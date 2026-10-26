@@ -42,6 +42,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.Check
@@ -153,7 +155,11 @@ internal fun DefaultMarkdownTypography.withTextStyle(style: TextStyle?): Default
  */
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean = false, textStyle: TextStyle? = null) {
-    val prepared = remember(text) { Bidi.isolateInlineCode(MathMarkup.prepare(text)) }
+    val prepared = remember(text) {
+        val parsed = Bidi.isolateInlineCode(MathMarkup.prepare(text))
+        // An Arabic sentence also needs the dates, amounts, identifiers and URLs inside it kept whole.
+        if (Bidi.prefersRightToLeft(text)) Bidi.isolateLtrRuns(parsed) else parsed
+    }
     // An Arabic reply is laid out right to left as a whole (ordered, and start-aligned, from the right);
     // anything else falls back to Content, so each block follows its own first strong character.
     val direction = remember(text) { if (Bidi.prefersRightToLeft(text)) TextDirection.Rtl else TextDirection.Content }
@@ -387,8 +393,12 @@ private fun DotList(content: String, node: ASTNode, depth: Int) {
     // Only an sp line height converts to dp; any other falls back to the body's.
     val lineHeight = LocalMarkdownTypography.current.list.lineHeight.takeIf { it.isSp } ?: Theme[typography][body].lineHeight
     val top = with(LocalDensity.current) { ((lineHeight.toDp() - BULLET_DOT) / 2) }
-    MarkdownListItems(content, node, depth, markerModifier = { Modifier.padding(start = 2.dp, end = 10.dp) }) { _, _, _ ->
-        Box(Modifier.padding(top = top).size(BULLET_DOT).background(dot, CircleShape))
+    // An Arabic list hangs off the right margin: the marker takes that side and the text follows it.
+    val rtl = Bidi.prefersRightToLeft(node.getTextInNode(content).toString())
+    CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+        MarkdownListItems(content, node, depth, markerModifier = { Modifier.padding(start = 2.dp, end = 10.dp) }) { _, _, _ ->
+            Box(Modifier.padding(top = top).size(BULLET_DOT).background(dot, CircleShape))
+        }
     }
 }
 

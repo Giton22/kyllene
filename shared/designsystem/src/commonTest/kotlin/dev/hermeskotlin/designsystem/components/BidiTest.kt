@@ -110,4 +110,60 @@ class BidiTest {
         val out = Bidi.isolateInlineCode(input)
         assertEquals("سطر اول `${lri}a$pdi`\n\nسطر ثاني `${lri}b$pdi`\n", out)
     }
+
+    // MARK: left-to-right runs in Arabic prose (dates, amounts, identifiers, paths, URLs)
+
+    @Test
+    fun aDateIsKeptWholeAndItsTrailingColonStaysInTheProse() {
+        val input = "أكتوبر ما زال في متناوله حتى 2026-11-20: لو دفع الـ25$ قبله"
+        val out = Bidi.isolateLtrRuns(input)
+        assertTrue(out.contains("${lri}2026-11-20$pdi:"))
+        assertTrue(out.contains("${lri}25\$$pdi"))
+    }
+
+    @Test
+    fun anEnglishPhraseStaysOneRun() {
+        val input = "ثم Now the controller يعيد التشغيل"
+        assertEquals("ثم ${lri}Now the controller$pdi يعيد التشغيل", Bidi.isolateLtrRuns(input))
+    }
+
+    @Test
+    fun identifiersPathsAndVersionsAreIsolated() {
+        val out = Bidi.isolateLtrRuns("استخدم www-data مع state.db على v0.22.5 داخل /root/.hermes")
+        for (run in listOf("www-data", "state.db", "v0.22.5", "/root/.hermes")) {
+            assertTrue(out.contains("${lri}$run$pdi"), "missing isolate around $run in: $out")
+        }
+    }
+
+    @Test
+    fun aBareUrlIsIsolatedAndItsSentencePeriodIsNot() {
+        val out = Bidi.isolateLtrRuns("افتح https://hermes.ispnet.online/docs ثم أكمل.")
+        assertTrue(out.contains("${lri}https://hermes.ispnet.online/docs$pdi ثم"))
+        assertTrue(out.endsWith("أكمل."))
+    }
+
+    @Test
+    fun aLinkDestinationIsNotTouched() {
+        val input = "راجع [الدليل](https://example.com/a_b) بعدين"
+        assertEquals(input, Bidi.isolateLtrRuns(input))
+    }
+
+    @Test
+    fun codeSpansAreLeftAsTheyAre() {
+        val input = "قبل `${lri}hermes update$pdi` بعد"
+        assertEquals(input, Bidi.isolateLtrRuns(input))
+    }
+
+    @Test
+    fun fencedCodeIsLeftAsItIs() {
+        val input = "```\nchown www-data /root/.hermes\n```\nثم ${lri}www-data$pdi"
+        assertEquals(input, Bidi.isolateLtrRuns(input))
+    }
+
+    @Test
+    fun aRunInsideArabicLettersEndsAtThem() {
+        val out = Bidi.isolateLtrRuns("المجلدhome/data هنا")
+        assertTrue(out.contains("${lri}home/data$pdi"))
+        assertTrue(out.startsWith("المجلد"))
+    }
 }
