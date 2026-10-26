@@ -5,6 +5,7 @@ import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.createHttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -33,6 +34,27 @@ class MediaApiFilesTest {
 
         assertEquals("/api/fs/read-text?path=%2Fopt%2Fa+b.md&profile=rin", asked)
         assertEquals(FileText("# Hi", 900_000, truncated = true, binary = false, language = "markdown"), text)
+    }
+
+    @Test
+    fun aNewFolderIsAskedForByPath() = runTest {
+        var asked: String? = null
+        val api = MediaApi(createHttpClient(MockEngine { request ->
+            asked = "${request.method.value} ${request.url.encodedPath} ${request.body.toByteArray().decodeToString()}"
+            respond("""{"ok":true,"path":"/home/me/projects/site"}""", HttpStatusCode.OK, json)
+        }))
+
+        assertIs<ApiResult.Success<Unit>>(api.makeFolder(url, "~/projects/site"))
+        assertEquals("""POST /api/files/mkdir {"path":"~/projects/site"}""", asked)
+    }
+
+    @Test
+    fun aFolderTheGatewayRefusesSaysWhy() = runTest {
+        val api = MediaApi(createHttpClient(MockEngine {
+            respond("""{"detail":"A file already exists at that path"}""", HttpStatusCode.Conflict, json)
+        }))
+
+        assertEquals("A file already exists at that path", assertIs<ApiResult.Failed>(api.makeFolder(url, "/srv/a")).message)
     }
 
     @Test

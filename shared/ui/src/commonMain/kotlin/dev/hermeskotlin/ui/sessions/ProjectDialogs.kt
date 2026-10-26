@@ -16,6 +16,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +51,7 @@ import dev.hermeskotlin.designsystem.danger
 import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.typography
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
 
 /** What a new project starts with: blank, or a folder the gateway grouped chats by, to keep as a project. */
@@ -85,7 +87,8 @@ internal fun ProjectActionsSheet(
 /**
  * Makes a project. [draft] opens it (null closes it); [busy] while the gateway is asked, and [error] is why the
  * last try didn't go through, so the form stays open to fix it. [listFolders] lists a folder's subfolders on the
- * gateway's machine, so the folder can be picked instead of typed.
+ * gateway's machine, so the folder can be picked instead of typed; [makeFolder], when the gateway can, makes a new
+ * one in the folder being looked through and answers why it couldn't, or null.
  */
 @Composable
 internal fun NewProjectDialog(
@@ -95,6 +98,7 @@ internal fun NewProjectDialog(
     onDismiss: () -> Unit,
     onCreate: (name: String, folder: String) -> Unit,
     listFolders: suspend (dir: String, prefix: String) -> FolderListing,
+    makeFolder: (suspend (dir: String, name: String) -> String?)? = null,
 ) {
     var shown by remember { mutableStateOf(draft) }
     if (draft != null) shown = draft
@@ -138,7 +142,7 @@ internal fun NewProjectDialog(
         },
     ) {
         if (dir != null) {
-            FolderPicker(dir, onOpen = { browsing = it }, listFolders = listFolders)
+            FolderPicker(dir, onOpen = { browsing = it }, listFolders = listFolders, makeFolder = makeFolder)
             return@Dialog
         }
         TextField(state = name, label = "Name", placeholder = "Herald", enabled = !busy)
@@ -166,16 +170,25 @@ internal fun NewProjectDialog(
 /**
  * The subfolders of [dir] on the gateway's machine: tap one to go in, Up and Home to move about, and a filter
  * that narrows by name (the gateway lists only a page of entries per folder). Dot-folders show only when the
- * filter starts with a dot.
+ * filter starts with a dot. New folder, with [makeFolder], makes one here and goes into it.
  */
 @Composable
 private fun FolderPicker(
     dir: String,
     onOpen: (String) -> Unit,
     listFolders: suspend (dir: String, prefix: String) -> FolderListing,
+    makeFolder: (suspend (dir: String, name: String) -> String?)?,
 ) {
     val filter = rememberTextFieldState()
-    LaunchedEffect(dir) { filter.edit { replace(0, length, "") } }
+    val newName = rememberTextFieldState()
+    var naming by remember(dir) { mutableStateOf(false) }
+    var making by remember(dir) { mutableStateOf(false) }
+    var makeError by remember(dir) { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(dir) {
+        filter.edit { replace(0, length, "") }
+        newName.edit { replace(0, length, "") }
+    }
     val prefix = filter.text.toString()
     var listing by remember(dir) { mutableStateOf<FolderListing?>(null) }
     var failed by remember(dir) { mutableStateOf<String?>(null) }
@@ -201,7 +214,37 @@ private fun FolderPicker(
             onClick = { onOpen(FolderPath.HOME) },
             enabled = dir != FolderPath.HOME,
         )
+        if (makeFolder != null) {
+            IconButton(Lucide.FolderPlus, contentDescription = "New folder", onClick = {
+                naming = !naming
+                makeError = null
+            })
+        }
         TextField(state = filter, modifier = Modifier.weight(1f), placeholder = "Filter", leadingIcon = Lucide.Search)
+    }
+    if (naming && makeFolder != null) {
+        val name = newName.text.toString().trim()
+        val valid = FolderPath.isName(name)
+        val make: () -> Unit = {
+            if (valid && !making) scope.launch {
+                making = true
+                makeError = makeFolder(dir, name)
+                making = false
+                if (makeError == null) onOpen(FolderPath.child(dir, name))
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextField(
+                state = newName,
+                modifier = Modifier.weight(1f),
+                placeholder = "New folder's name",
+                enabled = !making,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                onKeyboardAction = { make() },
+            )
+            Button("Create", onClick = make, size = ButtonSize.Small, enabled = valid, loading = making)
+        }
+        makeError?.let { Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
     }
     Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
         // Narrowed here too, so the last answer matches the filter while the gateway is asked again.
@@ -239,6 +282,9 @@ internal object FolderPath {
     }
 
     fun child(dir: String, name: String): String = "$dir$name/"
+
+    /** Whether [name] can be a folder's own name: not blank, no separator, not `.` or `..`. */
+    fun isName(name: String): Boolean = name.isNotBlank() && '/' !in name && '\\' !in name && name != "." && name != ".."
 
     /** The folder above [dir], or null at a root (`/`, `C:/`). Above home is `/`. */
     fun parent(dir: String): String? {

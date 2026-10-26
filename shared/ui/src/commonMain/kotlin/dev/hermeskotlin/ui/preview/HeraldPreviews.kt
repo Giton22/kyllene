@@ -313,6 +313,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                                     if (dir.endsWith("/projects/")) listOf("herald", "notes-app", "site") else listOf("androidApp", "docs", "shared"),
                                 )
                             },
+                            makeFolder = { _, _ -> null },
                         )
                     }
                 }

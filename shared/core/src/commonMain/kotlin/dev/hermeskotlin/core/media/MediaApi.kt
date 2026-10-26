@@ -7,15 +7,21 @@ import dev.hermeskotlin.core.network.map
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.CancellationException
 import kotlinx.io.readByteArray
 import io.ktor.client.request.parameter
+import io.ktor.http.ContentType
 import io.ktor.http.contentLength
+import io.ktor.http.contentType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -105,6 +111,18 @@ class MediaApi(
             else -> file(url, path)
         }
     }
+
+    /**
+     * Makes the folder [path] on the gateway's machine, and any folders above it that are missing
+     * (`POST /api/files/mkdir`, Desktop's New folder). One already there is fine. `~/` paths are the
+     * gateway's home; like the managed downloads, this is the host's disk, not a sandboxed profile's.
+     */
+    suspend fun makeFolder(url: GatewayUrl, path: String): ApiResult<Unit> = apiCall {
+        client.post(url.resolve("api/files/mkdir")) {
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject { put("path", path) })
+        }
+    }.map { }
 
     /** A reply's picture from the web (`![alt](https://...)`). */
     suspend fun remote(url: String): ApiResult<ByteArray> = apiCall { web.get(url) }.map { response ->

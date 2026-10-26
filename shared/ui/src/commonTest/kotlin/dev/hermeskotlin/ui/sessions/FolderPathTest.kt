@@ -2,7 +2,9 @@ package dev.hermeskotlin.ui.sessions
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class FolderPathTest {
 
@@ -11,6 +13,13 @@ class FolderPathTest {
         assertEquals("~/", FolderPath.dirOf("  "))
         assertEquals("/srv/herald/", FolderPath.dirOf("/srv/herald"))
         assertEquals("C:/Users/you/", FolderPath.dirOf("C:\\Users\\you\\"))
+    }
+
+    @Test
+    fun aNewFolderIsOneNameNotAPath() {
+        assertTrue(FolderPath.isName("versal"))
+        assertTrue(FolderPath.isName(".config"))
+        for (bad in listOf("", "  ", ".", "..", "a/b", "a\\b")) assertFalse(FolderPath.isName(bad), bad)
     }
 
     @Test
