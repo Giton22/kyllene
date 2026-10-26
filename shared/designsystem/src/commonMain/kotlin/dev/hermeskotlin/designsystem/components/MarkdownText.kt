@@ -41,6 +41,7 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.Check
@@ -152,12 +153,15 @@ internal fun DefaultMarkdownTypography.withTextStyle(style: TextStyle?): Default
  */
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean = false, textStyle: TextStyle? = null) {
-    val prepared = remember(text) { MathMarkup.prepare(text) }
-    val replyStyle = Theme[typography][body].copy(color = Theme[colors][textColor])
+    val prepared = remember(text) { Bidi.isolateInlineCode(MathMarkup.prepare(text)) }
+    // An Arabic reply is laid out right to left as a whole (ordered, and start-aligned, from the right);
+    // anything else falls back to Content, so each block follows its own first strong character.
+    val direction = remember(text) { if (Bidi.prefersRightToLeft(text)) TextDirection.Rtl else TextDirection.Content }
+    val replyStyle = Theme[typography][body].copy(color = Theme[colors][textColor], textDirection = direction)
     val compact = compactStyle(replyStyle, textStyle)
     val bodyStyle = compact ?: replyStyle
-    val codeStyle = Theme[typography][code].copy(color = Theme[colors][textColor])
-    val headingStyle = Theme[typography][heading].copy(color = Theme[colors][textColor])
+    val codeStyle = Theme[typography][code].copy(color = Theme[colors][textColor], textDirection = TextDirection.Ltr)
+    val headingStyle = Theme[typography][heading].copy(color = Theme[colors][textColor], textDirection = direction)
     val linkColor = Theme[colors][accentText]
     val markdownColors = DefaultMarkdownColors(
         text = bodyStyle.color,
@@ -431,7 +435,8 @@ private fun CodeBlock(code: String, language: String?, style: TextStyle) {
         }
         val scroll = if (wrap) Modifier else Modifier.horizontalScroll(rememberScrollState())
         Box(Modifier.fillMaxWidth().then(scroll).padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)) {
-            BasicText(text, style = style, softWrap = wrap)
+            // Code is always laid out left to right, even under an Arabic paragraph around it.
+            BasicText(text, style = style.copy(textDirection = TextDirection.Ltr), softWrap = wrap)
         }
     }
 }
