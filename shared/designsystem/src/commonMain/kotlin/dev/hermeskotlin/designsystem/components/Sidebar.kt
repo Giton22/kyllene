@@ -17,10 +17,12 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +40,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -106,22 +109,26 @@ class SidebarState internal constructor() {
 fun rememberSidebarState(): SidebarState = remember { SidebarState() }
 
 /**
- * A left sidebar next to the main [content]. Below [dockedBreakpoint] it is a drawer that slides in
- * over a dimmed content area (swipe right anywhere to open, swipe left or tap outside to close); from
- * the breakpoint up it is docked beside the content and collapses to zero width when closed.
+ * A left sidebar next to the main [content]. Where [sidebarDocks] says there is room, it is docked beside the
+ * content and collapses to zero width when closed; elsewhere it is a drawer that slides in over a dimmed
+ * content area (swipe right anywhere to open, swipe left or tap outside to close).
  */
 @Composable
 fun SidebarLayout(
     state: SidebarState,
     sidebar: @Composable () -> Unit,
     modifier: Modifier = Modifier,
-    dockedBreakpoint: Dp = 840.dp,
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
-        val docked = maxWidth >= dockedBreakpoint
+        val density = LocalDensity.current
+        val layoutDirection = LocalLayoutDirection.current
+        val sideInsets = with(density) {
+            WindowInsets.safeDrawing.let { it.getLeft(this, layoutDirection) + it.getRight(this, layoutDirection) }.toDp()
+        }
+        val docked = sidebarDocks(maxWidth, sideInsets)
         LaunchedEffect(docked) { state.updateDocked(docked) }
-        val width = if (docked) 304.dp else min(maxWidth * 0.86f, 340.dp)
+        val width = if (docked) DOCKED_WIDTH else min(maxWidth * 0.86f, 340.dp)
         val p = state.fraction
         val hidden = Modifier.clearAndSetSemantics { }.takeIf { !state.isOpen && p == 0f } ?: Modifier
 
@@ -137,7 +144,7 @@ fun SidebarLayout(
                 ) {
                     Box(Modifier.requiredWidth(width).fillMaxHeight().align(Alignment.CenterEnd)) { sidebar() }
                 }
-                if (p > 0f) Box(Modifier.width(1.dp).fillMaxHeight().background(Theme[colors][stroke]))
+                if (p > 0f) Box(Modifier.width(DIVIDER_WIDTH).fillMaxHeight().background(Theme[colors][stroke]))
                 Box(Modifier.weight(1f).fillMaxHeight()) { content() }
             }
             return@BoxWithConstraints
@@ -207,6 +214,22 @@ fun SidebarLayout(
         }
     }
 }
+
+/**
+ * Whether the sidebar docks in a window [width] wide: when the content beside it still gets a phone's width, so an
+ * unfolded foldable or a tablet held upright docks too, not only the widest screens. [sideInsets] (a side navigation
+ * bar, a cutout) come off that width, since the content pads itself by them.
+ */
+internal fun sidebarDocks(width: Dp, sideInsets: Dp): Boolean =
+    width - sideInsets - DOCKED_WIDTH - DIVIDER_WIDTH >= MIN_CONTENT_WIDTH
+
+private val DOCKED_WIDTH = 304.dp
+
+/** The hairline between the docked sidebar and the content. */
+private val DIVIDER_WIDTH = 1.dp
+
+/** The narrowest common phone, which every screen already fits, so the chat beside the sidebar is never narrower. */
+private val MIN_CONTENT_WIDTH = 360.dp
 
 private const val FLING_VELOCITY = 800f
 
