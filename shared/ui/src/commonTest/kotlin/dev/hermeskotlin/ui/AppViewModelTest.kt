@@ -522,7 +522,7 @@ class AppViewModelTest {
         certs.set(home.gatewayUrl.host, "picked-cert")
         gateways.save(home)
         signedIn(home)
-        val vm = viewModel(certs)
+        val vm = viewModel(certs = certs)
         vm.awaitChat(home)
 
         vm.removeGateway(home)

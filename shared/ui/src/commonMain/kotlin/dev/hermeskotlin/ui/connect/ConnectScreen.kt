@@ -231,12 +231,15 @@ internal fun ConnectView(
             HelpRow(Lucide.KeyRound, "Behind Cloudflare Access?", accessOpen) { accessOpen = !accessOpen }
             if (accessOpen) AccessTokenFields(access, state.accessError, test)
 
-            var certOpen by rememberSaveable { mutableStateOf(false) }
-            LaunchedEffect(result) {
-                if (result is ProbeResult.ClientCertRequired) certOpen = true
+            // Client certificates come from Android's system store; the desktop has none to pick from yet.
+            if (!isDesktop) {
+                var certOpen by rememberSaveable { mutableStateOf(false) }
+                LaunchedEffect(result) {
+                    if (result is ProbeResult.ClientCertRequired) certOpen = true
+                }
+                HelpRow(Lucide.ShieldCheck, "Need a client certificate?", certOpen) { certOpen = !certOpen }
+                if (certOpen) ClientCertFields(cert, demanded = result is ProbeResult.ClientCertRequired, onPick = picker::pick)
             }
-            HelpRow(Lucide.ShieldCheck, "Need a client certificate?", certOpen) { certOpen = !certOpen }
-            if (certOpen) ClientCertFields(cert, demanded = result is ProbeResult.ClientCertRequired, onPick = picker::pick)
         }
 
         if (signInReady) {
