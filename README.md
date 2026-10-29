@@ -172,8 +172,10 @@ Run the experimental desktop app, or package it (an MSI on Windows, a DMG on mac
 ```
 
 ```bash
-./gradlew :desktopApp:packageDistributionForCurrentOS
+./gradlew :desktopApp:packageReleaseDistributionForCurrentOS
 ```
+
+The release package goes through ProGuard, which takes a few minutes; `packageDistributionForCurrentOS` skips it.
 
 ### Project layout
 
