@@ -24,7 +24,8 @@ actual fun rememberClientCertPicker(
                 // The grant the picker hands out belongs to the calling activity; only it can use the key.
                 // LocalContext is usually a wrapper (theme, layout), not the activity itself.
                 val activity = context.findActivity() ?: return
-                KeyChain.choosePrivateKeyAlias(activity, { alias -> picked(alias) }, null, null, host, port, null)
+                // The system answers on a binder thread: the callers change screen state, so hand it to the main one.
+                KeyChain.choosePrivateKeyAlias(activity, { alias -> activity.runOnUiThread { picked(alias) } }, null, null, host, port, null)
             }
         }
     }
