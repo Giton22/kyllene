@@ -42,17 +42,19 @@ class AgentScreensTest {
     }
 
     @Test
-    fun aNewerCallOnTheSameSurfaceTakesOver() = runTest { supervisorScope {
-        val screens = AgentScreens()
-        val first = async { screens.await(screen("pick")) }
-        runCurrent()
-        val second = async { screens.await(screen("pick", "more")) }
-        runCurrent()
-        assertFailsWith<PhoneToolException> { first.await() }
-        assertEquals(setOf("pick", "more"), screens.live.value)
-        screens.answer("more", JsonPrimitive("ok"))
-        assertEquals(JsonPrimitive("ok"), second.await())
-    } }
+    fun aNewerCallOnTheSameSurfaceTakesOver() = runTest {
+        supervisorScope {
+            val screens = AgentScreens()
+            val first = async { screens.await(screen("pick")) }
+            runCurrent()
+            val second = async { screens.await(screen("pick", "more")) }
+            runCurrent()
+            assertFailsWith<PhoneToolException> { first.await() }
+            assertEquals(setOf("pick", "more"), screens.live.value)
+            screens.answer("more", JsonPrimitive("ok"))
+            assertEquals(JsonPrimitive("ok"), second.await())
+        }
+    }
 
     @Test
     fun aCancelledCallLeavesNothingLive() = runTest {
