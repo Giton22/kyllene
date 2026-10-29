@@ -155,6 +155,16 @@ Build, test and install a debug build:
 ./gradlew :androidApp:installDebug
 ```
 
+Run the experimental desktop app, or package it (an MSI on Windows, a DMG on macOS, a DEB on Linux):
+
+```bash
+./gradlew :desktopApp:run
+```
+
+```bash
+./gradlew :desktopApp:packageDistributionForCurrentOS
+```
+
 ### Project layout
 
 ```
@@ -162,6 +172,7 @@ shared/core          protocol, auth, network, repositories (no UI)
 shared/designsystem  design tokens and components on Compose Unstyled
 shared/ui            screens and view models (commonMain)
 androidApp           Android host: Application, Activity, notifications, manifest
+desktopApp           desktop host (experimental): the window, Escape as back
 ```
 
 The gateway protocol notes are in [docs/hermes-protocol-research.md](docs/hermes-protocol-research.md).
