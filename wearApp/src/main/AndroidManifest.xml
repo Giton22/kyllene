@@ -107,7 +107,7 @@
             </intent-filter>
             <meta-data
                 android:name="android.support.wearable.complications.SUPPORTED_TYPES"
-                android:value="SMALL_IMAGE" />
+                android:value="SMALL_IMAGE,SHORT_TEXT,MONOCHROMATIC_IMAGE" />
             <!-- Target artwork pushes a refresh when its cached snapshot changes. -->
             <meta-data
                 android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
