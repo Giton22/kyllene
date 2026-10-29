@@ -91,9 +91,46 @@ class GatewayProbeTest {
     @Test
     fun aWrappedCertDemandIsNamed() = runTest {
         val engine = MockEngine {
-            throw RuntimeException("handshake failed", javax.net.ssl.SSLHandshakeException("peer did not return a certificate"))
+            throw RuntimeException(
+                "handshake failed",
+                javax.net.ssl.SSLHandshakeException("Read error: Failure in SSL library: TLSV13_ALERT_CERTIFICATE_REQUIRED"),
+            )
         }
         assertIs<ProbeResult.ClientCertRequired>(probeWith(engine).probe(url))
+    }
+
+    @Test
+    fun nginxAskingForACertificateOverHttpIsNamed() = runTest {
+        // nginx with ssl_verify_client on finishes the handshake and turns the request down in HTTP.
+        val engine = MockEngine {
+            respond(
+                "<html><head><title>400 No required SSL certificate was sent</title></head></html>",
+                HttpStatusCode.BadRequest, headersOf(HttpHeaders.ContentType, "text/html"),
+            )
+        }
+        val result = assertIs<ProbeResult.ClientCertRequired>(probeWith(engine).probe(url))
+        assertEquals("HTTP 400", result.reason)
+    }
+
+    @Test
+    fun nginxRejectingTheCertificateIsNamed() = runTest {
+        val engine = MockEngine {
+            respond("<center>The SSL certificate error</center>", HttpStatusCode.BadRequest, headersOf(HttpHeaders.ContentType, "text/html"))
+        }
+        assertIs<ProbeResult.ClientCertRequired>(probeWith(engine).probe(url))
+    }
+
+    @Test
+    fun anOrdinaryBadRequestIsNotACertDemand() = runTest {
+        val engine = MockEngine { respond("<html>400 Bad Request</html>", HttpStatusCode.BadRequest, headersOf(HttpHeaders.ContentType, "text/html")) }
+        assertIs<ProbeResult.NotHermes>(probeWith(engine).probe(url))
+    }
+
+    @Test
+    fun turningDownTheServersCertificateIsNotACertDemand() {
+        // Raised by the app's own trust check: it names the alert, but the server never sent one.
+        assertFalse(isClientCertDemand(javax.net.ssl.SSLHandshakeException("certificate_unknown: no certificates for this host")))
+        assertFalse(isClientCertDemand(javax.net.ssl.SSLHandshakeException("Empty server certificate chain")))
     }
 
     @Test
