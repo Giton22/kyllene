@@ -54,6 +54,14 @@ compose.desktop {
         // will block.
         jvmArgs += "--enable-native-access=ALL-UNNAMED,jcef"
 
+        // The installers (packageRelease…) leave out the library code the app never reaches. Names are kept:
+        // renaming would save little more, and code that looks classes up by name (Warmup, Compose's text menu)
+        // would need a rule for each.
+        buildTypes.release.proguard {
+            obfuscate = false
+            configurationFiles.from(project.file("proguard-rules.pro"))
+        }
+
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "Kyllene"
