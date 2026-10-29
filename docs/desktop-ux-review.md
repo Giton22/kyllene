@@ -79,7 +79,7 @@ HIG, WAI-ARIA patterns, the KMP desktop docs) and what users of desktop chat app
 | First opening of a page | Settings waited ~200ms while the JVM loaded 509 classes and ran its code for the first time on the UI thread | a background warm-up after launch links the app's and Compose's classes and draws 36 screens off screen from sample data; the desktop build compiles lambdas as classes so they can be readied too. Settings starts drawing at ~130ms |
 | Panel corners | the composer's border was cut by an unsmoothed clip | the fill and border are drawn as shapes, the clip sits inside the border |
 | Code view | each line cut out of the whole file's colouring as it scrolled in | the colouring is cut into lines once, off the UI thread |
-| Installers | the Java icon, no screen reader bridge, admin install | Herald's icon on every OS, the Java Access Bridge for NVDA and JAWS, a per-user Windows install, a macOS bundle id |
+| Installers | the Java icon, no screen reader bridge, admin install | Kyllene's icon on every OS, the Java Access Bridge for NVDA and JAWS, a per-user Windows install, a macOS bundle id |
 | OS | — | the Dock icon brings the window back, the taskbar flashes for a notice, the link retries on wake and on focus, the window narrows to 500px for snap layouts |
 
 ### Found and left for later
@@ -93,8 +93,8 @@ HIG, WAI-ARIA patterns, the KMP desktop docs) and what users of desktop chat app
 | Releases | no desktop installers | a tag adds `.msi` (Windows, per user), `.dmg` (macOS) and `.deb` (Debian) to the draft release |
 | Signing | — | the MSI is signed and the DMG signed and notarised when the signing secrets are set; without them the installers are unsigned and the OS warns |
 | Updates | the phone's banner only | Settings → About offers a new desktop version; on Windows, Install updates in place |
-| Launch | ~2.1s to the window | an installed Windows Herald reads its classes from a shared archive (AppCDS) it makes itself after the first launch and each update: ~1.2s |
-| Notifications | tray balloons, no buttons, gone once seen | an installed Windows Herald shows Windows notifications that stay in the Action Center; Approve and Deny answer an approval; a click opens its chat through a `herald://` link |
+| Launch | ~2.1s to the window | an installed Windows Kyllene reads its classes from a shared archive (AppCDS) it makes itself after the first launch and each update: ~1.2s |
+| Notifications | tray balloons, no buttons, gone once seen | an installed Windows Kyllene shows Windows notifications that stay in the Action Center; Approve and Deny answer an approval; a click opens its chat through a `herald://` link |
 | Sidebar | a fixed width | drag its edge; the width is kept across launches |
 | Chat list | Up and Down only | type-ahead (letters jump to a title), F2 renames, Delete asks to delete; Down from search goes to the first chat |
 | Insights | one column | two columns; the chart reads out the day under the pointer |
@@ -142,12 +142,12 @@ headers keep its page in, but WebRTC ignores both: a widget could still reach a 
 did). Chromium now sends everything through a proxy that doesn't exist, with the gateways and loopback left out of
 it, and WebRTC may only use that proxy, so the same try now gets nowhere. What follows from it: a plugin page's
 images, fonts or scripts from other sites don't load; a gateway added after Chromium started opens its plugin pages
-in the browser until Herald restarts; and the app's session goes only to the gateway's own top-level pages, never to
+in the browser until Kyllene restarts; and the app's session goes only to the gateway's own top-level pages, never to
 what they load from elsewhere.
 
 From the review before shipping: the app's shortcuts (Ctrl+K, Ctrl+W, Escape) work while a page has the keyboard,
 and its editing keys (Ctrl+C, V, X, A, Z, arrows) stay the page's; a page's link to another site opens in the
-browser only after a click, never by itself; Chromium's cookies are cleared and its helper processes end when Herald
+browser only after a click, never by itself; Chromium's cookies are cleared and its helper processes end when Kyllene
 quits or installs an update (checked: five helpers before closing, none after).
 
 Checked in the running app: a widget's rendering, clicks, typing, scrolling, a `<select>` opened and picked, and
