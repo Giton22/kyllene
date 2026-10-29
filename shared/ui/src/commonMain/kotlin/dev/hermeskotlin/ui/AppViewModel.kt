@@ -254,9 +254,10 @@ class AppViewModel(
         viewModelScope.launch {
             if (signedInGateway()?.url != gateway.url) host.close()
             val saved = gateways.save(gateway)
-            // The Connect-screen pick is persisted on the gateway now: drop the pending entry so it can't
-            // shadow the saved one (or another gateway's) with a stale value.
-            if (saved.clientCertAlias != null) certs.set(saved.gatewayUrl.host, null)
+            // The Connect-screen pick is persisted on the gateway now, and the add flow is over: drop every
+            // pending pick so none shadows a saved gateway's certificate.
+            certs.clear()
+            if (saved.clientCertAlias != null) certs.changed(saved.gatewayUrl.host)
             sessionsChanged.update { it + 1 }
             connection.start(saved.gatewayUrl)
             _route.value = home(saved)
@@ -273,6 +274,8 @@ class AppViewModel(
     fun cancelAddGateway() {
         cancelPendingCall()
         viewModelScope.launch {
+            // A pick for the address abandoned would otherwise shadow saved gateways on its host until restart.
+            certs.clear()
             val current = gateways.current() ?: return@launch
             _route.value = if (auth.hasStoredSession(current.gatewayUrl)) home(current).also { connection.start(current.gatewayUrl) }
             else Route.SignIn(current)
@@ -298,7 +301,9 @@ class AppViewModel(
     fun setClientCert(gateway: SavedGateway, alias: String?) {
         viewModelScope.launch {
             gateways.setClientCert(gateway.url, alias)
-            certs.set(gateway.gatewayUrl.host, alias)
+            // Saved gateways carry their own alias: a pending pick for the host would shadow this one (and the
+            // other gateways there). Dropping it also tells the engine to stop reusing connections to the host.
+            certs.set(gateway.gatewayUrl.host, null)
         }
     }
 
@@ -319,11 +324,8 @@ class AppViewModel(
             // Again: a list read that was under way may have saved itself since.
             cache?.forgetGateway(gateway.gatewayUrl)
             gateways.remove(gateway.url)
-            // The saved alias goes with the gateway; a pending pick stays only while another saved
-            // gateway on the same host still names a certificate.
-            if (gateways.all().gateways.none { it.gatewayUrl.host == gateway.gatewayUrl.host && it.clientCertAlias != null }) {
-                certs.set(gateway.gatewayUrl.host, null)
-            }
+            // The saved alias goes with the gateway: no connection made with it is reused.
+            if (gateway.clientCertAlias != null) certs.changed(gateway.gatewayUrl.host)
             inbox?.forget(gateway.gatewayUrl.value)
             forgetUnusedAccessTokens()
             sessionsChanged.update { it + 1 }

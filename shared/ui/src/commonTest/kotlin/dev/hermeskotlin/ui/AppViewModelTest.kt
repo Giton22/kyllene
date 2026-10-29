@@ -22,6 +22,7 @@ import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.AccessToken
 import dev.hermeskotlin.core.gateway.AccessTokens
 import dev.hermeskotlin.core.gateway.ClientCertAliases
+import dev.hermeskotlin.core.gateway.clientCertAliasFor
 import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.createHttpClient
@@ -517,17 +518,57 @@ class AppViewModelTest {
     }
 
     @Test
-    fun removingAGatewayForgetsAPendingCertificatePickForItsHost() = runTest {
+    fun aSavedGatewaysCertificateIsNotShadowedByAPendingPick() = runTest {
+        // A pending pick wins over every saved gateway on its host, so setting a saved one must drop it,
+        // never write one: otherwise this alias would reach the host's other gateways until a restart.
         val certs = ClientCertAliases()
-        certs.set(home.gatewayUrl.host, "picked-cert")
+        certs.set(home.gatewayUrl.host, "stale-pick")
+        val changed = CompletableDeferred<String>()
+        certs.onChanged { changed.complete(it) }
         gateways.save(home)
         signedIn(home)
         val vm = viewModel(certs = certs)
         vm.awaitChat(home)
 
-        vm.removeGateway(home)
+        vm.setClientCert(home, "homelab-cert")
 
-        gateways.list.first { it.gateways.isEmpty() }
+        assertEquals(home.gatewayUrl.host, changed.await(), "the engine hears of the change")
+        assertNull(certs.get(home.gatewayUrl.host))
+        assertEquals("homelab-cert", clientCertAliasFor(home.gatewayUrl.host, certs, gateways.all().gateways))
+    }
+
+    @Test
+    fun removingAGatewayWithACertificateTellsTheEngine() = runTest {
+        val certs = ClientCertAliases()
+        val changed = CompletableDeferred<String>()
+        certs.onChanged { changed.complete(it) }
+        val withCert = home.copy(clientCertAlias = "homelab-cert")
+        gateways.save(withCert)
+        signedIn(withCert)
+        val vm = viewModel(certs = certs)
+        vm.awaitChat(withCert)
+
+        vm.removeGateway(withCert)
+
+        assertEquals(home.gatewayUrl.host, changed.await(), "no connection made with the removed certificate is reused")
+    }
+
+    @Test
+    fun cancellingAnAddForgetsItsPendingPick() = runTest {
+        // An abandoned pick would shadow the saved gateways on its host until restart.
+        val certs = ClientCertAliases()
+        gateways.save(home)
+        signedIn(home)
+        val vm = viewModel(certs = certs)
+        vm.awaitChat(home)
+        vm.addGateway()
+        certs.set(home.gatewayUrl.host, "abandoned-pick")
+        val changed = CompletableDeferred<String>()
+        certs.onChanged { changed.complete(it) }
+
+        vm.cancelAddGateway()
+
+        changed.await()
         assertNull(certs.get(home.gatewayUrl.host))
     }
 

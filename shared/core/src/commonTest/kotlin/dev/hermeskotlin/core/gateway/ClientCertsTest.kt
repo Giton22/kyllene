@@ -59,4 +59,38 @@ class ClientCertsTest {
 
         assertNull(clientCertAliasFor("other.example.net", pending, listOf(home)))
     }
+
+    @Test
+    fun aGatewayWithoutACertificateDoesNotHideOneOnTheSameHost() {
+        val bare = SavedGateway("https://hermes.example.ts.net:9119")
+        assertEquals("homelab-cert", clientCertAliasFor("hermes.example.ts.net", ClientCertAliases(), listOf(bare, home)))
+    }
+
+    @Test
+    fun everyChangeIsReportedWithItsNormalizedHost() {
+        val pending = ClientCertAliases()
+        val seen = mutableListOf<String>()
+        pending.onChanged { seen += it }
+
+        pending.set("HERMES.example.ts.net", "fresh-pick")
+        pending.set("hermes.example.ts.net", null)
+        pending.changed("Other.Example.net")
+
+        assertEquals(listOf("hermes.example.ts.net", "hermes.example.ts.net", "other.example.net"), seen)
+    }
+
+    @Test
+    fun clearingForgetsEveryPickAndReportsEachHost() {
+        val pending = ClientCertAliases()
+        pending.set("a.example.net", "a-cert")
+        pending.set("b.example.net", "b-cert")
+        val seen = mutableListOf<String>()
+        pending.onChanged { seen += it }
+
+        pending.clear()
+
+        assertNull(pending.get("a.example.net"))
+        assertNull(pending.get("b.example.net"))
+        assertEquals(setOf("a.example.net", "b.example.net"), seen.toSet())
+    }
 }

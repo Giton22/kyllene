@@ -227,6 +227,39 @@ class ConnectViewModelTest {
     }
 
     @Test
+    fun aSavedAddressTakesThePickOnItsSavedGateway() = runTest(dispatcher) {
+        // A pending pick would shadow the saved one until restart, and the sign-in would keep the old one.
+        val certs = ClientCertAliases()
+        val gateways = GatewayRepository(InMemoryKeyValueStore())
+        gateways.save(SavedGateway("https://saved.example.com", clientCertAlias = "old-cert"))
+        val vm = viewModel(certs, gateways)
+        vm.url.setTextAndPlaceCursorAtEnd("https://saved.example.com")
+        vm.onUrlEdited()
+
+        vm.pickClientCert("new-cert")
+        assertEquals("new-cert", vm.certAlias.value)
+        assertEquals("new-cert", gateways.all().find("https://saved.example.com")?.clientCertAlias)
+        assertNull(certs.get("saved.example.com"))
+    }
+
+    @Test
+    fun forgettingASavedAddresssCertificateClearsItForGood() = runTest(dispatcher) {
+        val gateways = GatewayRepository(InMemoryKeyValueStore())
+        gateways.save(SavedGateway("https://saved.example.com", clientCertAlias = "saved-cert"))
+        val vm = viewModel(gateways = gateways)
+        vm.url.setTextAndPlaceCursorAtEnd("https://saved.example.com")
+        vm.onUrlEdited()
+
+        vm.clearClientCert()
+        assertNull(gateways.all().find("https://saved.example.com")?.clientCertAlias)
+        // The sign-in that follows saves the gateway without one: nothing brings the old one back.
+        gateways.save(SavedGateway("https://saved.example.com", clientCertAlias = vm.certAlias.value))
+        assertNull(gateways.all().find("https://saved.example.com")?.clientCertAlias)
+        vm.onUrlEdited()
+        assertNull(vm.certAlias.value)
+    }
+
+    @Test
     fun pickingWithAnInvalidAddressClearsTheShownCertificate() = runTest(dispatcher) {
         val vm = viewModel()
         vm.url.setTextAndPlaceCursorAtEnd("https://hermes.example.com")

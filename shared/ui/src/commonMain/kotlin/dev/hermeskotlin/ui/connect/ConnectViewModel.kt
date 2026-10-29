@@ -56,6 +56,9 @@ class ConnectViewModel(
     private var probeJob: Job? = null
     private var lookupJob: Job? = null
 
+    /** The last certificate pick being stored; the probe waits for it so it presents what was just picked. */
+    private var certJob: Job? = null
+
     fun forgetAccessToken() {
         val host = GatewayUrl.parseOrNull(url.text.toString())?.host ?: return
         lookupJob?.cancel()
@@ -66,25 +69,30 @@ class ConnectViewModel(
     }
 
     /** Remembers the picked certificate for the address typed, so the probe, the sign-in and the chat present it. */
-    fun pickClientCert(alias: String) {
-        val host = GatewayUrl.parseOrNull(url.text.toString())?.host
-        if (host == null) {
-            _certAlias.value = null
-            return
-        }
-        certs.set(host, alias)
-        _certAlias.value = alias
-    }
+    fun pickClientCert(alias: String) = setClientCert(alias)
 
     /** Goes back to presenting no certificate to the address typed. */
-    fun clearClientCert() {
-        val host = GatewayUrl.parseOrNull(url.text.toString())?.host
-        if (host == null) {
-            _certAlias.value = null
-            return
+    fun clearClientCert() = setClientCert(null)
+
+    /**
+     * A saved address takes the pick on its saved gateway, which the sign-in then keeps; only an address not
+     * saved yet holds it as a pending pick until the sign-in saves it. A pending pick for a saved gateway would
+     * shadow its own, and clearing one would leave the saved certificate in place.
+     */
+    private fun setClientCert(alias: String?) {
+        val gatewayUrl = GatewayUrl.parseOrNull(url.text.toString())
+        _certAlias.value = alias.takeIf { gatewayUrl != null }
+        if (gatewayUrl == null) return
+        val previous = certJob
+        certJob = viewModelScope.launch {
+            previous?.join()
+            if (gateways.all().find(gatewayUrl.value) != null) {
+                gateways.setClientCert(gatewayUrl.value, alias)
+                certs.set(gatewayUrl.host, null)
+            } else {
+                certs.set(gatewayUrl.host, alias)
+            }
         }
-        certs.set(host, null)
-        _certAlias.value = null
     }
 
     fun testConnection() {
@@ -112,6 +120,7 @@ class ConnectViewModel(
                 accessClientId.clearText()
                 accessClientSecret.clearText()
             }
+            certJob?.join()
             val result = probe.probe(gatewayUrl)
             _state.update { it.copy(testing = false, result = result) }
         }
@@ -128,7 +137,11 @@ class ConnectViewModel(
         lookupJob = viewModelScope.launch {
             _accessSaved.value = host != null && access.get(host) != null
             // Pending picks first, then the saved gateways: retyping a saved address shows its certificate.
-            _certAlias.value = host?.let { clientCertAliasFor(it, certs, gateways.all().gateways) }
+            // A pick made meanwhile is stored first and shows itself, so this never shows the one it replaced.
+            val pick = certJob
+            pick?.join()
+            val alias = host?.let { clientCertAliasFor(it, certs, gateways.all().gateways) }
+            if (certJob === pick) _certAlias.value = alias
         }
     }
 }
