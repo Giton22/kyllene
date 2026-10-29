@@ -651,7 +651,7 @@ internal fun SettingsView(
                 if (isDesktop) Section("Desktop") {
                     SwitchRow(
                         title = "Keep running in the tray",
-                        detail = "Closing the window leaves Herald in the tray, still telling you of replies and questions. Quit from the tray's menu.",
+                        detail = "Closing the window leaves Kyllene in the tray, still telling you of replies and questions. Quit from the tray's menu.",
                         checked = settings.closeToTray,
                         onCheckedChange = { on -> onUpdate { it.copy(closeToTray = on) } },
                         icon = Lucide.AppWindow,
@@ -692,7 +692,7 @@ internal fun SettingsView(
                     }
                     SwitchRow(
                         title = "Approvals and questions",
-                        detail = if (isDesktop) "When the agent waits on you and Herald isn't the window in use." else "When the agent waits on you. Answer right from the notification.",
+                        detail = if (isDesktop) "When the agent waits on you and Kyllene isn't the window in use." else "When the agent waits on you. Answer right from the notification.",
                         checked = settings.notifyRequests,
                         onCheckedChange = { on -> onUpdate { it.copy(notifyRequests = on) } },
                         icon = Lucide.ShieldAlert,

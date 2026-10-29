@@ -90,7 +90,7 @@ fun ChatWindow(
     WindowMemory.Remember(state, koin.get(), saved, WindowMemory.CHAT_KEY)
     // The chat's title as the gateway has it now: a rename, or the title it gives a new chat, shows on the window.
     var liveTitle by remember(shown) { mutableStateOf<String?>(null) }
-    val title = liveTitle ?: shown.title ?: "Herald"
+    val title = liveTitle ?: shown.title ?: "Kyllene"
     Window(
         onCloseRequest = onClose,
         state = state,

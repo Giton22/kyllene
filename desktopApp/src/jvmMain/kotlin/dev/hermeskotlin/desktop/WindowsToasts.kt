@@ -43,7 +43,7 @@ internal object WindowsToasts {
         runCatching {
             val scheme = "Software\\Classes\\${AppLink.DESKTOP_SCHEME}"
             Advapi32Util.registryCreateKey(WinReg.HKEY_CURRENT_USER, "$scheme\\shell\\open\\command")
-            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, scheme, "", "URL:Herald")
+            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, scheme, "", "URL:Kyllene")
             Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, scheme, "URL Protocol", "")
             Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, "$scheme\\shell\\open\\command", "", "\"${launcher.path}\" \"%1\"")
 
@@ -53,7 +53,7 @@ internal object WindowsToasts {
             ImageIO.write(pixels, "png", png)
             val app = "Software\\Classes\\AppUserModelId\\$APP_ID"
             Advapi32Util.registryCreateKey(WinReg.HKEY_CURRENT_USER, app)
-            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, app, "DisplayName", "Herald")
+            Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, app, "DisplayName", "Kyllene")
             Advapi32Util.registrySetStringValue(WinReg.HKEY_CURRENT_USER, app, "IconUri", png.path)
         }
     }

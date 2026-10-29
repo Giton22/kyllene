@@ -500,7 +500,7 @@ class ChatViewModel(
         viewModelScope.launch {
             val ready = withTimeoutOrNull(VOICE_CONNECT_WAIT_MS) { connectionState.first { it is ConnectionState.Connected } }
             if (this@ChatViewModel.target != target) return@launch
-            if (ready != null) send() else showAttachmentError("The prompt wasn't sent: Herald couldn't reach the gateway. It's in the composer.")
+            if (ready != null) send() else showAttachmentError("The prompt wasn't sent: Kyllene couldn't reach the gateway. It's in the composer.")
         }
     }
 

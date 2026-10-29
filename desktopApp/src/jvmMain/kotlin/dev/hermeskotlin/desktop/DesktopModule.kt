@@ -67,5 +67,5 @@ private object NoPushKeys : PushKeys {
 /** The phone tools are the phone's. */
 private object NoPhoneTools : PhoneToolRunner {
     override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement =
-        throw PhoneToolException("${tool.title} needs Herald on an Android phone.")
+        throw PhoneToolException("${tool.title} needs Kyllene on an Android phone.")
 }

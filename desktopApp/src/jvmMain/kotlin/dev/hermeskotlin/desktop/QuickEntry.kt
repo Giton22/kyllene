@@ -84,7 +84,7 @@ fun QuickEntryWindow(visible: Boolean, onDismiss: () -> Unit, onSend: (String, Q
     Window(
         onCloseRequest = onDismiss,
         state = state,
-        title = "Herald quick entry",
+        title = "Kyllene quick entry",
         undecorated = true,
         transparent = !native,
         resizable = false,

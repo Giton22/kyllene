@@ -73,7 +73,7 @@ import java.awt.desktop.AppReopenedListener
 import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 
-private const val TITLE = "Herald"
+private const val TITLE = "Kyllene"
 
 /** ⌘ stands where Ctrl does elsewhere. */
 private val mac = System.getProperty("os.name").orEmpty().startsWith("Mac")
@@ -227,14 +227,14 @@ fun main(args: Array<String>) {
                 lastNotice = null
             },
             menu = {
-                Item("Open Herald", onClick = ::show)
+                Item("Open Kyllene", onClick = ::show)
                 Item("New chat") {
                     show()
                     links.newChat()
                 }
                 Item("Quick entry", onClick = { quickOpen = true })
                 Separator()
-                Item("Quit Herald", onClick = ::exitApplication)
+                Item("Quit Kyllene", onClick = ::exitApplication)
             },
         )
 

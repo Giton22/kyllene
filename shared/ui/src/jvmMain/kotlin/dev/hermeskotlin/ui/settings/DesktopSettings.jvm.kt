@@ -25,7 +25,7 @@ actual fun deviceHasScreenLock(): Boolean = false
 @Composable
 actual fun rememberPhoneToolAccess(): PhoneToolAccess = remember {
     object : PhoneToolAccess {
-        override fun missing(tool: PhoneTool) = "Phone tools work from Herald on an Android phone."
+        override fun missing(tool: PhoneTool) = "Phone tools work from Kyllene on an Android phone."
 
         override fun request(tool: PhoneTool) = Unit
     }
