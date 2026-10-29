@@ -6,59 +6,88 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 
 /**
  * The agent's screens in the chat that a `phone_show_ui` call waits on. The tool [await]s the user's answer; the
- * chat draws the screen from the call's arguments and hands a tap to [answer]. A screen is matched by its
- * surface ids, so the same screen in the chat's history takes taps only while its call still waits.
+ * chat draws the screen from the call's arguments, says it's on screen with [shown], and hands a tap to [answer].
+ * A screen is matched by its chat (the stored session id, when the gateway said which) and its surface ids, so the
+ * same screen in another chat, or in this chat's history, takes no taps.
  */
-class AgentScreens {
+class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
 
-    private class Waiting(val screen: AgentScreen, val answer: CompletableDeferred<Result<JsonElement>>)
+    /** A screen a call waits on: [chat] is null when the gateway didn't say which chat called. */
+    data class Live(val chat: String?, val surfaceIds: Set<String>) {
+        fun matches(chat: String?, surfaceId: String) =
+            surfaceId in surfaceIds && (this.chat == null || chat == null || this.chat == chat)
+    }
+
+    private class Waiting(val live: Live) {
+        val shown = CompletableDeferred<Unit>()
+        private val answer = CompletableDeferred<Result<JsonElement>>()
+
+        /** Ends the wait with [result]; an answer, or a failure, needs no more showing. */
+        fun complete(result: Result<JsonElement>): Boolean = answer.complete(result).also { shown.complete(Unit) }
+
+        suspend fun await(): JsonElement = answer.await().getOrThrow()
+    }
 
     private val waiting = MutableStateFlow<List<Waiting>>(emptyList())
 
-    /** The surface ids that take a tap now. */
-    val live: StateFlow<Set<String>> get() = _live.asStateFlow()
-    private val _live = MutableStateFlow<Set<String>>(emptySet())
+    /** The screens that take a tap now. */
+    val live: StateFlow<List<Live>> get() = _live.asStateFlow()
+    private val _live = MutableStateFlow<List<Live>>(emptyList())
 
     /**
-     * Waits until the user answers [screen] in the chat, and returns what they did, for the agent. Throws
-     * [PhoneToolException] when the screen couldn't be shown, or a newer call took over its surface.
+     * Waits until the user answers [screen] in [chat], and returns what they did, for the agent. Throws
+     * [PhoneToolException] when the chat doesn't show it soon (Kyllene is closed, or on another chat), when it
+     * failed to draw, when the call ended, or when a newer call took over its surface.
      */
-    suspend fun await(screen: AgentScreen): JsonElement {
-        val entry = Waiting(screen, CompletableDeferred())
+    suspend fun await(screen: AgentScreen, chat: String?): JsonElement {
+        val entry = Waiting(Live(chat, screen.surfaceIds))
         var replaced = emptyList<Waiting>()
         waiting.update { list ->
-            val (old, kept) = list.partition { it.screen.surfaceIds.any(screen.surfaceIds::contains) }
+            val (old, kept) = list.partition { it.live.chat == chat && it.live.surfaceIds.any(screen.surfaceIds::contains) }
             replaced = old
             kept + entry
         }
-        replaced.forEach { it.answer.complete(Result.failure(PhoneToolException(REPLACED))) }
+        replaced.forEach { it.complete(Result.failure(PhoneToolException(REPLACED))) }
         publish()
         try {
-            return entry.answer.await().getOrThrow()
+            withTimeoutOrNull(shownWithinMs) { entry.shown.await() } ?: throw PhoneToolException(NOT_SHOWN)
+            return entry.await()
         } finally {
             waiting.update { list -> list - entry }
             publish()
         }
     }
 
-    /** Hands the user's [result] on [surfaceId] to the call waiting on it; false when none waits. */
-    fun answer(surfaceId: String, result: JsonElement): Boolean = complete(surfaceId, Result.success(result))
-
-    /** Tells the call waiting on [surfaceId] that its screen failed ([message], for the agent to fix it). */
-    fun fail(surfaceId: String, message: String): Boolean = complete(surfaceId, Result.failure(PhoneToolException(message)))
-
-    private fun complete(surfaceId: String, result: Result<JsonElement>): Boolean {
-        val entry = waiting.value.lastOrNull { surfaceId in it.screen.surfaceIds } ?: return false
-        return entry.answer.complete(result)
+    /** The chat [chat] shows the screen with [surfaceIds] now, and can take its answer. */
+    fun shown(chat: String?, surfaceIds: Set<String>) {
+        waiting.value.filter { w -> surfaceIds.any { w.live.matches(chat, it) } }.forEach { it.shown.complete(Unit) }
     }
 
-    private fun publish() = _live.update { waiting.value.flatMapTo(HashSet()) { it.screen.surfaceIds } }
+    /** Hands the user's [result] on [surfaceId] in [chat] to the call waiting on it; false when none waits. */
+    fun answer(chat: String?, surfaceId: String, result: JsonElement): Boolean = complete(chat, surfaceId, Result.success(result))
 
-    private companion object {
+    /** Tells the call waiting on [surfaceId] in [chat] that its screen failed or ended ([message], for the agent). */
+    fun fail(chat: String?, surfaceId: String, message: String): Boolean =
+        complete(chat, surfaceId, Result.failure(PhoneToolException(message)))
+
+    private fun complete(chat: String?, surfaceId: String, result: Result<JsonElement>): Boolean {
+        val entry = waiting.value.lastOrNull { it.live.matches(chat, surfaceId) } ?: return false
+        return entry.complete(result)
+    }
+
+    private fun publish() = _live.update { waiting.value.map { it.live } }
+
+    companion object {
+        /** A screen the chat doesn't show by then isn't waited on: nobody would see it. */
+        const val SHOWN_WITHIN_MS = 15_000L
+
         const val REPLACED = "A newer screen with the same surface id took its place."
+        const val NOT_SHOWN = "Kyllene isn't showing this chat on the phone right now, so the user can't see the " +
+            "screen. Ask in words instead, or try again when they're in the chat."
     }
 }

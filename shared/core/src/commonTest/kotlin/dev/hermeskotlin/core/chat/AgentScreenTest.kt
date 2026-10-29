@@ -2,7 +2,11 @@ package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.rpc.GatewayEvent
+import dev.hermeskotlin.core.sessions.SessionMessage
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,7 +15,8 @@ import kotlin.test.assertNull
 
 class AgentScreenTest {
 
-    private val create = """{"version":"v0.9.1","createSurface":{"surfaceId":"pick","catalogId":"basic"}}"""
+    private val create =
+        """{"version":"v0.9","createSurface":{"surfaceId":"pick","catalogId":"https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json"}}"""
     private val components = """{"version":"v0.9.1","updateComponents":{"surfaceId":"pick","components":[{"id":"root","component":"Text","text":"Hi"}]}}"""
 
     private fun args(json: String) = HermesJson.parseToJsonElement(json)
@@ -54,6 +59,30 @@ class AgentScreenTest {
         assertNull(AgentScreen.from(SHOW_UI_TOOL, null))
         val tooMany = (0..AgentScreen.MAX_MESSAGES).joinToString(",") { create }
         assertNull(AgentScreen.from(SHOW_UI_TOOL, args("""{"messages":[$tooMany]}""")))
+    }
+
+    @Test
+    fun aStoredCallCarriesItsScreen() {
+        // The transcript keeps a call's arguments as JSON text.
+        val calls = buildJsonArray {
+            add(
+                buildJsonObject {
+                    put("id", "c1")
+                    put("function", buildJsonObject { put("name", SHOW_UI_TOOL); put("arguments", """{"messages":[$create]}""") })
+                },
+            )
+        }
+        val messages = historyToMessages(
+            listOf(
+                SessionMessage(id = 1, role = "user", content = JsonPrimitive("pick a time")),
+                SessionMessage(id = 2, role = "assistant", content = JsonPrimitive(""), toolCalls = calls),
+                SessionMessage(id = 3, role = "tool", content = JsonPrimitive("""{"event":"pick"}"""), toolCallId = "c1"),
+                SessionMessage(id = 4, role = "assistant", content = JsonPrimitive("Booked.")),
+            ),
+        )
+        val tool = assertIs<ChatMessage.Assistant>(messages.last()).tools.single()
+        assertEquals(setOf("pick"), tool.agentScreen?.surfaceIds)
+        assertFalse(tool.running)
     }
 
     @Test
