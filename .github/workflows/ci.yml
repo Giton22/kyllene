@@ -93,11 +93,13 @@ jobs:
       - name: Xcode project
         run: brew install xcodegen && xcodegen --spec iosApp/project.yml
 
+      # Signed ad hoc, with no team: an unsigned app gets no Keychain on the simulator (-34018), and the app writes
+      # to it at launch.
       - name: Build the app for the simulator
         run: >-
           xcodebuild -project iosApp/Herald.xcodeproj -scheme Herald -configuration Debug
           -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath iosApp/build
-          ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build
+          ARCHS=arm64 CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= build
 
       - name: Launch in the simulator
         run: |
