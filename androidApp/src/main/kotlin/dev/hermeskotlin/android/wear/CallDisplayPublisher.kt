@@ -24,10 +24,15 @@ internal class CallDisplayPublisher(private val context: Context) {
     suspend fun publish(gateway: String?, target: CallTarget?, picture: ByteArray?,
         pictureKnown: Boolean = picture != null || target?.profile == null) {
         val bitmap = target?.profile?.let { CallShortcut.pictureBitmap(context, picture) }
+        // JPEG, the artwork being opaque: a photograph as lossless PNG would often be over the watch's limit.
         val bytes = bitmap?.let {
-            try { ByteArrayOutputStream().use { out -> it.compress(Bitmap.CompressFormat.PNG, 100, out); out.toByteArray() } }
-            finally { it.recycle() }
-        }?.takeIf { it.size <= CallDisplay.MAX_IMAGE_BYTES }
+            try {
+                JPEG_QUALITIES.firstNotNullOfOrNull { quality ->
+                    ByteArrayOutputStream().use { out -> it.compress(Bitmap.CompressFormat.JPEG, quality, out); out.toByteArray() }
+                        .takeIf { bytes -> bytes.size <= CallDisplay.MAX_IMAGE_BYTES }
+                }
+            } finally { it.recycle() }
+        }
         val identity = WearJson.encode(listOf(gateway.orEmpty(), target?.profile.orEmpty(), target?.sessionId.orEmpty()))
         val targetKey = MessageDigest.getInstance("SHA-256").digest(identity).joinToString("") { "%02x".format(it) }
         if (target?.profile != null && bytes == null && (!pictureKnown || picture != null)) {
@@ -63,5 +68,9 @@ internal class CallDisplayPublisher(private val context: Context) {
         } catch (_: Exception) {
             // The next observed settings/connection refresh retries this revision.
         }
+    }
+
+    private companion object {
+        val JPEG_QUALITIES = listOf(90, 75, 60)
     }
 }
