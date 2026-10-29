@@ -42,6 +42,7 @@ import dev.hermeskotlin.core.chat.canEdit
 import dev.hermeskotlin.core.chat.promptNow
 import dev.hermeskotlin.core.chat.regenerateTarget
 import dev.hermeskotlin.core.network.errorMessage
+import dev.hermeskotlin.core.plugins.NextPromptApi
 import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.sessions.SessionsApi
@@ -206,6 +207,8 @@ class ChatViewModel(
     readAloudVoices: ReadAloudVoices? = null,
     /** An approval is only taken by voice while the phone is unlocked. */
     deviceLock: DeviceLock = DeviceLock.None,
+    /** The Next Prompt plugin's suggestions; none without it. */
+    nextPromptApi: NextPromptApi? = null,
 ) : ViewModel(), ChatActions {
 
     /** Dictation, voice chat and Read aloud for the open chat. */
@@ -235,6 +238,9 @@ class ChatViewModel(
     /** Runs goal, loop and heartbeat actions for the open chat's panel. */
     val control = SessionControlController(viewModelScope)
 
+    /** The message the gateway's Next Prompt plugin expects next in the open chat. */
+    val nextPrompt = NextPromptController(nextPromptApi, viewModelScope)
+
     override val composer = TextFieldState()
     val connectionState: StateFlow<ConnectionState> = connection.state
 
@@ -250,6 +256,13 @@ class ChatViewModel(
         // A chat opened under the checkpoints sheet shows its own checkpoints, not the last chat's.
         viewModelScope.launch { session.collect { checkpoints.follow(it) } }
         viewModelScope.launch { session.collect { control.follow(it) } }
+        viewModelScope.launch {
+            val enabled = settings.settings.map { it?.suggestedReplies ?: true }
+            widgetSession
+                .map { bound -> bound?.let { (chat, owner) -> Triple(chat, owner.gateway.gatewayUrl, owner.profile) } }
+                .distinctUntilChanged()
+                .collect { bound -> nextPrompt.follow(bound?.second, bound?.third, bound?.first?.state, enabled) }
+        }
     }
 
     internal val transcript: StateFlow<ChatTranscript> = widgetSession
@@ -479,6 +492,16 @@ class ChatViewModel(
         }
         // After the new chat's session is bound: the call belongs to it.
         if (target.draft?.start == DraftStart.VoiceChat) startVoiceWhenConnected(target)
+        if (target.draft?.start == DraftStart.Send) sendWhenConnected(target)
+    }
+
+    /** Sends the quick entry's prompt, already in the composer, once [target] can take it; a chat moved on from keeps it unsent. */
+    private fun sendWhenConnected(target: ChatTarget) {
+        viewModelScope.launch {
+            val ready = withTimeoutOrNull(VOICE_CONNECT_WAIT_MS) { connectionState.first { it is ConnectionState.Connected } }
+            if (this@ChatViewModel.target != target) return@launch
+            if (ready != null) send() else showAttachmentError("The prompt wasn't sent: Kyllene couldn't reach the gateway. It's in the composer.")
+        }
     }
 
     /** The screen tells whether it's on screen (started) or gone to the background (stopped). */
@@ -498,11 +521,11 @@ class ChatViewModel(
                 combine(connectionState, shown) { state, shown -> state.takeIf { it !is ConnectionState.Connected || shown } }
                     .first { it is ConnectionState.Connected || it is ConnectionState.Failed || it is ConnectionState.SessionExpired }
             }
-            if (this@ChatViewModel.target != target) return@launch
+            if (this@ChatViewModel.target?.copy(readUpTo = null) != target.copy(readUpTo = null)) return@launch
             when {
                 ready is ConnectionState.Connected -> _requests.send(ChatRequest.StartVoice)
                 ready is ConnectionState.Failed || (ready == null && connectionState.value !is ConnectionState.Connected) ->
-                    showAttachmentError("The call didn't start: Herald couldn't reach the gateway.")
+                    showAttachmentError("The call didn't start: Kyllene couldn't reach the gateway.")
             }
         }
     }
@@ -769,6 +792,15 @@ class ChatViewModel(
     override fun pickSuggestion(suggestion: SlashSuggestion) {
         composer.setTextAndPlaceCursorAtEnd(if (suggestion.kind == SlashKind.Option) suggestion.text else "${suggestion.text} ")
     }
+
+    override fun useSuggestedReply(reply: SuggestedReply) {
+        // Only into an empty composer, where the chip shows: what the user typed is never replaced.
+        if (reply != nextPrompt.suggestion.value || composer.text.isNotEmpty()) return
+        composer.setTextAndPlaceCursorAtEnd(reply.text)
+        nextPrompt.used()
+    }
+
+    override fun dismissSuggestedReply() = nextPrompt.dismiss()
 
     private fun isSlashQuery(text: String): Boolean = '\n' !in text && SlashCommand.looksLikeCommand(text) || text == "/"
 
@@ -1042,6 +1074,21 @@ class ChatViewModel(
         }
     }
 
+    override fun sendPrompt(text: String) {
+        val chat = session.value ?: return
+        if (text.isBlank()) return
+        val running = sendModeFor(state.value.running, null, settings.settings.value?.runningSend, withAttachments = false)
+        viewModelScope.launch {
+            val outcome = when (running) {
+                null -> chat.submit(text, emptyList())
+                RunningSend.Steer -> chat.steer(text)
+                // Stopping someone's run from a box in another app is too much; it waits its turn instead.
+                RunningSend.Queue, RunningSend.StopAndSend -> chat.submit(text, emptyList(), queue = true)
+            }
+            if (outcome == SendOutcome.NotSent) giveBack(text)
+        }
+    }
+
     override fun interrupt() {
         val chat = session.value ?: return
         viewModelScope.launch {
@@ -1074,16 +1121,7 @@ class ChatViewModel(
         if (!state.value.canChangeChat(connectionState.value is ConnectionState.Connected)) return
         if (state.value.messages.none { it.key == key }) return
         viewModelScope.launch {
-            // Counted from the first row, so the pages not scrolled back to yet are read first.
-            if (!chat.loadAllHistory()) return@launch
-            val messages = chat.state.value.messages
-            val index = messages.indexOfFirst { it.key == key }
-            if (index < 0) return@launch
-            // The gateway keeps the first N user and assistant rows that have text, so count those.
-            val count = messages.take(index + 1).count {
-                (it is ChatMessage.User && it.text.isNotBlank()) || (it is ChatMessage.Assistant && it.text.isNotBlank())
-            }
-            chat.branch(count)?.let { (id, title) -> _requests.send(ChatRequest.OpenChat(id, title)) }
+            chat.branchFrom(key)?.let { (id, title) -> _requests.send(ChatRequest.OpenChat(id, title)) }
         }
     }
 

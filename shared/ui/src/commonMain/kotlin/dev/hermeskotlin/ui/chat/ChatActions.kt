@@ -32,6 +32,12 @@ interface ChatActions {
     /** What Send does while a reply runs, from Settings. */
     val runningSend: StateFlow<RunningSend> get() = DefaultRunningSend
 
+    /**
+     * Sends [text] as a prompt of its own, leaving the composer and its files as they are (the desktop's quick
+     * entry). Mid-turn it steers, or queues when Send would stop the reply.
+     */
+    fun sendPrompt(text: String) {}
+
     fun interrupt()
 
     fun removeAttachment(id: String)
@@ -50,6 +56,12 @@ interface ChatActions {
     fun answer(request: InputRequest, result: JsonObject)
 
     fun pickSuggestion(suggestion: SlashSuggestion)
+
+    /** Puts the suggested next message in the composer, to look over and send. */
+    fun useSuggestedReply(reply: SuggestedReply) {}
+
+    /** Closes the suggested next message. */
+    fun dismissSuggestedReply() {}
 
     /** The bytes behind a picture or file in the chat, or null when it can't be had. */
     suspend fun loadMedia(source: String): ByteArray?

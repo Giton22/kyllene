@@ -88,12 +88,21 @@ data class AppSettings(
     val showPet: Boolean = true,
     /** Automatically fetch linked webpages and thumbnails; off until the user opts in. */
     val showLinkPreviews: Boolean = false,
+    /** The gateway's Next Prompt plugin's suggested next message, over the composer once a turn ends. */
+    val suggestedReplies: Boolean = true,
     val voicePause: VoicePause = VoicePause.Normal,
+    /** Default call destination per saved gateway; absence starts a new conversation in its selected profile. */
+    val callTargets: Map<String, CallTarget> = emptyMap(),
     /** The mic for dictation in the composer and on an empty chat. Off, it goes, and the model name gets the room. */
     val dictation: Boolean = true,
     val dictationEngine: DictationEngine = DictationEngine.Device,
     /** What tapping Send does while a reply is running; a long press on Send picks another for one message. */
     val runningSend: RunningSend = RunningSend.Steer,
+    /**
+     * What every new chat started here tells the agent first, out of sight (`putStartInstruction`), such as "I'm on
+     * my phone: keep replies short". Blank: nothing. Chats already going keep what they started with.
+     */
+    val startInstruction: String = "",
     /** Notify when a turn finishes while the app is in the background. */
     val notifyReplies: Boolean = true,
     /** Notify when the agent waits on an approval or a question while the app is in the background. */
@@ -154,7 +163,18 @@ data class AppSettings(
     val threadsCollapsed: Boolean = false,
     /** The sidebar shows its projects as one button that opens a list, not a row of chips that scrolls sideways. */
     val projectsAsDropdown: Boolean = false,
+    /** Desktop: closing the window keeps Herald in the tray, still telling of replies and questions. */
+    val closeToTray: Boolean = false,
+    /** Desktop: Ctrl+Shift+Space from any app opens a small composer that sends to the open chat. */
+    val quickEntry: Boolean = true,
+    /** Desktop: how big everything is drawn, in percent (Ctrl+= and Ctrl+-). */
+    val zoom: Int = 100,
+    /** Desktop: the sidebar's width in dp, as its edge was last dragged to. */
+    val sidebarWidth: Int = 304,
 )
+
+/** The [AppSettings.startInstruction] a new chat starts with, trimmed; null when there is none or the settings aren't read yet. */
+fun SettingsStore.startInstruction(): String? = settings.value?.startInstruction?.trim()?.takeIf { it.isNotEmpty() }
 
 /**
  * Holds [AppSettings]: null until the stored copy is read, so the first frame can wait for the

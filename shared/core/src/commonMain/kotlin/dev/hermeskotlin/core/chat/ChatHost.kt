@@ -4,11 +4,16 @@ import dev.hermeskotlin.core.cache.OfflineCache
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.sessions.SessionsApi
+import dev.hermeskotlin.core.settings.SettingsStore
+import dev.hermeskotlin.core.settings.startInstruction
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -24,7 +29,12 @@ class ChatHost(
     private val scope: CoroutineScope,
     private val risks: ToolRiskStore? = null,
     private val cache: OfflineCache? = null,
+    /** Where the instruction a new chat starts with comes from (see [startInstruction]). */
+    private val settings: SettingsStore? = null,
 ) {
+    /** What a new chat started on this device tells the agent first: the setting, read when the chat is created. */
+    val startInstruction: () -> String? = { settings?.startInstruction() }
+
     private val _session = MutableStateFlow<ChatSession?>(null)
     val session: StateFlow<ChatSession?> = _session.asStateFlow()
 
@@ -39,6 +49,17 @@ class ChatHost(
     fun holdSideChat(storedId: String) = _sideChats.update { it + storedId }
 
     fun releaseSideChat(storedId: String) = _sideChats.update { it - storedId }
+
+    private val _retitled = MutableSharedFlow<Pair<String, String?>>(extraBufferCapacity = 8)
+
+    /** Chats renamed from the list, as (stored id, new title), for a window of its own showing one. */
+    val retitled: SharedFlow<Pair<String, String?>> = _retitled.asSharedFlow()
+
+    /** [storedId] was renamed to [title] from the list: the open chat, if it's that one, shows it, and so does any window. */
+    fun retitled(storedId: String, title: String?) {
+        _session.value?.takeIf { it.state.value.storedSessionId == storedId }?.showTitle(title)
+        _retitled.tryEmit(storedId to title)
+    }
 
     private var gateway: GatewayUrl? = null
     private var profile: String? = null
@@ -66,7 +87,7 @@ class ChatHost(
         this.profile = profile
         sessionScope = childScope
         val cards = storedSessionId?.let { sideTasks.remove(Triple(gateway, profile, it)) }.orEmpty()
-        return ChatSession(gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache, sideTasks = cards)
+        return ChatSession(gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache, sideTasks = cards, startInstruction = startInstruction)
             .also { it.start() }
             .also { _session.value = it }
     }

@@ -7,5 +7,7 @@ import androidx.compose.runtime.Composable
 @Composable
 internal actual fun PlatformCommentableSelection(
     onAction: ((SelectionAction, SelectionAnchor) -> Unit)?,
+    // Asked only by the desktop's right-click; its default "nothing selected" stands.
+    probe: SelectionProbe?,
     content: @Composable () -> Unit,
 ) = SelectionContainer(content = content)

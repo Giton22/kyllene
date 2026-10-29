@@ -18,6 +18,8 @@ kotlin {
     // shared:core exposes it on iOS too, where it's only types: there's no watch to talk to.
     iosArm64()
     iosSimulatorArm64()
+    // The desktop app (experimental).
+    jvm()
 
     sourceSets {
         commonMain.dependencies {

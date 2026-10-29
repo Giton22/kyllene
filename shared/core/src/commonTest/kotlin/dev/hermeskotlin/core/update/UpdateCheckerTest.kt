@@ -41,7 +41,24 @@ class UpdateCheckerTest {
     fun aReleaseNamesItsApk() {
         val update = parseRelease(HermesJson.parseToJsonElement(release) as JsonObject, listOf("arm64-v8a"))!!
         assertEquals("0.3.0", update.version)
-        assertEquals("https://x/app.apk", update.apkUrl)
+        assertEquals("https://x/app.apk", update.downloadUrl)
+    }
+
+    @Test
+    fun aDesktopTakesItsOwnInstallerAndNeverAnApk() {
+        val release = HermesJson.parseToJsonElement(
+            """{"tag_name":"v1.2.0","html_url":"https://github.com/o/r/releases/tag/v1.2.0","assets":[""" +
+                listOf("kyllene-1.2.0.apk", "kyllene-desktop-1.2.0.dmg", "kyllene-desktop-1.2.0.msi", "kyllene-desktop-1.2.0.msi.sha256", "kyllene-desktop-1.2.0_amd64.deb")
+                    .joinToString(",") { """{"name":"$it","browser_download_url":"https://x/$it"}""" } + "]}",
+        ) as JsonObject
+
+        assertEquals("https://x/kyllene-desktop-1.2.0.msi", parseRelease(release, emptyList(), installer = ".msi")?.downloadUrl)
+        assertEquals("https://x/kyllene-desktop-1.2.0.dmg", parseRelease(release, emptyList(), installer = ".dmg")?.downloadUrl)
+        assertEquals("https://x/kyllene-desktop-1.2.0_amd64.deb", parseRelease(release, emptyList(), installer = ".deb")?.downloadUrl)
+        // A release without this desktop's installer: the release page.
+        assertNull(parseRelease(release, emptyList(), installer = ".rpm")?.downloadUrl)
+        // And a phone never takes a desktop installer.
+        assertEquals("https://x/kyllene-1.2.0.apk", parseRelease(release, listOf("arm64-v8a"))?.downloadUrl)
     }
 
     @Test
@@ -56,12 +73,12 @@ class UpdateCheckerTest {
                 names.zip(urls).joinToString(",") { (name, url) -> """{"name":"$name","browser_download_url":"https://x/$url"}""" } + "]}",
         ) as JsonObject
 
-        assertEquals("https://x/arm64.apk", parseRelease(split, listOf("arm64-v8a", "armeabi-v7a", "armeabi"))?.apkUrl)
-        assertEquals("https://x/arm32.apk", parseRelease(split, listOf("armeabi-v7a", "armeabi"))?.apkUrl)
-        assertEquals("https://x/x86_64.apk", parseRelease(split, listOf("x86_64", "arm64-v8a"))?.apkUrl)
+        assertEquals("https://x/arm64.apk", parseRelease(split, listOf("arm64-v8a", "armeabi-v7a", "armeabi"))?.downloadUrl)
+        assertEquals("https://x/arm32.apk", parseRelease(split, listOf("armeabi-v7a", "armeabi"))?.downloadUrl)
+        assertEquals("https://x/x86_64.apk", parseRelease(split, listOf("x86_64", "arm64-v8a"))?.downloadUrl)
         // No APK of its own (x86 here), or no ABI known: the universal one.
-        assertEquals("https://x/universal.apk", parseRelease(split, listOf("x86"))?.apkUrl)
-        assertEquals("https://x/universal.apk", parseRelease(split, emptyList())?.apkUrl)
+        assertEquals("https://x/universal.apk", parseRelease(split, listOf("x86"))?.downloadUrl)
+        assertEquals("https://x/universal.apk", parseRelease(split, emptyList())?.downloadUrl)
     }
 
     @Test
@@ -75,11 +92,18 @@ class UpdateCheckerTest {
         ) as JsonObject
 
         val full = release("herald-0.9.0.apk" to "universal.apk", "herald-0.9.0_arm64-v8a.apk" to "arm64.apk", "herald-wear-0.9.0.apk" to "wear.apk")
-        assertEquals("https://x/universal.apk", parseRelease(full, listOf("x86"))?.apkUrl)
-        assertEquals("https://x/arm64.apk", parseRelease(full, listOf("arm64-v8a"))?.apkUrl)
+        assertEquals("https://x/universal.apk", parseRelease(full, listOf("x86"))?.downloadUrl)
+        assertEquals("https://x/arm64.apk", parseRelease(full, listOf("arm64-v8a"))?.downloadUrl)
         // Only the watch's APK: the release page, not an APK the phone can't use.
         val wearOnly = release("herald-wear-0.9.0.apk" to "wear.apk")
-        assertEquals(null, parseRelease(wearOnly, listOf("arm64-v8a"))?.apkUrl)
+        assertEquals(null, parseRelease(wearOnly, listOf("arm64-v8a"))?.downloadUrl)
+
+        // Under another app name too, even listed before the phone's APKs.
+        val renamed = release("kyllene-wear-0.9.0.apk" to "wear.apk", "kyllene-0.9.0.apk" to "universal.apk", "kyllene-0.9.0_arm64-v8a.apk" to "arm64.apk")
+        assertEquals("https://x/universal.apk", parseRelease(renamed, listOf("x86"))?.downloadUrl)
+        assertEquals("https://x/arm64.apk", parseRelease(renamed, listOf("arm64-v8a"))?.downloadUrl)
+        assertEquals(null, parseRelease(release("Kyllene-Wear-0.9.0.apk" to "wear.apk"), listOf("arm64-v8a"))?.downloadUrl)
+        assertEquals(null, parseRelease(release("kyllene-dev-wear-0.9.0.apk" to "wear.apk"), listOf("arm64-v8a"))?.downloadUrl)
     }
 
     @Test
@@ -95,5 +119,27 @@ class UpdateCheckerTest {
         assertNull(checker().check("o/r", "0.3.0"))
         assertNull(checker(HttpStatusCode.NotFound, """{"message":"Not Found"}""").check("o/r", "0.1.0"))
         assertNull(checker().check("", "0.1.0"))
+    }
+
+    @Test
+    fun aRenamedRepoIsFollowedToItsNewAddress() = runTest {
+        // GitHub answers a renamed repo's old name with a redirect to the repo's id.
+        fun redirecting(location: String) = UpdateChecker(
+            createHttpClient(
+                MockEngine { request ->
+                    if (request.url.encodedPath.startsWith("/repos/")) {
+                        respond("", HttpStatusCode.MovedPermanently, headersOf(HttpHeaders.Location, location))
+                    } else {
+                        respond(release, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+                    }
+                },
+            ),
+            InMemoryKeyValueStore(),
+            abis = listOf("arm64-v8a"),
+        )
+        assertEquals("0.3.0", redirecting("https://api.github.com/repositories/1/releases/latest").check("o/r", "0.2.0")?.version)
+        // Only to GitHub's API, and not round in circles.
+        assertNull(redirecting("https://example.com/repositories/1/releases/latest").check("o/r", "0.2.0"))
+        assertNull(redirecting("https://api.github.com/repos/o/r/releases/latest").check("o/r", "0.2.0"))
     }
 }

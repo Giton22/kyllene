@@ -1,5 +1,7 @@
 package dev.hermeskotlin.ui.sessions
 
+import dev.hermeskotlin.ui.isDesktop
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
@@ -78,7 +80,8 @@ internal fun SwipeRow(
     modifier: Modifier = Modifier,
     content: @Composable (Modifier) -> Unit,
 ) {
-    if (start == null && end == null) {
+    // A desktop's mouse would archive or delete with a missed click's drag; its right-click menu has both.
+    if (isDesktop || start == null && end == null) {
         Box(modifier) { content(Modifier) }
         return
     }

@@ -11,3 +11,11 @@ internal actual val imeVisible: Boolean
     @Composable get() = WindowInsets.isImeVisible
 
 internal actual fun fullScreenDialogProperties() = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+
+// A phone's Enter starts a new line; Send is the button.
+internal actual val enterSends: Boolean = false
+
+internal actual val macKeys: Boolean = false
+
+@Composable
+internal actual fun PlatformTextContextMenu(content: @Composable () -> Unit) = content()
