@@ -258,7 +258,8 @@ private fun GatewayRow(
             items = {
                 if (!primary) MenuAction("Make primary", Lucide.Star, onClick = { menuOpen = false; onSetPrimary() })
                 MenuAction("Rename", Lucide.Pencil, onClick = { menuOpen = false; onRename() })
-                MenuAction("Client certificate", Lucide.ShieldCheck, onClick = { menuOpen = false; onClientCert() })
+                // Client certificates come from Android's system store; the desktop has none to pick from yet.
+                if (!isDesktop) MenuAction("Client certificate", Lucide.ShieldCheck, onClick = { menuOpen = false; onClientCert() })
                 MenuAction("Remove", Lucide.Trash2, onClick = { menuOpen = false; onRemove() })
             },
         ) {
@@ -337,7 +338,7 @@ private fun ClientCertDialog(gateway: SavedGateway?, onDismiss: () -> Unit, onSe
         visible = gateway != null,
         onDismissRequest = onDismiss,
         title = "Client certificate",
-        message = "Herald presents this certificate to “${g.label}” when its server asks for one. " +
+        message = "Kyllene presents this certificate to “${g.label}” when its server asks for one. " +
             "The key stays in the system store; only its name is kept.",
         actions = {
             Button("Cancel", onClick = onDismiss, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
