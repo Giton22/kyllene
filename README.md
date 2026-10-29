@@ -7,11 +7,11 @@
 **A native Android client for [Hermes Agent](https://github.com/NousResearch/hermes-agent).**
 Chat with your own agent, approve what it wants to do, and follow its work from your phone.
 
-[![Latest release](https://img.shields.io/github/v/release/Giton22/herald?style=flat&label=release)](https://github.com/Giton22/herald/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/Giton22/kyllene?style=flat&label=release)](https://github.com/Giton22/kyllene/releases/latest)
 [![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=flat&logo=android&logoColor=white)](#install)
 [![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-7F52FF?style=flat&logo=kotlin&logoColor=white)](#development)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/Giton22/herald?style=flat&logo=github)](https://github.com/Giton22/herald/stargazers)
+[![GitHub stars](https://img.shields.io/github/stars/Giton22/kyllene?style=flat&logo=github)](https://github.com/Giton22/kyllene/stargazers)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/wCtyvQ3KcM)
 
 <img src="docs/screenshots/reply.jpg" width="250" alt="A finished reply with reasoning, tools and a code block">&nbsp;
@@ -94,7 +94,7 @@ The full feature list, and what's planned, is in the [roadmap](docs/ROADMAP.md).
 ## Install
 
 1. On your Android phone (Android 8.0 or newer), download the APK from the
-   [latest release](https://github.com/Giton22/herald/releases/latest). For almost every phone that is
+   [latest release](https://github.com/Giton22/kyllene/releases/latest). For almost every phone that is
    the `arm64-v8a` build; the release notes say which fits other devices.
 2. Open it, and allow installing from your browser when Android asks.
 3. Herald tells you when a new release is out. Install it over the old one; your sign-in and settings stay.
@@ -133,7 +133,7 @@ connection one at a time and says what to fix.
 Join the [Herald Discord](https://discord.gg/wCtyvQ3KcM) to get help, share your setup, suggest features
 and hear about new releases first. In the app, it's under **Settings → About → Join the Discord**.
 
-Found a bug? [Open an issue](https://github.com/Giton22/herald/issues/new/choose) here or post it in
+Found a bug? [Open an issue](https://github.com/Giton22/kyllene/issues/new/choose) here or post it in
 the server's #bug-reports.
 
 ## Support Herald
@@ -210,9 +210,9 @@ the same values from an untracked `keystore.properties` at the repository root.
 
 <a href="https://www.star-history.com/?type=date&repos=Giton22%2Fherald">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Giton22/herald&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Giton22/herald&type=date&legend=top-left" />
-   <img alt="Star history chart" src="https://api.star-history.com/chart?repos=Giton22/herald&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Giton22/kyllene&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Giton22/kyllene&type=date&legend=top-left" />
+   <img alt="Star history chart" src="https://api.star-history.com/chart?repos=Giton22/kyllene&type=date&legend=top-left" />
  </picture>
 </a>
 
