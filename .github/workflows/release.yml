@@ -124,12 +124,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The release build type: ProGuard leaves out the library code the app never reaches.
           - os: windows-latest
-            task: packageMsi
+            task: packageReleaseMsi
           - os: macos-latest
-            task: packageDmg
+            task: packageReleaseDmg
           - os: ubuntu-latest
-            task: packageDeb
+            task: packageReleaseDeb
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:
@@ -191,7 +192,7 @@ jobs:
         env:
           HERALD_PACKAGING_JDK: ${{ env.JAVA_HOME }}
         run: >
-          ./gradlew --no-daemon :desktopApp:${{ matrix.task }} ${{ env.NOTARIZE && ':desktopApp:notarizeDmg' || '' }}
+          ./gradlew --no-daemon :desktopApp:${{ matrix.task }} ${{ env.NOTARIZE && ':desktopApp:notarizeReleaseDmg' || '' }}
           -PappVersion="${GITHUB_REF_NAME#v}" -PreleasesRepo="$GITHUB_REPOSITORY"
 
       - name: Sign the MSI
@@ -206,7 +207,7 @@ jobs:
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT))
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
             Where-Object { $_.FullName -like "*\x64\*" } | Sort-Object FullName -Descending | Select-Object -First 1
-          $msi = Get-ChildItem desktopApp/build/compose/binaries/main/msi -Filter *.msi | Select-Object -First 1
+          $msi = Get-ChildItem desktopApp/build/compose/binaries/main-release/msi -Filter *.msi | Select-Object -First 1
           try {
             & $signtool.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d Kyllene $msi.FullName
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -219,7 +220,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${GITHUB_REF_NAME#v}"
-          out=desktopApp/build/compose/binaries/main
+          out=desktopApp/build/compose/binaries/main-release
           case "${{ runner.os }}" in
             Windows) cp "$out"/msi/*.msi "kyllene-desktop-$v.msi" ;;
             macOS) cp "$out"/dmg/*.dmg "kyllene-desktop-$v.dmg" ;;
