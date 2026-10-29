@@ -81,9 +81,10 @@ internal fun FittedTable(content: String, node: ASTNode, style: TextStyle) {
             Box(Modifier.horizontalScroll(sideways)) {
                 TableGrid(rows, content, style, available, LocalMarkdownColors.current.dividerColor, dimens.dividerThickness)
             }
+            // A table wider than the reply shows the desktop's bar to drag it by, as a wide code block does. It is in
+            // the table's direction too, so for a right-to-left table it starts at the right and drags the same way.
+            Box(Modifier.matchParentSize()) { HorizontalScrollbar(sideways, Modifier.align(Alignment.BottomStart).fillMaxWidth()) }
         }
-        // A table wider than the reply shows the desktop's bar to drag it by, as a wide code block does.
-        Box(Modifier.matchParentSize()) { HorizontalScrollbar(sideways, Modifier.align(Alignment.BottomStart).fillMaxWidth()) }
     }
 }
 
