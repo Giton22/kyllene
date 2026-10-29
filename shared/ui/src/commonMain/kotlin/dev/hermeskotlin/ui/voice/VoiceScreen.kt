@@ -85,7 +85,7 @@ import com.composables.icons.lucide.X
 import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
-import com.composeunstyled.theme.rememberColoredIndication
+import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.designsystem.accent
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
@@ -265,7 +265,7 @@ private fun RingButton(icon: ImageVector, description: String, onClick: () -> Un
                 .clip(CircleShape)
                 .background(Theme[colors][surface])
                 .border(1.dp, Theme[colors][stroke], CircleShape)
-                .indication(interaction, rememberColoredIndication(Theme[colors][textColor])),
+                .indication(interaction, rememberHoverIndication(Theme[colors][textColor])),
             contentAlignment = Alignment.Center,
         ) {
             UnstyledIcon(icon, contentDescription = null, tint = Theme[colors][textSecondary], modifier = Modifier.size(19.dp))

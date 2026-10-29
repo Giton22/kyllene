@@ -14,8 +14,19 @@ kotlin {
         // For the bundled Geist fonts in res/font (license: GEIST-OFL.txt).
         androidResources { enable = true }
     }
+    // The desktop app (experimental). Lambdas as classes, which the app's warm-up loads ahead (see shared/ui).
+    jvm {
+        compilerOptions { freeCompilerArgs.add("-Xlambdas=class") }
+    }
 
     sourceSets {
+        jvmMain {
+            // The same Geist files, loaded from the classpath.
+            resources.srcDir("src/androidMain/res/font")
+            dependencies {
+                implementation(libs.jlatexmath)
+            }
+        }
         commonMain.dependencies {
             api(libs.compose.runtime)
             api(libs.compose.foundation)

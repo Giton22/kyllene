@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui.inbox
 
 import androidx.lifecycle.ViewModel
+import dev.hermeskotlin.ui.deviceNoun
 import androidx.lifecycle.viewModelScope
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
@@ -568,7 +569,7 @@ class InboxViewModel(
             }?.runs?.firstOrNull { it.key == key }
             if (gen != generation) return@launch
             if (run == null) {
-                _state.update { it.copy(message = "That report isn't on the phone. It may be further back in the list.") }
+                _state.update { it.copy(message = "That report isn't on the $deviceNoun. It may be further back in the list.") }
                 return@launch
             }
             _state.update { it.copy(choosing = false, grouping = false) }
