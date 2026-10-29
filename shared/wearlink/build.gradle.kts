@@ -15,6 +15,8 @@ kotlin {
         // The apps build for JVM 11, and they inline WearJson's reified helpers: this module's bytecode must match.
         compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11) }
     }
+    // The desktop app (experimental).
+    jvm()
 
     sourceSets {
         commonMain.dependencies {
