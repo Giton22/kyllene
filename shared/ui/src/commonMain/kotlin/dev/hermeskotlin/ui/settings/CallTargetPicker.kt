@@ -122,7 +122,7 @@ internal fun CallTargetPicker(
                     profiles.forEach { profile ->
                         val bot = faces.bots.firstOrNull { it.name == profile.name } ?: Bot(name = profile.name, displayName = profile.label)
                         CallTargetCard(bot.label, null, selected?.profile == bot.name, {
-                            onSelect(CallTarget(profile = bot.name, botChat = true, label = bot.label))
+                            onSelect(CallTarget(profile = bot.name, label = bot.label))
                         }) { BotAvatar(bot, faces.picture(bot), size = 40.dp) }
                     }
                 }

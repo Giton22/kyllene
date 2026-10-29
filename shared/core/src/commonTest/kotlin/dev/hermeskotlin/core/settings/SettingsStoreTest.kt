@@ -18,11 +18,11 @@ class SettingsStoreTest {
         val restored = settings.settings.filterNotNull().first()
         assertEquals(ThemeMode.Dark, restored.theme)
         assertEquals(CallTarget(profile = "sample_bot", sessionId = "r1", label = "Sample · Planning"), restored.callTargets["https://home.example"])
-        settings.update { it.copy(callTargets = it.callTargets + ("https://work.example" to CallTarget(profile = "helper", botChat = true))) }
+        settings.update { it.copy(callTargets = it.callTargets + ("https://work.example" to CallTarget(profile = "helper", label = "Helper"))) }
         advanceUntilIdle()
         val saved = SettingsStore(disk, backgroundScope).settings.filterNotNull().first()
         assertEquals(restored.callTargets["https://home.example"], saved.callTargets["https://home.example"])
-        assertEquals(true, saved.callTargets["https://work.example"]?.botChat)
+        assertEquals(CallTarget(profile = "helper", label = "Helper"), saved.callTargets["https://work.example"])
         assertEquals(ThemeMode.Dark, saved.theme)
     }
 

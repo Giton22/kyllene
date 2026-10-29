@@ -7,10 +7,7 @@ import kotlinx.serialization.Serializable
 data class CallTarget(
     val profile: String? = null,
     val sessionId: String? = null,
-    /** Legacy bot marker retained for validation; a profile always resolves its permanent chat. */
-    val botChat: Boolean = false,
     val label: String = "New session",
 ) {
-    val valid: Boolean get() = profile?.isBlank() != true && sessionId?.isBlank() != true &&
-        (profile == null || sessionId == null) && (!botChat || profile != null)
+    val valid: Boolean get() = profile?.isBlank() != true && sessionId?.isBlank() != true && (profile == null || sessionId == null)
 }
