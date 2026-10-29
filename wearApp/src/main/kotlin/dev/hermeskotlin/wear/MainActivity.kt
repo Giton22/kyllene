@@ -189,6 +189,8 @@ class MainActivity : ComponentActivity() {
             if (target.error != null) { listening.value = Listening(error = target.error); return@launch }
             listening.value = Listening()
             inputGeneration = app.link.profileReset.value
+            // No live voice there: the tile still talks to the target, one spoken ask at a time.
+            if (!target.live) return@launch listen()
             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 app.link.startCall(target.requestId)
             } else {

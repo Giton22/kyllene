@@ -228,9 +228,13 @@ class WatchBotsTest {
     }
 
     @Test
-    fun aDefaultWithNoLiveVoiceFailsWithoutCreatingOrResumingAChat() = runTest {
+    fun aDefaultWithNoLiveVoiceResolvesForAnAskWithoutCreatingOrResumingAChat() = runTest {
         val s = setup()
-        assertTrue(s.target("unavailable").error != null)
+        s.settings.update { it.copy(callTargets = mapOf(FakeGateway.URL.value to CallTarget(sessionId = "ordinary", label = "Plans"))) }
+        val target = s.target("not-live")
+        assertEquals(null, target.error)
+        assertEquals(false, target.live)
+        assertEquals("ordinary", target.chatId)
         assertTrue(s.gateway.sent("session.create").isEmpty())
         assertTrue(s.gateway.sent("session.resume").isEmpty())
     }
@@ -386,6 +390,23 @@ class WatchBotsTest {
         until { voiceChecks.isNotEmpty() }
         assertEquals(listOf<String?>(null), voiceChecks)
         assertEquals(false, s.relay.talksLive)
+    }
+
+    @Test
+    fun theRingersCheckDoesNotPushOutTheWatchChatsProfile() = runTest {
+        val s = setup()
+        s.relay.status("watch", "assistant")
+        until { voiceChecks.size == 1 }
+        s.relay.checkLiveVoice()
+        until { voiceChecks.size == 2 }
+        s.outbox.messages.clear()
+        s.relay.status("watch", "assistant")
+        until { s.outbox.messages.any { it.first == WearPaths.STATUS } }
+        // Both answers are still fresh: neither profile is asked again.
+        s.relay.checkLiveVoice()
+        delay(100)
+        assertEquals(listOf("assistant", null), voiceChecks)
+        assertEquals("true", s.outbox.messages.last { it.first == WearPaths.STATUS }.second["liveVoice"]?.jsonPrimitive?.content)
     }
 
     @Test

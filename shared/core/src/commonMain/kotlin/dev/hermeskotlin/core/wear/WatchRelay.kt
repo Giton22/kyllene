@@ -134,8 +134,9 @@ class WatchRelay(
         }
     }
 
-    private var liveVoice: Triple<GatewayUrl, String?, Boolean>? = null
-    private var liveVoiceAt = 0L
+    /** What each profile of the current gateway said of its live voice, and when: the watch's chat and the ringer ask for different ones. */
+    private class LiveVoice(val on: Boolean, val at: Long)
+    private val liveVoices = AtomicReference<Map<Pair<GatewayUrl, String?>, LiveVoice>>(emptyMap())
 
     private val _session = MutableStateFlow<ChatSession?>(null)
 
@@ -245,7 +246,7 @@ class WatchRelay(
         val reachable = state is ConnectionState.Connected || state is ConnectionState.Idle
         val gateway = saved?.gatewayUrl?.takeIf { signedIn }
         val profile = gateway?.let { if (owner != null && owner.gateway == it.value) owner.profile else botProfile ?: profiles.get(it) }
-        val live = if (gateway == null) false else liveVoice?.takeIf { it.first == gateway && it.second == profile }?.third
+        val live = if (gateway == null) false else liveVoices.load()[gateway to profile]?.on
         return PhoneStatus(signedIn, signedIn && reachable, failed = signedIn && state is ConnectionState.Failed,
             liveVoice = live, botChats = true, botProfile = botProfile, defaultCalls = true, profileSync = true,
             activeScope = gateway?.let { WatchScope(it.value, profiles.get(it)) },
@@ -254,7 +255,7 @@ class WatchRelay(
 
     /** Whether [gateway]'s live voice was asked lately: the watch asks how the phone stands often, the gateway every few minutes. */
     private fun liveVoiceFresh(gateway: GatewayUrl, profile: String?): Boolean =
-        liveVoice?.first == gateway && liveVoice?.second == profile && Clock.System.now().toEpochMilliseconds() - liveVoiceAt < LIVE_VOICE_CHECK_MS
+        liveVoices.load()[gateway to profile]?.let { Clock.System.now().toEpochMilliseconds() - it.at < LIVE_VOICE_CHECK_MS } == true
 
     /** Whether the gateway talks live (GPT-Live); [known] is what it said last. */
     private suspend fun checkLiveVoice(gateway: GatewayUrl, profile: String?, known: Boolean?): Boolean {
@@ -274,26 +275,26 @@ class WatchRelay(
      * watch rings. Not yet asked (just switched to), it doesn't, until [checkLiveVoice] finds out.
      */
     val talksLive: Boolean
-        get() = liveVoice?.let { it.third && it.second == null && it.first == gateways.list.value.current?.gatewayUrl } == true
+        get() = gateways.list.value.current?.gatewayUrl?.let { liveVoices.load()[it to null]?.on } == true
 
     /** Asks the gateway whether it talks live, unless that was asked lately, so [talksLive] is fresh for the next call. */
     fun checkLiveVoice() {
         scope.launch {
             val saved = gateways.current()
             // Another gateway's answer, or none signed in: it doesn't talk live until it says so.
-            if (liveVoice?.first != saved?.gatewayUrl) liveVoice = null
+            liveVoices.updateAndFetch { all -> all.filterKeys { it.first == saved?.gatewayUrl } }
             if (saved == null || !auth.hasStoredSession(saved.gatewayUrl)) {
-                liveVoice = null
+                liveVoices.store(emptyMap())
             } else if (!liveVoiceFresh(saved.gatewayUrl, null)) {
-                checkLiveVoice(saved.gatewayUrl, null, liveVoice?.takeIf { it.second == null }?.third)
+                checkLiveVoice(saved.gatewayUrl, null, liveVoices.load()[saved.gatewayUrl to null]?.on)
             }
         }
     }
 
     /** What a call just found out of [gateway]'s live voice, so the watch is told it next, not minutes on. */
     fun liveVoiceIs(gateway: GatewayUrl, on: Boolean, profile: String?) {
-        liveVoice = Triple(gateway, profile, on)
-        liveVoiceAt = Clock.System.now().toEpochMilliseconds()
+        val found = LiveVoice(on, Clock.System.now().toEpochMilliseconds())
+        liveVoices.updateAndFetch { all -> all.filterKeys { it.first == gateway } + ((gateway to profile) to found) }
     }
 
     /**
@@ -383,9 +384,10 @@ class WatchRelay(
                     if (chatId != null) check(sessions.messages(saved.gatewayUrl, chatId, limit = 1, profile = profile) is ApiResult.Success) {
                         "Couldn't open Default Call Target. Check it on your phone."
                     }
-                    val live = audio.voiceLiveStatus(saved.gatewayUrl, profile)
-                    check(live is ApiResult.Success && live.value.live) { "Live calling isn't available for Default Call Target." }
-                    val resolved = DefaultCallTarget(requestId, chatId, target.profile, bot?.label ?: target.label, scope = WatchScope(saved.gatewayUrl.value, profile))
+                    // Not live (or an older gateway that can't say): the watch asks there by voice instead.
+                    val live = audio.voiceLiveStatus(saved.gatewayUrl, profile).let { it is ApiResult.Success && it.value.live }
+                    val resolved = DefaultCallTarget(requestId, chatId, target.profile, bot?.label ?: target.label,
+                        scope = WatchScope(saved.gatewayUrl.value, profile), live = live)
                     val value = DefaultResolution(requestId, saved.gatewayUrl, target, profile, resolved)
                     check(defaultCurrent(value)) { "Default Call Target changed. Tap Call again." }
                     turnLock.withLock {
@@ -396,6 +398,8 @@ class WatchRelay(
                 }
             } catch (e: CancellationException) {
                 if (e !is kotlinx.coroutines.TimeoutCancellationException) throw e
+                // A connection that gave up stays down unless told to try again, as the other waits here do.
+                if (connection.state.value !is ConnectionState.Connected) connection.retry()
                 DefaultCallTarget(requestId, error = "Couldn't reach Default Call Target. Try again.")
             } catch (e: Exception) {
                 DefaultCallTarget(requestId, error = e.message ?: "Couldn't open Default Call Target.")

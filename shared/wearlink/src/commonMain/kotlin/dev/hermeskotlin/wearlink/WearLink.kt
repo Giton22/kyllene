@@ -463,10 +463,13 @@ fun clipForWatch(text: String, max: Int = MAX_WATCH_TEXT): String {
     return text.substring(0, cut).trimEnd() + "…"
 }
 
-/** Resolved on demand by the phone; cached artwork never determines the call destination. */
+/**
+ * Resolved on demand by the phone; cached artwork never determines the call destination. [live]: the target
+ * talks live; when it doesn't, the watch asks there by voice instead of calling.
+ */
 @Serializable
 data class DefaultCallTarget(val requestId: String, val chatId: String? = null, val botProfile: String? = null,
-    val title: String = "New session", val error: String? = null, val scope: WatchScope? = null)
+    val title: String = "New session", val error: String? = null, val scope: WatchScope? = null, val live: Boolean = true)
 
 /** Display only: revision covers the current target and rendered image. */
 @Serializable
