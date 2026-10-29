@@ -40,6 +40,9 @@ enum class DraftStart {
 
     /** A voice conversation (`hermes://voice-chat`). */
     VoiceChat,
+
+    /** The text goes out as the first prompt once the chat is connected (the desktop's quick entry). */
+    Send,
 }
 
 /**

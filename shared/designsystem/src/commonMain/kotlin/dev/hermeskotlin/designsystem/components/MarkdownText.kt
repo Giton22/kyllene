@@ -17,7 +17,7 @@ import androidx.compose.ui.draw.clip
 import com.composables.icons.lucide.SquareTerminal
 import com.composeunstyled.UnstyledButton
 import com.composeunstyled.UnstyledIcon
-import com.composeunstyled.theme.rememberColoredIndication
+import dev.hermeskotlin.designsystem.rememberHoverIndication
 import com.mikepenz.markdown.compose.elements.listDepth
 import com.mikepenz.markdown.compose.elements.MarkdownListItems
 import dev.hermeskotlin.designsystem.radiusSmall
@@ -25,6 +25,7 @@ import dev.hermeskotlin.designsystem.surface3
 import dev.hermeskotlin.designsystem.textMuted
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +62,8 @@ import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
 import com.mikepenz.markdown.compose.elements.MarkdownParagraph
 import com.mikepenz.markdown.compose.elements.MarkdownText as LibraryMarkdownText
 import dev.hermeskotlin.designsystem.accent
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
+import com.mikepenz.markdown.model.markdownExtendedSpans
 import org.intellij.markdown.ast.ASTNode
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalUriHandler
@@ -159,6 +162,11 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
     val codeStyle = Theme[typography][code].copy(color = Theme[colors][textColor])
     val headingStyle = Theme[typography][heading].copy(color = Theme[colors][textColor])
     val linkColor = Theme[colors][accentText]
+    val linkStyle = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+    // On a desktop a link under the pointer takes a soft tint, which also tells the right-click menu which link
+    // it is on (see LinkUnderPointer).
+    val desktop = LocalDesktopLayout.current
+    val hoverMark = Theme[colors][accent].copy(alpha = 0.14f)
     val markdownColors = DefaultMarkdownColors(
         text = bodyStyle.color,
         codeBackground = Theme[colors][well],
@@ -181,7 +189,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
         ordered = replyStyle,
         bullet = replyStyle,
         list = replyStyle,
-        textLink = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+        textLink = TextLinkStyles(linkStyle, hoveredStyle = if (desktop) linkStyle.copy(background = hoverMark) else null),
         table = replyStyle,
     ).withTextStyle(compact)
     val components = remember {
@@ -205,6 +213,15 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
     val parentUris = LocalUriHandler.current
     val fileLinks = LocalFileLinks.current
     val webOnly = remember(parentUris, fileLinks) { WebLinksOnly(parentUris, fileLinks) }
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val extendedSpans = if (!desktop) markdownExtendedSpans() else markdownExtendedSpans {
+        rememberLinkHoverSpans(
+            hoverMark,
+            open = webOnly::openUri,
+            copy = { url -> scope.launch { clipboard.setClipEntry(plainTextClipEntry(url)) } },
+        )
+    }
     CompositionLocalProvider(LocalUriHandler provides webOnly, LocalStreaming provides streaming, LocalMathStyle provides math) {
         Markdown(
             content = prepared,
@@ -217,6 +234,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
             inlineContent = inlineContent,
             imageTransformer = PictureTransformer,
             components = components,
+            extendedSpans = extendedSpans,
             retainState = true,
             immediate = !streaming,
         )
@@ -323,7 +341,7 @@ private object PictureTransformer : ImageTransformer {
             null, MarkdownPicture.Loading -> null
             is MarkdownPicture.Ready -> ImageData(
                 BitmapPainter(picture.bitmap),
-                modifier = picture.onOpen?.let { Modifier.clickable(onClickLabel = "Open the picture", onClick = it) } ?: Modifier,
+                modifier = picture.onOpen?.let { Modifier.handCursor().clickable(onClickLabel = "Open the picture", onClick = it) } ?: Modifier,
                 contentDescription = null,
             )
             MarkdownPicture.Failed -> ImageData(
@@ -414,8 +432,9 @@ private fun CodeBlock(code: String, language: String?, style: TextStyle) {
             .background(Theme[colors][well])
             .border(1.dp, Theme[colors][stroke], shape),
     ) {
-        // A header strip: what the code is, and a Copy pill.
-        Row(
+        // A header strip: what the code is, and a Copy pill. Out of a selection, so copying a reply across the
+        // block takes its code without "kotlin" and "Copy".
+        DisableSelection { Row(
             Modifier.fillMaxWidth().background(Theme[colors][surface2]).padding(start = 12.dp, end = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -428,10 +447,15 @@ private fun CodeBlock(code: String, language: String?, style: TextStyle) {
                 modifier = Modifier.weight(1f),
             )
             CopyPill(code)
-        }
-        val scroll = if (wrap) Modifier else Modifier.horizontalScroll(rememberScrollState())
-        Box(Modifier.fillMaxWidth().then(scroll).padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)) {
-            BasicText(text, style = style, softWrap = wrap)
+        } }
+        val scroll = rememberScrollState()
+        Box {
+            val sideways = if (wrap) Modifier else Modifier.horizontalScroll(scroll)
+            Box(Modifier.fillMaxWidth().then(sideways).padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)) {
+                BasicText(text, style = style, softWrap = wrap)
+            }
+            // In the bottom padding, so a line running past the edge shows it does, to a mouse too.
+            if (!wrap) HorizontalScrollbar(scroll, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 6.dp, vertical = 3.dp))
         }
     }
 }
@@ -500,8 +524,8 @@ private fun CopyPill(text: String) {
     val tint = Theme[colors][textTertiary]
     UnstyledButton(
         onClick = copy,
-        modifier = Modifier.height(40.dp).clip(RoundedCornerShape(Theme[radii][radiusSmall])),
-        indication = rememberColoredIndication(tint),
+        modifier = Modifier.height(40.dp).handCursor().clip(RoundedCornerShape(Theme[radii][radiusSmall])),
+        indication = rememberHoverIndication(tint),
         contentPadding = PaddingValues(horizontal = 4.dp),
     ) {
         Row(

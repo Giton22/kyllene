@@ -74,6 +74,8 @@ data class SessionsUiState(
     val savedCopyAt: Long? = null,
     /** Results for the search box; null while it is empty. */
     val searchResults: List<SessionSummary>? = null,
+    /** The words [searchResults] answer, trimmed; a box typed on since holds results for something else. */
+    val searchedFor: String? = null,
     val searching: Boolean = false,
     /** One-off feedback for a failed row action, cleared by [SessionsViewModel.dismissMessage]. */
     val message: String? = null,
@@ -553,9 +555,11 @@ class SessionsViewModel(
      *  leaving it set would bounce the next mount after a fresh sign-in. */
     fun consumeSessionExpired() = _state.update { it.copy(sessionExpired = false) }
 
-    fun rename(session: SessionSummary, title: String) = mutate(
+    /** [onRenamed] runs once the gateway has taken the new title. */
+    fun rename(session: SessionSummary, title: String, onRenamed: () -> Unit = {}) = mutate(
         apply = { list -> list.map { if (it.id == session.id) it.copy(title = title.ifBlank { null }) else it } },
         call = { url, profile -> api.rename(url, session.id, title.trim(), profile) },
+        onSuccess = { onRenamed() },
     )
 
     fun togglePinned(session: SessionSummary) = mutate(
@@ -822,16 +826,17 @@ class SessionsViewModel(
                 .collectLatest { q ->
                     val url = gateway?.gatewayUrl
                     if (q == null || url == null) {
-                        _state.update { it.copy(searchResults = null, searching = false) }
+                        _state.update { it.copy(searchResults = null, searchedFor = null, searching = false) }
                         return@collectLatest
                     }
                     _state.update { it.copy(searching = true) }
                     val result = api.search(url, q, profile = profile)
                     _state.update {
                         when (result) {
-                            is ApiResult.Success -> it.copy(searchResults = result.value, searching = false)
+                            is ApiResult.Success -> it.copy(searchResults = result.value, searchedFor = q, searching = false)
                             else -> it.copy(
                                 searchResults = emptyList(),
+                                searchedFor = q,
                                 searching = false,
                                 message = result.errorMessage,
                                 sessionExpired = result.isExpired,
