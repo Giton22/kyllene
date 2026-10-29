@@ -7,11 +7,25 @@ import kotlin.test.assertNull
 class AppLinkTest {
 
     @Test
+    fun aVoiceChatLinkIsRecognized() {
+        assertEquals(AppLink.VoiceChat, AppLink.parse("hermes://voice-chat"))
+        assertEquals(AppLink.VoiceChat, AppLink.parse("HERMES://Voice-Chat/?from=launcher#top"))
+        assertNull(AppLink.parse("hermes://voice-chat/extra"))
+    }
+
+    @Test
     fun readsEachKindOfLink() {
         assertEquals(AppLink.NewChat, AppLink.parse("hermes://new-chat"))
         assertEquals(AppLink.NewChatVoice, AppLink.parse("hermes://new-chat-voice"))
         assertEquals(AppLink.Session("20260105_101500_ab12"), AppLink.parse("hermes://session/20260105_101500_ab12"))
         assertEquals(AppLink.Bot("researcher"), AppLink.parse("hermes://bot/researcher"))
+    }
+
+    @Test
+    fun theDesktopsOwnSchemeReadsTheSame() {
+        assertEquals(AppLink.Session("s1"), AppLink.parse("herald://session/s1"))
+        assertEquals(AppLink.NewChat, AppLink.parse("Herald://new-chat"))
+        assertNull(AppLink.parse("heraldx://new-chat"))
     }
 
     @Test

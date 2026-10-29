@@ -1,5 +1,7 @@
 package dev.hermeskotlin.ui.rooms
 
+import dev.hermeskotlin.designsystem.components.ScrollbarBox
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -28,12 +30,29 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.traversalIndex
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.runtime.key
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import dev.hermeskotlin.ui.chat.ComposerKey
+import dev.hermeskotlin.ui.chat.composerKey
+import dev.hermeskotlin.ui.chat.isPickKey
+import dev.hermeskotlin.ui.chat.moveHighlight
+import dev.hermeskotlin.ui.chat.suggestionStep
+import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.bots.mentionQuery
 import dev.hermeskotlin.core.rooms.mentionable
 import dev.hermeskotlin.core.rooms.mentionsEveryone
@@ -44,10 +63,15 @@ import dev.hermeskotlin.ui.chat.MentionSuggestions
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.text.input.placeCursorAtEnd
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
@@ -69,6 +93,23 @@ import com.composeunstyled.TextInput
 import com.composeunstyled.UnstyledTextField
 import com.composeunstyled.theme.Theme
 import androidx.compose.foundation.text.input.TextFieldState
+import dev.hermeskotlin.core.chat.OutgoingAttachment
+import dev.hermeskotlin.core.chat.ShownAttachment
+import dev.hermeskotlin.core.chat.AttachmentKind
+import dev.hermeskotlin.core.rooms.RoomAttachment
+import dev.hermeskotlin.ui.chat.rememberAttachmentPicker
+import dev.hermeskotlin.ui.chat.AttachSheet
+import dev.hermeskotlin.ui.chat.ComposerTray
+import dev.hermeskotlin.ui.chat.SentAttachments
+import dev.hermeskotlin.ui.LocalFocusHeld
+import dev.hermeskotlin.ui.Shortcut
+import dev.hermeskotlin.ui.ShortcutHandler
+import dev.hermeskotlin.ui.isDesktop
+import com.composables.icons.lucide.Paperclip
+import dev.hermeskotlin.core.chat.linkFileUris
+import dev.hermeskotlin.core.gateway.GatewayUrl
+import dev.hermeskotlin.core.media.GatewayFile
+import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.core.rooms.Room
 import dev.hermeskotlin.core.rooms.RoomLine
 import dev.hermeskotlin.core.rooms.RoomPendingAction
@@ -81,8 +122,10 @@ import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
+import dev.hermeskotlin.designsystem.components.CopyButton
 import dev.hermeskotlin.designsystem.components.DropdownMenu
 import dev.hermeskotlin.designsystem.components.MarkdownText
+import dev.hermeskotlin.designsystem.components.LocalFileLinks
 import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.designsystem.components.Surface
 import dev.hermeskotlin.designsystem.radii
@@ -102,6 +145,10 @@ import dev.hermeskotlin.ui.bots.BotFaces
 import dev.hermeskotlin.ui.bots.LocalBotFaces
 import dev.hermeskotlin.ui.chat.BarButton
 import dev.hermeskotlin.ui.chat.MessageTimeLabel
+import dev.hermeskotlin.ui.chat.FileLoad
+import dev.hermeskotlin.ui.chat.FileDownload
+import dev.hermeskotlin.ui.chat.fileDownload
+import dev.hermeskotlin.ui.chat.fileLoad
 import dev.hermeskotlin.ui.chat.SendButton
 import dev.hermeskotlin.ui.chat.BarStatus
 import dev.hermeskotlin.ui.chat.SendIcon
@@ -122,16 +169,22 @@ fun RoomScreen(
     viewModel: RoomsViewModel = koinViewModel(),
     onOpenSidebar: () -> Unit,
     onBack: () -> Unit,
+    onOpenFile: (String?, GatewayFile) -> Unit = { _, _ -> },
+    /** Off while a page covers the room (Settings, the bot editor, a plugin), so its keys don't type in it unseen. */
+    keysEnabled: Boolean = true,
 ) {
     val open by viewModel.opened.collectAsStateWithLifecycle()
     val room = open ?: return
-    RoomView(room, viewModel, LocalBotFaces.current, onOpenSidebar = onOpenSidebar, onBack = onBack)
+    RoomView(room, viewModel, LocalBotFaces.current, onOpenSidebar = onOpenSidebar, onBack = onBack, onOpenFile = onOpenFile, keysEnabled = keysEnabled)
 }
 
 /** What an open room can ask for; [RoomsViewModel] does it all, previews nothing. */
 interface RoomActions {
     /** What the user is typing to the room. */
     val composer: TextFieldState
+    fun addAttachments(picked: List<OutgoingAttachment>, draftKey: Int) {}
+    fun removeAttachment(id: String) {}
+    fun attachmentError(message: String, draftKey: Int) {}
     fun send()
     fun stop()
     fun loadEarlier()
@@ -144,7 +197,15 @@ interface RoomActions {
 
 /** An open room's layout, apart from the view model, so previews can draw it from sample data. */
 @Composable
-internal fun RoomView(room: OpenRoom, viewModel: RoomActions, faces: BotFaces, onOpenSidebar: () -> Unit, onBack: () -> Unit) {
+internal fun RoomView(
+    room: OpenRoom,
+    viewModel: RoomActions,
+    faces: BotFaces,
+    onOpenSidebar: () -> Unit,
+    onBack: () -> Unit,
+    onOpenFile: (String?, GatewayFile) -> Unit = { _, _ -> },
+    keysEnabled: Boolean = true,
+) {
     var ask by remember { mutableStateOf<RoomAsk?>(null) }
     RoomAskDialogs(ask, onDismiss = { ask = null }, onRename = viewModel::renameRoom, onDelete = viewModel::deleteRoom)
     Box(
@@ -186,7 +247,7 @@ internal fun RoomView(room: OpenRoom, viewModel: RoomActions, faces: BotFaces, o
                 },
             )
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                Transcript(room, faces, onLoadEarlier = viewModel::loadEarlier)
+                Transcript(room, faces, onLoadEarlier = viewModel::loadEarlier, onOpenFile = onOpenFile)
             }
             // A failed read in full, above whatever waits on the user; the loop keeps trying.
             room.error?.let { ListNotice(it) }
@@ -208,8 +269,9 @@ internal fun RoomView(room: OpenRoom, viewModel: RoomActions, faces: BotFaces, o
                     )
                 }
             }
-            RoomMentions(room, viewModel, faces)
-            RoomComposer(room, viewModel)
+            val mentions = rememberRoomMentions(room, viewModel, faces)
+            RoomMentions(room, mentions)
+            RoomComposer(room, viewModel, mentions, keysEnabled)
         }
         room.notice?.let { message ->
             MessageBanner(message, onDismiss = viewModel::dismissRoomNotice, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 120.dp))
@@ -222,7 +284,7 @@ internal fun RoomView(room: OpenRoom, viewModel: RoomActions, faces: BotFaces, o
  * the lines before it, while the log goes back further.
  */
 @Composable
-private fun Transcript(room: OpenRoom, faces: BotFaces, onLoadEarlier: () -> Unit) {
+private fun Transcript(room: OpenRoom, faces: BotFaces, onLoadEarlier: () -> Unit, onOpenFile: (String?, GatewayFile) -> Unit) {
     val listState = rememberLazyListState()
     val lines = room.lines
     // A newer line brings the end of the conversation into view; older ones read in above don't move the reader.
@@ -259,7 +321,7 @@ private fun Transcript(room: OpenRoom, faces: BotFaces, onLoadEarlier: () -> Uni
         (room.loading || room.loadingEarlier || room.canLoadEarlier) && lines.isEmpty() -> ListSpinner()
         lines.isEmpty() -> ListNotice("The room is quiet. Say something to start it.")
         else -> Box(Modifier.fillMaxSize()) {
-            TranscriptList(lines, listState, faces)
+            TranscriptList(lines, listState, faces, onOpenFile)
             // Over the list, not in it: a row on top would hold the scroll there and pull the reader up.
             if (room.loadingEarlier) {
                 Spinner(Modifier.align(Alignment.TopCenter).padding(top = 8.dp).size(18.dp))
@@ -270,7 +332,7 @@ private fun Transcript(room: OpenRoom, faces: BotFaces, onLoadEarlier: () -> Uni
 
 /** The transcript's lines, keyed by seq. */
 @Composable
-private fun TranscriptList(lines: List<RoomLine>, listState: LazyListState, faces: BotFaces) {
+private fun TranscriptList(lines: List<RoomLine>, listState: LazyListState, faces: BotFaces, onOpenFile: (String?, GatewayFile) -> Unit) = ScrollbarBox(listState, Modifier.fillMaxSize()) {
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -286,7 +348,7 @@ private fun TranscriptList(lines: List<RoomLine>, listState: LazyListState, face
                     val previous = lines.getOrNull(index - 1) as? RoomLine.Message
                     val continued = previous != null && !previous.fromUser &&
                         previous.profile == line.profile && previous.speaker == line.speaker
-                    MemberLine(line, continued, faces)
+                    MemberLine(line, continued, faces, onOpenFile)
                 }
                 is RoomLine.System -> SystemLine(line)
             }
@@ -302,15 +364,34 @@ private fun TranscriptList(lines: List<RoomLine>, listState: LazyListState, face
 internal fun UserLine(line: RoomLine.Message) {
     val shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp)
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(Modifier.fillMaxWidth(0.84f), contentAlignment = Alignment.CenterEnd) {
+        if (line.attachments.isNotEmpty()) SentAttachments(remember(line.attachments) {
+            line.attachments.map { file -> ShownAttachment(file.attachmentId, file.name, when (file.kind) {
+                "image" -> AttachmentKind.Image
+                "pdf" -> AttachmentKind.Pdf
+                else -> AttachmentKind.File
+            }) }
+        })
+        // Copy sits beside the bubble, at its foot, so it takes no height of its own. A screen reader still
+        // reads the message first, as on a bot's line. Files sent alone have no bubble.
+        if (line.text.isNotBlank()) Row(
+            Modifier.fillMaxWidth(0.84f).semantics { isTraversalGroup = true },
+            horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.End),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            if (copyable(line.text)) {
+                CopyButton(line.text, Modifier.semantics { traversalIndex = 1f }, label = copyLabel(null))
+            }
             Box(
                 Modifier
+                    .weight(1f, fill = false)
                     .clip(shape)
                     .background(Theme[colors][userBubble], shape)
                     .border(1.dp, Theme[colors][userBubbleStroke], shape)
                     .padding(horizontal = 14.dp, vertical = 9.dp),
             ) {
-                Text(line.text, style = Theme[typography][body], color = Theme[colors][onUserBubble])
+                SelectionContainer {
+                    Text(line.text, style = Theme[typography][body], color = Theme[colors][onUserBubble])
+                }
             }
         }
         MessageTimeLabel(line.createdAt)
@@ -322,9 +403,13 @@ internal fun UserLine(line: RoomLine.Message) {
  * toward its face tucked in.
  */
 @Composable
-internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFaces) {
+internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFaces, onOpenFile: (String?, GatewayFile) -> Unit = { _, _ -> }) {
     val bot = remember(line.profile, faces) { faces.roomBot(line.profile) }
     val tint = bot.roomColor()
+    val name = line.speaker ?: bot.label
+    // Kept across recompositions: a new handler would redraw the whole message each time the room updates.
+    val open by rememberUpdatedState(onOpenFile)
+    val fileLinks = remember(line.profile) { { link: String -> roomFileLink(link, line.profile, open) } }
     val shape = RoundedCornerShape(topStart = 6.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.size(FACE)) {
@@ -334,7 +419,7 @@ internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFa
             if (!continued) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        line.speaker ?: bot.label,
+                        name,
                         style = Theme[typography][caption].copy(fontSize = 12.sp, fontWeight = FontWeight.SemiBold),
                         // The bot's own color, drawn toward the text color so it reads on either theme: further on a
                         // light one, where a yellow or cyan name would wash out.
@@ -346,18 +431,35 @@ internal fun MemberLine(line: RoomLine.Message, continued: Boolean, faces: BotFa
                     MessageTimeLabel(line.createdAt)
                 }
             }
-            Box(
-                Modifier
-                    .clip(shape)
-                    .background(Theme[colors][surface], shape)
-                    .border(1.dp, Theme[colors][stroke], shape)
-                    .padding(horizontal = 13.dp, vertical = 9.dp),
-            ) {
-                MarkdownText(line.text)
+            // Copy sits beside the bubble, at its foot, so a bot's run of lines stays packed.
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.Bottom) {
+                Box(
+                    Modifier
+                        .weight(1f, fill = false)
+                        .clip(shape)
+                        .background(Theme[colors][surface], shape)
+                        .border(1.dp, Theme[colors][stroke], shape)
+                        .padding(horizontal = 13.dp, vertical = 9.dp),
+                ) {
+                    SelectionContainer {
+                        CompositionLocalProvider(LocalFileLinks provides fileLinks) {
+                            MarkdownText(remember(line.text) { linkFileUris(line.text) })
+                        }
+                    }
+                }
+                // Copy keeps the message as the bot wrote it, not with its paths turned into links.
+                if (copyable(line.text)) CopyButton(line.text, label = copyLabel(name))
             }
         }
     }
 }
+
+/** Whether a line has text worth a Copy button. */
+internal fun copyable(text: String): Boolean = text.isNotBlank()
+
+/** What a screen reader hears for a line's Copy: whose message it copies, the user's when [speaker] is null. */
+internal fun copyLabel(speaker: String?): String =
+    if (speaker == null) "Copy your message" else "Copy $speaker's message"
 
 /** A line the gateway wrote: centred and quiet between the messages. */
 @Composable
@@ -408,10 +510,48 @@ private fun PendingActions(room: OpenRoom, onApprove: (RoomPendingAction, String
  * typed meanwhile).
  */
 @Composable
-private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
-    val hasText = viewModel.composer.text.isNotBlank()
+private fun RoomComposer(room: OpenRoom, viewModel: RoomActions, mentions: RoomMentionList, keysEnabled: Boolean) {
+    val hasText = viewModel.composer.text.isNotBlank() || room.attachments.isNotEmpty()
+    var attachOpen by remember(room.draftKey) { mutableStateOf(false) }
+    // A file read belongs to this opening, even if another room opens while it finishes.
+    val picker = key(viewModel, room.draftKey) {
+        val draftKey = room.draftKey
+        rememberAttachmentPicker(
+            onPicked = { viewModel.addAttachments(it, draftKey) },
+            onError = { viewModel.attachmentError(it, draftKey) },
+        )
+    }
+    AttachSheet(attachOpen, onDismiss = { attachOpen = false }, picker = picker,
+        subtitle = RoomAttachment.LIMITS)
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     var focused by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    // The desktop's keys, as the chat's composer has them: an opened room takes the keyboard unless something else
+    // holds it, Ctrl+L comes back to it, and typing or a paste with nothing focused lands in it.
+    val focusHeld = LocalFocusHeld.current
+    LaunchedEffect(room.draftKey) {
+        if (!isDesktop || !keysEnabled) return@LaunchedEffect
+        withFrameNanos {}
+        if (!focusHeld.value) focus.requestFocus()
+    }
+    ShortcutHandler(enabled = isDesktop && keysEnabled && !room.attachmentRetry) { shortcut ->
+        fun write(text: String) {
+            focus.requestFocus()
+            viewModel.composer.edit {
+                append(text)
+                placeCursorAtEnd()
+            }
+        }
+        when (shortcut) {
+            Shortcut.FocusComposer -> true.also { focus.requestFocus() }
+            is Shortcut.Type -> true.also { write(shortcut.text) }
+            Shortcut.Paste -> when {
+                room.attachmentsSupported && picker.pasteAttachments() -> true
+                else -> picker.clipboardText()?.let { write(it) } != null
+            }
+            else -> false
+        }
+    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -423,8 +563,13 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
             .onFocusChanged { focused = it.hasFocus }
             .padding(start = 4.dp, end = 6.dp, top = 14.dp, bottom = 6.dp),
     ) {
+        if (room.attachments.isNotEmpty()) ComposerTray(room.attachments, onRemove = viewModel::removeAttachment)
+        if (room.attachmentRetry) Text(
+            if (room.retryText.isBlank()) "Send again to confirm the previous message."
+            else "Send again to confirm the previous message: “${room.retryText}”", style = Theme[typography][caption], color = Theme[colors][textTertiary])
         UnstyledTextField(
             state = viewModel.composer,
+            enabled = !room.attachmentRetry,
             textStyle = Theme[typography][body],
             textColor = Theme[colors][text],
             cursorBrush = SolidColor(Theme[colors][accent]),
@@ -432,7 +577,19 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
             selectionColors = LocalTextSelectionColors.current,
             lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 8),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus).then(
+                // The desktop's keys, as the chat's composer has them: Enter sends, Shift+Enter starts a line,
+                // and with the `@` list up, Up and Down mark a member and Enter or Tab takes it.
+                if (!isDesktop) {
+                    Modifier
+                } else {
+                    Modifier.onPreviewKeyEvent { event ->
+                        mentions.onKey(event) || (composerKey(event) == ComposerKey.Send).also { send ->
+                            if (send && hasText && !room.sending) viewModel.send()
+                        }
+                    }
+                },
+            ),
         ) {
             TextInput(
                 placeholder = {
@@ -441,6 +598,11 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
             )
         }
         Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            BarButton(Lucide.Paperclip, "Add photos or files", onClick = {
+                // A desktop has no camera, and its file dialog picks photos as well: it opens straight away.
+                if (room.attachmentsSupported) { if (isDesktop) picker.pickFiles() else attachOpen = true }
+                else viewModel.attachmentError("This gateway doesn't support room attachments. Update Hermes to use them.", room.draftKey)
+            }, enabled = !room.sending && !room.attachmentRetry && room.attachments.size < RoomAttachment.MAX_COUNT)
             // Who answers first, by the gateway's own @ rule: everyone, unless the message names someone.
             val members = room.room.members
             val recipients by remember(members) { derivedStateOf { roomRecipients(viewModel.composer.text.toString(), members) } }
@@ -456,7 +618,7 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
                     // Over a selection, the cursor goes after the @ rather than selecting it.
                     placeCursorBeforeCharAt(at.start + before.length)
                 }
-            })
+            }, enabled = !room.attachmentRetry)
             Text(
                 if (recipients.size == members.size) members.joinToString(" · ") { it.label }
                 else "To ${recipients.joinToString(", ") { it.label }}",
@@ -481,28 +643,102 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions) {
  * A pick puts the member's room handle in, which is what the gateway matches (not the chat's `@hermes`).
  */
 @Composable
-private fun RoomMentions(room: OpenRoom, viewModel: RoomActions, faces: BotFaces) {
+private fun RoomMentions(room: OpenRoom, mentions: RoomMentionList) {
+    val choices = mentions.choices
+    AnimatedVisibility(visible = !room.attachmentRetry && choices.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
+        // Kept through the fade-out, so the list doesn't empty before it leaves.
+        var shown by remember { mutableStateOf(choices) }
+        if (choices.isNotEmpty()) shown = choices
+        MentionSuggestions(shown, hazeState = null, marked = if (isDesktop) mentions.marked.coerceAtLeast(0) else -1, onPick = mentions::pick)
+    }
+}
+
+/** The members what's typed after `@` can mean, the one Up and Down have marked on the desktop, and the pick. */
+@Stable
+private class RoomMentionList(val choices: List<MentionChoice>, private val pickAt: (MentionChoice) -> Unit) {
+    var marked by mutableIntStateOf(-1)
+
+    fun pick(choice: MentionChoice) = pickAt(choice)
+
+    /** The desktop's keys in the composer while the list shows: Up and Down mark, Enter or Tab takes the marked one. */
+    fun onKey(event: KeyEvent): Boolean {
+        if (choices.isEmpty()) return false
+        suggestionStep(event)?.let { step -> return true.also { marked = moveHighlight(marked, step, choices.size) } }
+        if (!isPickKey(event)) return false
+        pick(choices[marked.coerceIn(choices.indices)])
+        return true
+    }
+}
+
+@Composable
+private fun rememberRoomMentions(room: OpenRoom, viewModel: RoomActions, faces: BotFaces): RoomMentionList {
     val members = room.room.members
     val mention by remember(viewModel) {
         derivedStateOf { viewModel.composer.let { mentionQuery(it.text.toString(), it.selection.end) } }
     }
-    val choices = remember(mention, members, faces) {
-        val typed = mention ?: return@remember emptyList()
-        val everyone = MentionChoice("Everyone", "all", bot = null).takeIf { mentionsEveryone(typed.query) }
-        listOfNotNull(everyone) + members.mentionable(typed.query).mapNotNull { member ->
+    val retry = room.attachmentRetry
+    return remember(mention, members, faces, retry) {
+        val typed = mention
+        val everyone = MentionChoice("Everyone", "all", bot = null).takeIf { typed != null && mentionsEveryone(typed.query) }
+        val choices = if (typed == null || retry) emptyList() else listOfNotNull(everyone) + members.mentionable(typed.query).mapNotNull { member ->
             member.handle?.let { MentionChoice(member.label, it, faces.roomBot(member.profile ?: member.memberId)) }
         }
-    }
-    AnimatedVisibility(visible = choices.isNotEmpty(), enter = fadeIn(), exit = fadeOut()) {
-        // Kept through the fade-out, so the list doesn't empty before it leaves.
-        var shown by remember { mutableStateOf(choices) }
-        if (choices.isNotEmpty()) shown = choices
-        MentionSuggestions(shown, hazeState = null) { choice ->
-            val typed = mention ?: return@MentionSuggestions
-            viewModel.composer.edit { replace(typed.start, typed.end, "@${choice.handle} ") }
+        RoomMentionList(choices) { choice ->
+            if (!retry && typed != null) viewModel.composer.edit { replace(typed.start, typed.end, "@${choice.handle} ") }
         }
     }
 }
 
 /** How big a member's face is beside its lines. */
 private val FACE = 30.dp
+
+/** Opens the gateway file [link] points at as one of [profile]'s; a web link or anything else is left alone. */
+internal fun roomFileLink(link: String, profile: String?, open: (String?, GatewayFile) -> Unit) {
+    GatewayFile.fromLink(link)?.let { open(profile, it) }
+}
+
+/**
+ * A room file keeps the gateway, the room and the speaking bot that own it, including for links inside its
+ * preview. In a Desktop room [profile] is the member's name, and [shownIn] decides whether it is a bot here.
+ */
+internal data class RoomFileLink(val gateway: GatewayUrl, val room: String, val profile: String?, val file: GatewayFile) {
+    /**
+     * The link as the open [openRoom] shows it, or null when another room (or none) is open: a file saved
+     * across process death can come back before its room does. A Desktop member's owner is looked up in
+     * [bots] each time, so a tap made while the roster was still loading finds it once the roster arrives.
+     */
+    fun shownIn(openRoom: String?, bots: List<Bot>): RoomFileLink? = when {
+        room != openRoom -> null
+        room.startsWith(DESKTOP) -> copy(profile = desktopFileOwner(profile, bots))
+        else -> this
+    }
+
+    suspend fun preview(media: MediaApi, linked: GatewayFile = file): FileLoad =
+        if (profile.isNullOrBlank()) FileLoad.Failed(NO_OWNER) else media.fileLoad(gateway, linked, profile)
+
+    suspend fun download(media: MediaApi, linked: GatewayFile = file): FileDownload =
+        if (profile.isNullOrBlank()) FileDownload.Failed(NO_OWNER) else media.fileDownload(gateway, linked, profile)
+
+    companion object {
+        /** No request goes out without an owner: another profile's file at the same path is not this one. */
+        const val NO_OWNER = "Kyllene can't tell which of this gateway's bots owns this file."
+
+        private const val HOSTED = "hosted:"
+        private const val DESKTOP = "desktop:"
+
+        /** The key [room] takes for the open room: a hosted room by its id, a Desktop room by its mirror key. */
+        fun roomKey(hostedRoomId: String?, desktopRoomKey: String?): String? =
+            hostedRoomId?.let { HOSTED + it } ?: desktopRoomKey?.let { DESKTOP + it }
+
+        /** Kept across rotation and a folding screen, so an open file stays open. */
+        val Saver = Saver<RoomFileLink?, List<Any>>(
+            save = { link -> link?.let { arrayListOf(it.gateway.value, it.room, it.profile.orEmpty(), it.file.path, it.file.line ?: 0) } },
+            restore = { saved ->
+                GatewayUrl.parseOrNull(saved[0] as String)?.let { gateway ->
+                    val file = GatewayFile(saved[3] as String, (saved[4] as Int).takeIf { it > 0 })
+                    RoomFileLink(gateway, saved[1] as String, (saved[2] as String).ifEmpty { null }, file)
+                }
+            },
+        )
+    }
+}

@@ -11,6 +11,22 @@ import kotlin.test.assertEquals
 class SettingsStoreTest {
 
     @Test
+    fun callTargetsSurviveLoadingAndSavingAlongsideOtherPreferences() = runTest {
+        val disk = InMemoryKeyValueStore()
+        disk.put("settings.v1", """{"theme":"Dark","callTargets":{"https://home.example":{"profile":"sample_bot","sessionId":"r1","label":"Sample · Planning"}}}""")
+        val settings = SettingsStore(disk, backgroundScope)
+        val restored = settings.settings.filterNotNull().first()
+        assertEquals(ThemeMode.Dark, restored.theme)
+        assertEquals(CallTarget(profile = "sample_bot", sessionId = "r1", label = "Sample · Planning"), restored.callTargets["https://home.example"])
+        settings.update { it.copy(callTargets = it.callTargets + ("https://work.example" to CallTarget(profile = "helper", label = "Helper"))) }
+        advanceUntilIdle()
+        val saved = SettingsStore(disk, backgroundScope).settings.filterNotNull().first()
+        assertEquals(restored.callTargets["https://home.example"], saved.callTargets["https://home.example"])
+        assertEquals(CallTarget(profile = "helper", label = "Helper"), saved.callTargets["https://work.example"])
+        assertEquals(ThemeMode.Dark, saved.theme)
+    }
+
+    @Test
     fun startsWithDefaultsAndRemembersChanges() = runTest {
         val disk = InMemoryKeyValueStore()
         val first = SettingsStore(disk, backgroundScope)
@@ -85,6 +101,68 @@ class SettingsStoreTest {
         val restored = SettingsStore(disk, backgroundScope).settings.filterNotNull().first()
         assertEquals(ThemeMode.Dark, restored.theme)
         assertEquals("Neon", restored.accent)
+    }
+
+    @Test
+    fun pinnedStaysOpenUntilFoldedAndRemembersIt() = runTest {
+        val disk = InMemoryKeyValueStore()
+        // Settings saved before the option existed show every pinned chat.
+        disk.put("settings.v1", """{"theme":"Dark"}""")
+        val first = SettingsStore(disk, backgroundScope)
+        assertEquals(false, first.settings.filterNotNull().first().pinnedCollapsed)
+
+        first.update { it.copy(pinnedCollapsed = true) }
+        advanceUntilIdle()
+
+        assertEquals(true, SettingsStore(disk, backgroundScope).settings.filterNotNull().first().pinnedCollapsed)
+    }
+
+    @Test
+    fun threadsStayOpenUntilFoldedAndRemembersIt() = runTest {
+        val disk = InMemoryKeyValueStore()
+        // Settings saved before the option existed show every thread, whatever Pinned does.
+        disk.put("settings.v1", """{"theme":"Dark","pinnedCollapsed":true}""")
+        val first = SettingsStore(disk, backgroundScope)
+        assertEquals(false, first.settings.filterNotNull().first().threadsCollapsed)
+
+        first.update { it.copy(threadsCollapsed = true) }
+        advanceUntilIdle()
+
+        val again = SettingsStore(disk, backgroundScope).settings.filterNotNull().first()
+        assertEquals(true, again.threadsCollapsed)
+        assertEquals(true, again.pinnedCollapsed)
+    }
+
+    @Test
+    fun projectsShowAsChipsUntilSwitchedToAListAndRemembersIt() = runTest {
+        val disk = InMemoryKeyValueStore()
+        // Settings saved before the option existed keep the chips.
+        disk.put("settings.v1", """{"theme":"Dark"}""")
+        val first = SettingsStore(disk, backgroundScope)
+        assertEquals(false, first.settings.filterNotNull().first().projectsAsDropdown)
+
+        first.update { it.copy(projectsAsDropdown = true) }
+        advanceUntilIdle()
+
+        assertEquals(true, SettingsStore(disk, backgroundScope).settings.filterNotNull().first().projectsAsDropdown)
+    }
+
+    @Test
+    fun linkPreviewsRequireOptInAndRememberTheChoice() = runTest {
+        assertEquals(false, AppSettings().showLinkPreviews)
+        val disk = InMemoryKeyValueStore().apply { put("settings.v1", """{"theme":"Dark"}""") }
+        val first = SettingsStore(disk, backgroundScope)
+        assertEquals(false, first.settings.filterNotNull().first().showLinkPreviews)
+
+        first.update { it.copy(showLinkPreviews = true) }
+        advanceUntilIdle()
+        val reopened = SettingsStore(disk, backgroundScope)
+        assertEquals(true, reopened.settings.filterNotNull().first().showLinkPreviews)
+        assertEquals(ThemeMode.Dark, reopened.settings.value?.theme)
+
+        reopened.update { it.copy(showLinkPreviews = false) }
+        advanceUntilIdle()
+        assertEquals(false, SettingsStore(disk, backgroundScope).settings.filterNotNull().first().showLinkPreviews)
     }
 
     @Test

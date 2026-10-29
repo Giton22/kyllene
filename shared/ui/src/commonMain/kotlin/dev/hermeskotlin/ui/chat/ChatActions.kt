@@ -3,7 +3,9 @@ package dev.hermeskotlin.ui.chat
 import androidx.compose.foundation.text.input.TextFieldState
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatState
+import dev.hermeskotlin.core.chat.ControlAction
 import dev.hermeskotlin.core.chat.InputRequest
+import dev.hermeskotlin.core.media.LinkPreview
 import dev.hermeskotlin.core.settings.RunningSend
 import dev.hermeskotlin.core.slash.SlashSuggestion
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,6 +32,12 @@ interface ChatActions {
     /** What Send does while a reply runs, from Settings. */
     val runningSend: StateFlow<RunningSend> get() = DefaultRunningSend
 
+    /**
+     * Sends [text] as a prompt of its own, leaving the composer and its files as they are (the desktop's quick
+     * entry). Mid-turn it steers, or queues when Send would stop the reply.
+     */
+    fun sendPrompt(text: String) {}
+
     fun interrupt()
 
     fun removeAttachment(id: String)
@@ -49,8 +57,17 @@ interface ChatActions {
 
     fun pickSuggestion(suggestion: SlashSuggestion)
 
+    /** Puts the suggested next message in the composer, to look over and send. */
+    fun useSuggestedReply(reply: SuggestedReply) {}
+
+    /** Closes the suggested next message. */
+    fun dismissSuggestedReply() {}
+
     /** The bytes behind a picture or file in the chat, or null when it can't be had. */
     suspend fun loadMedia(source: String): ByteArray?
+
+    /** Webpage metadata and thumbnail, or null when unavailable. */
+    suspend fun loadLinkPreview(url: String): LinkPreview? = null
 
     fun stopSubagent(subagentId: String)
 
@@ -88,6 +105,12 @@ interface ChatActions {
     /** Loads the page of the conversation before what's shown, as the reader scrolls to the top. */
     fun loadOlder() {}
 
+    /**
+     * Runs an action from the goal and loops panel (pause, resume, clear, sub-goal edits) on the open
+     * chat. The snapshot it answers with lands in [ChatState.control]; failures show in the sheet.
+     */
+    fun runControl(action: ControlAction, text: String? = null, index: Int? = null) {}
+
     fun dismissError()
 
     /** Hides the gateway notice with [key] (its ×). */
@@ -97,6 +120,9 @@ interface ChatActions {
 
     fun skipSpeech()
 
+    /** Sends what the voice chat has heard so far, without waiting for a pause. */
+    fun sendVoiceNow() {}
+
     fun stopVoiceChat()
 
     /** Turns the microphone off or on in a GPT-Live call. */
@@ -105,6 +131,13 @@ interface ChatActions {
     fun dismissVoiceChatError()
 
     fun dismissDictationError()
+
+    /** Reads reply [key] aloud with the gateway's voice; [text] is the reply as shown. Another being read stops. */
+    fun readAloud(key: String, text: String) {}
+
+    fun stopReading() {}
+
+    fun dismissReadAloudError() {}
 }
 
 /**

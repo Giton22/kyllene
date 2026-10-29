@@ -101,8 +101,11 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
         "error" -> copy(error = payload.string("message")).withoutAgentNotices()
         "session.title" -> copy(title = payload.string("title") ?: title)
         "session.info" -> withInfo(payload).copy(title = payload.string("title")?.takeIf { it.isNotBlank() } ?: title)
-        "btw.complete" -> answerAside(payload)
+        "btw.complete" -> answerSideTask(payload, "/btw")
+        "background.complete" -> answerSideTask(payload, "/bg")
         "todo.updated" -> withTodos(TodoList.parse(payload))
+        // Pushed on every mutation, our own actions included; an empty snapshot is a clear, one without a snapshot nothing.
+        "session.control.update" -> (payload?.get("control") as? JsonObject)?.let { withControl(SessionControl.parse(it)) } ?: this
         "subagent.spawn_requested", "subagent.start", "subagent.progress", "subagent.thinking", "subagent.tool", "subagent.complete" ->
             withSubagentEvent(event.type, payload)
         else -> this
@@ -130,19 +133,41 @@ internal fun ChatState.withTodos(list: TodoList?): ChatState {
     return copy(todos = list, todosLive = running)
 }
 
-/** A `/btw` answer: fills the card that asked it, or adds one when the question came from another client. */
-private fun ChatState.answerAside(payload: JsonObject?): ChatState {
+/**
+ * Takes a control snapshot, keeping the same reference when its revision matches: an unchanged
+ * revision means identical state, so nothing should recompose for it.
+ */
+internal fun ChatState.withControl(next: SessionControl?): ChatState {
+    val current = control
+    if (next == null) return if (current == null) this else copy(control = null)
+    if (current != null && next.revision.isNotEmpty() && next.revision == current.revision) return this
+    return copy(control = next)
+}
+
+/**
+ * A side task's answer (`btw.complete` for `/btw`, `background.complete` for `/bg`): fills the card that
+ * started it, or adds one under [command] when it was started from another client. The gateway reports a
+ * task that crashed as `error: <why>` in the same text.
+ */
+private fun ChatState.answerSideTask(payload: JsonObject?, command: String): ChatState {
     val text = payload.string("text")?.trim()?.takeIf { it.isNotEmpty() } ?: return this
-    val taskId = payload.string("task_id")
+    return answerSideTask(payload.string("task_id"), text, command, failed = text.startsWith(SIDE_TASK_ERROR), asked = payload.string("question"))
+}
+
+/** Puts [text] on the card for [taskId], or on a new one under [command]; [asked] is a `/btw`'s question. */
+internal fun ChatState.answerSideTask(taskId: String?, text: String, command: String, failed: Boolean = false, asked: String? = null): ChatState {
     val index = messages.indexOfFirst { it is ChatMessage.Command && it.taskId != null && it.taskId == taskId }
     if (index >= 0) {
-        val asked = messages[index] as ChatMessage.Command
-        return copy(messages = messages.toMutableList().apply { set(index, asked.copy(output = text, running = false)) })
+        val card = messages[index] as ChatMessage.Command
+        return copy(messages = messages.toMutableList().apply { set(index, card.copy(output = text, running = false, failed = failed)) })
     }
-    val question = payload.string("question")?.trim().orEmpty()
-    val card = ChatMessage.Command("btw-$keySeq", "/btw $question".trimEnd(), text, running = false, taskId = taskId)
+    // Only /btw's answer repeats what was asked.
+    val card = ChatMessage.Command("side-$keySeq", "$command ${asked?.trim().orEmpty()}".trimEnd(), text, running = false, failed = failed, taskId = taskId)
     return copy(messages = messages + card, keySeq = keySeq + 1)
 }
+
+/** How `_spawn_side_agent` reports a side task that threw. */
+private const val SIDE_TASK_ERROR = "error: "
 
 /** Desktop's `providerWaitText` (store/provider-wait.ts): the waits the core explains after a long silence. */
 private val PROVIDER_WAIT = Regex(
@@ -268,8 +293,10 @@ internal fun unwrapCorrection(text: String): String = CORRECTION_FRAME.find(text
  * Stored rows → chat messages: tool results and system/hidden rows drop out, and consecutive
  * assistant rows (text and tool-call steps) merge into one reply listing every tool it used.
  * [liveSessionId] is the session the page was read from; prompts stored under an older one can't be cut at.
+ * [turnStartedAt]: when the running turn began (gateway clock). Its saved steps start a reply of their own even
+ * when its prompt doesn't show (hidden, a system note), since they are what its live reply repeats.
  */
-fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null): List<ChatMessage> {
+fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null, turnStartedAt: Double? = null): List<ChatMessage> {
     val messages = mutableListOf<ChatMessage>()
     // Each call's result is a later `tool` row carrying its id.
     val results = rows.filter { it.role == "tool" && it.toolCallId != null }.associateBy { it.toolCallId }
@@ -295,7 +322,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null)
                 if (TranscriptRows.isNoise(row.text.trim(), row.displayKind)) return@forEachIndexed
                 TranscriptRows.classify(row.text, row.displayKind, deliveries)?.let { events ->
                     events.forEachIndexed { i, event ->
-                        messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event)
+                        messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event, timestamp = row.timestamp)
                         replyingTo = (event as? TranscriptEvent.FromBot)?.takeUnless { from ->
                             from.handle?.lowercase() in messagedSinceUser || from.sender.lowercase() in messagedSinceUser
                         }?.sender
@@ -332,11 +359,14 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null)
                 row.storedToolCalls.filter { it.name == MESSAGE_AGENT_TOOL }.forEach { call ->
                     messageTarget(call.arguments)?.let { messagedSinceUser += it.lowercase() }
                 }
+                // A step of the running turn is saved before its calls end: one with no result row yet still runs.
+                val runningTurn = turnStartedAt != null && row.timestamp != null && row.timestamp >= turnStartedAt
                 val tools = row.storedToolCalls.mapIndexed { i, call ->
                     val result = call.id?.let(results::get)?.content
                     ToolActivity(
                         id = call.id ?: "$key-$i",
                         name = call.name,
+                        running = runningTurn && call.id != null && call.id !in results,
                         input = ToolDetails.input(call.arguments),
                         output = ToolDetails.output(result),
                         failed = ToolDetails.failed(result),
@@ -346,7 +376,11 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null)
                     )
                 }
                 val reasoning = row.reasoning.orEmpty()
-                val previous = messages.lastOrNull() as? ChatMessage.Assistant
+                val previous = (messages.lastOrNull() as? ChatMessage.Assistant)?.takeUnless { before ->
+                    val at = row.timestamp
+                    val ended = before.timestamp
+                    turnStartedAt != null && at != null && ended != null && at >= turnStartedAt && ended < turnStartedAt
+                }
                 if (previous != null) {
                     messages[messages.lastIndex] = previous.copy(
                         text = listOf(previous.text, text).filter { it.isNotEmpty() }.joinToString("\n\n"),
@@ -373,6 +407,18 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null)
 
 /** Bot Mode's tool for messaging another bot. */
 const val MESSAGE_AGENT_TOOL = "message_agent"
+
+/** What a running tool is doing, in words: "terminal" reads as "Running a command"; other tools as "Using <name>". */
+fun toolInProgress(name: String): String = when (name) {
+    "terminal", "shell", "bash" -> "Running a command"
+    "read_file", "file_read" -> "Reading a file"
+    "write_file", "patch", "edit_file" -> "Editing a file"
+    "web_search", "search" -> "Searching the web"
+    "web_extract", "browser", "fetch" -> "Reading a web page"
+    "delegate_task" -> "Working with subagents"
+    MESSAGE_AGENT_TOOL -> "Messaging another bot"
+    else -> "Using ${name.replace('_', ' ')}"
+}
 
 /** The bot a `message_agent` call is addressed to (`target`, with or without its `@`). */
 fun messageTarget(arguments: kotlinx.serialization.json.JsonElement?): String? {

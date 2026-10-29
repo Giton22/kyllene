@@ -19,12 +19,14 @@ class InvalidGatewayUrlException(message: String) : IllegalArgumentException(mes
 value class GatewayUrl private constructor(val value: String) {
 
     /** `ws(s)://host[:port][/prefix]/api/ws` for the JSON-RPC socket. */
-    val webSocketUrl: String
-        get() {
-            val url = Url(value)
-            val scheme = if (url.protocol == URLProtocol.HTTPS) "wss" else "ws"
-            return "$scheme://${url.hostWithPortIfSpecified}${url.encodedPath.trimEnd('/')}/api/ws"
-        }
+    val webSocketUrl: String get() = siblingSocketUrl("api/ws")
+
+    /** `ws(s)://host[:port][/prefix]/<path>`, for the gateway's sockets beside `/api/ws` (voice audio). */
+    fun siblingSocketUrl(path: String): String {
+        val url = Url(value)
+        val scheme = if (url.protocol == URLProtocol.HTTPS) "wss" else "ws"
+        return "$scheme://${url.hostWithPortIfSpecified}${url.encodedPath.trimEnd('/')}/${path.trimStart('/')}"
+    }
 
     /** Host name only, e.g. `hermes.example.ts.net`. */
     val host: String get() = Url(value).host

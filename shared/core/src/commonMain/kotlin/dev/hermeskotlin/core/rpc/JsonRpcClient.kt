@@ -66,6 +66,12 @@ data class ServerRequest(
 }
 
 /**
+ * A request this app sent: its [method], the [sessionId] it was for (prompts carry whole images, so no more), and
+ * when, [atMillis] by the client's clock.
+ */
+data class SentRequest(val method: String, val sessionId: String?, val atMillis: Long)
+
+/**
  * JSON-RPC 2.0 peer over the dashboard WebSocket (tui_gateway/ws.py + apps/shared/json-rpc-channel.ts).
  *
  * Call [run] to pump the socket; it returns only by throwing (closed, heartbeat timeout).
@@ -86,7 +92,11 @@ class JsonRpcClient(
     private val sendMutex = Mutex()
     private val pending = mutableMapOf<String, CompletableDeferred<JsonElement>>()
     private val pendingMutex = Mutex()
+    /** Taken only under [pendingMutex]: callers run on several threads, and a shared id hands one caller another's reply. */
     private var nextId = 0L
+
+    /** The heartbeat's own count, so a ping never races a request for an id. */
+    private var nextPing = 0L
     @kotlin.concurrent.Volatile private var lastInboundAt = clock()
     private var heartbeatJob: Job? = null
 
@@ -107,6 +117,17 @@ class JsonRpcClient(
      * open until another client answers it, it times out, or `session.resume` replays it.
      */
     val serverRequests: SharedFlow<ServerRequest> = _serverRequests.asSharedFlow()
+
+    private val _sent = MutableSharedFlow<SentRequest>(replay = SENT_REPLAY, extraBufferCapacity = 64)
+
+    /**
+     * Each request as it goes out, for what has to follow what the user sends (which phone a chat is on). The
+     * last few are replayed, so one sent the moment the link came up isn't missed by a collector starting then.
+     */
+    val sent: SharedFlow<SentRequest> = _sent.asSharedFlow()
+
+    /** Now, by the clock [sent] stamps requests with. */
+    fun clockMillis(): Long = clock()
 
     /** Completed with the `gateway.ready` payload. */
     val ready = CompletableDeferred<JsonObject>()
@@ -139,9 +160,10 @@ class JsonRpcClient(
     suspend fun request(method: String, params: JsonObject = JsonObject(emptyMap()), timeoutMs: Long = 30_000): JsonElement {
         // Nothing will answer on a link that is gone; say so now rather than after the timeout.
         closedWith?.let { throw it }
-        val id = "c${++nextId}"
         val deferred = CompletableDeferred<JsonElement>()
-        pendingMutex.withLock { pending[id] = deferred }
+        val id = pendingMutex.withLock { "c${++nextId}".also { pending[it] = deferred } }
+        // A cast, not jsonPrimitive: a request whose session_id isn't a string must still go out.
+        _sent.tryEmit(SentRequest(method, (params["session_id"] as? JsonPrimitive)?.contentOrNull, clock()))
         try {
             send(buildJsonObject {
                 put("jsonrpc", "2.0")
@@ -255,7 +277,7 @@ class JsonRpcClient(
                 runCatching {
                     send(buildJsonObject {
                         put("jsonrpc", "2.0")
-                        put("id", "ping${++nextId}")
+                        put("id", "ping${++nextPing}")
                         put("method", "gateway.ping")
                         put("params", JsonObject(emptyMap()))
                     })
@@ -275,6 +297,9 @@ class JsonRpcClient(
 
     companion object {
         private const val GOING_AWAY: Short = 1001
+
+        /** How many sent requests [sent] replays to a new collector. */
+        private const val SENT_REPLAY = 16
 
         /** tui_gateway/server_requests.py `NOT_SHOWN_CODE`: nothing in this client shows the request. */
         const val SESSION_NOT_SHOWN = 4404

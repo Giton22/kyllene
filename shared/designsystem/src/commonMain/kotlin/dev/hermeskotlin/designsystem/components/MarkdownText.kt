@@ -17,7 +17,7 @@ import androidx.compose.ui.draw.clip
 import com.composables.icons.lucide.SquareTerminal
 import com.composeunstyled.UnstyledButton
 import com.composeunstyled.UnstyledIcon
-import com.composeunstyled.theme.rememberColoredIndication
+import dev.hermeskotlin.designsystem.rememberHoverIndication
 import com.mikepenz.markdown.compose.elements.listDepth
 import com.mikepenz.markdown.compose.elements.MarkdownListItems
 import dev.hermeskotlin.designsystem.radiusSmall
@@ -25,6 +25,7 @@ import dev.hermeskotlin.designsystem.surface3
 import dev.hermeskotlin.designsystem.textMuted
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,12 +60,10 @@ import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
 import com.mikepenz.markdown.compose.elements.MarkdownParagraph
-import com.mikepenz.markdown.compose.elements.MarkdownTable
-import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
-import com.mikepenz.markdown.compose.elements.MarkdownTableRow
-import androidx.compose.ui.text.style.TextOverflow
 import com.mikepenz.markdown.compose.elements.MarkdownText as LibraryMarkdownText
 import dev.hermeskotlin.designsystem.accent
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
+import com.mikepenz.markdown.model.markdownExtendedSpans
 import org.intellij.markdown.ast.ASTNode
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalUriHandler
@@ -95,6 +94,7 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
@@ -112,6 +112,14 @@ import kotlinx.coroutines.withContext
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.getTextInNode
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import com.composables.icons.lucide.ImageOff
+import com.mikepenz.markdown.model.ImageData
+import com.mikepenz.markdown.model.ImageTransformer
 
 /** Code blocks wrap long lines instead of scrolling sideways (the "Wrap code lines" setting). */
 val LocalCodeWrap = compositionLocalOf { false }
@@ -119,22 +127,48 @@ val LocalCodeWrap = compositionLocalOf { false }
 /** The Markdown being drawn is still streaming in. */
 private val LocalStreaming = compositionLocalOf { false }
 
+/** [textStyle] laid over the reply's [body] style: what it leaves unset (color, line height, font) stays the body's. */
+internal fun compactStyle(body: TextStyle, textStyle: TextStyle?): TextStyle? = textStyle?.let(body::merge)
+
+/** A compact text style keeps every block small, while code keeps its own font and links their accent. */
+internal fun DefaultMarkdownTypography.withTextStyle(style: TextStyle?): DefaultMarkdownTypography {
+    if (style == null) return this
+    val heading = style.copy(fontWeight = FontWeight.SemiBold)
+    val codeStyle = code.copy(fontSize = style.fontSize, lineHeight = style.lineHeight, color = style.color)
+    return copy(
+        h1 = heading, h2 = heading, h3 = heading, h4 = heading, h5 = heading, h6 = heading,
+        text = style, paragraph = style, ordered = style, bullet = style, list = style, table = style,
+        // A quote keeps its own muted color so it still stands apart from the text around it.
+        quote = style.copy(color = quote.color), code = codeStyle,
+        inlineCode = inlineCode.copy(fontSize = style.fontSize, lineHeight = style.lineHeight, color = style.color),
+        alertTitle = heading,
+    )
+}
+
 /**
  * GitHub-flavoured Markdown in the app's type and colors. Fenced code gets a language label, syntax
  * colors, horizontal scrolling (or wrapping, per [LocalCodeWrap]) and a copy button. TeX math between
  * `$…$`, `\(…\)`, `$$…$$` or `\[…\]` is typeset (see [MathMarkup]). [streaming] parses off the main thread
  * and keeps the previous render while text grows; settled text parses synchronously so list items don't
- * change height after they appear.
+ * change height after they appear. [textStyle] keeps blocks compact, for folded reasoning summaries;
+ * headings use weight rather than size and code keeps its monospace font.
  */
 @Composable
-fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean = false) {
+fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean = false, textStyle: TextStyle? = null) {
     val prepared = remember(text) { MathMarkup.prepare(text) }
-    val bodyStyle = Theme[typography][body].copy(color = Theme[colors][textColor])
+    val replyStyle = Theme[typography][body].copy(color = Theme[colors][textColor])
+    val compact = compactStyle(replyStyle, textStyle)
+    val bodyStyle = compact ?: replyStyle
     val codeStyle = Theme[typography][code].copy(color = Theme[colors][textColor])
     val headingStyle = Theme[typography][heading].copy(color = Theme[colors][textColor])
     val linkColor = Theme[colors][accentText]
+    val linkStyle = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)
+    // On a desktop a link under the pointer takes a soft tint, which also tells the right-click menu which link
+    // it is on (see LinkUnderPointer).
+    val desktop = LocalDesktopLayout.current
+    val hoverMark = Theme[colors][accent].copy(alpha = 0.14f)
     val markdownColors = DefaultMarkdownColors(
-        text = Theme[colors][textColor],
+        text = bodyStyle.color,
         codeBackground = Theme[colors][well],
         inlineCodeBackground = Theme[colors][surface2],
         dividerColor = Theme[colors][stroke],
@@ -145,39 +179,49 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
         h2 = headingStyle.copy(fontSize = 19.sp, lineHeight = 26.sp),
         h3 = headingStyle,
         h4 = headingStyle,
-        h5 = bodyStyle.copy(fontWeight = FontWeight.SemiBold),
-        h6 = bodyStyle.copy(fontWeight = FontWeight.SemiBold),
-        text = bodyStyle,
+        h5 = replyStyle.copy(fontWeight = FontWeight.SemiBold),
+        h6 = replyStyle.copy(fontWeight = FontWeight.SemiBold),
+        text = replyStyle,
         code = codeStyle,
         inlineCode = codeStyle,
-        quote = bodyStyle.copy(color = Theme[colors][textTertiary]),
-        paragraph = bodyStyle,
-        ordered = bodyStyle,
-        bullet = bodyStyle,
-        list = bodyStyle,
-        textLink = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
-        table = bodyStyle,
-    )
+        quote = replyStyle.copy(color = Theme[colors][textTertiary]),
+        paragraph = replyStyle,
+        ordered = replyStyle,
+        bullet = replyStyle,
+        list = replyStyle,
+        textLink = TextLinkStyles(linkStyle, hoveredStyle = if (desktop) linkStyle.copy(background = hoverMark) else null),
+        table = replyStyle,
+    ).withTextStyle(compact)
     val components = remember {
         markdownComponents(
             codeFence = { MarkdownCodeFence(it.content, it.node, block = { code, language, style -> CodeBlock(code, language, style) }) },
             codeBlock = { MarkdownCodeBlock(it.content, it.node, block = { code, language, style -> CodeBlock(code, language, style) }) },
             paragraph = { HighlightedParagraph(it.content, it.node) },
             unorderedList = { DotList(it.content, it.node, it.listDepth) },
-            table = { WrappingTable(it.content, it.node, it.typography.table) },
+            table = { FittedTable(it.content, it.node, it.typography.table) },
         )
     }
     val density = LocalDensity.current
     val math = MathStyle(
         textSizePx = with(density) { bodyStyle.fontSize.toPx() },
-        argb = Theme[colors][textColor].toArgb(),
-        fallback = codeStyle.toSpanStyle(),
+        argb = bodyStyle.color.toArgb(),
+        fallback = markdownTypography.code.toSpanStyle(),
     )
     val annotate: AnnotatedString.Builder.(String, ASTNode) -> Boolean = remember(math) { { content, child -> appendFormula(content, child, math) } }
     val annotator = markdownAnnotator(annotate = annotate)
     val inlineContent = remember(prepared, math, density) { DefaultMarkdownInlineContent(inlineFormulas(prepared, math, density)) }
     val parentUris = LocalUriHandler.current
-    val webOnly = remember(parentUris) { WebLinksOnly(parentUris) }
+    val fileLinks = LocalFileLinks.current
+    val webOnly = remember(parentUris, fileLinks) { WebLinksOnly(parentUris, fileLinks) }
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val extendedSpans = if (!desktop) markdownExtendedSpans() else markdownExtendedSpans {
+        rememberLinkHoverSpans(
+            hoverMark,
+            open = webOnly::openUri,
+            copy = { url -> scope.launch { clipboard.setClipEntry(plainTextClipEntry(url)) } },
+        )
+    }
     CompositionLocalProvider(LocalUriHandler provides webOnly, LocalStreaming provides streaming, LocalMathStyle provides math) {
         Markdown(
             content = prepared,
@@ -188,7 +232,9 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
             dimens = markdownDimens(codeBackgroundCornerSize = Theme[radii][radiusMedium], tableCornerSize = Theme[radii][radiusMedium]),
             annotator = annotator,
             inlineContent = inlineContent,
+            imageTransformer = PictureTransformer,
             components = components,
+            extendedSpans = extendedSpans,
             retainState = true,
             immediate = !streaming,
         )
@@ -258,20 +304,64 @@ private fun DisplayFormula(formula: MathFormula, math: MathStyle) {
             if (picture != null) {
                 Image(picture, contentDescription = formula.latex)
             } else {
-                BasicText(formula.source(), style = Theme[typography][code].copy(color = Theme[colors][textColor]), softWrap = false)
+                BasicText(formula.source(), style = LocalMarkdownTypography.current.code, softWrap = false)
             }
         }
     }
 }
 
 /**
- * Opens only web and mail links. The text may come from a page the agent read, so a link to an
- * `intent:`, `file:` or app scheme must not reach another app on a tap.
+ * Where a tapped link that isn't a web or mail link goes, a file path for instance; the handler ignores
+ * what it can't open. Null (the default) leaves such links inert.
  */
-private class WebLinksOnly(private val parent: UriHandler) : UriHandler {
+val LocalFileLinks = staticCompositionLocalOf<((String) -> Unit)?> { null }
+
+/** A picture a Markdown image links to, as the screen's loader has it. */
+sealed interface MarkdownPicture {
+    data object Loading : MarkdownPicture
+
+    /** [onOpen] shows it full screen. */
+    class Ready(val bitmap: ImageBitmap, val onOpen: (() -> Unit)? = null) : MarkdownPicture
+
+    data object Failed : MarkdownPicture
+}
+
+/**
+ * Loads the picture a Markdown image (`![chart](chart.png)`) links to, or returns null to leave that image
+ * out. Null (the default) shows no linked pictures: a reply doesn't fetch what its text points at.
+ */
+val LocalMarkdownPictures = staticCompositionLocalOf<(@Composable (String) -> MarkdownPicture?)?> { null }
+
+/** Draws images through [LocalMarkdownPictures]: nothing while one loads, a broken-picture icon when it fails. */
+private object PictureTransformer : ImageTransformer {
+    @Composable
+    override fun transform(link: String): ImageData? {
+        val load = LocalMarkdownPictures.current ?: return null
+        return when (val picture = load(link)) {
+            null, MarkdownPicture.Loading -> null
+            is MarkdownPicture.Ready -> ImageData(
+                BitmapPainter(picture.bitmap),
+                modifier = picture.onOpen?.let { Modifier.handCursor().clickable(onClickLabel = "Open the picture", onClick = it) } ?: Modifier,
+                contentDescription = null,
+            )
+            MarkdownPicture.Failed -> ImageData(
+                rememberVectorPainter(Lucide.ImageOff),
+                contentDescription = "Picture couldn't load",
+                colorFilter = ColorFilter.tint(Theme[colors][textTertiary]),
+            )
+        }
+    }
+}
+
+/**
+ * Opens only web and mail links. The text may come from a page the agent read, so a link to an
+ * `intent:`, `file:` or app scheme must not reach another app on a tap; [files] may still show it in
+ * the app (a path on the gateway, opened in a preview).
+ */
+private class WebLinksOnly(private val parent: UriHandler, private val files: ((String) -> Unit)?) : UriHandler {
     override fun openUri(uri: String) {
         val scheme = uri.substringBefore(':', "").lowercase()
-        if (scheme in setOf("http", "https", "mailto")) runCatching { parent.openUri(uri) }
+        if (scheme in setOf("http", "https", "mailto")) runCatching { parent.openUri(uri) } else files?.invoke(uri)
     }
 }
 
@@ -302,32 +392,15 @@ private fun HighlightedParagraph(content: String, node: ASTNode) {
     LibraryMarkdownText(text, node, style = style)
 }
 
-/**
- * The library's table, but every cell shows all of its text on as many lines as it needs. The library
- * cuts each cell to one line with "…", which hides most words on a phone.
- */
-@Composable
-private fun WrappingTable(content: String, node: ASTNode, style: TextStyle) {
-    MarkdownTable(
-        content,
-        node,
-        style = style,
-        headerBlock = { text, header, width, cellStyle ->
-            MarkdownTableHeader(text, header, width, cellStyle, verticalAlignment = Alignment.Top, maxLines = Int.MAX_VALUE, overflow = TextOverflow.Clip)
-        },
-        rowBlock = { text, row, width, cellStyle ->
-            MarkdownTableRow(text, row, width, cellStyle, verticalAlignment = Alignment.Top, maxLines = Int.MAX_VALUE, overflow = TextOverflow.Clip)
-        },
-    )
-}
-
 /** A bullet list whose markers are small accent dots, centered on the first line; nested lists get muted ones. */
 @Composable
 private fun DotList(content: String, node: ASTNode, depth: Int) {
     val dot = Theme[colors][if (depth == 0) accentText else textMuted]
     // Centers the dot on the first line of the item's text. Only the dot is pushed down: a task item's
     // checkbox takes the same marker slot and sits on the line as it is.
-    val top = with(LocalDensity.current) { ((Theme[typography][body].lineHeight.toDp() - BULLET_DOT) / 2) }
+    // Only an sp line height converts to dp; any other falls back to the body's.
+    val lineHeight = LocalMarkdownTypography.current.list.lineHeight.takeIf { it.isSp } ?: Theme[typography][body].lineHeight
+    val top = with(LocalDensity.current) { ((lineHeight.toDp() - BULLET_DOT) / 2) }
     MarkdownListItems(content, node, depth, markerModifier = { Modifier.padding(start = 2.dp, end = 10.dp) }) { _, _, _ ->
         Box(Modifier.padding(top = top).size(BULLET_DOT).background(dot, CircleShape))
     }
@@ -359,8 +432,9 @@ private fun CodeBlock(code: String, language: String?, style: TextStyle) {
             .background(Theme[colors][well])
             .border(1.dp, Theme[colors][stroke], shape),
     ) {
-        // A header strip: what the code is, and a Copy pill.
-        Row(
+        // A header strip: what the code is, and a Copy pill. Out of a selection, so copying a reply across the
+        // block takes its code without "kotlin" and "Copy".
+        DisableSelection { Row(
             Modifier.fillMaxWidth().background(Theme[colors][surface2]).padding(start = 12.dp, end = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -373,10 +447,15 @@ private fun CodeBlock(code: String, language: String?, style: TextStyle) {
                 modifier = Modifier.weight(1f),
             )
             CopyPill(code)
-        }
-        val scroll = if (wrap) Modifier else Modifier.horizontalScroll(rememberScrollState())
-        Box(Modifier.fillMaxWidth().then(scroll).padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)) {
-            BasicText(text, style = style, softWrap = wrap)
+        } }
+        val scroll = rememberScrollState()
+        Box {
+            val sideways = if (wrap) Modifier else Modifier.horizontalScroll(scroll)
+            Box(Modifier.fillMaxWidth().then(sideways).padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)) {
+                BasicText(text, style = style, softWrap = wrap)
+            }
+            // In the bottom padding, so a line running past the edge shows it does, to a mouse too.
+            if (!wrap) HorizontalScrollbar(scroll, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 6.dp, vertical = 3.dp))
         }
     }
 }
@@ -445,8 +524,8 @@ private fun CopyPill(text: String) {
     val tint = Theme[colors][textTertiary]
     UnstyledButton(
         onClick = copy,
-        modifier = Modifier.height(40.dp).clip(RoundedCornerShape(Theme[radii][radiusSmall])),
-        indication = rememberColoredIndication(tint),
+        modifier = Modifier.height(40.dp).handCursor().clip(RoundedCornerShape(Theme[radii][radiusSmall])),
+        indication = rememberHoverIndication(tint),
         contentPadding = PaddingValues(horizontal = 4.dp),
     ) {
         Row(
@@ -460,15 +539,18 @@ private fun CopyPill(text: String) {
     }
 }
 
-/** Copies [text]; the icon turns into a check for a moment. */
+/**
+ * Copies [text]; the icon turns into a check for a moment. [label] is what a screen reader hears, so a list of
+ * them can say whose text each one copies.
+ */
 @Composable
-fun CopyButton(text: String, modifier: Modifier = Modifier) {
+fun CopyButton(text: String, modifier: Modifier = Modifier, label: String = "Copy") {
     val (copied, copy) = rememberCopy(text)
     IconButton(
         icon = if (copied) Lucide.Check else Lucide.Copy,
-        contentDescription = if (copied) "Copied" else "Copy",
+        contentDescription = if (copied) "Copied" else label,
         onClick = copy,
-        // Smaller than MinTouchTarget so it sits under the text; it stands alone, so Compose still stretches its taps to 48dp.
+        // Smaller than MinTouchTarget so it sits close to the text; it stands alone, so Compose still stretches its taps to 48dp.
         modifier = modifier.size(32.dp),
         tint = Theme[colors][textTertiary],
         iconSize = 16.dp,

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The tile as the tile picker shows it: the call icon on Herald blue, in a round watch face. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="#0A0A0C" />
+            <size
+                android:width="192dp"
+                android:height="192dp" />
+        </shape>
+    </item>
+    <item
+        android:width="96dp"
+        android:height="96dp"
+        android:gravity="center">
+        <shape android:shape="oval">
+            <solid android:color="#2F6BF5" />
+        </shape>
+    </item>
+    <item
+        android:width="48dp"
+        android:height="48dp"
+        android:drawable="@drawable/ic_call"
+        android:gravity="center" />
+</layer-list>

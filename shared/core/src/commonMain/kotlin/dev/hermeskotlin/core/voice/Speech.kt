@@ -1,5 +1,13 @@
 package dev.hermeskotlin.core.voice
 
+import dev.hermeskotlin.core.chat.extractReplyMedia
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.io.Buffer
+import kotlinx.io.readByteArray
+import kotlinx.io.writeIntLe
+import kotlinx.io.writeShortLe
+
 /**
  * How a recording decides you're done talking. The timings are Desktop's (tools.voice_mode); the
  * level is lower, since a phone's speech-recognition mic is unboosted where the browser's isn't.
@@ -28,9 +36,15 @@ class EndOfSpeech(private val activity: VoiceActivity) {
     var noise = -1f
         private set
     private var silenceSince = -1L
+    /** Since when the level has stood above quiet, in a pause after speech; -1 when it hasn't. */
+    private var loudSince = -1L
+    /** Where the last frame ended, which is where this one starts. */
+    private var lastFrameEnd = 0L
 
     /** Feeds one frame's [level] at [elapsedMs] into the recording; true once the recording should end. */
     fun onFrame(level: Float, elapsedMs: Long): Boolean {
+        val frameStart = lastFrameEnd
+        lastFrameEnd = elapsedMs
         // The opening moment only measures the room; nobody starts talking that fast.
         if (elapsedMs <= CALIBRATION_MS) {
             noise = if (noise < 0) level else noise + (level - noise) * 0.2f
@@ -38,9 +52,9 @@ class EndOfSpeech(private val activity: VoiceActivity) {
         }
         val speechBar = maxOf(activity.speechLevel, noise * SPEECH_OVER_NOISE)
         val quietBar = maxOf(activity.speechLevel * QUIET_FRACTION, noise * QUIET_OVER_NOISE)
-        if (level >= speechBar) {
+        val speech = level >= speechBar
+        if (speech) {
             heardSpeech = true
-            silenceSince = -1
             // A steady loud room lifts the bar too, slowly enough that a long sentence doesn't.
             noise += (level - noise) * 0.002f
         } else {
@@ -50,12 +64,18 @@ class EndOfSpeech(private val activity: VoiceActivity) {
                 level < noise -> noise + (level - noise) * 0.3f
                 else -> noise + (level - noise) * 0.02f
             }
-            if (heardSpeech && level < quietBar) {
-                if (silenceSince < 0) silenceSince = elapsedMs
-                if (elapsedMs - silenceSince >= activity.silenceMs) return true
-            } else if (heardSpeech) {
-                silenceSince = -1
-            }
+        }
+        if (heardSpeech && level < quietBar) {
+            loudSince = -1
+            if (silenceSince < 0) silenceSince = elapsedMs
+            if (elapsedMs - silenceSince >= activity.silenceMs) return true
+        } else if (heardSpeech) {
+            // Road noise, wind or a fan poke above the quiet bar for a moment; only a run of it is someone
+            // talking again, so a blip doesn't start the pause over (#185). A run counts from its first frame's
+            // start. Speech needs only a syllable's worth, so clipped words still hold; a level short of speech,
+            // which noise reaches far more often, needs longer.
+            if (loudSince < 0) loudSince = frameStart
+            if (elapsedMs - loudSince >= if (speech) SPEECH_RUN_MS else MURMUR_RUN_MS) silenceSince = -1
         }
         if (!heardSpeech && activity.idleMs > 0 && elapsedMs >= activity.idleMs) return true
         return elapsedMs >= activity.maxMs
@@ -66,6 +86,10 @@ class EndOfSpeech(private val activity: VoiceActivity) {
         const val SPEECH_OVER_NOISE = 2.5f
         const val QUIET_OVER_NOISE = 1.6f
         const val QUIET_FRACTION = 0.8f
+        /** How long the level has to stay at speech, in a pause, to count as talking again: a syllable's worth. */
+        const val SPEECH_RUN_MS = 60L
+        /** The same for a level between quiet and speech, which noise reaches more often. */
+        const val MURMUR_RUN_MS = 200L
     }
 }
 
@@ -83,6 +107,24 @@ interface VoiceRecorder {
 
     /** Ends the recording in progress now and keeps what was said. */
     fun finish()
+
+    /**
+     * Listens while the agent works and speaks, for someone talking over it ([bargeIn] decides), with the echo
+     * cancelling a call uses. [playing] says whether the voice is sounding right now; [onTrip] fires the moment
+     * someone cuts in, and [onLevel] gets the input level from then on. [onListening] fires once the microphone is
+     * actually listening. Returns what they said, from its first syllable, once they pause; null when the microphone
+     * couldn't listen. Cancelling stops it. Its [Recording.heardSpeech] says whether they went on talking once the
+     * voice held ([BargeIn.spoke]), which its own echo doesn't.
+     *
+     * A recorder that can't listen over the voice never returns, so nobody ever cuts in.
+     */
+    suspend fun listenOver(
+        bargeIn: BargeIn,
+        playing: () -> Boolean,
+        onTrip: () -> Unit,
+        onLevel: (Float) -> Unit = {},
+        onListening: () -> Unit = {},
+    ): Recording? = awaitCancellation()
 }
 
 /**
@@ -119,12 +161,56 @@ object NoDeviceDictation : DeviceDictation {
 interface SpeechPlayer {
     /** Plays [audio] to the end; cancelling stops it. */
     suspend fun play(audio: SpokenAudio)
+
+    /**
+     * Holds the voice where it is, and what starts meanwhile, until it's let go, when it goes on from there.
+     * False for a player that can't, whose voice goes on regardless.
+     */
+    fun hold(on: Boolean): Boolean = false
+
+    /**
+     * Plays 16-bit little-endian PCM at [sampleRate], [channels] interleaved, as [chunks] arrive, until the
+     * channel is closed and all of it has played; cancelling stops it at once. [onSound] says when sound starts
+     * coming out, and when it has stopped for a moment, as it does while the agent works between sentences.
+     *
+     * A player that can't stream plays it all at once when the channel closes.
+     */
+    suspend fun playPcm(sampleRate: Int, channels: Int, chunks: ReceiveChannel<ByteArray>, onSound: (Boolean) -> Unit = {}) {
+        val pcm = Buffer()
+        for (chunk in chunks) pcm.write(chunk)
+        if (pcm.size == 0L) return
+        onSound(true)
+        try {
+            play(SpokenAudio(wav(pcm.readByteArray(), sampleRate, channels), "audio/wav"))
+        } finally {
+            onSound(false)
+        }
+    }
+}
+
+/** [pcm] (16-bit, [channels] interleaved) as a WAV file. */
+fun wav(pcm: ByteArray, sampleRate: Int, channels: Int = 1): ByteArray {
+    val header = Buffer().apply {
+        write("RIFF".encodeToByteArray())
+        writeIntLe(36 + pcm.size)
+        write("WAVEfmt ".encodeToByteArray())
+        writeIntLe(16)
+        writeShortLe(1.toShort()) // PCM
+        writeShortLe(channels.toShort())
+        writeIntLe(sampleRate)
+        writeIntLe(sampleRate * channels * 2)
+        writeShortLe((channels * 2).toShort())
+        writeShortLe(16.toShort())
+        write("data".encodeToByteArray())
+        writeIntLe(pcm.size)
+    }
+    return header.readByteArray() + pcm
 }
 
 private val FENCED_CODE = Regex("```[\\s\\S]*?(?:```|$)")
 private val INLINE_CODE = Regex("`([^`]+)`")
 private val MARKDOWN_LINK = Regex("""\[([^\]]+)\]\(([^)]+)\)""")
-private val URL = Regex("""\bhttps?://\S+""", RegexOption.IGNORE_CASE)
+private val URL = Regex("""\b(?:https?|file)://\S+""", RegexOption.IGNORE_CASE)
 private val MEDIA_PATH = Regex("""[ \t]*MEDIA:\S+?(?=[.,;:!?)\]]*(?:\s|$))""")
 private val LINE_FINAL_COLON = Regex(""":\s*$""", RegexOption.MULTILINE)
 private val HEADING = Regex("""^#{1,6}\s+""", RegexOption.MULTILINE)
@@ -178,6 +264,14 @@ private fun String.withoutEmoji(): String {
     }
     return out.toString()
 }
+
+/**
+ * A finished reply as its Read aloud action says it: [speakableText] once the pictures and files it delivered
+ * are taken out, since they show as themselves. Empty when there's nothing to say: a reply of only code, say,
+ * or only punctuation, which the gateway would have no words for.
+ */
+fun readAloudText(reply: String): String =
+    speakableText(extractReplyMedia(reply).first).takeIf { text -> text.any { it.isLetterOrDigit() } }.orEmpty()
 
 /**
  * Cuts [text] into pieces of at most about [maxChars], at sentence ends where possible, so the first

@@ -14,18 +14,22 @@ import dev.hermeskotlin.core.network.HermesJson
 import kotlinx.serialization.builtins.ListSerializer
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.AppSettings
+import dev.hermeskotlin.core.settings.CallTarget
 import dev.hermeskotlin.core.settings.SettingsStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -85,6 +89,52 @@ class BotNotifier(
     }
 
     fun start() {
+        scope.launch {
+            var previousUrl: String? = null
+            var previousConnected: Boolean? = null
+            var pictureKey: Pair<String?, String?>? = null
+            var callPicture: ByteArray? = null
+            // The bot's picture was fetched for this gateway and target: a reconnect doesn't fetch it again. A bot
+            // with none (or missing) is looked up again, so one that gets a picture later shows it.
+            var pictureSettled = false
+            // Shortcut updates count against Android's rate limit in the background, which bot notifications need:
+            // only a change publishes, and a refused one is tried again at the next.
+            var callShortcut: Pair<String?, ByteArray?>? = null
+            val watchDisplay = dev.hermeskotlin.android.wear.CallDisplayPublisher(context)
+            suspend fun show(url: String?, target: CallTarget?, pictureKnown: Boolean) = withContext(Dispatchers.IO) {
+                if (callShortcut?.let { it.first == url && it.second === callPicture } != true) {
+                    callShortcut = if (BotShortcuts.publishCall(context, callPicture)) url to callPicture else null
+                }
+                watchDisplay.publish(url, target, callPicture, pictureKnown)
+            }
+            // Connected or not is all that counts here: every other state change would publish again for nothing.
+            combine(settings.settings.filterNotNull(), gateways.list, connection.state.map { it is ConnectionState.Connected }) { prefs, gateways, connected ->
+                Triple(gateways.current?.url, prefs.callTargets[gateways.current?.url], connected)
+            }.distinctUntilChanged().collectLatest { (url, target, connected) ->
+                // Switched while the old gateway's socket still stands: its roster isn't this gateway's.
+                val switching = previousUrl != null && url != previousUrl && connected == previousConnected
+                previousUrl = url
+                previousConnected = connected
+                val key = url to target?.profile
+                if (key != pictureKey) { pictureKey = key; callPicture = null; pictureSettled = false }
+                show(url, target, pictureKnown = callPicture != null || target?.profile == null)
+                if (switching || !connected || target?.profile == null || pictureSettled) return@collectLatest
+                var pictureKnown = callPicture != null
+                callPicture = try {
+                    val bot = api.roster().bots.firstOrNull { it.name == target.profile }
+                    if (bot?.hasAvatar == true) {
+                        api.avatar(bot.name)?.also { pictureKnown = true; pictureSettled = true } ?: callPicture
+                    } else {
+                        pictureKnown = true
+                        null
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) { callPicture }
+                show(url, target, pictureKnown)
+            }
+        }
+
         // A new socket: take stock without notifying, and ask the gateway to watch every bot's chats.
         scope.launch {
             connection.state.map { it is ConnectionState.Connected }.distinctUntilChanged().collectLatest { connected ->
@@ -93,7 +143,9 @@ class BotNotifier(
         }
         scope.launch {
             connection.events.filter { it.type == "sessions.changed" }.debounce(DEBOUNCE_MS).collect {
-                runCatching { check(notify = !visibility.visible.value, watch = false) }
+                // In sight, only with notifications for other chats on; the open chat is skipped below either way.
+                val inApp = settings.settings.value?.notifyOtherChatsInApp == true
+                runCatching { check(notify = !visibility.visible.value || inApp, watch = false) }
             }
         }
         // Leaving the app: a bot removed, renamed or hidden in it leaves the share sheet and launcher now,
@@ -108,6 +160,23 @@ class BotNotifier(
 
     /** The bots the shortcuts were last published for, by name, label and look: a change publishes them again. */
     private var published: List<Bot>? = null
+
+    /**
+     * The launcher entry (the app icon's alias) the shortcuts went out under. Android drops them when the user
+     * picks another app icon, which turns that entry off.
+     */
+    private var publishedUnder: String? = null
+
+    private fun launcherEntry(): String? =
+        context.packageManager.getLaunchIntentForPackage(context.packageName)?.component?.className
+
+    /** After an app icon change (Herald restarts from the new icon), puts the bot shortcuts back under it. */
+    fun republishIfIconChanged() {
+        if (publishedUnder == null || launcherEntry() == publishedUnder) return
+        scope.launch {
+            if (connection.state.value is ConnectionState.Connected) runCatching { check(notify = false, watch = false, track = false) }
+        }
+    }
 
     /** Reads the roster: keeps the shortcuts to it, and with [track] notes (and with [notify] tells) what each bot's chat did. */
     private suspend fun check(notify: Boolean, watch: Boolean, track: Boolean = true) = lock.withLock {
@@ -127,10 +196,12 @@ class BotNotifier(
         // is renamed or hidden, so the share sheet never offers one that's gone.
         val shown = bots.filterNot { it.meta.hidden }
         val look = shown.map { Bot(name = it.name, isDefault = it.isDefault, displayName = it.displayName, uiMeta = it.uiMeta, hasAvatar = it.hasAvatar) }
-        if (watch || look != published) {
+        val launcher = launcherEntry()
+        if (watch || look != published || launcher != publishedUnder) {
             loadPictures(shown)
-            BotShortcuts.publish(context, shown, pictures)
+            withContext(Dispatchers.IO) { BotShortcuts.publish(context, shown, pictures) }
             published = look
+            publishedUnder = launcher
         }
         if (!track) return@withLock
         val prefs = settings.settings.value ?: AppSettings()

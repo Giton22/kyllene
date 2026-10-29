@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Questions and help
+    url: https://discord.gg/wCtyvQ3KcM
+    about: Ask how to set something up, or chat with other Herald users, on the Herald Discord.
   - name: A problem with the agent itself
     url: https://github.com/NousResearch/hermes-agent/issues
     about: If Hermes Desktop or the CLI shows the same thing, it's the agent, not Herald. Report it to Hermes Agent.

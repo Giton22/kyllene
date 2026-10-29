@@ -12,6 +12,7 @@ import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.rpc.RpcTimeoutException
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
+import dev.hermeskotlin.core.sessions.putStartInstruction
 import dev.hermeskotlin.core.slash.SlashCommand
 import dev.hermeskotlin.core.slash.SlashResult
 import kotlinx.coroutines.CancellationException
@@ -74,13 +75,22 @@ class ChatSession(
     private val cwd: String? = null,
     /** The device's copy of the transcript, shown while the gateway can't be read. */
     private val cache: OfflineCache? = null,
+    /** `/btw` and `/bg` cards from when this chat was last open ([ChatHost] keeps them across a switch). */
+    sideTasks: List<ChatMessage.Command> = emptyList(),
+    /** For a new chat: what it tells the agent first, out of sight (see `putStartInstruction`); read when it's created. */
+    private val startInstruction: () -> String? = { null },
 ) {
     private fun nowSeconds(): Double = clock.now().toEpochMilliseconds() / 1000.0
 
-    private val _state = MutableStateFlow(ChatState(storedSessionId = initialStoredId, title = initialTitle))
+    private val _state = MutableStateFlow(
+        ChatState(storedSessionId = initialStoredId, title = initialTitle, messages = sideTasks.map(::reopenedSideTask)),
+    )
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    /** The stored row exists only after the first accepted prompt; until then a reconnect re-creates. */
+    /**
+     * The stored row exists only after the first accepted prompt, or once a chat seeded with a starting instruction is
+     * created; until then a reconnect re-creates.
+     */
     private var rowExists = initialStoredId != null
     private val attachMutex = Mutex()
 
@@ -130,7 +140,19 @@ class ChatSession(
     private val streamMutex = Mutex()
 
     /** The running turn's reply so far as the last `session.resume` had it, for when the gap can't be filled. */
-    private var inflightText: String? = null
+    @kotlin.concurrent.Volatile private var inflightText: String? = null
+
+    /** When the turn running at the last `session.resume` started (gateway clock); null when none ran or it's unknown. */
+    @kotlin.concurrent.Volatile private var turnStartedAt: Double? = null
+
+    /**
+     * The running turn's live reply, as the gateway's copy named it at the last `session.resume`. It stays the turn's
+     * once text streams on past that copy, so the saved steps still fold into it when the list is rebuilt.
+     */
+    @kotlin.concurrent.Volatile private var turnReplyKey: String? = null
+
+    /** The [turnStartedAt] the loaded rows were last laid out with, so they're laid out again once it's known. */
+    @kotlin.concurrent.Volatile private var rowsLaidOutFor: Double? = null
 
     fun start() {
         if (jobs.isNotEmpty()) return
@@ -139,7 +161,9 @@ class ChatSession(
             scope.launch { followConnection() },
             scope.launch { followEvents() },
             scope.launch { followServerRequests() },
-        )
+        ) + _state.value.messages.mapNotNull { card ->
+            (card as? ChatMessage.Command)?.takeIf { it.running && it.isBackground }?.taskId?.let { scope.launch { followBackgroundTask(it) } }
+        }
     }
 
     fun stop() {
@@ -429,7 +453,7 @@ class ChatSession(
                     put("text", trimmed)
                     put("truncate_before_row_id", rowId)
                     put("confirm_truncate", true)
-                    // Cutting at the first prompt empties the transcript, which the gateway wants said outright.
+                    // Cutting at the first prompt can empty the transcript (all but a hidden starting instruction), which the gateway wants said outright.
                     put("confirm_empty_truncate", true)
                 },
             ) as? JsonObject
@@ -824,6 +848,87 @@ class ChatSession(
     private suspend fun liveIdForCheckpoints(client: JsonRpcClient): String? =
         _state.value.runtimeSessionId ?: if (rowExists) ensureAttached(client) else null
 
+    /**
+     * The link on which `session.control.read` came back "no such method": that gateway predates it, so
+     * don't ask it again. A new link may be to an updated gateway, so it asks once more.
+     */
+    private var controlUnsupportedOn: JsonRpcClient? = null
+
+    /**
+     * Reads the session's goal, loop and heartbeat once (`session.control.read`), since `session.resume`
+     * doesn't carry them; later changes arrive as `session.control.update` events. Best effort: a gateway
+     * that doesn't know the method hides the feature, and any other failure leaves the state as it is.
+     */
+    suspend fun refreshControl() {
+        val client = connectedClient() ?: return
+        if (client === controlUnsupportedOn) return
+        val runtimeId = _state.value.runtimeSessionId ?: return
+        // An update that lands while the read is out is newer than the read's answer, so the answer yields to it.
+        val before = _state.value.control
+        val result = try {
+            client.request("session.control.read", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RpcException) {
+            if (e.code == METHOD_NOT_FOUND) controlUnsupportedOn = client
+            return
+        } catch (_: Exception) {
+            return
+        }
+        if (result != null && "control" in result) {
+            _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        }
+    }
+
+    /**
+     * Runs one `session.control` action (pause a goal, add a sub-goal, ...) and applies the snapshot it
+     * returns at once rather than waiting for the event. A `send` dispatch (a resumed goal's kickoff)
+     * goes out as a prompt with its `display` on the bubble, queued behind a running turn. Returns null
+     * on success, or a user-readable reason it didn't go.
+     */
+    suspend fun runControl(action: ControlAction, text: String? = null, index: Int? = null): String? {
+        val client = connectedClient() ?: return NOT_CONNECTED
+        val runtimeId = try {
+            ensureAttached(client)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return e.message ?: "Couldn't open the session."
+        }
+        // As with the read: an update from another client that lands first is newer than this answer.
+        val before = _state.value.control
+        val result = try {
+            client.request(
+                "session.control",
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("action", action.wire)
+                    if (text != null) put("args", buildJsonObject { put("text", text) })
+                    else if (index != null) put("args", buildJsonObject { put("index", index) })
+                },
+            ) as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return e.message ?: "Couldn't ${action.verb}."
+        }
+        if (result != null && "control" in result) {
+            _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        }
+        val dispatch = result?.get("dispatch") as? JsonObject
+        if (dispatch.string("type") == "send") {
+            val message = dispatch.string("message")?.takeIf { it.isNotBlank() }
+            if (message != null) {
+                val display = dispatch.string("display")?.takeIf { it.isNotBlank() } ?: "/goal resume"
+                // The gateway has already resumed it; without this prompt the agent wouldn't take the next step.
+                if (!send(message, display = display, queue = _state.value.running)) {
+                    return "The goal is resumed, but its next step didn't go out. Resend it from the chat."
+                }
+            }
+        }
+        return null
+    }
+
     /** `/stop`: stops the reply, then the background processes the agent left running (`process.stop`). */
     suspend fun stopEverything() = runOnGateway("/stop") { client, runtimeId ->
         val lines = mutableListOf<String>()
@@ -849,27 +954,102 @@ class ChatSession(
             showCommandOutput("/btw", "Usage: /btw <question>. It's answered from a snapshot of this chat, without interrupting it.")
             return
         }
-        val key = addCommand("/btw ${question.trim()}")
+        startSideTask("/btw", "prompt.btw", question.trim(), "Couldn't ask the side question.")
+    }
+
+    /**
+     * `/bg <prompt>`: a fresh agent runs [prompt] in its own session beside this chat (`prompt.background`),
+     * as the TUI and Desktop do. The reply arrives later as `background.complete` and fills in the card.
+     * Through `slash.exec` the slash worker would print it after its output was already collected, so it
+     * never reached the chat (hermes-agent #97635). A gateway without the method still gets that path, and the
+     * answer is read from the task's own stored session instead.
+     */
+    suspend fun runInBackground(prompt: String) {
+        if (prompt.isBlank()) {
+            showCommandOutput("/bg", "Usage: /bg <prompt>. A separate agent runs it in the background, and its answer shows up here.")
+            return
+        }
+        startSideTask("/bg", "prompt.background", prompt.trim(), "Couldn't start the background task.") { client, runtimeId, key ->
+            val reply = client.request(
+                "slash.exec",
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("command", "bg ${prompt.trim()}")
+                },
+                timeoutMs = COMMAND_TIMEOUT_MS,
+            ) as? JsonObject
+            val output = (SlashResult.parse(reply) as? SlashResult.Output)?.text.orEmpty().replace(ANSI_ESCAPE, "").trim()
+            // The worker prints the task's id; its stored session holds the answer.
+            val taskId = WORKER_TASK_ID.find(output)?.value
+            if (taskId == null) finishCommand(key, output.ifEmpty { "Started in the background." })
+            taskId
+        }
+    }
+
+    /**
+     * Starts a side agent through [method] under a running card for [command]. Its answer comes back as an
+     * event with the returned `task_id`, which the reducer matches to the card; a `/bg` answer is also read
+     * from the task's stored session ([followBackgroundTask]), since the event is lost after a reconnect.
+     * A gateway without [method] runs [fallback] instead, which returns the task's id, or null when it
+     * finished the card itself.
+     */
+    private suspend fun startSideTask(
+        command: String,
+        method: String,
+        text: String,
+        failure: String,
+        fallback: (suspend (client: JsonRpcClient, runtimeId: String, key: String) -> String?)? = null,
+    ) {
+        val key = addCommand("$command $text")
         val client = connectedClient() ?: return finishCommand(key, NOT_CONNECTED, failed = true)
         try {
             val runtimeId = ensureAttached(client)
-            val result = client.request(
-                "prompt.btw",
-                buildJsonObject {
-                    put("session_id", runtimeId)
-                    put("text", question.trim())
-                },
-            ) as? JsonObject
-            val taskId = result.string("task_id")
+            val taskId = try {
+                (client.request(method, buildJsonObject { put("session_id", runtimeId); put("text", text) }) as? JsonObject).string("task_id")
+            } catch (e: RpcException) {
+                if (fallback == null || e.code != METHOD_NOT_FOUND) throw e
+                fallback(client, runtimeId, key) ?: return
+            }
             _state.update { state ->
                 state.copy(messages = state.messages.map { if (it is ChatMessage.Command && it.key == key) it.copy(taskId = taskId) else it })
             }
+            if (taskId != null && command == "/bg") scope.launch { followBackgroundTask(taskId) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            finishCommand(key, e.message ?: "Couldn't ask the side question.", failed = true)
+            finishCommand(key, e.message ?: failure, failed = true)
         }
     }
+
+    /**
+     * Fills the running `/bg` card for [taskId] from the task's own stored session (the agent runs under
+     * that id) once its last row is the final answer. `background.complete` usually gets there first; this
+     * covers the event going to a runtime this chat no longer holds (a reconnect, another chat open meanwhile)
+     * and gateways that only run `/bg` on the slash worker.
+     */
+    private suspend fun followBackgroundTask(taskId: String) {
+        repeat(BACKGROUND_POLLS) {
+            delay(BACKGROUND_POLL_MS)
+            if (!isRunningTask(taskId)) return
+            val rows = (sessions.messages(gateway, taskId, limit = 1, profile = profile) as? ApiResult.Success)?.value?.messages
+            val last = rows?.lastOrNull()
+            val answer = last?.takeIf { it.role == "assistant" && it.storedToolCalls.isEmpty() }?.text?.trim()
+            if (!answer.isNullOrEmpty()) {
+                _state.update { it.answerSideTask(taskId, answer, "/bg") }
+                return
+            }
+        }
+        if (isRunningTask(taskId)) {
+            _state.update { state ->
+                state.copy(messages = state.messages.map {
+                    if (it is ChatMessage.Command && it.taskId == taskId) it.copy(output = BACKGROUND_NO_ANSWER, running = false) else it
+                })
+            }
+        }
+    }
+
+    private fun isRunningTask(taskId: String) =
+        _state.value.messages.any { it is ChatMessage.Command && it.taskId == taskId && it.running }
 
     /**
      * `/reasoning [level|show|hide] [--global]` through `config.set reasoning`, as the TUI does; bare,
@@ -960,14 +1140,41 @@ class ChatSession(
             showCommandOutput("/branch", "Nothing to branch yet. Send a message first.", failed = true)
             return null
         }
+        // The gateway's count takes in the hidden rows (a starting instruction, compaction wrappers) the chat doesn't show.
+        val keep = count?.let {
+            if (!loadAllHistory()) return null
+            withHiddenRows(it)
+        }
+        return branchKeeping(keep)
+    }
+
+    /**
+     * "Branch from here": a new chat with this one up to and with the message [key], a reply with all its steps.
+     * Counted on the stored rows, as the gateway counts them: a reply split by its tool calls is one message here
+     * but a row per step there, and hidden rows show nowhere. Null when it failed.
+     */
+    suspend fun branchFrom(key: String): Pair<String, String?>? {
+        if (!rowExists) return branch(null)
+        // Counted from the first row, so the pages not scrolled back to yet are read first.
+        if (!loadAllHistory()) return null
+        val messages = _state.value.messages
+        val index = messages.indexOfFirst { it.key == key }
+        if (index < 0) return null
+        // Up to the row the next message starts at; the last message keeps every row.
+        val next = messages.drop(index + 1).firstNotNullOfOrNull { message -> storedRowId(message.key) }
+        val end = next?.let { id -> rows.indexOfFirst { it.id == id } }?.takeIf { it >= 0 } ?: rows.size
+        return branchKeeping(rows.take(end).count { it.countsInBranch })
+    }
+
+    private suspend fun branchKeeping(keep: Int?): Pair<String, String?>? {
         var branched: Pair<String, String?>? = null
         runOnGateway("/branch") { client, runtimeId ->
             val params = buildJsonObject {
                 put("session_id", runtimeId)
-                count?.let { put("count", it) }
+                keep?.let { put("count", it) }
             }
             val result = try {
-                client.request(if (count == null) "session.branch_whole" else "session.branch", params) as? JsonObject
+                client.request(if (keep == null) "session.branch_whole" else "session.branch", params) as? JsonObject
             } catch (e: RpcException) {
                 // Gateways older than branch_whole only have session.branch.
                 if (e.code != METHOD_NOT_FOUND) throw e
@@ -980,6 +1187,29 @@ class ChatSession(
         }
         return branched
     }
+
+    /**
+     * How many stored user and assistant rows with text the first [visible] shown ones reach, as `session.branch`
+     * counts them (`_visible_branch_history`): with the hidden rows among them.
+     */
+    private fun withHiddenRows(visible: Int): Int {
+        var seen = 0
+        var counted = 0
+        for (row in rows) {
+            if (seen == visible) break
+            if (!row.countsInBranch) continue
+            counted++
+            if (!row.isHidden) seen++
+        }
+        return counted + (visible - seen)
+    }
+
+    /** A row `session.branch` counts (`_visible_branch_history`): a user or assistant one with text, hidden or not. */
+    private val SessionMessage.countsInBranch: Boolean
+        get() = (role == "user" || role == "assistant") && text.isNotBlank()
+
+    /** The stored row id a message's key names (`row-12`, or `row-12-0` for one of its parts); null for a live one. */
+    private fun storedRowId(key: String): Long? = ROW_KEY.matchEntire(key)?.groupValues?.get(1)?.toLongOrNull()
 
     /**
      * `/handoff <platform>`: queues this chat for a messaging platform's home channel and waits for the
@@ -1411,7 +1641,15 @@ class ChatSession(
                 lastSeq = null
                 val streamed = inflightText
                 if (streamed != null && _state.value.running) {
-                    _state.update { it.withInflight(streamed) }
+                    var replyKey: String? = null
+                    _state.update { state ->
+                        val shown = state.withInflight(streamed)
+                        replyKey = shown.messages.inflightReplyKey(streamed)
+                        // The transcript just read has the steps saved while away, which the gateway's copy now repeats.
+                        shown.copy(messages = shown.messages.withSavedStepsFolded())
+                    }
+                    // Named by the try of the update that landed, not by one that lost to another change.
+                    turnReplyKey = replyKey
                 } else if (!_state.value.running) {
                     _state.update { it.withoutStaleReply().withoutAgentNotices() }
                 }
@@ -1426,6 +1664,11 @@ class ChatSession(
         event.seq?.let { lastSeq = it }
         val now = nowSeconds()
         val noticesBefore = _state.value.notices
+        // Cleared before the turn's end lands, so no rows laid out meanwhile still take it as running.
+        if (event.type == "message.complete") {
+            turnStartedAt = null
+            turnReplyKey = null
+        }
         _state.update { it.reduce(event, now) }
         when (event.type) {
             // Timed here, not on screen, so it ends on time even while the chat isn't showing. A notice that
@@ -1615,14 +1858,17 @@ class ChatSession(
                 val fresh = (if (full) page.fromFirstTurn() else page).filter { it.id == null || it.id !in known }
                 // Past only those: rows before the page's first prompt that aren't loaded yet come with the next page.
                 if (fresh.isEmpty() && full) olderSkew += page.count { it.id != null && it.id in known }
-                val shownBefore = historyToMessages(rows, rowsSessionId).mapTo(HashSet()) { it.key }
+                val startedAt = turnStartedAt
+                val shownBefore = historyToMessages(rows, rowsSessionId, startedAt).mapTo(HashSet()) { it.key }
                 rows = fresh + rows
                 val flagged = risks?.all().orEmpty()
                 _state.update { state ->
                     // The stored rows lead the list; what follows them (the live turn, local notes) stays as it is.
                     val stored = state.messages.takeWhile { it.key in shownBefore }.size
                     state.copy(
-                        messages = historyToMessages(rows, rowsSessionId).withRisks(flagged) + state.messages.drop(stored),
+                        // The live reply took in the turn's saved steps, which this page brings again.
+                        messages = (historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged) + state.messages.drop(stored))
+                            .withSavedStepsFolded(),
                         olderMessages = full,
                     )
                 }
@@ -1635,9 +1881,11 @@ class ChatSession(
 
     /**
      * Shows the loaded [rows] in place of the stored messages, keeping what they can't hold yet. [savedCopyAt]: they're
-     * the copy saved on this device then, not the gateway's.
+     * the copy saved on this device then, not the gateway's. [relaid]: the same rows again, now that the turn's start is known.
      */
-    private fun showRows(flagged: Map<String, ToolRisk>, older: Boolean, savedCopyAt: Long? = null) = _state.update { state ->
+    private fun showRows(flagged: Map<String, ToolRisk>, older: Boolean, savedCopyAt: Long? = null, relaid: Boolean = false) = _state.update { state ->
+        // Read again on each try of the update, so the one that lands says what the rows were laid out with.
+        val startedAt = turnStartedAt.also { rowsLaidOutFor = it }
         // Keep a reply that is streaming right now; the stored rows don't have it yet. Nor do they
         // have a correction mid-turn, or the part of the reply shown before it.
         val corrected = state.messages.indexOfFirst { it.key == state.correctedReplyKey }
@@ -1646,14 +1894,24 @@ class ChatSession(
         } else {
             state.messages.filter { it.isLocalOnly }
         }
-        val stored = historyToMessages(rows, rowsSessionId).withRisks(flagged)
+        // The running turn's saved steps apart from the reply before them, to fold into its live reply below.
+        val stored = historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged)
         // A prompt sent without a reply that the transcript now has arrived after all.
         val storedPrompts = stored.mapNotNullTo(HashSet()) { (it as? ChatMessage.User)?.text }
         // Only the gateway's transcript says a prompt arrived; the saved copy is from before it.
         val unsettled = if (savedCopyAt != null) live else {
             live.filterNot { it is ChatMessage.User && it.check != null && storedPrompts.any { p -> p.contains(it.text) } }
         }
-        state.copy(messages = stored + unsettled, historyLoaded = true, historyError = null, savedCopyAt = savedCopyAt, olderMessages = older)
+        // Steps of the running turn are saved as it goes, and the live copy repeats them: show them once.
+        val messages = (stored + unsettled).withSavedStepsFolded()
+        state.copy(
+            messages = messages,
+            historyLoaded = true,
+            // Laid out again, the rows read no better than before: a failed read still shows as one.
+            historyError = if (relaid) state.historyError else null,
+            savedCopyAt = savedCopyAt,
+            olderMessages = older,
+        )
     }
 
     private suspend fun runCatchingAttach(client: JsonRpcClient, reconnected: Boolean = false): Boolean = try {
@@ -1702,6 +1960,7 @@ class ChatSession(
         // A turn already running when we attach is someone else's; reconcile with the stored rows when it ends.
         if (running && ownTurnsPending == 0) foreignTurn = true
         val inflight = result["inflight"] as? JsonObject
+        turnStartedAt = result.double("turn_started_at").takeIf { running }
         // Questions asked while no socket of ours was attached; the gateway keeps them open for us.
         val open = result["open_requests"].asObjectList().mapNotNull { snapshot ->
             InputRequest.parse(
@@ -1716,7 +1975,11 @@ class ChatSession(
             inflightText = streamed
             // Seqs count per runtime session and per gateway run, so only the same of both can be picked up.
             val resumable = reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
-            if (!resumable) lastSeq = null
+            if (!resumable) {
+                lastSeq = null
+                // The turn may have changed while away: the gateway's copy names its reply again below.
+                turnReplyKey = null
+            }
             seqRuntime = runtimeId
             seqEpoch = epoch
             // Held from before the state names the runtime, so no live event slips in ahead of the missed ones.
@@ -1725,6 +1988,7 @@ class ChatSession(
             resumable to catchingUp
         }
         if (reconnected && (!resumable || (!_state.value.historyRead && !historyMutex.isLocked))) loadHistory()
+        var replyKey: String? = null
         _state.update { state ->
             state.copy(
                 attachment = Attachment.Attached(runtimeId),
@@ -1734,6 +1998,8 @@ class ChatSession(
                 messages = when {
                     resumable -> state.messages
                     running -> state.withInflight(streamed).messages
+                        .also { replyKey = it.inflightReplyKey(streamed) }
+                        .withSavedStepsFolded()
                     reconnected -> state.withoutStaleReply().messages
                     else -> state.messages
                 },
@@ -1743,18 +2009,42 @@ class ChatSession(
                 // Nothing runs, so the agent is built; its clear may have gone while this phone was away.
                 .let { if (running || resumable) it else it.withoutAgentNotices() }
         }
-        if (catchingUp) scope.launch { catchUp(client, runtimeId) }
+        // Named by the try of the update that landed, not by one that lost to another change.
+        if (running && !resumable) turnReplyKey = replyKey
+        // Read before the turn's start was known, the rows merged its saved steps into the reply before them when its
+        // prompt doesn't show: lay them out again, now apart, so they fold into the live reply.
+        if (running && !resumable && turnStartedAt != null && _state.value.historyLoaded) {
+            historyMutex.withLock {
+                if (rows.isNotEmpty() && rowsLaidOutFor != turnStartedAt) {
+                    showRows(risks?.all().orEmpty(), _state.value.olderMessages, _state.value.savedCopyAt, relaid = true)
+                }
+            }
+        }
+        // session.resume doesn't carry the goal/loop/heartbeat; read them once, events take it from there.
+        // After the catch-up: a missed update it replays is older than the read, so it mustn't land after it.
+        scope.launch {
+            if (catchingUp) catchUp(client, runtimeId)
+            refreshControl()
+        }
         runtimeId
     }
+
+    /** [withSavedStepsInLiveReply] for the running turn. */
+    private fun List<ChatMessage>.withSavedStepsFolded(): List<ChatMessage> =
+        withSavedStepsInLiveReply(turnStartedAt, inflightText, turnReplyKey)
 
     /** The gateway run's `replay_epoch` from [client]'s `gateway.ready`, when it is the connected one. */
     private fun readyEpoch(client: JsonRpcClient): String? =
         (connection.state.value as? ConnectionState.Connected)?.takeIf { it.client === client }?.ready.string("replay_epoch")
 
-    /** `session.create` for a brand-new chat; its stored row appears with the first prompt. */
+    /**
+     * `session.create` for a brand-new chat; its stored row appears with the first prompt, or at once when it starts
+     * with an instruction (a seeded chat's row is stored on create), so it's resumed from then on, not made again.
+     */
     private suspend fun create(client: JsonRpcClient): String = attachMutex.withLock {
         _state.update { it.copy(attachment = Attachment.Attaching) }
         val picks = _state.value
+        val instruction = startInstruction()
         val result = client.request(
             "session.create",
             buildJsonObject {
@@ -1769,9 +2059,11 @@ class ChatSession(
                 }
                 picks.reasoningEffort?.let { put("reasoning_effort", it) }
                 picks.fast?.let { put("fast", it) }
+                putStartInstruction(instruction)
             },
         ) as? JsonObject ?: error("Empty session.create reply")
         val runtimeId = result.string("session_id") ?: error("session.create returned no session_id")
+        if (!instruction.isNullOrBlank()) rowExists = true
         streamMutex.withLock {
             lastSeq = null
             seqRuntime = runtimeId
@@ -1795,6 +2087,9 @@ class ChatSession(
     private fun connectedClient(): JsonRpcClient? = (connection.state.value as? ConnectionState.Connected)?.client
 
     private companion object {
+        /** A message key made from a stored row (`historyToMessages`): `row-<id>`, or `row-<id>-<n>` for one of its events. */
+        val ROW_KEY = Regex("row-(\\d+)(?:-\\d+)?")
+
         /**
          * The surface the agent is told it's on (agent/prompt_builder.py PLATFORM_HINTS). "desktop", like
          * Hermes Desktop and the dashboard chat: Markdown renders and files come back as `MEDIA:` paths,
@@ -1870,8 +2165,30 @@ class ChatSession(
 
         /** `command.dispatch`'s "not a quick/plugin/bundle/skill command" (older gateways lack "bundle/"). */
         val NOT_DISPATCHABLE = Regex("""not a quick/plugin/(?:bundle/)?skill command""", RegexOption.IGNORE_CASE)
+
+        /** How often a running `/bg` card looks for its answer in the task's stored session, and for how long (an hour). */
+        const val BACKGROUND_POLL_MS = 15_000L
+        const val BACKGROUND_POLLS = 240
+
+        const val BACKGROUND_NO_ANSWER = "No answer yet. When it's done, it's in its own chat in the list."
+
+        /** The id the slash worker's `/bg` prints (`bg_<HHMMSS>_<hex>`), which its stored session is filed under. */
+        val WORKER_TASK_ID = Regex("""\bbg_\d{6}_[0-9a-f]{6}\b""")
     }
 }
+
+/** A `/bg` card, as opposed to a `/btw` one. */
+private val ChatMessage.Command.isBackground: Boolean get() = command == "/bg" || command.startsWith("/bg ")
+
+/**
+ * A side-task card brought back into its reopened chat, keyed by its task so it can't clash with this session's
+ * keys. A `/btw` answer that came while another chat was open is lost; only a `/bg` one can be read back.
+ */
+private fun reopenedSideTask(card: ChatMessage.Command): ChatMessage.Command = card.copy(
+    key = "task-${card.taskId}",
+    output = if (card.running && !card.isBackground) "Its answer may have come while another chat was open." else card.output,
+    running = card.running && card.isBackground,
+)
 
 /** How [ChatSession.stopAndSubmit] went: the send's [outcome], and the queued prompts the stop dropped, to give back. */
 data class StopAndSend(val outcome: SendOutcome, val dropped: List<String> = emptyList())
@@ -1905,6 +2222,89 @@ internal fun ChatState.withInflight(streamed: String): ChatState {
     val reply = messages[open] as ChatMessage.Assistant
     if (streamed.length <= reply.text.length || !streamed.startsWith(reply.text)) return this
     return copy(messages = messages.toMutableList().apply { set(open, reply.copy(text = streamed)) })
+}
+
+/**
+ * The running turn's steps already saved, folded into its live reply. The gateway saves each step (text and tool
+ * calls) as the turn goes, while the live copy (`inflight.assistant`, then the stream) holds the whole reply so far:
+ * a chat opened mid-turn has both, the saved part right before the live one. Like Desktop, they are one reply only
+ * when all of it holds: the saved one was written after the turn began ([turnStartedAt], the gateway's clock; without
+ * it nothing folds), the live one is this turn's (it agrees with the gateway's copy, [inflightText]), and the live text
+ * carries on from the saved text. Then the live one stays (deltas keep landing on it), with the saved tool calls.
+ * [turnReplyKey] is the reply the gateway's copy named when it was read ([inflightReplyKey]): it stays this turn's once
+ * text streams on past that copy (onto a reply that had none), and each rebuild brings the saved steps again.
+ */
+internal fun List<ChatMessage>.withSavedStepsInLiveReply(
+    turnStartedAt: Double?,
+    inflightText: String?,
+    turnReplyKey: String? = null,
+): List<ChatMessage> {
+    if (turnStartedAt == null || inflightText == null) return this
+    val liveAt = indexOfLast { it is ChatMessage.Assistant && it.streaming }
+    if (liveAt < 1) return this
+    val live = this[liveAt] as ChatMessage.Assistant
+    // A rebuild puts this device's own lines (notices, commands) after the stored rows; they don't part the two.
+    val savedAt = (liveAt - 1 downTo 0).firstOrNull { !this[it].isLocalLine } ?: return this
+    val saved = this[savedAt] as? ChatMessage.Assistant ?: return this
+    if (saved.streaming || saved.error != null || saved.warning != null) return this
+    if (saved.timestamp == null || saved.timestamp < turnStartedAt) return this
+    // A reply left streaming from an earlier turn isn't this one's, whatever was saved before it.
+    if (live.key != turnReplyKey && live.key != inflightReplyKey(inflightText)) return this
+    // Steps are saved apart and joined with blank lines; the stream runs them together. Spacing aside, the same.
+    if (!live.text.startsWithIgnoringSpaces(saved.text)) return this
+    val folded = live.copy(
+        // Folded before, the live reply leads with the saved reasoning and has streamed on from there.
+        reasoning = if (live.reasoning.startsWithIgnoringSpaces(saved.reasoning)) live.reasoning
+            else listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
+        // A call still running in the live copy (folded before) has its events since; once the saved one has its
+        // result, that is newer (an end missed while the link was down).
+        // A copy folded from rows read before the turn's start was known didn't know a call without a result still ran.
+        tools = saved.tools.map { tool ->
+            val shown = live.tools.firstOrNull { it.id == tool.id }
+            when {
+                shown == null -> tool
+                // The saved call has its result row (empty ones included): its end, missed while the link was down.
+                shown.running && !tool.running -> tool
+                // An end the live copy got itself carries its time or summary; one folded from older rows has neither.
+                tool.running && !shown.running && shown.output == null && shown.durationSeconds == null && shown.summary == null -> tool
+                else -> shown
+            }
+        } +
+            live.tools.filter { tool -> saved.tools.none { it.id == tool.id } },
+        repliedTo = live.repliedTo ?: saved.repliedTo,
+    )
+    return toMutableList().apply {
+        set(liveAt, folded)
+        removeAt(savedAt)
+    }
+}
+
+/**
+ * The streaming reply that is the running turn's: it carries on from the gateway's copy ([inflightText]), and has
+ * nothing yet while that copy is still empty. Null when the reply open isn't (an earlier turn's, left streaming).
+ */
+internal fun List<ChatMessage>.inflightReplyKey(inflightText: String): String? {
+    val live = lastOrNull { it is ChatMessage.Assistant && it.streaming } ?: return null
+    val liveText = (live as ChatMessage.Assistant).text
+    return live.key.takeIf { liveText.startsWithIgnoringSpaces(inflightText) && (inflightText.isNotBlank() || liveText.isBlank()) }
+}
+
+/** A line only this device shows (a notice, a command) and no reply or prompt: it sits after the stored rows. */
+private val ChatMessage.isLocalLine: Boolean
+    get() = isLocalOnly && this !is ChatMessage.Assistant && this !is ChatMessage.User
+
+/** Whether this starts with [prefix], whitespace aside in both. Walks the two in place: replies run long. */
+private fun String.startsWithIgnoringSpaces(prefix: String): Boolean {
+    var i = 0
+    var j = 0
+    while (true) {
+        while (j < prefix.length && prefix[j].isWhitespace()) j++
+        if (j == prefix.length) return true
+        while (i < length && this[i].isWhitespace()) i++
+        if (i == length || this[i] != prefix[j]) return false
+        i++
+        j++
+    }
 }
 
 /**

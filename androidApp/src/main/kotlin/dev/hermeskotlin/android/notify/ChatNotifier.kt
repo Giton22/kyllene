@@ -8,6 +8,7 @@ import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.TurnOutcome
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
+import dev.hermeskotlin.core.phone.ringsForAnswers
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.SettingsStore
 import kotlinx.coroutines.CoroutineScope
@@ -16,6 +17,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.reflect.KClass
@@ -35,20 +38,22 @@ class ChatNotifier(
     private val notifications: ChatNotifications,
     private val connection: GatewayConnection,
     private val bots: BotNotifier,
+    /** Something outside the open chat needs the connection now: the watch's turn ([WatchRelay.busy]). */
+    private val outsideWork: StateFlow<Boolean> = MutableStateFlow(false),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var serviceStarted = false
 
     fun start() {
         scope.launch {
-            combine(host.session, settings.settings) { session, prefs -> session to (prefs?.keepsProcessUp == true) }
+            combine(host.session, settings.settings, outsideWork) { session, prefs, outside -> Triple(session, prefs?.keepsProcessUp == true, outside) }
                 .distinctUntilChanged()
-                .collectLatest { (session, stay) ->
+                .collectLatest { (session, stay, outside) ->
                     when {
                         session != null -> follow(session)
                         // No chat open (the app started in the background after an update or reboot):
-                        // Notifications anywhere still needs the process up, for its ntfy stream.
-                        stay -> keepConnected()
+                        // Notifications anywhere still needs the process up, for its ntfy stream, and a watch turn the socket.
+                        stay || outside -> keepConnected()
                         else -> stopService()
                     }
                 }
@@ -63,13 +68,14 @@ class ChatNotifier(
         var previous: ChatState? = null
         var shown: Shown? = null
         try {
-            combine(session.state, visibility.visible, settings.settings, connection.state) { state, visible, stored, link ->
-                Quad(state, visible, stored, link)
-            }.collect { (state, visible, stored, link) ->
+            combine(session.state, visibility.visible, settings.settings, connection.state, outsideWork) { state, visible, stored, link, outside ->
+                Quad(state, visible, stored, link) to outside
+            }.collect { (quad, outside) ->
+                val (state, visible, stored, link) = quad
                 val prefs = stored ?: AppSettings()
 
                 // Each change is a chance to start it: Android refuses while the app is in the background.
-                val wanted = state.running || prefs.keepsProcessUp
+                val wanted = state.running || prefs.keepsProcessUp || outside
                 if (wanted && !serviceStarted) {
                     serviceStarted = ChatService.start(context)
                     // The service shows the notification as it is when it starts.
@@ -89,7 +95,9 @@ class ChatNotifier(
                     notified.clear()
                 } else if (prefs.notifyRequests) {
                     for (request in state.inputRequests) {
-                        if (request.id !in notified && notifications.postRequest(state.storedSessionId, state.title, request)) notified.add(request.id)
+                        if (request.id !in notified && notifications.postRequest(state.storedSessionId, state.title, request, prefs.ringsForAnswers, prefs.phoneRingsTalk)) {
+                            notified.add(request.id)
+                        }
                     }
                 }
                 val open = state.inputRequests.mapTo(HashSet()) { it.id }
@@ -128,6 +136,14 @@ class ChatNotifier(
         combine(connection.state, settings.settings) { state, prefs -> state to (prefs?.pushAnywhere == true) }
             .distinctUntilChanged()
             .collect { (state, push) -> if (serviceStarted) notifications.postOngoing(state, push) }
+    }
+
+    /**
+     * Starts the service now, from a caller Android lets start one (the watch's message as it's delivered);
+     * the usual rules stop it again once nothing needs it. Main thread only.
+     */
+    fun startServiceNow() {
+        if (!serviceStarted) serviceStarted = ChatService.start(context)
     }
 
     private fun stopService() {

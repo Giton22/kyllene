@@ -3,6 +3,7 @@ package dev.hermeskotlin.ui.chat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.hermeskotlin.core.chat.OutgoingAttachment
 
@@ -25,6 +26,15 @@ actual fun rememberAttachmentPicker(
 
 @Composable
 actual fun rememberImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap? =
-    remember(bytes, maxEdge) { decodeUpright(bytes, maxEdge)?.toBitmap() }
+    remember(bytes, maxEdge) { decodeImageBitmap(bytes, maxEdge) }
+
+actual fun decodeImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap? = decodeUpright(bytes, maxEdge)?.toBitmap()
+
+/** Every format iOS decodes reads quickly enough to decode in place, so it's never shown as decoding. */
+@Composable
+actual fun rememberDecodedImage(bytes: ByteArray, maxEdge: Int): DecodedImage =
+    remember(bytes, maxEdge) { DecodedImage(decodeImageBitmap(bytes, maxEdge), decoding = false) }
+
+actual fun Modifier.fileDrop(onHover: (Boolean) -> Unit, onFiles: (List<String>) -> Unit): Modifier = this
 
 private const val NOT_YET = "Attachments aren't available on iOS yet."

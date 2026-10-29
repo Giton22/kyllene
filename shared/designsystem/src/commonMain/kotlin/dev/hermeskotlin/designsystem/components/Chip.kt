@@ -2,7 +2,9 @@ package dev.hermeskotlin.designsystem.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +19,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.pointerInput
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -25,7 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
-import com.composeunstyled.theme.rememberColoredIndication
+import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.designsystem.code
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.inverse
@@ -41,6 +49,7 @@ import dev.hermeskotlin.designsystem.typography
  * A filter toggle: a ringed pill, filled with the inverse colour when selected. [count] follows the label
  * in mono, in [countColor] (e.g. warning for what needs the user) while unselected.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun Chip(
     text: String,
@@ -49,26 +58,60 @@ fun Chip(
     modifier: Modifier = Modifier,
     count: Int? = null,
     countColor: Color = Theme[colors][textTertiary],
+    /** A long press, such as for the chip's options; [onLongClickLabel] says what it does. Null: none. */
+    onLongClick: (() -> Unit)? = null,
+    onLongClickLabel: String? = null,
 ) {
     val shape = CircleShape
     val content = if (selected) Theme[colors][onInverse] else Theme[colors][textSecondary]
     val interaction = remember { MutableInteractionSource() }
-    // A 32dp pill drawn inside a full-height touch target.
+    val desktop = LocalDesktopLayout.current
+    // A 32dp pill drawn inside a full-height touch target; on the desktop a 28dp one, rows of them packed closer.
     Box(
         modifier
-            .heightIn(min = MinTouchTarget)
-            .clickable(interaction, indication = null, role = Role.Tab, onClick = onClick)
+            .heightIn(min = if (desktop) 32.dp else MinTouchTarget)
+            .handCursor()
+            // A mouse has no long press to speak of: the right button opens the chip's options on the desktop.
+            .then(
+                if (onLongClick == null || !desktop) {
+                    Modifier
+                } else {
+                    Modifier.pointerInput(onLongClick) {
+                        awaitEachGesture {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
+                                event.changes.forEach { it.consume() }
+                                onLongClick()
+                            }
+                        }
+                    }
+                },
+            )
+            .then(
+                if (onLongClick == null) {
+                    Modifier.clickable(interaction, indication = null, role = Role.Tab, onClick = onClick)
+                } else {
+                    Modifier.combinedClickable(
+                        interactionSource = interaction,
+                        indication = null,
+                        role = Role.Tab,
+                        onLongClickLabel = onLongClickLabel,
+                        onLongClick = onLongClick,
+                        onClick = onClick,
+                    )
+                },
+            )
             .semantics { this.selected = selected },
         contentAlignment = Alignment.Center,
     ) {
         Row(
             Modifier
-                .heightIn(min = 32.dp)
+                .heightIn(min = if (desktop) 28.dp else 32.dp)
                 .clip(shape)
                 .border(1.dp, if (selected) Color.Transparent else Theme[colors][stroke], shape)
                 .background(Theme[colors][if (selected) inverse else surface2], shape)
-                .indication(interaction, rememberColoredIndication(content))
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .indication(interaction, rememberHoverIndication(content, shape))
+                .padding(horizontal = if (desktop) 11.dp else 12.dp, vertical = if (desktop) 3.dp else 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

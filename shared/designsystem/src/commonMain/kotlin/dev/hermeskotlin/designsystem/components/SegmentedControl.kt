@@ -27,6 +27,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -42,7 +48,7 @@ import androidx.compose.ui.unit.sp
 import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
-import com.composeunstyled.theme.rememberColoredIndication
+import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.designsystem.code
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.label
@@ -69,6 +75,8 @@ fun <T> SegmentedControl(
     optionIcon: (T) -> ImageVector? = { null },
     /** A count beside the label, in mono, such as how many each tab holds. */
     optionBadge: (T) -> String? = { null },
+    /** Off, the options are dimmed and say so to accessibility services, and a tap does nothing. */
+    enabled: Boolean = true,
 ) {
     val track = Theme[colors][well]
     val ring = Theme[colors][stroke]
@@ -87,6 +95,22 @@ fun <T> SegmentedControl(
                 drawRoundRect(ring, topLeft = Offset(0f, inset), size = Size(size.width, h), cornerRadius = corner, style = Stroke(1.dp.toPx()))
             }
             .padding(horizontal = 3.dp)
+            // Left and Right step to the next option on the desktop, as a radio group's arrows do.
+            .then(
+                if (LocalDesktopLayout.current && enabled) {
+                    Modifier.onPreviewKeyEvent { event ->
+                        val step = when {
+                            event.type != KeyEventType.KeyDown -> 0
+                            event.key == Key.DirectionRight -> 1
+                            event.key == Key.DirectionLeft -> -1
+                            else -> 0
+                        }
+                        val at = options.indexOf(selected)
+                        val next = options.getOrNull(at + step)
+                        (step != 0 && next != null).also { if (it) onSelect(next!!) }
+                    }
+                } else Modifier,
+            )
             .selectableGroup(),
     ) {
         options.forEach { option ->
@@ -94,12 +118,13 @@ fun <T> SegmentedControl(
             val interaction = remember { MutableInteractionSource() }
             val fill by animateColorAsState(if (isSelected) Theme[colors][thumb] else Color.Transparent)
             val edge by animateColorAsState(if (isSelected) Theme[colors][strokeStrong] else Color.Transparent)
-            val content = if (isSelected) Theme[colors][text] else Theme[colors][textTertiary]
+            val content = (if (isSelected) Theme[colors][text] else Theme[colors][textTertiary]).let { if (enabled) it else it.copy(alpha = it.alpha * 0.5f) }
             Box(
                 Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .selectable(selected = isSelected, interactionSource = interaction, indication = null, role = Role.RadioButton, onClick = { onSelect(option) }),
+                    .handCursor(enabled && !isSelected)
+                    .selectable(selected = isSelected, enabled = enabled, interactionSource = interaction, indication = null, role = Role.RadioButton, onClick = { onSelect(option) }),
                 contentAlignment = Alignment.Center,
             ) {
                 Row(
@@ -109,7 +134,7 @@ fun <T> SegmentedControl(
                         .clip(CircleShape)
                         .background(fill, CircleShape)
                         .border(1.dp, edge, CircleShape)
-                        .indication(interaction, rememberColoredIndication(Theme[colors][text]))
+                        .indication(interaction, rememberHoverIndication(Theme[colors][text], CircleShape))
                         .padding(horizontal = 6.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically,

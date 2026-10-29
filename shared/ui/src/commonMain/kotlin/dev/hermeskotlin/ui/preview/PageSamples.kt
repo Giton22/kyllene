@@ -1,11 +1,23 @@
 package dev.hermeskotlin.ui.preview
 
 import dev.hermeskotlin.core.capabilities.Skill
+import dev.hermeskotlin.core.config.ConfigCatalog
+import dev.hermeskotlin.core.config.ConfigSchema
+import dev.hermeskotlin.ui.sessions.ConfigPlace
+import dev.hermeskotlin.ui.sessions.ConfigUiState
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import dev.hermeskotlin.core.chat.BackgroundProcess
 import dev.hermeskotlin.core.chat.Checkpoint
 import dev.hermeskotlin.core.chat.CheckpointDiff
 import dev.hermeskotlin.core.chat.Checkpoints
 import dev.hermeskotlin.core.chat.ContextBreakdown
+import dev.hermeskotlin.core.chat.GoalContract
+import dev.hermeskotlin.core.chat.GoalControl
+import dev.hermeskotlin.core.chat.GoalGate
+import dev.hermeskotlin.core.chat.HeartbeatControl
+import dev.hermeskotlin.core.chat.LoopControl
+import dev.hermeskotlin.core.chat.SessionControl
 import dev.hermeskotlin.core.chat.ContextCategory
 import dev.hermeskotlin.core.chat.ContextFile
 import dev.hermeskotlin.core.chat.SessionUsage
@@ -33,6 +45,12 @@ import dev.hermeskotlin.ui.chat.CheckpointsState
 import dev.hermeskotlin.ui.chat.ProcessesState
 import dev.hermeskotlin.ui.chat.UsageSheetState
 import dev.hermeskotlin.ui.sessions.CapabilitiesUiState
+import dev.hermeskotlin.ui.sessions.HubDetail
+import dev.hermeskotlin.ui.sessions.SkillsHubUiState
+import dev.hermeskotlin.core.capabilities.HubFinding
+import dev.hermeskotlin.core.capabilities.HubPreview
+import dev.hermeskotlin.core.capabilities.HubScan
+import dev.hermeskotlin.core.capabilities.HubSkill
 import dev.hermeskotlin.ui.sessions.InsightsUiState
 import dev.hermeskotlin.ui.sessions.JobEditor
 import dev.hermeskotlin.ui.sessions.Loadable
@@ -98,6 +116,100 @@ internal object PageSamples {
             ),
         ),
     )
+
+    private val hubFeatured = listOf(
+        HubSkill("grafana", "Build and edit Grafana dashboards from Prometheus metrics", source = "github", identifier = "acme/skills/grafana", trustLevel = "trusted"),
+        HubSkill("smart-disks", "Read SMART data and judge whether a disk is failing", source = "github", identifier = "acme/skills/smart-disks", trustLevel = "community"),
+    )
+    private val hubOfficial = listOf(
+        HubSkill("arxiv", "Search arXiv and summarize papers", source = "official", identifier = "official/research/arxiv", trustLevel = "builtin", category = "research"),
+        HubSkill("github-pr", "Open, review and merge pull requests with gh", source = "official", identifier = "official/software/github-pr", trustLevel = "builtin", category = "software"),
+    )
+    private val hubScan = HubScan(
+        name = "smart-disks",
+        identifier = "acme/skills/smart-disks",
+        trustLevel = "community",
+        verdict = "caution",
+        summary = "2 findings",
+        policy = "ask",
+        policyReason = "Community skills with findings need your yes.",
+        findings = listOf(
+            HubFinding("medium", "exec", "scripts/check.sh", 12, "Runs a shell command built from input"),
+            HubFinding("low", "network", "SKILL.md", 40, "Fetches a file from the web"),
+        ),
+    )
+    private val hubPreview = HubPreview(
+        name = "smart-disks",
+        description = "Read SMART data and judge whether a disk is failing",
+        identifier = "acme/skills/smart-disks",
+        trustLevel = "community",
+        tags = listOf("disks", "homelab"),
+        skillMd = "# smart-disks\n\nRead SMART data with `smartctl` and say whether a disk is failing.\n\n- Reallocated sectors\n- Pending sectors",
+        files = listOf("SKILL.md", "scripts/check.sh"),
+    )
+
+    val skillsHub = SkillsHubUiState(
+        featured = Loadable(hubFeatured),
+        official = Loadable(hubOfficial),
+        installed = setOf("acme/skills/grafana"),
+    )
+    val skillsHubDetail = skillsHub.copy(detail = HubDetail(hubFeatured[1], preview = hubPreview, scan = hubScan.copy(verdict = "safe", policy = "allow", findings = emptyList())))
+    val skillsHubCaution = skillsHub.copy(confirm = hubScan)
+    val skillsHubBlocked = skillsHub.copy(
+        detail = HubDetail(hubFeatured[1], preview = hubPreview, scan = hubScan.copy(verdict = "dangerous", policy = "block", summary = "1 high-risk finding", findings = hubScan.findings.take(1))),
+        message = "smart-disks was blocked by the security scan.",
+    )
+
+    /** Hermes's settings on a sample gateway, open at [place]: the sections, or one of them by id. */
+    fun config(place: String? = null): ConfigUiState {
+        val schema = Json { ignoreUnknownKeys = true }.decodeFromString<ConfigSchema>(CONFIG_SCHEMA)
+        return ConfigUiState(
+            schema = schema,
+            values = Json.parseToJsonElement(CONFIG_VALUES).jsonObject,
+            view = place?.let { id -> ConfigPlace.Section(ConfigCatalog.sections.first { it.id == id }) } ?: ConfigPlace.Overview,
+            saving = setOf("voice.gpt_live.voice").takeIf { place == "voice" }.orEmpty(),
+        )
+    }
+
+    private val CONFIG_SCHEMA = """{"category_order":["general","agent","terminal","display","delegation","memory","compression","security","voice","tts","stt"],"fields":{
+        "model":{"type":"string","description":"Default model","category":"general"},
+        "model_context_length":{"type":"number","description":"Context window override","category":"general"},
+        "fallback_providers":{"type":"list","description":"Fallback Providers","category":"general"},
+        "toolsets":{"type":"list","description":"Toolsets","category":"general"},
+        "timezone":{"type":"select","description":"IANA timezone","category":"general","options":["America/New_York","Europe/London","Asia/Tokyo"],"searchable":true,"clearable":true},
+        "display.personality":{"type":"string","description":"Personality","category":"display"},
+        "display.show_reasoning":{"type":"boolean","description":"Show reasoning","category":"display"},
+        "approvals.mode":{"type":"select","description":"Dangerous command approval mode","category":"security","options":["manual","smart","off"]},
+        "approvals.timeout":{"type":"number","description":"Approvals → Timeout","category":"security"},
+        "command_allowlist":{"type":"list","description":"Command Allowlist","category":"general"},
+        "security.redact_secrets":{"type":"boolean","description":"Security → Redact Secrets","category":"security"},
+        "checkpoints.enabled":{"type":"boolean","description":"Checkpoints → Enabled","category":"agent"},
+        "agent.max_turns":{"type":"number","description":"Agent → Max Turns","category":"agent"},
+        "memory.memory_enabled":{"type":"boolean","description":"Memory → Memory Enabled","category":"memory"},
+        "memory.user_profile_enabled":{"type":"boolean","description":"Memory → User Profile Enabled","category":"memory"},
+        "memory.provider":{"type":"select","description":"Memory provider plugin","category":"memory","options":["","hindsight","honcho"]},
+        "compression.enabled":{"type":"boolean","description":"Compression → Enabled","category":"compression"},
+        "compression.threshold":{"type":"number","description":"Compression → Threshold","category":"compression"},
+        "voice.voice_chat_mode":{"type":"string","description":"Voice chat mode","category":"voice"},
+        "voice.gpt_live.voice":{"type":"string","description":"GPT-Live voice","category":"voice"},
+        "voice.auto_tts":{"type":"boolean","description":"Voice → Auto Tts","category":"voice"},
+        "tts.provider":{"type":"select","description":"Text-to-speech provider","category":"tts","options":["edge","elevenlabs","openai","xai"]},
+        "tts.openai.voice":{"type":"string","description":"OpenAI voice","category":"tts"},
+        "tts.openai.model":{"type":"string","description":"OpenAI model","category":"tts"},
+        "stt.enabled":{"type":"boolean","description":"Stt → Enabled","category":"stt"},
+        "stt.local.model":{"type":"select","description":"Local faster-whisper model size","category":"stt","options":["base","small","medium"]},
+        "delegation.max_concurrent_children":{"type":"number","description":"Delegation → Max Concurrent Children","category":"delegation"},
+        "terminal.backend":{"type":"select","description":"Terminal execution backend","category":"terminal","options":["local","docker","ssh"]}}}"""
+
+    private val CONFIG_VALUES = """{"model":"kimi-k3","model_context_length":0,
+        "fallback_providers":[{"provider":"opencode-go","model":"glm-5.3"},{"provider":"openrouter","model":"google/gemini-3-flash"}],
+        "toolsets":["hermes-cli"],"timezone":"America/New_York","display":{"personality":"","show_reasoning":false},
+        "approvals":{"mode":"smart","timeout":120},"command_allowlist":["git status","ls"],"security":{"redact_secrets":true},
+        "checkpoints":{"enabled":true},"agent":{"max_turns":90},
+        "memory":{"memory_enabled":true,"user_profile_enabled":true,"provider":"hindsight"},"compression":{"enabled":true,"threshold":0.5},
+        "voice":{"voice_chat_mode":"gpt-live","gpt_live":{"voice":"willow"},"auto_tts":false},
+        "tts":{"provider":"openai","openai":{"voice":"nova","model":"gpt-4o-mini-tts"}},"stt":{"enabled":true,"local":{"model":"small"}},
+        "delegation":{"max_concurrent_children":3},"terminal":{"backend":"local"}}"""
 
     val deliveryTargets = listOf(
         DeliveryTarget("local", "Local (save only)"),
@@ -219,6 +331,69 @@ internal object PageSamples {
             ),
         ),
     )
+
+    /**
+     * The backup chat's automation, after the gateway's real goal_loop_heartbeat snapshot: a goal four
+     * turns in with sub-goals and a check, the loop it holds back, and a heartbeat. Times follow the
+     * clock so the next run reads as a time of day.
+     */
+    val control: SessionControl
+        get() {
+            val now = Clock.System.now().toEpochMilliseconds() / 1000.0
+            return SessionControl(
+                goal = GoalControl(
+                    title = "Get the test suite green on the feat/goals branch",
+                    status = "active",
+                    turnsUsed = 4,
+                    maxTurns = 20,
+                    contract = GoalContract(
+                        outcome = "Core tests pass",
+                        verification = "./gradlew :shared:core:testAndroidHostTest",
+                        constraints = "No new dependencies",
+                        boundaries = "",
+                        stopWhen = "",
+                    ),
+                    subgoals = listOf("Fix the flaky reconnect test", "Pin the wire contract in a test"),
+                    gates = listOf(
+                        GoalGate(
+                            command = "./gradlew :shared:core:testAndroidHostTest",
+                            timeoutSeconds = 600,
+                            maxRetries = 2,
+                            attempts = 2,
+                            lastExitCode = 1,
+                        ),
+                    ),
+                    pausedReason = null,
+                    lastVerdict = "continue",
+                    lastReason = "Two tests still fail in ChatSessionTest.",
+                    waitBarrier = null,
+                    updatedAt = now - 9 * 60,
+                ),
+                loop = LoopControl(
+                    prompt = "Check the deploy log and report errors",
+                    status = "active",
+                    selfPaced = false,
+                    intervalSeconds = 1800.0,
+                    times = 6,
+                    until = "",
+                    ticksFired = 2,
+                    lastFiredAt = now - 12 * 60,
+                    nextDueAt = now + 18 * 60,
+                    awaitingResponse = false,
+                    deferredByGoal = true,
+                    pausedReason = null,
+                    lastStopReason = null,
+                ),
+                heartbeat = HeartbeatControl(
+                    prompt = "Any new GitHub notifications?",
+                    status = "active",
+                    intervalSeconds = 3600,
+                    lastFiredAt = now - 42 * 60,
+                    fireCount = 3,
+                ),
+                revision = "dced25cac75f65f0dce50607239ba5a41dbc0b9b91d1c4e75503dde64af77467",
+            )
+        }
 
     /** Settings → Check connection, where the server and sign-in pass but the live link doesn't. */
     val connectionCheck = mapOf(

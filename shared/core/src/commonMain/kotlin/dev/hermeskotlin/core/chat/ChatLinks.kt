@@ -19,18 +19,30 @@ data class ChatLink(
 
 /**
  * What a new chat opened from outside starts with: [text] in the composer and [attachments] in its tray
- * (shared from another app), or dictation running ([dictate], the voice shortcut). Nothing is sent until
- * the user sends it. [notice] is a sentence about anything that couldn't come along.
+ * (shared from another app), or what a voice shortcut has it [start]. Draft text and files wait for the user
+ * to send them. [notice] is about anything that couldn't come along.
  */
 class ComposeDraft(
     val text: String? = null,
     val attachments: List<OutgoingAttachment> = emptyList(),
     val notice: String? = null,
-    val dictate: Boolean = false,
+    val start: DraftStart? = null,
 ) {
     /** The same draft, telling [notice] first and then the notice it had. */
     fun withNotice(notice: String) =
-        ComposeDraft(text, attachments, listOfNotNull(notice, this.notice).joinToString(" "), dictate)
+        ComposeDraft(text, attachments, listOfNotNull(notice, this.notice).joinToString(" "), start)
+}
+
+/** What a voice shortcut starts in its new chat. */
+enum class DraftStart {
+    /** Dictation into the composer (`hermes://new-chat-voice`). */
+    Dictation,
+
+    /** A voice conversation (`hermes://voice-chat`). */
+    VoiceChat,
+
+    /** The text goes out as the first prompt once the chat is connected (the desktop's quick entry). */
+    Send,
 }
 
 /**
@@ -63,7 +75,8 @@ class ChatLinks {
     /** Opens what a `hermes://` [link] names. */
     fun follow(link: AppLink) = when (link) {
         AppLink.NewChat -> newChat()
-        AppLink.NewChatVoice -> newChat(ComposeDraft(dictate = true))
+        AppLink.NewChatVoice -> newChat(ComposeDraft(start = DraftStart.Dictation))
+        AppLink.VoiceChat -> newChat(ComposeDraft(start = DraftStart.VoiceChat))
         is AppLink.Session -> open(link.id, title = null)
         is AppLink.Bot -> openBot(link.profile, label = null)
     }

@@ -18,25 +18,34 @@ import io.ktor.util.date.getTimeMillis
 import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.chat.ToolRiskStore
 import dev.hermeskotlin.core.capabilities.CapabilitiesApi
+import dev.hermeskotlin.core.capabilities.SkillsHubApi
+import dev.hermeskotlin.core.plugins.NextPromptApi
 import dev.hermeskotlin.core.plugins.PluginsApi
 import dev.hermeskotlin.core.cron.CronApi
 import dev.hermeskotlin.core.insights.InsightsApi
+import dev.hermeskotlin.core.config.ConfigApi
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.AccessTokens
 import dev.hermeskotlin.core.gateway.ConnectionCheck
 import dev.hermeskotlin.core.gateway.GatewayProbe
 import dev.hermeskotlin.core.gateway.GatewayRepository
+import dev.hermeskotlin.core.media.LinkPreviews
 import dev.hermeskotlin.core.media.MediaApi
+import dev.hermeskotlin.core.media.publicWebEngine
 import dev.hermeskotlin.core.models.ModelsApi
 import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.profiles.ProfileStore
 import dev.hermeskotlin.core.push.NtfyClient
+import dev.hermeskotlin.core.inbox.InboxLinks
+import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.settings.SettingsStore
+import dev.hermeskotlin.core.settings.startInstruction
 import dev.hermeskotlin.core.rpc.openGatewaySocket
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.slash.SlashApi
+import dev.hermeskotlin.core.update.RenameNotice
 import dev.hermeskotlin.core.update.UpdateChecker
 import dev.hermeskotlin.core.journey.JourneyApi
 import dev.hermeskotlin.core.pet.PetApi
@@ -44,11 +53,15 @@ import dev.hermeskotlin.core.bots.BotChats
 import dev.hermeskotlin.core.bots.BotHealth
 import dev.hermeskotlin.core.bots.BotsApi
 import dev.hermeskotlin.core.projects.ProjectsApi
+import dev.hermeskotlin.core.threads.ThreadsApi
+import dev.hermeskotlin.core.threads.ThreadsRepository
 import dev.hermeskotlin.core.bots.SidebarModeStore
 import dev.hermeskotlin.core.rooms.RoomLinks
 import dev.hermeskotlin.core.rooms.RoomSeenStore
 import dev.hermeskotlin.core.rooms.RoomsApi
 import dev.hermeskotlin.core.voice.AudioApi
+import dev.hermeskotlin.core.voice.GatewaySpeechStreams
+import dev.hermeskotlin.core.voice.SpeechStreams
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -80,8 +93,11 @@ val coreModule = module {
     single { SessionsApi(get()) }
     single { CronApi(get()) }
     single { CapabilitiesApi(get()) }
+    single { SkillsHubApi(get()) }
     single { PluginsApi(get()) }
+    single { NextPromptApi(get(), get(), get()) }
     single { InsightsApi(get()) }
+    single { ConfigApi(get()) }
     single { LastChatStore(get()) }
     single { DraftStore(get()) }
     single { ProfilesApi(get()) }
@@ -97,7 +113,7 @@ val coreModule = module {
     }
     single { ToolRiskStore(get()) }
     single { OfflineCache(get<OfflineDatabase>().dao(), get()) { getTimeMillis() } }
-    single { ChatHost(get(), get(), get(), get(), get()) }
+    single { ChatHost(get(), get(), get(), get(), get(), get()) }
     single { ActiveSessions(get(), get()) }
     single(createdAtStart = true) { AttentionTracker(get(), get(), get(), get()) }
     single(createdAtStart = true) { SessionWatcher(get(), get(), get(), get(), get()) }
@@ -108,6 +124,11 @@ val coreModule = module {
     single { PetApi(get()) }
     single { BotsApi(get()) }
     single { ProjectsApi(get()) }
+    single { ThreadsApi(get()) }
+    single {
+        val settings = get<SettingsStore>()
+        ThreadsRepository(get(), get(), get(), get(), startInstruction = { settings.startInstruction() })
+    }
     single { BotChats(get<BotsApi>()) }
     single { RoomsApi(get()) }
     single { RoomSeenStore(get()) }
@@ -119,11 +140,17 @@ val coreModule = module {
     single { SidebarModeStore(get()) }
     single { JourneyApi(get()) }
     single { AudioApi(get()) }
+    single<SpeechStreams> { GatewaySpeechStreams(get(), get()) }
     // Outside requests (pictures from the web, GitHub) get a client without the gateway's cookies.
     single(named(OUTSIDE_CLIENT)) { createHttpClient() }
     single { MediaApi(get(), get(named(OUTSIDE_CLIENT))) }
+    // Previews fetch without a tap, so their client also refuses addresses on the user's own networks.
+    single { LinkPreviews(createHttpClient(publicWebEngine())) }
     single { UpdateChecker(get(named(OUTSIDE_CLIENT)), get()) }
+    single { RenameNotice(get(), get()) }
     // ntfy is someone else's server: never send it the gateway's cookies.
     single { NtfyClient(get(named(OUTSIDE_CLIENT))) }
     single { PushApi(get()) }
+    single { InboxStore(get()) }
+    single { InboxLinks() }
 }

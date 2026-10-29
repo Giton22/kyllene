@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 
 class HistoryToMessagesTest {
 
@@ -157,5 +158,17 @@ class HistoryToMessagesTest {
         assertEquals("plain", messages[0].sentText)
         assertEquals(1L, messages[0].rowId)
         assertEquals(null, messages[1].sentText)
+    }
+
+    @Test
+    fun anotherBotsMessageKeepsItsTimeSoTheNewMessagesLineCanFindIt() {
+        val rows = listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("Message from 🤖 Scribe (@scribe): the draft is ready"), timestamp = 200.0),
+        )
+
+        val event = historyToMessages(rows).single() as ChatMessage.Event
+
+        assertIs<TranscriptEvent.FromBot>(event.event)
+        assertEquals(200.0, event.timestamp)
     }
 }

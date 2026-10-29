@@ -8,10 +8,13 @@ import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ComposeDraft
+import dev.hermeskotlin.core.chat.DraftStart
 import dev.hermeskotlin.core.chat.DraftStore
 import dev.hermeskotlin.core.chat.OutgoingAttachment
 import dev.hermeskotlin.core.chat.LastChatStore
+import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
+import dev.hermeskotlin.core.rpc.RpcTransport
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.journey.JourneyApi
 import dev.hermeskotlin.core.media.MediaApi
@@ -41,7 +44,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -86,14 +97,42 @@ class ChatViewModelTest {
         override suspend fun play(audio: SpokenAudio) = Unit
     }
 
-    private fun viewModel(drafts: DraftStore = DraftStore(InMemoryKeyValueStore())): Pair<ChatViewModel, ChatHost> {
+    /** A gateway socket that says it's ready and answers every call with an empty result. */
+    private class ReadyGateway : RpcTransport {
+        private val inbound = Channel<String>(Channel.UNLIMITED).apply {
+            trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
+        }
+
+        override val incoming: Flow<String> = inbound.receiveAsFlow()
+
+        override suspend fun send(text: String) {
+            val id = Json.parseToJsonElement(text).jsonObject["id"] ?: return
+            inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{}}""")
+        }
+
+        override suspend fun close(code: Short, reason: String) {
+            inbound.close()
+        }
+    }
+
+    /** The connection of the last [viewModel]; [GatewayConnection.start] connects it to a [ReadyGateway]. */
+    private lateinit var connection: GatewayConnection
+
+    private fun viewModel(drafts: DraftStore = DraftStore(InMemoryKeyValueStore()), fileReads: MutableList<Pair<String, String?>>? = null): Pair<ChatViewModel, ChatHost> {
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
         // On the test dispatcher, so no request is still finishing on another thread when a test ends.
         val engine = MockEngineConfig()
         engine.dispatcher = dispatcher
-        engine.addHandler { respond("{}", HttpStatusCode.OK, json) }
+        engine.addHandler { request ->
+            if (request.url.encodedPath.startsWith("/api/fs/")) {
+                fileReads?.add(request.url.host to request.url.parameters["profile"])
+                if (request.url.encodedPath.endsWith("read-text")) respond("""{"text":"<p>widget</p>","byte_size":13,"truncated":false,"binary":false}""", HttpStatusCode.OK, json)
+                else respond("<p>widget</p>", HttpStatusCode.OK)
+            } else if (request.url.encodedPath == "/api/auth/ws-ticket") respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
+            else respond("{}", HttpStatusCode.OK, json)
+        }
         val client = createHttpClient(MockEngine(engine), cookies)
-        val connection = GatewayConnection(AuthApi(client, cookies), { _, _ -> error("not connecting in tests") }, scope)
+        connection = GatewayConnection(AuthApi(client, cookies), { _, _ -> ReadyGateway() }, scope)
         val sessions = SessionsApi(client)
         val chatHost = ChatHost(connection, sessions, scope)
         val vm = ChatViewModel(
@@ -106,9 +145,46 @@ class ChatViewModelTest {
                 override fun release() = Unit
             },
             NoDeviceDictation,
+            { _, _ -> null },
         )
         viewModels.put("chat", vm)
         return vm to chatHost
+    }
+
+    @Test
+    fun widgetFilesStayWithTheirTranscriptWhileTheSelectedChatChanges() = runTest(dispatcher) {
+        Dispatchers.setMain(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
+        val reads = mutableListOf<Pair<String, String?>>()
+        val (vm, _) = viewModel(fileReads = reads)
+        val first = ChatTarget(gateway, "same-id", "First", profile = "first")
+        vm.open(first)
+        runCurrent()
+        val oldTranscript = vm.transcript.value
+        val oldFiles = assertNotNull(oldTranscript.widgetFiles)
+        val file = dev.hermeskotlin.core.media.GatewayFile("/tmp/widget.html")
+
+        listOf(first.copy(profile = "second"), first.copy(gateway = SavedGateway("https://other.example"))).forEach { next ->
+            val previous = vm.transcript.value
+            vm.open(next)
+            // Session delivery is delayed: the old emission must still carry its old callbacks.
+            assertSame(previous, vm.transcript.value)
+            runCurrent()
+            val newTranscript = vm.transcript.value
+            assertEquals("same-id", newTranscript.state.storedSessionId)
+            assertEquals(next.gateway.gatewayUrl to next.profile, assertNotNull(newTranscript.widgetFiles).identity)
+            // The screen may still hold this prior emission while the selected route has changed.
+            assertTrue(loadWidget(oldFiles, file) is FileLoad.Ready)
+            assertTrue(downloadWidget(oldFiles, file) is FileDownload.Ready)
+        }
+        assertEquals<List<Pair<String, String?>>>(List(4) { "hermes.example.ts.net" to "first" }, reads)
+        assertEquals(first.gateway.gatewayUrl to first.profile, oldFiles.identity)
+        assertEquals("same-id", oldTranscript.state.storedSessionId)
+
+        // A new title on the same chat reads the same files, so its widgets keep their key and don't reload.
+        val current = vm.transcript.value.widgetFiles
+        vm.open(first.copy(gateway = SavedGateway("https://other.example"), title = "Renamed"))
+        runCurrent()
+        assertEquals(assertNotNull(current).identity, assertNotNull(vm.transcript.value.widgetFiles).identity)
     }
 
     @Test
@@ -254,9 +330,129 @@ class ChatViewModelTest {
     fun theVoiceShortcutAsksTheScreenToDictate() = runTest(dispatcher) {
         val (vm, _) = viewModel()
 
-        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(dictate = true)))
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.Dictation)))
 
         assertEquals(ChatRequest.StartDictation, vm.requests.first())
+    }
+
+    @Test
+    fun theCallShortcutStartsVoiceOnceInItsFreshChat() = runTest(dispatcher) {
+        val (vm, host) = viewModel()
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        vm.open(ChatTarget(gateway, "s1", "Previous chat"))
+        val previous = host.session.value
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        val call = ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat))
+        vm.open(call)
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+        assertNotSame(previous, host.session.value)
+        assertNull(vm.state.value.storedSessionId)
+
+        // The same shortcut isn't replayed, and a plain new chat starts nothing.
+        vm.open(call)
+        vm.open(ChatTarget(gateway, null, null, nonce = 2))
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+    }
+
+    @Test
+    fun theCallShortcutWaitsForTheGateway() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat)))
+        assertEquals(emptyList(), requests)
+
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+    }
+
+    @Test
+    fun theCallShortcutGivesUpWithANoticeWhenTheGatewayNeverAnswers() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat)))
+        advanceTimeBy(30_001)
+
+        assertEquals(emptyList(), requests)
+        assertEquals("The call didn't start: Kyllene couldn't reach the gateway.", vm.attachmentError.value)
+        // Connecting afterwards doesn't start a call the person has given up on.
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        assertEquals(emptyList(), requests)
+    }
+
+    @Test
+    fun theCallShortcutWaitsForThePersonToComeBackToTheApp() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat)))
+        vm.onScreen(false)
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        assertEquals(emptyList(), requests)
+
+        vm.onScreen(true)
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+    }
+
+    @Test
+    fun aStoredCallStillStartsAfterItsUnreadPositionChanges() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+        vm.onScreen(false)
+        val call = ChatTarget(gateway, "s1", "Call target", nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat))
+        vm.open(call)
+        val updated = call.copy(readUpTo = 1_000.0)
+        vm.open(updated)
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        assertEquals(emptyList(), requests)
+
+        vm.onScreen(true)
+        vm.open(updated)
+        assertEquals(listOf<ChatRequest>(ChatRequest.StartVoice), requests)
+    }
+
+    @Test
+    fun theCallShortcutGivesUpQuietlyWhenThePersonStaysAway() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat)))
+        vm.onScreen(false)
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        advanceTimeBy(30_001)
+        vm.onScreen(true)
+
+        assertEquals(emptyList(), requests)
+        // The gateway was there; the notice would blame it wrongly.
+        assertNull(vm.attachmentError.value)
+    }
+
+    @Test
+    fun theCallShortcutDoesNotFollowThePersonToAnotherChat() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.VoiceChat)))
+        vm.open(ChatTarget(gateway, "s1", "Another chat"))
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+
+        assertEquals(emptyList(), requests)
     }
 
     @Test
@@ -269,5 +465,32 @@ class ChatViewModelTest {
         vm.open(target)
 
         assertSame(first, host.session.value)
+    }
+
+    @Test
+    fun theSameChatWithANewReadPositionKeepsItsSession() = runTest(dispatcher) {
+        val (vm, host) = viewModel()
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        val first = assertNotNull(host.session.value)
+
+        // Reopened from a notification: only where the "New messages" line goes has changed.
+        vm.open(target.copy(readUpTo = 1_300.0))
+
+        assertSame(first, host.session.value)
+    }
+
+    @Test
+    fun theSameChatFromANotificationAfterTheHostClosedGetsAFreshSession() = runTest(dispatcher) {
+        val (vm, host) = viewModel()
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        val first = assertNotNull(host.session.value)
+
+        // The session expired while away; the reply's notification reopens the chat with a read position.
+        host.close()
+        vm.open(target.copy(readUpTo = 1_300.0))
+
+        assertNotSame(first, assertNotNull(host.session.value))
     }
 }

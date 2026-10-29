@@ -182,8 +182,9 @@ class SessionWatcher(
         val attached = mutableSetOf<String>()
         combine(active.live, following) { live, on -> live to on }.collect { (live, on) ->
             val openId = host.session.value?.state?.value?.storedSessionId
+            val side = host.sideChats.value
             for ((storedId, row) in live.rows) {
-                if (!row.status.running || storedId == openId || row.title == BotsApi.BOT_CHAT_TITLE) continue
+                if (!row.status.running || storedId == openId || storedId in side || row.title == BotsApi.BOT_CHAT_TITLE) continue
                 // Compressing a chat goes on in a new stored session on the same runtime: the same chat, renamed.
                 _chats.value.values.firstOrNull { it.runtimeId == row.runtimeId && it.storedId != storedId }?.let { old ->
                     _chats.update { all -> all[old.storedId]?.let { all - old.storedId + (storedId to it.copy(storedId = storedId)) } ?: all }

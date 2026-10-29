@@ -20,10 +20,12 @@ import dev.hermeskotlin.core.slash.SlashCommand
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
@@ -50,6 +52,9 @@ class ChatSessionTest {
     /** The stored row doesn't exist yet while this is set, as for a new chat before its first prompt. */
     private var historyMissing = false
 
+    /** Other stored sessions' transcripts by id, such as a `/bg` task's. */
+    private val storedSessions = mutableMapOf<String, String>()
+
     /** The gateway of the latest [setup]; its client reads [history]. */
     private lateinit var gateway: FakeGateway
 
@@ -63,7 +68,9 @@ class ChatSessionTest {
         FakeGateway(scope, reconnects).also { gateway = it }.apply {
             answer = { call -> (results[call.method] ?: "{}").takeIf { it != SILENT } }
             http = { request ->
+                val other = storedSessions.entries.firstOrNull { request.url.encodedPath == "/api/sessions/${it.key}/messages" }
                 when {
+                    other != null -> json(other.value)
                     request.url.encodedPath != "/api/sessions/stored-1/messages" -> error("unexpected ${request.url}")
                     historyFails -> json("{}", HttpStatusCode.InternalServerError)
                     historyMissing -> json("{}", HttpStatusCode.NotFound)
@@ -184,6 +191,80 @@ class ChatSessionTest {
         assertFalse(user.pending)
         // Dated when this device sent it.
         assertEquals(1_700_000_000.0, user.timestamp)
+    }
+
+    @Test
+    fun aNewChatStartsWithTheStartingInstructionAsAHiddenRow() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-9","message_count":0,"messages":[],"info":{}}""",
+                "prompt.submit" to """{"status":"streaming"}""",
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        var instruction: String? = "Keep replies short."
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope, startInstruction = { instruction })
+        chat.start()
+        // Read when the chat is created, not when it opens.
+        instruction = "I'm on my phone: keep replies short."
+
+        assertTrue(chat.send("hi"))
+
+        val create = transport.awaitSent { it.isCall("session.create") }
+        val seeded = create["params"]!!.jsonObject["messages"]!!.jsonArray.single().jsonObject
+        assertEquals("user", seeded["role"]?.jsonPrimitive?.content)
+        assertEquals("hidden", seeded["display_kind"]?.jsonPrimitive?.content)
+        val content = seeded["content"]!!.jsonPrimitive.content
+        assertTrue(content.endsWith("\n\nI'm on my phone: keep replies short."), content)
+        // The prompt itself goes as usual; the instruction isn't in it or on screen.
+        assertEquals("hi", transport.awaitSent { it.isCall("prompt.submit") }.param("text"))
+        assertEquals(listOf("hi"), chat.state.value.messages.map { it.textOf() })
+    }
+
+    @Test
+    fun aNewChatWithoutAStartingInstructionSeedsNothing() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-9","message_count":0,"messages":[],"info":{}}""",
+                "prompt.submit" to """{"status":"streaming"}""",
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope, startInstruction = { null })
+        chat.start()
+
+        assertTrue(chat.send("hi"))
+
+        val create = transport.awaitSent { it.isCall("session.create") }
+        assertNull(create["params"]!!.jsonObject["messages"])
+    }
+
+    @Test
+    fun aChatSeededWithAStartingInstructionResumesItsRowOnReconnect() = runTest {
+        val (connection, transports) = reconnectingSetup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-1","info":{}}""",
+                "session.resume" to """{"session_id":"rt9","running":false}""",
+                "prompt.submit" to SILENT,
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope, startInstruction = { "Keep replies short." })
+        chat.start()
+        historyFails = true
+        val sending = backgroundScope.async { chat.submit("deploy it") }
+        transports.last().awaitSent { it.isCall("prompt.submit") }
+        val dropped = transports.last()
+        dropped.serverClose(1006)
+        assertEquals(SendOutcome.Unsettled, sending.await())
+
+        // The seeded row was stored on create, so the next link resumes it instead of making a second chat.
+        chat.state.first { it.runtimeSessionId != null && transports.last() !== dropped }
+        assertTrue(transports.last().sent.value.any { it.isCall("session.resume") })
+        assertEquals(1, transports.sumOf { socket -> socket.sent.value.count { it.isCall("session.create") } })
     }
 
     @Test
@@ -1165,6 +1246,175 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aBackgroundPromptRunsBesideTheChatAndAnswersIntoItsCard() = runTest {
+        val (chat, transport) = newChat(backgroundScope, mapOf("prompt.background" to """{"task_id":"bg_1a2b3c"}"""))
+
+        chat.runInBackground("  summarize the logs  ")
+
+        val call = transport.sent.value.first { it.isCall("prompt.background") }
+        assertEquals("summarize the logs", call.param("text"))
+        // Not the slash worker, which prints the answer after its output was collected.
+        assertTrue(transport.sent.value.none { it.isCall("slash.exec") })
+        val waiting = chat.state.first { (it.messages.singleOrNull() as? ChatMessage.Command)?.taskId == "bg_1a2b3c" }
+        assertTrue((waiting.messages.single() as ChatMessage.Command).running)
+
+        transport.push(event("background.complete", "rt9", """{"task_id":"bg_1a2b3c","text":"Three errors, all from cron."}"""))
+        val card = chat.state.first { (it.messages.single() as ChatMessage.Command).output.isNotEmpty() }.messages.single() as ChatMessage.Command
+        assertEquals("/bg summarize the logs", card.command)
+        assertEquals("Three errors, all from cron.", card.output)
+        assertFalse(card.running)
+        assertFalse(card.failed)
+    }
+
+    @Test
+    fun aBackgroundTaskThatCrashedShowsAsFailed() = runTest {
+        val (chat, transport) = newChat(backgroundScope, mapOf("prompt.background" to """{"task_id":"bg_x"}"""))
+
+        chat.runInBackground("do it")
+        chat.state.first { (it.messages.singleOrNull() as? ChatMessage.Command)?.taskId == "bg_x" }
+        transport.push(event("background.complete", "rt9", """{"task_id":"bg_x","text":"error: no credentials"}"""))
+
+        val card = chat.state.first { (it.messages.single() as ChatMessage.Command).output.isNotEmpty() }.messages.single() as ChatMessage.Command
+        assertTrue(card.failed)
+        assertFalse(card.running)
+    }
+
+    @Test
+    fun aBackgroundAnswerStartedElsewhereGetsItsOwnCard() = runTest {
+        val (chat, transport) = newChat(backgroundScope, mapOf("prompt.background" to """{"task_id":"bg_mine"}"""))
+        chat.runInBackground("mine")
+        chat.state.first { (it.messages.singleOrNull() as? ChatMessage.Command)?.taskId == "bg_mine" }
+
+        // Desktop or the TUI started this one on the same session.
+        transport.push(event("background.complete", "rt9", """{"task_id":"bg_theirs","text":"done"}"""))
+
+        val messages = chat.state.first { it.messages.size == 2 }.messages
+        assertTrue((messages[0] as ChatMessage.Command).running)
+        val card = messages[1] as ChatMessage.Command
+        assertEquals("/bg", card.command)
+        assertEquals("done", card.output)
+        assertFalse(card.running)
+    }
+
+    @Test
+    fun aGatewayWithoutBackgroundPromptsRunsBgOnTheSlashWorker() = runTest {
+        val (chat, transport) = newChat(
+            backgroundScope,
+            mapOf("prompt.background" to "error:-32601", "slash.exec" to """{"output":"Background task #1 started"}"""),
+        )
+
+        chat.runInBackground("do it")
+
+        assertEquals("bg do it", transport.sent.value.first { it.isCall("slash.exec") }.param("command"))
+        val card = chat.state.value.messages.single() as ChatMessage.Command
+        assertEquals("/bg do it", card.command)
+        assertEquals("Background task #1 started", card.output)
+    }
+
+    @Test
+    fun theSlashWorkersBackgroundAnswerIsReadFromTheTasksSession() = runTest {
+        val printed = "Background task #1 started: \\\"do it\\\"\\n  Task ID: bg_101500_a1b2c3\\n  You can keep chatting"
+        val (chat, _) = newChat(
+            backgroundScope,
+            mapOf("prompt.background" to "error:-32601", "slash.exec" to """{"output":"$printed"}"""),
+        )
+        storedSessions["bg_101500_a1b2c3"] = """{"session_id":"bg_101500_a1b2c3","messages":[
+            {"id":1,"role":"user","content":"do it"},{"id":2,"role":"assistant","content":"Done, all of it."}]}"""
+
+        chat.runInBackground("do it")
+
+        val waiting = chat.state.value.messages.single() as ChatMessage.Command
+        assertEquals("bg_101500_a1b2c3", waiting.taskId)
+        assertTrue(waiting.running)
+        val card = chat.state.first { !(it.messages.single() as ChatMessage.Command).running }.messages.single() as ChatMessage.Command
+        assertEquals("/bg do it", card.command)
+        assertEquals("Done, all of it.", card.output)
+        assertFalse(card.failed)
+    }
+
+    @Test
+    fun aBackgroundAnswerWhoseEventWasLostIsReadFromTheTasksSession() = runTest {
+        val (chat, _) = newChat(backgroundScope, mapOf("prompt.background" to """{"task_id":"bg_lost"}"""))
+        // Still working: the last row is a tool call.
+        storedSessions["bg_lost"] = """{"session_id":"bg_lost","messages":[{"id":1,"role":"user","content":"count"},
+            {"id":2,"role":"assistant","content":"","tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]}]}"""
+
+        chat.runInBackground("count")
+        chat.state.first { (it.messages.singleOrNull() as? ChatMessage.Command)?.taskId == "bg_lost" }
+        // Two looks, 15 s apart, find it still working.
+        delay(31_000)
+        assertTrue((chat.state.value.messages.single() as ChatMessage.Command).running)
+
+        storedSessions["bg_lost"] = """{"session_id":"bg_lost","messages":[{"id":3,"role":"assistant","content":"error: 42 is the count"}]}"""
+        val card = chat.state.first { !(it.messages.single() as ChatMessage.Command).running }.messages.single() as ChatMessage.Command
+        assertEquals("error: 42 is the count", card.output)
+        // A stored answer is the agent's reply, whatever it starts with.
+        assertFalse(card.failed)
+    }
+
+    @Test
+    fun aGatewayThatCantAttachDoesntRunBgOnTheSlashWorker() = runTest {
+        val (chat, transport) = newChat(backgroundScope, mapOf("session.create" to "error:-32601"))
+
+        chat.runInBackground("do it")
+
+        val card = chat.state.value.messages.single() as ChatMessage.Command
+        assertTrue(card.failed)
+        assertEquals("/bg do it", card.command)
+        assertTrue(transport.sent.value.none { it.isCall("prompt.background") || it.isCall("slash.exec") })
+    }
+
+    @Test
+    fun theHostKeepsABackgroundCardAcrossAChatSwitchButNotASignOut() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.resume" to """{"session_id":"rt1","running":false,"info":{}}""",
+                "prompt.background" to """{"task_id":"bg_host"}""",
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope)
+        val first = host.open(url, "stored-1", "Greeting")
+        first.state.first { it.historyLoaded }
+        first.runInBackground("tidy up")
+        transport.push(event("background.complete", "rt1", """{"task_id":"bg_host","text":"Tidied."}"""))
+        first.state.first { s -> s.messages.count { it is ChatMessage.Command } == 1 && !(s.messages.last() as ChatMessage.Command).running }
+
+        host.open(url, null, null)
+        val back = host.open(url, "stored-1", "Greeting").state.first { it.historyLoaded }.messages
+        val card = back.filterIsInstance<ChatMessage.Command>().single()
+        assertEquals("Tidied.", card.output)
+
+        host.close()
+        assertTrue(host.open(url, "stored-1", "Greeting").state.first { it.historyLoaded }.messages.none { it is ChatMessage.Command })
+    }
+
+    @Test
+    fun sideTaskCardsComeBackWithTheirChat() = runTest {
+        val (connection, _) = setup(backgroundScope, mapOf("session.resume" to """{"session_id":"rt1","running":false,"info":{}}"""))
+        storedSessions["bg_away"] = """{"session_id":"bg_away","messages":[{"id":1,"role":"assistant","content":"Finished while away."}]}"""
+        val cards = listOf(
+            ChatMessage.Command("cmd-0", "/btw what was that?", running = true, taskId = "btw_1"),
+            ChatMessage.Command("cmd-1", "/bg tidy up", running = true, taskId = "bg_away"),
+            ChatMessage.Command("cmd-2", "/bg earlier", "Earlier answer", running = false, taskId = "bg_old"),
+        )
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope, sideTasks = cards)
+        chat.start()
+
+        val loaded = chat.state.first { it.historyLoaded }.messages
+        // After the transcript, keyed apart from this session's own cards.
+        assertEquals(listOf("task-btw_1", "task-bg_away", "task-bg_old"), loaded.drop(2).map { it.key })
+        val btw = loaded[2] as ChatMessage.Command
+        assertFalse(btw.running)
+        assertEquals("Its answer may have come while another chat was open.", btw.output)
+
+        val done = chat.state.first { s -> s.messages.none { it is ChatMessage.Command && it.running } }.messages
+        assertEquals("Finished while away.", (done[3] as ChatMessage.Command).output)
+        assertEquals("Earlier answer", (done[4] as ChatMessage.Command).output)
+    }
+
+    @Test
     fun yoloTogglesForThisChatOnly() = runTest {
         val (chat, transport) = newChat(backgroundScope, mapOf("config.set" to """{"key":"yolo","value":"1"}"""))
 
@@ -1192,6 +1442,47 @@ class ChatSessionTest {
 
         assertEquals("stored-2" to "Greeting #2", chat.branch(null))
         assertEquals("rt1", transport.sent.value.first { it.isCall("session.branch_whole") }.param("session_id"))
+    }
+
+    @Test
+    fun branchingCountsTheHiddenRowsTheGatewayCountsToo() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"[A standing instruction…]\n\nKeep replies short.","display_kind":"hidden"},
+            {"id":2,"role":"user","content":"one"},{"id":3,"role":"assistant","content":"First"},
+            {"id":4,"role":"user","content":"two"},{"id":5,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        assertEquals(listOf("one", "First", "two", "Second"), chat.state.value.messages.map { it.textOf() })
+
+        // Up to "First": two shown, three stored with the instruction.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(2))
+        assertEquals("3", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
+    fun branchingFromAReplyKeepsEveryStepOfIt() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
+            {"id":2,"role":"user","content":"one","timestamp":10},
+            {"id":3,"role":"assistant","content":"Checking.","timestamp":11,"tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},
+            {"id":4,"role":"tool","tool_call_id":"c1","content":"ok","timestamp":12},
+            {"id":5,"role":"assistant","content":"Done.","timestamp":13},
+            {"id":6,"role":"user","content":"two","timestamp":20},{"id":7,"role":"assistant","content":"Second","timestamp":21}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        // The first reply shows as one message, from its first step's row.
+        assertEquals(listOf("row-2", "row-3", "row-6", "row-7"), chat.state.value.messages.map { it.key })
+
+        // Up to the next prompt: the instruction, "one" and both steps of the reply.
+        assertEquals("stored-2" to "Greeting #2", chat.branchFrom("row-3"))
+        assertEquals("4", transport.sent.value.last { it.isCall("session.branch") }.param("count"))
+        // From a prompt: the instruction and the prompt.
+        chat.branchFrom("row-2")
+        assertEquals("2", transport.sent.value.last { it.isCall("session.branch") }.param("count"))
     }
 
     private val threeTurns = """{"session_id":"stored-1","messages":[

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -53,6 +54,15 @@ class PushSetup(
                     }
                 }
         }
+        scope.launch {
+            // Phone tools updated the shared plugin: look again, so the update isn't still offered here.
+            api.updates.drop(1).collect {
+                val offered = _status.value.update != null
+                if (offered && settings.settings.value?.pushAnywhere == true && connection.state.value is ConnectionState.Connected) {
+                    runCatching { refresh(install = false) }
+                }
+            }
+        }
     }
 
     /** Turns it on: installs the plugin when the gateway lacks it, then registers this phone. */
@@ -77,12 +87,16 @@ class PushSetup(
         if (_status.value.state != State.Off) _status.value = PushStatus(State.Unknown)
     }
 
+    /** The user asked for the newer plugin the status offers: install it on the gateway, then register again. */
+    suspend fun updatePlugin() = refresh(install = true, update = true)
+
     suspend fun test(): Boolean = runCatching { api.test(keys.deviceId) }.getOrDefault(false)
 
     private suspend fun retireNow() {
         val url = keys.pinnedGatewayUrl() ?: return
         // Retired first: if the gateway can't be told now, it's told on the next connection.
         keys.retire(url)
+        api.registrationChanged()
         withTimeoutOrNull(FORGET_BUDGET_MS) { runCatching { cleanUp() } }
     }
 
@@ -95,7 +109,7 @@ class PushSetup(
         }
     }
 
-    private suspend fun refresh(install: Boolean) = lock.withLock {
+    private suspend fun refresh(install: Boolean, update: Boolean = false) = lock.withLock {
         // Turned off while this waited for the lock: don't register again.
         if (settings.settings.value?.pushAnywhere != true) return@withLock
         val url = gateways.current()?.gatewayUrl?.value ?: return@withLock
@@ -108,7 +122,8 @@ class PushSetup(
         try {
             // An identity registered with another gateway is retired, never shared.
             keys.pinnedGatewayUrl()?.takeIf { it != url }?.let(keys::retire)
-            val info = plugin(install) ?: return@withLock
+            val ready = plugin(install, update) ?: return@withLock
+            val info = ready.info
             // Refused keys would leave a registration the phone can't retire: check them first.
             val announced = info.gateway?.takeIf(keys::accepts)
             if (announced == null) {
@@ -132,7 +147,10 @@ class PushSetup(
                 _status.value = PushStatus(State.Failed, "The gateway's plugin sent unusable keys.")
                 return@withLock
             }
-            _status.value = PushStatus(State.On, if (reply.watching) null else "Restart the gateway's dashboard to start sending.")
+            api.registrationChanged()
+            _status.value = PushStatus(State.On, listOfNotNull(ready.detail,
+                if (reply.watching) null else "Restart the gateway's dashboard to start sending.",
+            ).joinToString("\n").ifEmpty { null }, ready.update)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -142,40 +160,24 @@ class PushSetup(
 
     /**
      * The plugin, ready: switched on when it was only disabled, installed when missing (only with [install]),
-     * and reinstalled at the reviewed commit when older than this Herald needs. Null with the status set.
+     * and updated only with [update], the user's ask. Null with the status set.
      */
-    private suspend fun plugin(install: Boolean): PushPluginReply? {
-        var info = api.info()
-        if (info == null && install) {
-            // Present but switched off (in Desktop's Plugins hub, say): a toggle is enough, and an
-            // install would be refused as "already exists".
-            _status.value = PushStatus(State.Working, "Setting up on the gateway…")
-            if (api.enable()) info = api.info()
-            if (info == null) {
-                _status.value = PushStatus(State.Working, "Installing on the gateway…")
-                api.install()
-                info = api.info()
+    private suspend fun plugin(install: Boolean, update: Boolean): PluginState.Ready? =
+        when (val plugin = api.prepare(install, update = update) { _status.value = PushStatus(State.Working, it) }) {
+            is PluginState.Ready -> plugin
+            PluginState.Missing -> {
+                _status.value = PushStatus(State.NotInstalled)
+                null
+            }
+            is PluginState.Outdated -> {
+                _status.value = PushStatus(State.Outdated, update = plugin.update)
+                null
+            }
+            is PluginState.Failed -> {
+                _status.value = PushStatus(State.Failed, plugin.reason)
+                null
             }
         }
-        if (info != null && info.ok && !info.versionAtLeast(PushApi.MIN_PLUGIN_VERSION)) {
-            _status.value = PushStatus(State.Working, "Updating the gateway's plugin…")
-            api.install(force = true)
-            info = api.info()
-            if (info != null && info.ok && !info.versionAtLeast(PushApi.MIN_PLUGIN_VERSION)) {
-                _status.value = PushStatus(State.Failed, "The gateway's herald-push plugin is too old (${info.version}). Update it there.")
-                return null
-            }
-        }
-        if (info == null) {
-            _status.value = PushStatus(State.NotInstalled)
-            return null
-        }
-        if (!info.ok) {
-            _status.value = PushStatus(State.Failed, info.error)
-            return null
-        }
-        return info
-    }
 
     private companion object {
         /** How long leaving a gateway may wait on telling it; the retirement itself is already saved. */

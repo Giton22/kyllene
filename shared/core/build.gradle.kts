@@ -17,10 +17,32 @@ kotlin {
     iosArm64()
     iosSimulatorArm64()
 
+    // The desktop app (experimental).
+    jvm()
+
+    // Asked for by name: a hand-made source set (jvmShared) otherwise turns it off, and iosMain with it.
+    applyDefaultHierarchyTemplate()
+
     sourceSets {
+        // What Android and the desktop share: the JDK's crypto, text and time, jsoup and OkHttp.
+        val jvmShared by creating {
+            dependsOn(commonMain.get())
+            dependencies {
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.jsoup)
+                implementation(libs.markdown.parser)
+            }
+        }
+        androidMain.get().dependsOn(jvmShared)
+        jvmMain.get().dependsOn(jvmShared)
+        jvmMain.dependencies {
+            implementation(libs.sqlite.bundled)
+            implementation(libs.jna.platform)
+        }
         commonMain.dependencies {
             api(libs.kotlinx.coroutines.core)
             api(libs.kotlinx.serialization.json)
+            api(projects.shared.wearlink)
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.client.websockets)
@@ -30,6 +52,8 @@ kotlin {
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
+            implementation(libs.jsoup)
+            implementation(libs.markdown.parser)
             implementation(libs.koin.android)
             implementation(libs.androidx.core.ktx)
             implementation(libs.webrtc.android)
@@ -52,6 +76,7 @@ dependencies {
     add("kspAndroid", libs.room.compiler)
     add("kspIosArm64", libs.room.compiler)
     add("kspIosSimulatorArm64", libs.room.compiler)
+    add("kspJvm", libs.room.compiler)
 }
 
 room {

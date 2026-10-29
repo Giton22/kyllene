@@ -45,6 +45,13 @@ fun messageTime(epochSeconds: Double?, use24Hour: Boolean, nowMillis: Long = Clo
     return messageTime(localMoment((epochSeconds * 1000).toLong()), localMoment(nowMillis), use24Hour)
 }
 
+/** The whole moment, for a desktop's tooltip over a message's time: "Thursday, Oct 23, 2026, 14:05"; "" without one. */
+fun fullMessageTime(epochSeconds: Double?, use24Hour: Boolean): String {
+    if (epochSeconds == null || epochSeconds <= 0 || !epochSeconds.isFinite()) return ""
+    val at = localMoment((epochSeconds * 1000).toLong())
+    return "${DAY_NAMES[at.dayOfWeek - 1]}, ${MONTHS[at.month - 1]} ${at.day}, ${at.year}, ${clockTime(at, use24Hour)}"
+}
+
 private fun clockTime(at: LocalMoment, use24Hour: Boolean): String {
     val minute = at.minute.toString().padStart(2, '0')
     if (use24Hour) return "${at.hour.toString().padStart(2, '0')}:$minute"
@@ -54,3 +61,21 @@ private fun clockTime(at: LocalMoment, use24Hour: Boolean): String {
 
 private val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 private val WEEKDAYS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+/** A day heading for a list grouped by day: "Today", "Yesterday", "Monday" within the week, "Sep 3", "Sep 3, 2024". */
+fun dayHeading(at: LocalMoment, now: LocalMoment): String {
+    val daysAgo = now.epochDay - at.epochDay
+    return when {
+        daysAgo <= 0 -> "Today"
+        daysAgo == 1L -> "Yesterday"
+        daysAgo < 7 -> DAY_NAMES[at.dayOfWeek - 1]
+        at.year == now.year -> "${MONTHS[at.month - 1]} ${at.day}"
+        else -> "${MONTHS[at.month - 1]} ${at.day}, ${at.year}"
+    }
+}
+
+/** [dayHeading] for epoch seconds, on the device's calendar. */
+fun dayHeading(epochSeconds: Long, nowMillis: Long = Clock.System.now().toEpochMilliseconds()): String =
+    dayHeading(localMoment(epochSeconds * 1000), localMoment(nowMillis))
+
+private val DAY_NAMES = listOf("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")

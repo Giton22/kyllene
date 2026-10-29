@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- How Herald on the phone could find this watch app among the paired devices (WearCapabilities.WATCH). -->
+    <string-array name="android_wear_capabilities" translatable="false">
+        <item>herald_watch</item>
+    </string-array>
+</resources>

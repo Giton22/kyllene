@@ -33,6 +33,8 @@ data class Project(
     val sessionCount: Int,
     val isAuto: Boolean = false,
     val isNoProject: Boolean = false,
+    /** The chats the project holds in the gateway's window (`sessionIds`), by stored id. */
+    val sessionIds: Set<String> = emptySet(),
 ) {
     /** A stored project (`projects.db`), which can be renamed and deleted; the others are only groupings. */
     val isUserMade: Boolean get() = !isAuto && !isNoProject
@@ -40,6 +42,9 @@ data class Project(
 
 /** One folder's subfolders on the gateway; [more] when the gateway's page was full, so some may be missing. */
 data class FolderListing(val folders: List<String>, val more: Boolean = false)
+
+/** A file or folder ([dir]) on the gateway's machine, by its [name] in the folder listed. */
+data class PathEntry(val name: String, val dir: Boolean)
 
 /**
  * The gateway's projects (`projects.*`, tui_gateway/methods_config.py and methods_projects.py), per profile.
@@ -157,6 +162,22 @@ class ProjectsApi(private val connection: GatewayConnection) {
         return parseFolders(reply?.get("items"))
     }
 
+    /**
+     * `complete.path` for an `@file:` or `@folder:` reference being typed: the entries of the folder [word] is in
+     * (relative to where the gateway's agent works, or `~/`, or absolute) whose names start with its last part.
+     * An empty [word] asks for `./`: the gateway lists nothing for an empty one.
+     */
+    suspend fun completePath(profile: String?, word: String): List<PathEntry> {
+        val reply = client().request(
+            "complete.path",
+            buildJsonObject {
+                profile?.let { put("profile", it) }
+                put("word", word.ifEmpty { "./" })
+            },
+        ) as? JsonObject
+        return parsePaths(reply?.get("items"))
+    }
+
     private fun client(): JsonRpcClient = (connection.state.value as? ConnectionState.Connected)?.client
         ?: throw RpcException(0, "Not connected to the gateway.")
 
@@ -182,6 +203,14 @@ class ProjectsApi(private val connection: GatewayConnection) {
             return FolderListing(folders, more = items.size >= FOLDER_PAGE)
         }
 
+        /** `complete.path` items as names in their folder (`display`), folders marked by `meta`. */
+        internal fun parsePaths(element: JsonElement?): List<PathEntry> =
+            (element as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.mapNotNull { item ->
+                val dir = item.text("meta") == "dir"
+                val name = item.text("display")?.removeSuffix("/")?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                PathEntry(name, dir)
+            }
+
         /** The newest sessions the gateway groups; it reads 2000 by default, which is a lot for a phone to ask often. */
         const val SESSION_LIMIT = 500
 
@@ -191,7 +220,9 @@ class ProjectsApi(private val connection: GatewayConnection) {
                 val id = o.text("id") ?: return@mapNotNull null
                 // `sessionIds` are the chats the project really holds in the window; a discovered repo's
                 // `sessionCount` counts all history (cron runs, helpers, years back) and opens on nothing.
-                val ids = o["sessionIds"] as? JsonArray
+                val ids = (o["sessionIds"] as? JsonArray)?.mapNotNullTo(LinkedHashSet()) {
+                    (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.contentOrNull?.takeIf { s -> s.isNotBlank() }
+                }
                 Project(
                     id = id,
                     label = o.text("label") ?: id,
@@ -201,6 +232,7 @@ class ProjectsApi(private val connection: GatewayConnection) {
                     // shows empty or offers Rename and Delete.
                     isAuto = (o["isAuto"] as? JsonPrimitive)?.booleanOrNull != false,
                     isNoProject = (o["isNoProject"] as? JsonPrimitive)?.booleanOrNull == true || id == NO_PROJECT_ID,
+                    sessionIds = ids.orEmpty(),
                 )
             }
                 // A project the user made shows with no chats yet, as on Desktop: it was made to start chats in.

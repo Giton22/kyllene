@@ -63,6 +63,9 @@ private class KtorWebSocketTransport(private val session: DefaultClientWebSocket
 private const val GATEWAY_PROTOCOL = "hermes-gateway-v1"
 private const val TICKET_PROTOCOL_PREFIX = "hermes-gateway-ticket."
 
+/** The subprotocol list carrying a single-use [ticket], which the gateway takes on any of its sockets. */
+internal fun ticketProtocols(ticket: String): String = "$GATEWAY_PROTOCOL, $TICKET_PROTOCOL_PREFIX$ticket"
+
 /**
  * Opens `/api/ws` the way the desktop does: the single-use ticket rides in the subprotocol list
  * (`hermes-gateway-v1, hermes-gateway-ticket.<ticket>`) so it never lands in URLs or logs.
@@ -70,7 +73,7 @@ private const val TICKET_PROTOCOL_PREFIX = "hermes-gateway-ticket."
 suspend fun HttpClient.openGatewaySocket(url: GatewayUrl, ticket: String): RpcTransport {
     val session = try {
         webSocketSession(url.webSocketUrl) {
-            header(HttpHeaders.SecWebSocketProtocol, "$GATEWAY_PROTOCOL, $TICKET_PROTOCOL_PREFIX$ticket")
+            header(HttpHeaders.SecWebSocketProtocol, ticketProtocols(ticket))
         }
     } catch (e: CancellationException) {
         throw e

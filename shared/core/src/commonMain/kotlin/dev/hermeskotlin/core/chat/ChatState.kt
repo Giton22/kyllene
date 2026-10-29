@@ -109,8 +109,11 @@ sealed interface ChatMessage {
         val timestamp: Double? = null,
     ) : ChatMessage
 
-    /** A row written by the machinery rather than the person: another bot's message, a delivery, a routine… */
-    data class Event(override val key: String, val event: TranscriptEvent) : ChatMessage
+    /**
+     * A row written by the machinery rather than the person: another bot's message, a delivery, a routine…
+     * [timestamp] is the stored row's time (epoch seconds), when it has one.
+     */
+    data class Event(override val key: String, val event: TranscriptEvent, val timestamp: Double? = null) : ChatMessage
 
     /**
      * A one-line notice about the session: a live `notice`, shown on this device only, or a [stored] row
@@ -128,7 +131,7 @@ sealed interface ChatMessage {
         val output: String = "",
         val running: Boolean = true,
         val failed: Boolean = false,
-        /** The side task answering a `/btw`, whose `btw.complete` fills [output] in. */
+        /** The side task answering a `/btw` or `/bg`, whose `btw.complete` / `background.complete` fills [output] in. */
         val taskId: String? = null,
     ) : ChatMessage
 }
@@ -196,6 +199,8 @@ data class ChatState(
     val subagents: List<Subagent> = emptyList(),
     /** The part of the running turn's reply shown before a mid-turn correction; the turn continues below it. */
     val correctedReplyKey: String? = null,
+    /** The session's goal, loop and heartbeat, null when it has none (`session.control.update`). */
+    val control: SessionControl? = null,
     /** Source of unique keys for messages created on this device. */
     val keySeq: Int = 0,
 ) {

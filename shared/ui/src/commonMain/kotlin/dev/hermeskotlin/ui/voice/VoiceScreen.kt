@@ -72,6 +72,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.composables.icons.lucide.ArrowUp
 import com.composables.icons.lucide.Captions
 import com.composables.icons.lucide.CaptionsOff
 import com.composables.icons.lucide.ChevronDown
@@ -84,7 +85,7 @@ import com.composables.icons.lucide.X
 import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
-import com.composeunstyled.theme.rememberColoredIndication
+import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.designsystem.accent
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
@@ -107,6 +108,7 @@ import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.PlatformBackHandler
+import dev.hermeskotlin.ui.chat.LocalReplySpeaker
 import kotlin.math.PI
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -131,6 +133,8 @@ internal fun VoiceScreen(
     onMute: () -> Unit,
     onEnd: () -> Unit,
     onType: () -> Unit,
+    /** Sends what's been heard without waiting for the pause. */
+    onSendNow: () -> Unit = {},
 ) {
     PlatformBackHandler(enabled = active, onBack = onMinimize)
     val glow = Theme[colors][accent].copy(alpha = 0.22f)
@@ -196,6 +200,7 @@ internal fun VoiceScreen(
                         state.live && state.phase != VoicePhase.Connecting ->
                             SideButton(Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff, "Mute", onMute, on = state.muted, toggle = true)
                         !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
+                        canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
                         // An empty slot keeps End in the middle.
                         else -> Spacer(Modifier.size(52.dp))
                     }
@@ -214,12 +219,13 @@ private fun Transcript(state: VoiceChatState, lastReply: String?, captions: Bool
     Column(modifier.clipToBounds(), verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.Bottom)) {
         if (!captions) return@Column
         val said = state.caption
+        val bot = LocalReplySpeaker.current?.name ?: "Hermes"
         val mine = said != null && !state.captionIsVoice
         // While you talk, the reply you're answering stays above; while Hermes talks, its words are the caption.
         if (lastReply != null && (said == null || mine)) {
-            Line("Hermes", lastReply, Modifier.alpha(0.55f), big = false, you = false, lines = if (said == null) 8 else 4)
+            Line(bot, lastReply, Modifier.alpha(0.55f), big = false, you = false, lines = if (said == null) 8 else 4)
         }
-        if (said != null) Line(if (mine) "You" else "Hermes", said, Modifier, big = mine, you = mine, lines = 8)
+        if (said != null) Line(if (mine) "You" else bot, said, Modifier, big = mine, you = mine, lines = 8)
     }
 }
 
@@ -259,7 +265,7 @@ private fun RingButton(icon: ImageVector, description: String, onClick: () -> Un
                 .clip(CircleShape)
                 .background(Theme[colors][surface])
                 .border(1.dp, Theme[colors][stroke], CircleShape)
-                .indication(interaction, rememberColoredIndication(Theme[colors][textColor])),
+                .indication(interaction, rememberHoverIndication(Theme[colors][textColor])),
             contentAlignment = Alignment.Center,
         ) {
             UnstyledIcon(icon, contentDescription = null, tint = Theme[colors][textSecondary], modifier = Modifier.size(19.dp))
