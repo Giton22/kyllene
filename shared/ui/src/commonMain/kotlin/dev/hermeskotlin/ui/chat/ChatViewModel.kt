@@ -495,6 +495,16 @@ class ChatViewModel(
         }
         // After the new chat's session is bound: the call belongs to it.
         if (target.draft?.start == DraftStart.VoiceChat) startVoiceWhenConnected(target)
+        if (target.draft?.start == DraftStart.Send) sendWhenConnected(target)
+    }
+
+    /** Sends the quick entry's prompt, already in the composer, once [target] can take it; a chat moved on from keeps it unsent. */
+    private fun sendWhenConnected(target: ChatTarget) {
+        viewModelScope.launch {
+            val ready = withTimeoutOrNull(VOICE_CONNECT_WAIT_MS) { connectionState.first { it is ConnectionState.Connected } }
+            if (this@ChatViewModel.target != target) return@launch
+            if (ready != null) send() else showAttachmentError("The prompt wasn't sent: Kyllene couldn't reach the gateway. It's in the composer.")
+        }
     }
 
     /** The screen tells whether it's on screen (started) or gone to the background (stopped). */
@@ -1064,6 +1074,21 @@ class ChatViewModel(
                 _attachments.update { attachments + it }
                 _comments.update { comments + it }
             }
+        }
+    }
+
+    override fun sendPrompt(text: String) {
+        val chat = session.value ?: return
+        if (text.isBlank()) return
+        val running = sendModeFor(state.value.running, null, settings.settings.value?.runningSend, withAttachments = false)
+        viewModelScope.launch {
+            val outcome = when (running) {
+                null -> chat.submit(text, emptyList())
+                RunningSend.Steer -> chat.steer(text)
+                // Stopping someone's run from a box in another app is too much; it waits its turn instead.
+                RunningSend.Queue, RunningSend.StopAndSend -> chat.submit(text, emptyList(), queue = true)
+            }
+            if (outcome == SendOutcome.NotSent) giveBack(text)
         }
     }
 

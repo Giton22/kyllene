@@ -380,7 +380,7 @@ internal fun PhoneToolsView(
                                 }
                             }
                             Text(
-                                "A chat you send from a phone uses that phone. Scheduled jobs and chats from Desktop or the " +
+                                "A chat you send from a phone uses that phone. Scheduled jobs and chats from Hermes Desktop or the " +
                                     "dashboard use the first phone in this list with the tool on. A phone you remove comes " +
                                     "back if Kyllene on it is still signed in with phone tools on.",
                                 style = Theme[typography][bodySmall],
@@ -612,6 +612,7 @@ private fun UseRow(use: PhoneToolUse, nowMillis: Long) {
 /** A row that opens a page: [detail] under the title, a chevron at the end. */
 @Composable
 internal fun NavRow(title: String, detail: String, icon: ImageVector, onClick: () -> Unit, detailLines: Int = Int.MAX_VALUE) {
+    if (!settingShown(title, detail)) return
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 13.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),

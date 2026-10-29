@@ -25,6 +25,7 @@ jlatexmath-android = "0.2.0"
 haze = "2.0.1"
 webrtc = "150.7871.01"
 room = "2.8.5"
+sqlite = "2.6.2"
 ksp = "2.3.12"
 # Wear OS companion
 play-services-wearable = "20.0.1"
@@ -54,6 +55,8 @@ compose-unstyled-colored-indication = { module = "com.composables:composeunstyle
 icons-lucide = { module = "com.composables:icons-lucide", version.ref = "lucide" }
 markdown-renderer = { module = "com.mikepenz:multiplatform-markdown-renderer", version.ref = "markdown-renderer" }
 highlights = { module = "dev.snipme:highlights", version.ref = "highlights" }
+# The original JLaTeXMath, which the Android port comes from, for the desktop.
+jlatexmath = { module = "org.scilab.forge:jlatexmath", version = "1.0.7" }
 jlatexmath-android = { module = "ru.noties:jlatexmath-android", version.ref = "jlatexmath-android" }
 haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 haze-blur = { module = "dev.chrisbanes.haze:haze-blur", version.ref = "haze" }
@@ -108,6 +111,20 @@ wear-complications-data-source = { module = "androidx.wear.watchface:watchface-c
 # Offline cache
 room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+# The SQLite that Room uses on the desktop (Android keeps the system one).
+sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
+
+# Desktop app: Compose's Main dispatcher is the Swing event thread.
+kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-swing", version.ref = "kotlinx-coroutines" }
+# Windows DPAPI, which seals the desktop app's stored secrets.
+jna-platform = { module = "net.java.dev.jna:jna-platform", version = "5.15.0" }
+# The JetBrains Runtime's API: the desktop app draws its own title bar with the system's window buttons.
+jbr-api = { module = "com.jetbrains:jbr-api", version = "1.5.0" }
+# Compiled against only: the classes come from the JetBrains Runtime the app runs on, which must be a JCEF build of
+# the same API (1.21). JBR 25.0.4.1 b508.40 ships 144.0.15-…-api-1.21-262-b61; b37 is the nearest one published.
+jcef = { module = "org.jetbrains.intellij.deps.jcef:jcef", version = "144.0.15-g72717cf-chromium-144.0.7559.172-api-1.21-262-b37" }
+# The system's own Open and Save dialogs on the desktop (AWT's are the old-style ones on Windows).
+filekit-dialogs = { module = "io.github.vinceglb:filekit-dialogs", version = "0.16.0" }
 
 # Testing
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }

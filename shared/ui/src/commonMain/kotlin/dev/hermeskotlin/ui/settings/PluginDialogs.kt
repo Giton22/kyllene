@@ -50,7 +50,7 @@ internal fun SuggestionsInstallDialog(visible: Boolean, onDismiss: () -> Unit, o
         title = "Install Next Prompt?",
         message = "Kyllene installs Next Prompt ${NextPromptApi.PLUGIN_VERSION}, a community plugin, from " +
             "${NextPromptApi.PLUGIN_REPO.substringAfter("://")}, at the commit this Kyllene was reviewed with. After " +
-            "every turn, in Kyllene, Desktop and the terminal alike, it sends the last few messages of the chat to " +
+            "every turn, in Kyllene, Hermes Desktop and the terminal alike, it sends the last few messages of the chat to " +
             "your model (or the one set for its auxiliary task) and keeps the reply it suggests. That's one more " +
             "model call per turn. You can remove it on the gateway at any time.",
         actions = {

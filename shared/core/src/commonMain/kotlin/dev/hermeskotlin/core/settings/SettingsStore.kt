@@ -163,6 +163,14 @@ data class AppSettings(
     val threadsCollapsed: Boolean = false,
     /** The sidebar shows its projects as one button that opens a list, not a row of chips that scrolls sideways. */
     val projectsAsDropdown: Boolean = false,
+    /** Desktop: closing the window keeps Herald in the tray, still telling of replies and questions. */
+    val closeToTray: Boolean = false,
+    /** Desktop: Ctrl+Shift+Space from any app opens a small composer that sends to the open chat. */
+    val quickEntry: Boolean = true,
+    /** Desktop: how big everything is drawn, in percent (Ctrl+= and Ctrl+-). */
+    val zoom: Int = 100,
+    /** Desktop: the sidebar's width in dp, as its edge was last dragged to. */
+    val sidebarWidth: Int = 304,
 )
 
 /** The [AppSettings.startInstruction] a new chat starts with, trimmed; null when there is none or the settings aren't read yet. */

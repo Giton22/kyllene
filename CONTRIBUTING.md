@@ -10,7 +10,7 @@ Thanks for helping. Bug fixes, missing gateway features and UI polish are all we
 
 ## Setup
 
-You need JDK 17+ (Android Studio's bundled JBR works) and the Android SDK with API 37. You also need a Hermes gateway to test against: your own, or a throwaway one.
+You need JetBrains Runtime 25 (Android Studio's bundled JBR is one; Gradle downloads it when none is found) and the Android SDK with API 37. You also need a Hermes gateway to test against: your own, or a throwaway one.
 
 ```bash
 ./gradlew :androidApp:installDebug
@@ -35,7 +35,7 @@ Add a test with every behaviour change. A bug fix should come with a test that f
 Before you push, run what CI runs:
 
 ```bash
-./gradlew --continue :shared:core:testAndroidHostTest :shared:designsystem:testAndroidHostTest :shared:ui:testAndroidHostTest :androidApp:assembleDebug :androidApp:lintDebug
+./gradlew --continue :shared:core:testAndroidHostTest :shared:designsystem:testAndroidHostTest :shared:ui:testAndroidHostTest :shared:wearlink:testAndroidHostTest :androidApp:assembleDebug :androidApp:assembleDev :androidApp:lintDebug :wearApp:testDebugUnitTest :wearApp:assembleDebug :wearApp:lintDebug
 ```
 
 Lint fails on any new issue. Fix it instead of adding it to `lint-baseline.xml`.

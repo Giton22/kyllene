@@ -149,7 +149,7 @@ Herald is free and open source. If it's useful to you, you can support its devel
 
 Want to contribute? Read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
-**Requirements:** JDK 17+ (Android Studio's bundled JBR works) and the Android SDK with API 37.
+**Requirements:** JetBrains Runtime 25 (Android Studio's bundled JBR is one; Gradle downloads it when none is found) and the Android SDK with API 37. For inline widgets and plugin pages in the desktop app, use the JBR build with JCEF.
 
 Build, test and install a debug build:
 
@@ -165,6 +165,18 @@ Build, test and install a debug build:
 ./gradlew :androidApp:installDebug
 ```
 
+Run the experimental desktop app, or package it (an MSI on Windows, a DMG on macOS, a DEB on Linux):
+
+```bash
+./gradlew :desktopApp:run
+```
+
+```bash
+./gradlew :desktopApp:packageReleaseDistributionForCurrentOS
+```
+
+The release package goes through ProGuard, which takes a few minutes; `packageDistributionForCurrentOS` skips it.
+
 ### Project layout
 
 ```
@@ -172,6 +184,7 @@ shared/core          protocol, auth, network, repositories (no UI)
 shared/designsystem  design tokens and components on Compose Unstyled
 shared/ui            screens and view models (commonMain)
 androidApp           Android host: Application, Activity, notifications, manifest
+desktopApp           desktop host (experimental): the window, Escape as back
 ```
 
 The gateway protocol notes are in [docs/hermes-protocol-research.md](docs/hermes-protocol-research.md).

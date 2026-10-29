@@ -1,9 +1,13 @@
 package dev.hermeskotlin.ui
 
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.CompositionLocalProvider
@@ -19,9 +23,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composeunstyled.theme.ColorScheme
 import com.composeunstyled.theme.Theme
@@ -30,10 +36,13 @@ import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.ThemeMode
 import dev.hermeskotlin.designsystem.AccentPalette
 import dev.hermeskotlin.designsystem.LocalAccentPalette
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import dev.hermeskotlin.designsystem.PureBlack
 import dev.hermeskotlin.designsystem.hermesTheme
 import dev.hermeskotlin.designsystem.components.LocalCodeWrap
 import dev.hermeskotlin.designsystem.components.LocalGlow
+import dev.hermeskotlin.designsystem.components.LocalOpenModals
+import dev.hermeskotlin.designsystem.components.OpenModals
 import dev.hermeskotlin.designsystem.background
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.SidebarLayout
@@ -60,6 +69,7 @@ import dev.hermeskotlin.ui.chat.ChatViewModel
 import dev.hermeskotlin.ui.chat.ModelConfirmDialog
 import dev.hermeskotlin.ui.chat.ModelSheet
 import dev.hermeskotlin.ui.chat.ProvideReplySpeaker
+import dev.hermeskotlin.ui.chat.ReplySpeakerSource
 import dev.hermeskotlin.ui.chat.replySpeaker
 import dev.hermeskotlin.ui.sessions.CapabilitiesPage
 import dev.hermeskotlin.ui.sessions.ConfigPage
@@ -82,6 +92,7 @@ import dev.hermeskotlin.ui.update.LocalRenameOffer
 import dev.hermeskotlin.ui.update.LocalUpdateOffer
 import dev.hermeskotlin.ui.update.rememberRenameOffer
 import dev.hermeskotlin.ui.update.rememberUpdateOffer
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import dev.hermeskotlin.core.inbox.InboxLink
@@ -94,6 +105,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import dev.hermeskotlin.ui.sessions.OtherChat
 import dev.hermeskotlin.ui.sessions.OtherChatEvent
@@ -103,6 +115,8 @@ import dev.hermeskotlin.ui.sessions.SessionsBadge
 import dev.hermeskotlin.ui.sessions.SessionsViewModel
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import dev.hermeskotlin.ui.components.CommandPalette
 
 /** The current [AppSettings], for screens that change how they draw. */
 val LocalAppSettings = compositionLocalOf { AppSettings() }
@@ -116,6 +130,7 @@ val LocalAppVersion = staticCompositionLocalOf<String?> { null }
  * [releasesRepo] is the GitHub `owner/name` the build was released from, to look for newer releases.
  * While [locked] (App lock), a cover hides everything until [onUnlock] lets the user back in.
  * [phoneQuestion] is a phone tool asking before it changes something, shown over any screen.
+ * [titleBar] is the desktop's own title bar, whose row the screens share.
  */
 @Composable
 fun App(
@@ -125,23 +140,22 @@ fun App(
     locked: Boolean = false,
     onUnlock: () -> Unit = {},
     phoneQuestion: PhoneQuestion? = null,
+    titleBar: TitleBar? = null,
 ) {
     // Nothing is drawn until the stored settings are read, so the first frame has the right theme.
-    val settings = koinInject<SettingsStore>().settings.collectAsStateWithLifecycle().value ?: return
-    val dark = when (settings.theme) {
-        ThemeMode.System -> isSystemInDarkTheme()
-        ThemeMode.Light -> false
-        ThemeMode.Dark -> true
-    }
+    val settingsStore = koinInject<SettingsStore>()
+    val settings = settingsStore.settings.collectAsStateWithLifecycle().value ?: return
+    val dark = isDark(settings)
     LaunchedEffect(dark) { onDarkTheme(dark) }
-    val scheme = when {
-        !dark -> ColorScheme.Light
-        settings.pureBlack -> PureBlack
-        else -> ColorScheme.Dark
-    }
     val density = LocalDensity.current
     val palette = AccentPalette.named(settings.accent)
-    hermesTheme(palette)(scheme) {
+    // The desktop's zoom (Ctrl+= and Ctrl+-), saved with the settings.
+    ShortcutHandler { shortcut ->
+        val zoom = zoomAfter(shortcut, settings.zoom) ?: return@ShortcutHandler false
+        settingsStore.update { it.copy(zoom = zoom) }
+        true
+    }
+    hermesTheme(palette)(schemeFor(settings, dark)) {
         CompositionLocalProvider(
             LocalAccentPalette provides palette,
             LocalAppSettings provides settings,
@@ -151,15 +165,112 @@ fun App(
             LocalUpdateOffer provides rememberUpdateOffer(releasesRepo, appVersion, settings.checkForUpdates),
             LocalRenameOffer provides rememberRenameOffer(),
             LocalDensity provides Density(density.density, density.fontScale * settings.textSize.scale),
+            LocalDesktopLayout provides isDesktop,
         ) {
             // The screens leave composition rather than sit under the cover, so their sheets and dialogs
             // (windows of their own) can't show over it. View models and drafts outlive this.
-            if (locked) {
-                AppLockCover(onUnlock)
-            } else {
-                Routes()
-                PhoneQuestionDialog(phoneQuestion)
+            val screens = @Composable {
+                PlatformTextContextMenu {
+                    if (locked) {
+                        AppLockCover(onUnlock)
+                    } else {
+                        Routes()
+                        PhoneQuestionDialog(phoneQuestion)
+                    }
+                }
             }
+            if (titleBar == null) {
+                screens()
+            } else {
+                // The screens run up to the window's top edge, one surface with the title bar: the sidebar's
+                // header and the chat's sit in its row, as a modern desktop app's do, clear of the system's buttons.
+                val text = LocalDensity.current
+                val controls = with(text) {
+                    WindowControls(
+                        start = if (titleBar.start > 0.dp) (titleBar.start + WINDOW_CONTROLS_GAP).roundToPx() else 0,
+                        end = if (titleBar.end > 0.dp) (titleBar.end + WINDOW_CONTROLS_GAP).roundToPx() else 0,
+                        height = titleBar.height.roundToPx(),
+                    )
+                }
+                Box(Modifier.fillMaxSize().background(Theme[colors][background]).then(titleBar.frame)) {
+                    CompositionLocalProvider(
+                        LocalWindowControls provides controls,
+                        LocalDensity provides Density(text.density * settings.zoom / 100f, text.fontScale),
+                    ) {
+                        screens()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The zoom levels Ctrl+= and Ctrl+- step through, in percent, as a browser's. */
+private val ZOOM_STEPS = listOf(50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200)
+
+/** The zoom [shortcut] goes to from [current], in percent; null for a shortcut that isn't a zoom. Any window's. */
+fun zoomAfter(shortcut: Shortcut, current: Int): Int? = when (shortcut) {
+    Shortcut.ZoomIn -> ZOOM_STEPS.firstOrNull { it > current } ?: ZOOM_STEPS.last()
+    Shortcut.ZoomOut -> ZOOM_STEPS.lastOrNull { it < current } ?: ZOOM_STEPS.first()
+    Shortcut.ZoomReset -> 100
+    else -> null
+}
+
+/** A desktop window narrower than this (only at a large zoom) gets the sidebar as a drawer. */
+private val DESKTOP_DOCKED_FROM = 600.dp
+
+/** The widest a sidebar page gets in the chat's place on a desktop. */
+private val MAIN_PAGE_WIDTH = 880.dp
+
+/** A page of panes side by side (a list and what's open in it) stretches further before it centres. */
+private val WIDE_PAGE_WIDTH = 1240.dp
+
+/** A page drawn over another: every press, wheel turn and hover stops here, whatever the page leaves untaken. */
+private fun Modifier.coverPointer(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) awaitPointerEvent().changes.forEach { it.consume() }
+    }
+}
+
+private fun isDark(settings: AppSettings, systemDark: Boolean): Boolean = when (settings.theme) {
+    ThemeMode.System -> systemDark
+    ThemeMode.Light -> false
+    ThemeMode.Dark -> true
+}
+
+@Composable
+private fun isDark(settings: AppSettings): Boolean = isDark(settings, isSystemInDarkTheme())
+
+private fun schemeFor(settings: AppSettings, dark: Boolean): ColorScheme = when {
+    !dark -> ColorScheme.Light
+    settings.pureBlack -> PureBlack
+    else -> ColorScheme.Dark
+}
+
+/**
+ * The app's theme from the stored settings, for a window of its own beside the app's (the desktop's quick entry).
+ * Nothing is drawn until the settings are read.
+ */
+@Composable
+fun HeraldTheme(content: @Composable () -> Unit) {
+    val settings = koinInject<SettingsStore>().settings.collectAsStateWithLifecycle().value ?: return
+    val palette = AccentPalette.named(settings.accent)
+    val density = LocalDensity.current
+    // Each window's own count of its open dialogs.
+    val modals = remember { OpenModals() }
+    hermesTheme(palette)(schemeFor(settings, isDark(settings))) {
+        // As the app's own window has them: text size, code wrap, glow and the desktop's layout. The zoom is the
+        // caller's to put under its title bar.
+        CompositionLocalProvider(
+            LocalAccentPalette provides palette,
+            LocalAppSettings provides settings,
+            LocalCodeWrap provides settings.wrapCode,
+            LocalGlow provides settings.glow,
+            LocalDesktopLayout provides isDesktop,
+            LocalDensity provides Density(density.density, density.fontScale * settings.textSize.scale),
+            LocalOpenModals provides modals,
+        ) {
+            PlatformTextContextMenu(content)
         }
     }
 }
@@ -247,6 +358,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     var pluginUrl by rememberSaveable { mutableStateOf<String?>(null) }
     var pluginLabel by rememberSaveable { mutableStateOf<String?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
+    // The chat bar's options button, which the desktop's menu hangs from when it opened the menu.
+    var menuAnchor by remember { mutableStateOf<Rect?>(null) }
     val chatsProfile by app.chatsProfile.collectAsStateWithLifecycle()
     val bots: BotsViewModel = koinViewModel()
     val rooms: RoomsViewModel = koinViewModel()
@@ -287,7 +400,13 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         if (open != liveChat.id && open != next && !chatState.running) app.openBotChat(bot, next)
     }
 
+    // On a desktop, the sidebar's pages open in the chat's place while it's docked beside it.
+    val mainPage = remember { MainPageSlot() }
+    mainPage.enabled = isDesktop && sidebar.docked
+
+    /** Whatever the sidebar opened next (a chat, a room) takes the place of a page beside it. */
     fun closeDrawer() {
+        mainPage.close()
         if (!sidebar.docked) scope.launch { sidebar.close() }
     }
 
@@ -385,20 +504,24 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // The bot answering in the open chat, named above its replies. Only a launch profile the gateway named counts:
     // a guessed `default` could name the wrong bot. Equal unless what's drawn changed, so a roster refresh doesn't
     // redraw the chat.
-    val speaker = replySpeaker(
-        faces,
-        route.target.bot?.name,
-        route.target.profile,
-        profileRoster?.takeIf { it.launchKnown }?.launch,
-    )
+    val launchProfile = profileRoster?.takeIf { it.launchKnown }?.launch
+    val speaker = replySpeaker(faces, route.target.bot?.name, route.target.profile, launchProfile)
+    // Chats in windows of their own name their bots from this roster too.
+    val speakerSource = koinInject<ReplySpeakerSource>()
+    SideEffect {
+        speakerSource.faces.value = faces
+        speakerSource.launchProfile.value = launchProfile
+    }
     val others: OtherChatsViewModel = koinViewModel { parametersOf(sessions) }
     val settings = LocalAppSettings.current
+    val sidebarWidthStore = koinInject<SettingsStore>()
     val alerts = settings.otherChatsAlerts
     LaunchedEffect(alerts, settings.otherChatsBanner) { others.setOtherChats(alerts, banner = settings.otherChatsBanner) }
     val lifecycleState by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     // A page drawn over the chat (Settings, a plugin, the bot editor) hides it too: a banner there would time out unseen.
+    val pageShown = mainPage.content != null
     val chatShown = lifecycleState.isAtLeast(Lifecycle.State.STARTED) && openRoom == null && desktopRoom == null &&
-        !settingsOpen && pluginUrl == null && editing == null
+        !settingsOpen && pluginUrl == null && editing == null && !pageShown
     LaunchedEffect(chatShown) { others.setChatShown(chatShown) }
     // The phone's drawer over the chat: the sidebar says it all there, so the banner waits until it closes.
     val drawerOver by remember { derivedStateOf { sidebar.fraction > 0f && !sidebar.docked } }
@@ -437,6 +560,34 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         closeDrawerToChat()
     }
 
+    // The desktop's keys for the app around the chat.
+    var paletteOpen by remember { mutableStateOf(false) }
+    var shortcutsOpen by remember { mutableStateOf(false) }
+    val bus = LocalShortcuts.current
+    ShortcutHandler { shortcut ->
+        when (shortcut) {
+            // The open chat moves to a window of its own; this one goes on with a new chat.
+            Shortcut.NewWindow -> {
+                val id = openSessionId ?: return@ShortcutHandler false
+                val title = chatState.title?.takeIf { it.isNotBlank() } ?: route.target.title
+                bus.fire(Shortcut.PopOut(route.target.copy(storedSessionId = id, title = title, draft = null, readUpTo = null))).also { if (it) app.newChat() }
+            }
+            Shortcut.CommandPalette -> true.also { paletteOpen = !paletteOpen }
+            Shortcut.ShortcutsHelp -> true.also { shortcutsOpen = true }
+            // The sidebar has opened the page already; it has to show to be used.
+            is Shortcut.Go -> true.also { scope.launch { sidebar.open() } }
+            Shortcut.NewChat -> true.also {
+                app.newChat()
+                closeDrawerToChat()
+            }
+            Shortcut.Settings -> true.also { settingsOpen = true }
+            Shortcut.ToggleSidebar -> true.also { scope.launch { sidebar.toggle() } }
+            // The sidebar has opened its search already; it has to show to be used.
+            Shortcut.SearchChats -> true.also { scope.launch { sidebar.open() } }
+            else -> false
+        }
+    }
+
     // On phones the keyboard makes way for the drawer.
     LaunchedEffect(sidebar) {
         snapshotFlow { sidebar.fraction > 0f && !sidebar.docked }.filter { it }.collect { focusManager.clearFocus() }
@@ -444,11 +595,18 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
 
     SidebarLayout(
         state = sidebar,
+        // A desktop window keeps its sidebar docked down to the window's smallest size: a phone's drawer, with a
+        // scrim and the chat dragged aside, has no place in one.
+        dockedBreakpoint = if (isDesktop) DESKTOP_DOCKED_FROM else 840.dp,
+        // A desktop's sidebar is as wide as its edge was last dragged.
+        dockedWidth = settings.sidebarWidth.dp,
+        onDockedWidthChange = if (isDesktop) { width -> sidebarWidthStore.update { it.copy(sidebarWidth = width.value.roundToInt()) } } else null,
         sidebar = {
             SessionsSidebar(
                 gateway = route.gateway,
                 profile = chatsProfile,
-                selectedId = openSessionId,
+                // A page in the chat's place: no chat is showing, so none is marked.
+                selectedId = openSessionId.takeIf { mainPage.content == null },
                 visible = sidebar.isOpen,
                 onOpenSession = { session, readUpTo ->
                     if (session.id != openSessionId) app.openSession(session.id, session.displayTitle, readUpTo)
@@ -504,16 +662,25 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     if (shownInboxLink == link) shownInboxLink = null
                     inboxLinks.consume(link)
                 },
+                mainPage = mainPage,
             )
         },
     ) {
         CompositionLocalProvider(LocalBotFaces provides faces) {
+            val page = mainPage.content
             when {
+                // A list a desktop window would stretch past reading stays a page's width, in the middle.
+                page != null -> Box(Modifier.fillMaxSize().background(Theme[colors][background]), contentAlignment = Alignment.TopCenter) {
+                    // By its kind alone: a bot's routines are "routines", not the bot's name.
+                    key(mainPage.key) { TimeOpening(mainPage.key?.substringBefore(':') ?: "page") }
+                    Box(Modifier.widthIn(max = if (mainPage.wide) WIDE_PAGE_WIDTH else MAIN_PAGE_WIDTH).fillMaxSize()) { page() }
+                }
                 openRoom != null -> RoomScreen(
                     viewModel = rooms,
                     onOpenSidebar = { scope.launch { sidebar.toggle() } },
                     onBack = rooms::close,
                     onOpenFile = openRoomFile,
+                    keysEnabled = !settingsOpen && pluginUrl == null && editing == null,
                 )
                 desktopRoom != null -> DesktopRoomScreen(
                     room = desktopRoom,
@@ -527,10 +694,17 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                         target = route.target,
                         onOpenSidebar = { scope.launch { sidebar.toggle() } },
                         onNewChat = app::newChat,
-                        onOpenMenu = openSessionId?.let { { menuOpen = true } },
+                        onOpenMenu = openSessionId?.let {
+                            { button ->
+                                menuAnchor = button
+                                menuOpen = true
+                            }
+                        },
                         onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
                         onSwitchProfile = app::switchProfile,
                         viewModel = chat,
+                        // Not while a page or the chat's menu covers it: typing there mustn't land in the composer.
+                        keysEnabled = chatShown && !menuOpen,
                         sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
                         otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
                         onOpenOtherChat = { event: OtherChatEvent ->
@@ -563,8 +737,59 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
 
     ArchiveUndoToast()
 
+    val shortcutBus = LocalShortcuts.current
+    val settingsStore = koinInject<SettingsStore>()
+    // Read only while the palette is open: the list changes on every status poll, which would recompose the app.
+    val listedChats = if (paletteOpen) sessions.state.collectAsStateWithLifecycle().value.sessions else emptyList()
+    CommandPalette(
+        visible = paletteOpen,
+        items = if (!paletteOpen) emptyList() else paletteItems(
+            chats = listedChats,
+            bots = roster.all,
+            commands = HomeCommands(
+                newChat = {
+                    app.newChat()
+                    closeDrawerToChat()
+                },
+                settings = { settingsOpen = true },
+                gateways = onOpenGateways,
+                openChat = { session ->
+                    // The sidebar opens it as a click does (marked read, or brought forward in its own window);
+                    // with no sidebar to take it, it opens here.
+                    if (session.id != openSessionId && !shortcutBus.fire(Shortcut.OpenListed(session.id))) {
+                        app.openSession(session.id, session.displayTitle)
+                    }
+                    closeDrawerToChat()
+                },
+                openBot = { bot ->
+                    bots.open(bot) { storedId, readUpTo -> app.openBotChat(bot, storedId, readUpTo) }
+                    closeDrawerToChat()
+                },
+                chatMenu = openSessionId?.let {
+                    {
+                        // Not from the button: at the pointer, not from where the button was last clicked.
+                        menuAnchor = null
+                        menuOpen = true
+                    }
+                },
+                usage = chat::openUsage.takeIf { openSessionId != null },
+                processes = chat::openProcesses.takeIf { openSessionId != null },
+                checkpoints = chat::openCheckpoints.takeIf { openSessionId != null },
+                theme = { mode -> settingsStore.update { it.copy(theme = mode) } },
+                fire = { shortcutBus.fire(it) },
+            ),
+        ),
+        onDismiss = { paletteOpen = false },
+        onSearchAll = { text ->
+            shortcutBus.fire(Shortcut.SearchChats)
+            sessions.query.setTextAndPlaceCursorAtEnd(text)
+        },
+    )
+    ShortcutsDialog(visible = shortcutsOpen, onDismiss = { shortcutsOpen = false })
+
     ChatMenu(
         visible = menuOpen && openSessionId != null,
+        anchor = menuAnchor.takeIf { isDesktop },
         sessionId = openSessionId,
         title = route.target.bot?.label ?: chatState.title?.takeIf { it.isNotBlank() } ?: route.target.title ?: "Untitled session",
         messages = chatState.messages,
@@ -631,38 +856,45 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             )
             if (capabilitiesOpen) {
                 PlatformBackHandler(enabled = true) { capabilitiesOpen = false }
-                Box(Modifier.fillMaxSize().background(Theme[colors][background]).windowInsetsPadding(WindowInsets.safeDrawing)) {
-                    CapabilitiesPage(
-                        gateway = route.gateway,
-                        profile = bot.name,
-                        profileLabel = bot.label,
-                        onBack = { capabilitiesOpen = false },
-                        onSessionExpired = app::onSessionExpired,
-                        title = "${bot.label}'s capabilities",
-                        // Hermes fixes a chat's tools when it starts (#124211).
-                        note = "Changes apply to ${bot.label}'s new chats. If its Bot Chat doesn't pick one up, Start fresh gives it a new chat with everything set here.",
-                        viewModel = koinViewModel(key = "capabilities-${bot.name}"),
-                    )
+                // As the sidebar's pages: a page's width in the middle of a wide window. The sides beside it take the
+                // pointer too, so nothing in the bot editor under them can be clicked, scrolled or hovered.
+                Box(Modifier.fillMaxSize().background(Theme[colors][background]).coverPointer().windowInsetsPadding(WindowInsets.safeDrawing), contentAlignment = Alignment.TopCenter) {
+                    Box(Modifier.widthIn(max = MAIN_PAGE_WIDTH).fillMaxSize()) {
+                        CapabilitiesPage(
+                            gateway = route.gateway,
+                            profile = bot.name,
+                            profileLabel = bot.label,
+                            onBack = { capabilitiesOpen = false },
+                            onSessionExpired = app::onSessionExpired,
+                            title = "${bot.label}'s capabilities",
+                            // Hermes fixes a chat's tools when it starts (#124211).
+                            note = "Changes apply to ${bot.label}'s new chats. If its Bot Chat doesn't pick one up, Start fresh gives it a new chat with everything set here.",
+                            viewModel = koinViewModel(key = "capabilities-${bot.name}"),
+                        )
+                    }
                 }
             }
             if (configOpen) {
                 PlatformBackHandler(enabled = true) { configOpen = false }
-                Box(Modifier.fillMaxSize().background(Theme[colors][background]).windowInsetsPadding(WindowInsets.safeDrawing)) {
-                    ConfigPage(
-                        gateway = route.gateway,
-                        profile = bot.name,
-                        onBack = { configOpen = false },
-                        onSessionExpired = app::onSessionExpired,
-                        title = "${bot.label}'s config",
-                        note = "${bot.label}'s own settings, saved to its profile's config.yaml. Most apply from its next chat.",
-                        viewModel = koinViewModel(key = "config-${bot.name}"),
-                    )
+                Box(Modifier.fillMaxSize().background(Theme[colors][background]).coverPointer().windowInsetsPadding(WindowInsets.safeDrawing), contentAlignment = Alignment.TopCenter) {
+                    Box(Modifier.widthIn(max = MAIN_PAGE_WIDTH).fillMaxSize()) {
+                        ConfigPage(
+                            gateway = route.gateway,
+                            profile = bot.name,
+                            onBack = { configOpen = false },
+                            onSessionExpired = app::onSessionExpired,
+                            title = "${bot.label}'s config",
+                            note = "${bot.label}'s own settings, saved to its profile's config.yaml. Most apply from its next chat.",
+                            viewModel = koinViewModel(key = "config-${bot.name}"),
+                        )
+                    }
                 }
             }
         }
     }
 
     if (settingsOpen) {
+        TimeOpening("settings")
         SettingsScreen(
             gateway = route.gateway,
             botFaces = faces,

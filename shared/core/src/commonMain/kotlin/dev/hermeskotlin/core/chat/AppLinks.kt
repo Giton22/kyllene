@@ -20,10 +20,16 @@ sealed interface AppLink {
     companion object {
         const val SCHEME = "hermes"
 
+        /**
+         * The desktop app's own scheme (`herald://session/<id>`): Hermes Desktop owns `hermes://` on a computer,
+         * so Herald registers this one there instead.
+         */
+        const val DESKTOP_SCHEME = "herald"
+
         /** The link [uri] names, or null when it isn't one of ours. */
         fun parse(uri: String): AppLink? {
             val scheme = uri.substringBefore(':', "")
-            if (!scheme.equals(SCHEME, ignoreCase = true)) return null
+            if (!scheme.equals(SCHEME, ignoreCase = true) && !scheme.equals(DESKTOP_SCHEME, ignoreCase = true)) return null
             val rest = uri.substringAfter(':').removePrefix("//").substringBefore('?').substringBefore('#')
             val host = rest.substringBefore('/').lowercase()
             val segments = rest.substringAfter('/', "").split('/').filter { it.isNotEmpty() }.map(::percentDecode)
