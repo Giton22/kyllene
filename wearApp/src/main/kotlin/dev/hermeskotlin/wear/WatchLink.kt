@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import androidx.wear.tiles.TileService
 import com.google.android.gms.wearable.CapabilityClient
+import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.Wearable
 import dev.hermeskotlin.wearlink.CALL_EVENT_TYPES
 import dev.hermeskotlin.wearlink.InOrder
@@ -537,7 +538,16 @@ class WatchLink(
     /** A message from the selected phone, or the debug fake phone. */
     fun onMessage(path: String, data: ByteArray, sourceNode: String? = null) {
         scope.launch(main) {
-            if (sourceNode != null && sourceNode != phoneNode) return@launch
+            if (sourceNode != null && sourceNode != phoneNode) {
+                // None known yet (just updated) or another phone paired since: the reachable phone is taken, and its
+                // profile is checked again before the watch's remembered chat is used. A ring then still rings.
+                if (sourceNode != phoneNow()) return@launch
+                if (phoneNode != sourceNode) {
+                    phoneNode = sourceNode
+                    profileChecked = false
+                    HeraldWatch.of(context).callDisplay.bindPhone(sourceNode)
+                }
+            }
             when (path) {
                 WearPaths.PROFILE_CHANGED -> {
                     profileChecked = false
@@ -662,11 +672,7 @@ class WatchLink(
     /** Runs [block] with Herald's phone node; [path] and [data] go to the fake phone when it stands in. */
     private suspend fun reach(path: String, data: ByteArray, current: () -> Boolean = { true }, block: suspend (String) -> Unit): String? {
         return try {
-            val phone = capabilities.getCapability(WearCapabilities.PHONE, CapabilityClient.FILTER_REACHABLE).await().nodes
-            // A phone's capabilities can reach the watch minutes after Herald is installed or updated there: until
-            // then the connected phone is tried anyway, and one without Herald never answers (ANSWER_WITHIN_MS).
-            val connected = if (phone.isEmpty()) nodes.connectedNodes.await() else emptyList()
-            val node = phone.firstOrNull { it.isNearby } ?: phone.firstOrNull() ?: connected.firstOrNull { it.isNearby } ?: connected.firstOrNull()
+            val node = reachablePhone()
             if (!current()) return "Phone profile changed. Try again."
             if (node == null) {
                 if (fake != null) {
@@ -688,6 +694,23 @@ class WatchLink(
         } catch (_: Exception) {
             "Couldn't reach your phone."
         }
+    }
+
+    /** The phone Herald talks to now. */
+    private suspend fun reachablePhone(): Node? {
+        val phone = capabilities.getCapability(WearCapabilities.PHONE, CapabilityClient.FILTER_REACHABLE).await().nodes
+        // A phone's capabilities can reach the watch minutes after Herald is installed or updated there: until
+        // then the connected phone is tried anyway, and one without Herald never answers (ANSWER_WITHIN_MS).
+        val connected = if (phone.isEmpty()) nodes.connectedNodes.await() else emptyList()
+        return phone.firstOrNull { it.isNearby } ?: phone.firstOrNull() ?: connected.firstOrNull { it.isNearby } ?: connected.firstOrNull()
+    }
+
+    private suspend fun phoneNow(): String? = try {
+        reachablePhone()?.id
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
     }
 
     companion object {
