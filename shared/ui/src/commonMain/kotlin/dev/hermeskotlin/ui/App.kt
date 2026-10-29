@@ -57,7 +57,10 @@ import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.ui.bots.StartOverDialog
 import dev.hermeskotlin.ui.bots.BotsViewModel
 import dev.hermeskotlin.ui.bots.LocalBotFaces
+import dev.hermeskotlin.core.phone.AgentScreens
+import dev.hermeskotlin.ui.chat.AgentScreenContext
 import dev.hermeskotlin.ui.chat.ChatScreen
+import dev.hermeskotlin.ui.chat.LocalAgentScreens
 import dev.hermeskotlin.ui.rooms.RoomScreen
 import dev.hermeskotlin.ui.rooms.DesktopRoomScreen
 import dev.hermeskotlin.ui.rooms.RoomsViewModel
@@ -155,12 +158,18 @@ fun App(
         settingsStore.update { it.copy(zoom = zoom) }
         true
     }
+    val agentScreens = koinInject<AgentScreens>()
+    val liveScreens by agentScreens.live.collectAsStateWithLifecycle()
+    val screenContext = remember(liveScreens) {
+        AgentScreenContext(liveScreens, { surface, result -> agentScreens.answer(surface, result) }, { surface, message -> agentScreens.fail(surface, message) })
+    }
     hermesTheme(palette)(schemeFor(settings, dark)) {
         CompositionLocalProvider(
             LocalAccentPalette provides palette,
             LocalAppSettings provides settings,
             LocalCodeWrap provides settings.wrapCode,
             LocalGlow provides settings.glow,
+            LocalAgentScreens provides screenContext,
             LocalAppVersion provides appVersion,
             LocalUpdateOffer provides rememberUpdateOffer(releasesRepo, appVersion, settings.checkForUpdates),
             LocalRenameOffer provides rememberRenameOffer(),

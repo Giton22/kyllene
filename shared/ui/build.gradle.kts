@@ -43,10 +43,11 @@ kotlin {
             implementation(libs.androidx.core.ktx)
             // The Health switch asks for Health Connect's permissions through its own screen.
             implementation(libs.androidx.health.connect)
-            // Agent-made UI (experiment).
+            // Screens the agent draws in the chat (experiment), themed through Material's roles.
             implementation(libs.a2ui.compose.runtime)
             implementation(libs.a2ui.compose.ui)
             implementation(libs.a2ui.material3)
+            implementation(libs.androidx.material3)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
