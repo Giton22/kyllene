@@ -4,12 +4,16 @@ import android.content.Context
 import android.security.KeyChain
 import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.okhttp.OkHttp
+import okhttp3.ConnectionPool
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.Principal
 import java.security.PrivateKey
 import java.security.cert.X509Certificate
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.KeyManager
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLSocketFactory
@@ -26,34 +30,35 @@ import javax.net.ssl.X509TrustManager
  */
 private val handshakeSniHost = ThreadLocal<String>()
 
-internal class SniCapturingSocketFactory(private val delegate: SSLSocketFactory) : SSLSocketFactory() {
-    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
-    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
+/** Captures the SNI host for [MtlsKeyManager], creating sockets from the [delegate] current at each call. */
+internal class SniCapturingSocketFactory(private val delegate: () -> SSLSocketFactory) : SSLSocketFactory() {
+    override fun getDefaultCipherSuites(): Array<String> = delegate().defaultCipherSuites
+    override fun getSupportedCipherSuites(): Array<String> = delegate().supportedCipherSuites
     override fun createSocket(s: Socket?, host: String?, port: Int, autoClose: Boolean): Socket? {
         if (host != null) handshakeSniHost.set(host) else handshakeSniHost.remove()
-        return delegate.createSocket(s, host, port, autoClose)
+        return delegate().createSocket(s, host, port, autoClose)
     }
     override fun createSocket(host: String?, port: Int): Socket? {
         if (host != null) handshakeSniHost.set(host) else handshakeSniHost.remove()
-        return delegate.createSocket(host, port)
+        return delegate().createSocket(host, port)
     }
     override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket? {
         if (host != null) handshakeSniHost.set(host) else handshakeSniHost.remove()
-        return delegate.createSocket(host, port, localHost, localPort)
+        return delegate().createSocket(host, port, localHost, localPort)
     }
     // No hostname on these paths: clear any previous handshake's host so a pooled thread
     // never presents one host's certificate to another host's handshake.
     override fun createSocket(host: InetAddress?, port: Int): Socket? {
         handshakeSniHost.remove()
-        return delegate.createSocket(host, port)
+        return delegate().createSocket(host, port)
     }
     override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int): Socket? {
         handshakeSniHost.remove()
-        return delegate.createSocket(address, port, localAddress, localPort)
+        return delegate().createSocket(address, port, localAddress, localPort)
     }
     override fun createSocket(): Socket? {
         handshakeSniHost.remove()
-        return delegate.createSocket()
+        return delegate().createSocket()
     }
 }
 
@@ -67,7 +72,6 @@ internal class MtlsKeyManager(
     private val resolveAlias: (host: String) -> String?,
     private val privateKey: (alias: String) -> PrivateKey?,
     private val chain: (alias: String) -> Array<X509Certificate>?,
-    private val fallbackAlias: () -> String? = { null },
     private val sniHost: () -> String? = { handshakeSniHost.get() },
 ) : X509ExtendedKeyManager() {
 
@@ -75,14 +79,9 @@ internal class MtlsKeyManager(
         // The socket address is usually numeric: OkHttp connects by IP, so the stored hostname never
         // matches it. The SNI host captured from the socket factory is authoritative; the socket host
         // stays as a second try (IP-literal gateways pick under the IP string, which matches it).
+        // Nothing else is guessed: a handshake whose host matches no pick presents no certificate.
         val socketHost = (socket?.remoteSocketAddress as? InetSocketAddress)?.hostString
-        val sni = sniHost()
-        val direct = listOfNotNull(sni, socketHost).distinct().firstNotNullOfOrNull { resolveAlias(it) }
-        if (direct != null) return direct
-        // The factory never saw this handshake (no hostname passed to any createSocket overload): with a
-        // single pending pick there is no other host it could be for. A present-but-unmatched SNI host is
-        // authoritative, so it never falls through — no certificate goes to a host it wasn't picked for.
-        return if (sni == null) fallbackAlias() else null
+        return listOfNotNull(sniHost(), socketHost).distinct().firstNotNullOfOrNull { resolveAlias(it) }
     }
 
     /** OkHttp handshakes on sockets, never engines, so there is no host to pick an alias for. */
@@ -103,13 +102,19 @@ internal class MtlsKeyManager(
  * The gateway engine: OkHttp whose TLS presents each gateway's client certificate. The lookup reads the live
  * saved gateways (a pending Connect-screen pick first), so switching or editing gateways needs no rebuild, and
  * the same [HttpClient] serves the REST calls and the `/api/ws` upgrade. The context only feeds [KeyChain].
+ *
+ * When a certificate changes ([ClientCertAliases.changed]), idle pooled connections are dropped and the TLS
+ * session cache starts empty, so the next request handshakes again with the new certificate instead of reusing
+ * a connection or resuming a session made with the old one (or none). A connection in use at that moment, such
+ * as an open `/api/ws` socket or a call still running, keeps its certificate until it closes.
  */
 internal actual fun mtlsEngine(certs: ClientCertAliases, gateways: GatewayRepository): HttpClientEngine {
     val keyManager = MtlsKeyManager(
         resolveAlias = { host -> clientCertAliasFor(host, certs, gateways.list.value.gateways) },
         // MtlsAppContext is read here, on the handshake thread, not at engine-construction time: the engine is
         // built eagerly during startKoin while the platform module's createdAtStart setter still hasn't run.
-        // A null context (startup, or host tests) means no certificate rather than a crash.
+        // A null context (startup, or host tests) means no certificate rather than a crash. Not cached: a
+        // certificate renewed under the same alias, or a grant taken back, counts from the next handshake.
         privateKey = { alias ->
             val ctx = MtlsAppContext.context
             if (ctx == null) null else runCatching { KeyChain.getPrivateKey(ctx, alias) }.getOrNull()
@@ -118,20 +123,28 @@ internal actual fun mtlsEngine(certs: ClientCertAliases, gateways: GatewayReposi
             val ctx = MtlsAppContext.context
             if (ctx == null) null else runCatching { KeyChain.getCertificateChain(ctx, alias) }.getOrNull()
         },
-        // The Connect screen probes before its gateway is saved, so a single pending pick is the only
-        // alias there is: when the factory never saw the hostname (no SNI on this path), that pick is the
-        // certificate the probe is for. With two or more pending picks the handshake can't be told apart
-        // from any of them, so nothing is presented rather than the wrong certificate.
-        fallbackAlias = { certs.all().values.singleOrNull() },
     )
     val trustManager = defaultTrustManager()
-    val ssl = SSLContext.getInstance("TLS").apply { init(arrayOf(keyManager), arrayOf(trustManager), null) }
+    val pool = ConnectionPool()
+    val ssl = AtomicReference(tlsContext(keyManager, trustManager))
+    // Changes come from the main thread, and closing a TLS socket there throws NetworkOnMainThreadException.
+    val evictor = Executors.newSingleThreadExecutor { Thread(it, "mtls-evict").apply { isDaemon = true } }
+    certs.onChanged {
+        // Swapped at once, so the next handshake (a probe right after a pick) already starts a fresh session.
+        ssl.set(tlsContext(keyManager, trustManager))
+        evictor.execute { runCatching { pool.evictAll() } }
+    }
     return OkHttp.create {
         config {
-            sslSocketFactory(SniCapturingSocketFactory(ssl.socketFactory), trustManager)
+            connectionPool(pool)
+            sslSocketFactory(SniCapturingSocketFactory { ssl.get().socketFactory }, trustManager)
         }
     }
 }
+
+/** A new context, so a new client session cache: nothing resumes a session made with another certificate. */
+private fun tlsContext(keyManager: KeyManager, trustManager: X509TrustManager): SSLContext =
+    SSLContext.getInstance("TLS").apply { init(arrayOf(keyManager), arrayOf(trustManager), null) }
 
 /** Holds the application context for [KeyChain], set once from the platform module at startup. */
 internal object MtlsAppContext {

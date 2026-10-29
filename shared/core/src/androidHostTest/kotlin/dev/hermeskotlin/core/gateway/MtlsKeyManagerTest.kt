@@ -14,12 +14,10 @@ class MtlsKeyManagerTest {
         pending: ClientCertAliases = ClientCertAliases(),
         saved: List<SavedGateway> = emptyList(),
         sniHost: String? = null,
-        fallback: Boolean = false,
     ) = MtlsKeyManager(
         resolveAlias = { host -> clientCertAliasFor(host, pending, saved) },
         privateKey = { throw UnsupportedOperationException("no KeyChain in host tests") },
         chain = { throw UnsupportedOperationException("no KeyChain in host tests") },
-        fallbackAlias = { if (fallback) pending.all().values.singleOrNull() else null },
         sniHost = { sniHost },
     )
 
@@ -83,32 +81,19 @@ class MtlsKeyManagerTest {
         pending.set("other.example.net", "other-cert")
         connectedSocket().use {
             assertNull(
-                manager(pending, sniHost = "hermes.example.ts.net", fallback = true)
+                manager(pending, sniHost = "hermes.example.ts.net")
                     .chooseClientAlias(arrayOf("RSA"), null, it),
             )
         }
     }
 
-    @Test fun aSinglePendingPickSurvivesAHostlessHandshake() {
-        // The Connect screen probes before its gateway is saved: without any SNI capture a single pick is
-        // the only certificate there is, so it presents. (The UI supports exactly one pending pick.)
+    @Test fun aHostlessHandshakeGetsNoOtherHostsPick() {
+        // Without an SNI host only the socket's own address can match: a single pick for another host is
+        // never guessed to be the one, since this handshake may well be to a host it wasn't picked for.
         val pending = ClientCertAliases()
         pending.set("hermes.example.ts.net", "fresh-pick")
         connectedSocket().use {
-            assertEquals(
-                "fresh-pick",
-                manager(pending, fallback = true).chooseClientAlias(arrayOf("RSA"), null, it),
-            )
-        }
-    }
-
-    @Test fun twoPendingPicksCannotBeToldApartWithoutSni() {
-        // With two pending picks and no SNI host, no host owns the handshake: nothing is presented.
-        val pending = ClientCertAliases()
-        pending.set("a.example.net", "a-cert")
-        pending.set("b.example.net", "b-cert")
-        connectedSocket().use {
-            assertNull(manager(pending, fallback = true).chooseClientAlias(arrayOf("RSA"), null, it))
+            assertNull(manager(pending).chooseClientAlias(arrayOf("RSA"), null, it))
         }
     }
 }
