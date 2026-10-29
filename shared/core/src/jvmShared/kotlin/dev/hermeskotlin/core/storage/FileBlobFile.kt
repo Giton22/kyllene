@@ -6,7 +6,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /** A [BlobFile] in the app's private files. Writes land in a temporary file first, so a crash never leaves half an image. */
-class AndroidBlobFile(private val file: File) : BlobFile {
+class FileBlobFile(private val file: File) : BlobFile {
 
     override suspend fun read(): ByteArray? = withContext(Dispatchers.IO) {
         file.takeIf { it.isFile }?.readBytes()
