@@ -6,6 +6,7 @@ import dev.hermeskotlin.core.voice.DeviceLock
 import dev.hermeskotlin.ui.AppViewModel
 import dev.hermeskotlin.ui.bots.BotsViewModel
 import dev.hermeskotlin.ui.chat.ChatViewModel
+import dev.hermeskotlin.ui.chat.ReplySpeakerSource
 import dev.hermeskotlin.ui.connect.ConnectViewModel
 import dev.hermeskotlin.ui.sessions.CapabilitiesViewModel
 import dev.hermeskotlin.ui.sessions.SkillsHubViewModel
@@ -72,6 +73,7 @@ val uiModule = module {
         )
     }
     viewModelOf(::SettingsViewModel)
+    single { ReplySpeakerSource() }
     // Watched places are the platform's; one without them shows none.
     viewModel { PhoneToolsViewModel(get(), get(), getOrNull<WatchedPlaces>() ?: NoWatchedPlaces) }
 }

@@ -51,6 +51,7 @@ import dev.hermeskotlin.ui.ShortcutHandler
 import dev.hermeskotlin.ui.chat.ChatScreen
 import dev.hermeskotlin.ui.chat.ChatTarget
 import dev.hermeskotlin.ui.chat.ChatViewModel
+import dev.hermeskotlin.ui.chat.ProvideReplySpeakerFor
 import dev.hermeskotlin.ui.di.CHAT_WINDOW
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.koin.compose.koinInject
@@ -173,15 +174,17 @@ fun ChatWindow(
                     val zoom = LocalAppSettings.current.zoom / 100f
                     CompositionLocalProvider(LocalDensity provides Density(text.density * zoom, text.fontScale)) {
                         Box(Modifier.weight(1f).fillMaxWidth()) {
-                            ChatScreen(
-                                target = shown,
-                                onOpenSidebar = onShowMain,
-                                onNewChat = { onShown(ChatTarget(shown.gateway, null, null, nonce = System.nanoTime(), profile = shown.profile)) },
-                                onOpenMenu = null,
-                                onOpenChat = { id, title -> onShown(ChatTarget(shown.gateway, id, title, profile = shown.profile)) },
-                                onSwitchProfile = {},
-                                viewModel = chat,
-                            )
+                            ProvideReplySpeakerFor(shown) {
+                                ChatScreen(
+                                    target = shown,
+                                    onOpenSidebar = onShowMain,
+                                    onNewChat = { onShown(ChatTarget(shown.gateway, null, null, nonce = System.nanoTime(), profile = shown.profile)) },
+                                    onOpenMenu = null,
+                                    onOpenChat = { id, title -> onShown(ChatTarget(shown.gateway, id, title, profile = shown.profile)) },
+                                    onSwitchProfile = {},
+                                    viewModel = chat,
+                                )
+                            }
                         }
                     }
                 }

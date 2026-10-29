@@ -69,6 +69,7 @@ import dev.hermeskotlin.ui.chat.ChatViewModel
 import dev.hermeskotlin.ui.chat.ModelConfirmDialog
 import dev.hermeskotlin.ui.chat.ModelSheet
 import dev.hermeskotlin.ui.chat.ProvideReplySpeaker
+import dev.hermeskotlin.ui.chat.ReplySpeakerSource
 import dev.hermeskotlin.ui.chat.replySpeaker
 import dev.hermeskotlin.ui.sessions.CapabilitiesPage
 import dev.hermeskotlin.ui.sessions.ConfigPage
@@ -104,6 +105,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import dev.hermeskotlin.ui.sessions.OtherChat
 import dev.hermeskotlin.ui.sessions.OtherChatEvent
@@ -502,12 +504,14 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // The bot answering in the open chat, named above its replies. Only a launch profile the gateway named counts:
     // a guessed `default` could name the wrong bot. Equal unless what's drawn changed, so a roster refresh doesn't
     // redraw the chat.
-    val speaker = replySpeaker(
-        faces,
-        route.target.bot?.name,
-        route.target.profile,
-        profileRoster?.takeIf { it.launchKnown }?.launch,
-    )
+    val launchProfile = profileRoster?.takeIf { it.launchKnown }?.launch
+    val speaker = replySpeaker(faces, route.target.bot?.name, route.target.profile, launchProfile)
+    // Chats in windows of their own name their bots from this roster too.
+    val speakerSource = koinInject<ReplySpeakerSource>()
+    SideEffect {
+        speakerSource.faces.value = faces
+        speakerSource.launchProfile.value = launchProfile
+    }
     val others: OtherChatsViewModel = koinViewModel { parametersOf(sessions) }
     val settings = LocalAppSettings.current
     val sidebarWidthStore = koinInject<SettingsStore>()
