@@ -20,6 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -127,6 +128,8 @@ actual fun rememberImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap? = r
 
 // A full-size photo is sampled down to what the view needs rather than decoded whole.
 actual fun decodeImageBitmap(bytes: ByteArray, maxEdge: Int): ImageBitmap? = decodeUpright(bytes, maxEdge)?.asImageBitmap()
+
+actual fun Modifier.fileDrop(onHover: (Boolean) -> Unit, onFiles: (List<String>) -> Unit): Modifier = this
 
 @Composable
 actual fun rememberDecodedImage(bytes: ByteArray, maxEdge: Int): DecodedImage {

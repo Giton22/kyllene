@@ -23,6 +23,7 @@ import dev.hermeskotlin.core.phone.NoWatchedPlaces
 import dev.hermeskotlin.core.phone.WatchedPlaces
 import org.koin.core.module.dsl.viewModel
 import org.koin.core.module.dsl.viewModelOf
+import org.koin.core.qualifier.named
 import org.koin.dsl.module
 
 val uiModule = module {
@@ -54,10 +55,27 @@ val uiModule = module {
             nextPromptApi = get(),
         )
     }
+    // A chat in a window of its own (the desktop's Open in new window), with the host it's handed: the app's one
+    // host holds only the main window's chat.
+    viewModel(named(CHAT_WINDOW)) { params ->
+        ChatViewModel(
+            get(), params.get(), get(), get(), get(), get(), get(), get(), get(), get(), get(),
+            get(), get(), get(), get(), get(), get(), get(), get(), get(), get(),
+            seen = getOrNull(),
+            threads = getOrNull(),
+            linkPreviews = get(),
+            readAloudVoices = getOrNull(),
+            deviceLock = getOrNull() ?: DeviceLock.None,
+            nextPromptApi = get(),
+        )
+    }
     viewModelOf(::SettingsViewModel)
     // Watched places are the platform's; one without them shows none.
     viewModel { PhoneToolsViewModel(get(), get(), getOrNull<WatchedPlaces>() ?: NoWatchedPlaces) }
 }
+
+/** The [ChatViewModel] of a chat in its own window, made with that window's `ChatHost` as its parameter. */
+const val CHAT_WINDOW = "chat-window"
 
 /** Every shared module, in dependency order. */
 val sharedModules = listOf(platformModule, coreModule, uiModule)

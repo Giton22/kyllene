@@ -1,5 +1,11 @@
 package dev.hermeskotlin.ui.sessions
 
+import dev.hermeskotlin.ui.PageFoot
+import dev.hermeskotlin.ui.PageRowHeight
+
+import dev.hermeskotlin.designsystem.components.handCursor
+import dev.hermeskotlin.ui.CopyableOnDesktop
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import dev.hermeskotlin.designsystem.components.ScrollbarBox
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -161,7 +169,7 @@ internal fun CapabilitiesView(
                 }
                 CapabilityTab.Mcp -> TabList(
                     state.servers,
-                    empty = "No MCP servers. Add one on the gateway with `hermes mcp add`, or from Desktop.",
+                    empty = "No MCP servers. Add one on the gateway with `hermes mcp add`, or from Hermes Desktop.",
                     onRetry = actions::refresh,
                 ) { servers ->
                     item(key = "note") { Hint("Changes apply from the next chat.") }
@@ -179,7 +187,7 @@ internal fun CapabilitiesView(
                 }
             }
         }
-        state.message?.let { MessageBanner(it, onDismiss = actions::dismissMessage, modifier = Modifier.padding(bottom = 96.dp)) }
+        state.message?.let { MessageBanner(it, onDismiss = actions::dismissMessage, modifier = Modifier.padding(bottom = PageFoot)) }
     }
 }
 
@@ -241,8 +249,13 @@ private fun <T> TabList(loadable: Loadable<T>, empty: String, onRetry: () -> Uni
         items == null -> ListSkeleton()
         items.isEmpty() -> Box(Modifier.fillMaxSize().padding(12.dp)) { ListNotice(empty) }
         // 4dp on top leaves room for a focused search field's ring, which the list would clip.
-        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 96.dp)) {
-            content(items)
+        else -> {
+            val list = rememberLazyListState()
+            ScrollbarBox(list, Modifier.fillMaxSize(), bottomInset = PageFoot) {
+                LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = PageFoot)) {
+                    content(items)
+                }
+            }
         }
     }
 }
@@ -303,14 +316,17 @@ private fun ServerRow(server: McpServer, test: McpTestResult?, testing: Boolean,
                     style = Theme[typography][bodySmall],
                     color = Theme[colors][success],
                 )
-                else -> Text(
-                    test.error ?: "Couldn't connect.",
-                    style = Theme[typography][bodySmall],
-                    color = Theme[colors][danger],
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
+                else -> Box(Modifier.weight(1f)) {
+                    CopyableOnDesktop {
+                        Text(
+                            test.error ?: "Couldn't connect.",
+                            style = Theme[typography][bodySmall],
+                            color = Theme[colors][danger],
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
     }
@@ -353,10 +369,10 @@ private fun SwitchRow(
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 56.dp)
+            .heightIn(min = PageRowHeight)
             .then(
                 if (onToggle != null) {
-                    Modifier.toggleable(value = checked, role = Role.Switch, onValueChange = onToggle)
+                    Modifier.handCursor().toggleable(value = checked, role = Role.Switch, onValueChange = onToggle)
                 } else {
                     Modifier.semantics(mergeDescendants = true) { stateDescription = "${if (checked) "On" else "Off"}, $lockedNote" }
                 },

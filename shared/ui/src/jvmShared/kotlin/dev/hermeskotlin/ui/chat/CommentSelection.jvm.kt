@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.contextmenu.builder.item
 import androidx.compose.foundation.text.contextmenu.modifier.appendTextContextMenuComponents
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -11,21 +12,29 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.AnnotatedString
+import dev.hermeskotlin.ui.isDesktop
 
+// Experimental in Compose Multiplatform's foundation, which the desktop gets; stable in Android's.
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal actual fun PlatformCommentableSelection(
     onAction: ((SelectionAction, SelectionAnchor) -> Unit)?,
+    probe: SelectionProbe?,
     content: @Composable () -> Unit,
 ) {
+    val state = remember { SelectionState() }
+    probe?.selected = { state.selectedTexts.any { it.text.isNotEmpty() } }
     if (onAction == null) {
-        SelectionContainer(content = content)
+        SelectionContainer(state = state, content = content)
         return
     }
     val latestOnAction by rememberUpdatedState(onAction)
-    val state = remember { SelectionState() }
     SelectionContainer(
         state = state,
         modifier = Modifier.appendTextContextMenuComponents {
+            // They act on the selection: a desktop's right-click on text with nothing selected offers only Select
+            // all. A phone's toolbar shows only for a selection, as it always has.
+            if (isDesktop && state.selectedTexts.none { it.text.isNotEmpty() }) return@appendTextContextMenuComponents
             SelectionAction.entries.forEach { action ->
                 item(key = action, label = action.label) {
                     anchorOf(state)?.let { latestOnAction(action, it) }
