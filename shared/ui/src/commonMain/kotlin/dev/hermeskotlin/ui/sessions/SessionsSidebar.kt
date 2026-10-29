@@ -270,6 +270,7 @@ import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.ListSkeleton
 import dev.hermeskotlin.ui.components.relativeTime
 import dev.hermeskotlin.ui.components.savedCopyLabel
+import dev.hermeskotlin.ui.update.RenameBanner
 import dev.hermeskotlin.ui.update.UpdateBanner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -728,6 +729,7 @@ fun SessionsSidebar(
                     optionLabel = { if (it == SidebarMode.Bots && needsYou.isNotEmpty()) "${it.name} · ${needsYou.size}" else it.name },
                     modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
                 )
+                RenameBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
                 UpdateBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
                 // A desktop starts a chat from the top of its sidebar, as desktop chat apps do; the footer
                 // keeps the account. A phone keeps the pill under the thumb.
@@ -1107,6 +1109,7 @@ internal fun SessionsSidebarSample(
     ) {
         Column(Modifier.fillMaxSize()) {
             MainHeader(gatewayLabel = "homelab", connection = null, onAccount = {}, onSettings = {}, onSearch = {})
+            RenameBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val index = remember(projects) { ProjectIndex(projects) }
                 val sections = threadSections(threads, sessions, sessions, selectedProject, index)
@@ -1283,7 +1286,7 @@ private fun MainHeader(
                     verticalArrangement = Arrangement.Center,
                 ) {
                     Text(
-                        "Herald",
+                        "Kyllene",
                         style = Theme[typography][heading].copy(fontSize = 17.sp, lineHeight = 21.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.02).em),
                         color = Theme[colors][text],
                         maxLines = 1,

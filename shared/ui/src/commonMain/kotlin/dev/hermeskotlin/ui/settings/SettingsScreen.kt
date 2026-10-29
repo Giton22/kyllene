@@ -109,6 +109,7 @@ import com.composables.icons.lucide.Vibrate
 import com.composables.icons.lucide.ArrowLeftRight
 import com.composables.icons.lucide.Brain
 import com.composables.icons.lucide.Cat
+import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Clock
 import com.composables.icons.lucide.Gauge
 import com.composables.icons.lucide.Globe
@@ -123,6 +124,7 @@ import com.composables.icons.lucide.MessageCircle
 import com.composables.icons.lucide.MessageSquarePlus
 import com.composables.icons.lucide.MessagesSquare
 import com.composables.icons.lucide.Moon
+import com.composables.icons.lucide.Phone
 import com.composables.icons.lucide.RefreshCw
 import com.composables.icons.lucide.Send
 import com.composables.icons.lucide.ShieldAlert
@@ -135,10 +137,12 @@ import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.phone.enabledPhoneTools
 import dev.hermeskotlin.core.plugins.NextPromptApi
 import dev.hermeskotlin.core.push.PushStatus
 import dev.hermeskotlin.core.settings.AppSettings
+import dev.hermeskotlin.core.settings.CallTarget
 import dev.hermeskotlin.core.settings.RunningSend
 import dev.hermeskotlin.core.settings.TextSize
 import dev.hermeskotlin.core.settings.ThemeMode
@@ -183,6 +187,8 @@ import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.title
 import dev.hermeskotlin.designsystem.typography
+import dev.hermeskotlin.ui.bots.BotFaces
+import dev.hermeskotlin.ui.bots.BotAvatar
 import dev.hermeskotlin.ui.LocalAppVersion
 import dev.hermeskotlin.ui.PlatformBackHandler
 import dev.hermeskotlin.ui.hasVoice
@@ -221,6 +227,7 @@ import dev.hermeskotlin.designsystem.components.TextField
 @Composable
 fun SettingsScreen(
     gateway: SavedGateway,
+    botFaces: BotFaces = BotFaces(),
     onBack: () -> Unit,
     onSignOut: () -> Unit,
     onOpenGateways: () -> Unit,
@@ -244,13 +251,14 @@ fun SettingsScreen(
     )
     var checkOpen by remember { mutableStateOf(false) }
     var phoneToolsOpen by remember { mutableStateOf(false) }
+    var callTargetOpen by remember { mutableStateOf(false) }
     var appIconOpen by remember { mutableStateOf(false) }
     var startInstructionOpen by remember { mutableStateOf(false) }
     // Read again when the App icon page closes, so its row names the icon just applied.
     val appIcons = key(appIconOpen) { rememberAppIcons() }
     val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
     LaunchedEffect(gateway, profile) { viewModel.bind(gateway, profile) }
-    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen && !startInstructionOpen, onBack = onBack)
+    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen && !startInstructionOpen && !callTargetOpen, onBack = onBack)
     // The desktop lists the sections beside the page; they say here where they start.
     val anchors = remember { mutableStateMapOf<String, Int>() }
     CompositionLocalProvider(LocalSectionAnchors provides anchors.takeIf { isDesktop }) { SettingsView(
@@ -274,6 +282,8 @@ fun SettingsScreen(
             viewModel.removeWallpaper()
         },
         onOpenPhoneTools = { phoneToolsOpen = true },
+        botFaces = botFaces,
+        onChooseCallTarget = { callTargetOpen = true },
         appIcon = appIcons.current,
         onOpenAppIcon = { appIconOpen = true },
         onOpenStartInstruction = { startInstructionOpen = true },
@@ -281,6 +291,10 @@ fun SettingsScreen(
         onInstallSuggestions = viewModel::installSuggestions,
         onCheckSuggestions = viewModel::checkSuggestions,
     ) }
+    if (callTargetOpen) CallTargetPicker(gateway, viewModel, botFaces, onDismiss = { callTargetOpen = false }) { target ->
+        viewModel.update { it.copy(callTargets = it.callTargets + (gateway.url to target)) }
+        callTargetOpen = false
+    }
     if (phoneToolsOpen) PhoneToolsScreen(onBack = { phoneToolsOpen = false })
     if (startInstructionOpen) {
         StartInstructionScreen(
@@ -367,6 +381,8 @@ internal fun SettingsView(
     onChooseWallpaper: () -> Unit = {},
     onRemoveWallpaper: () -> Unit = {},
     onOpenPhoneTools: () -> Unit = {},
+    botFaces: BotFaces = BotFaces(),
+    onChooseCallTarget: () -> Unit = {},
     appIcon: AppIcon = AppIcon.Blue,
     onOpenAppIcon: () -> Unit = {},
     onOpenStartInstruction: () -> Unit = {},
@@ -567,7 +583,7 @@ internal fun SettingsView(
                     Divider()
                     SwitchRow(
                         title = "Show link previews",
-                        detail = "A card for each web link in a finished reply. Herald opens the linked pages and their pictures itself, without your gateway's cookies.",
+                        detail = "A card for each web link in a finished reply. Kyllene opens the linked pages and their pictures itself, without your gateway's cookies.",
                         checked = settings.showLinkPreviews,
                         onCheckedChange = { on -> onUpdate { it.copy(showLinkPreviews = on) } },
                         icon = Lucide.Globe,
@@ -596,6 +612,8 @@ internal fun SettingsView(
                 }
 
                 if (hasVoice) Section("Voice") {
+                    CallTargetRow(settings.callTargets[gatewayUrl] ?: CallTarget(), botFaces, onChooseCallTarget)
+                    Divider()
                     SwitchRow(
                         title = "Dictation",
                         detail = "A mic in the composer to talk instead of type. Off, the model name gets its room.",
@@ -682,15 +700,15 @@ internal fun SettingsView(
                     Divider()
                     SwitchRow(
                         title = "Finished replies",
-                        detail = if (isDesktop) "When a turn ends or fails while Herald isn't the window in use. Click it to open the chat." else "When a turn ends while Herald is in the background. Reply from the notification.",
+                        detail = if (isDesktop) "When a turn ends or fails while Kyllene isn't the window in use. Click it to open the chat." else "When a turn ends while Kyllene is in the background. Reply from the notification.",
                         checked = settings.notifyReplies,
                         onCheckedChange = { on -> onUpdate { it.copy(notifyReplies = on) } },
                         icon = Lucide.MessageCircle,
                     )
                     Divider()
                     SwitchRow(
-                        title = "Notify for other chats while Herald is open",
-                        detail = "Replies and requests in chats other than the one on screen notify even while you're in Herald.",
+                        title = "Notify for other chats while Kyllene is open",
+                        detail = "Replies and requests in chats other than the one on screen notify even while you're in Kyllene.",
                         checked = settings.notifyOtherChatsInApp,
                         onCheckedChange = { on -> onUpdate { it.copy(notifyOtherChatsInApp = on) } },
                         icon = Lucide.BellRing,
@@ -768,8 +786,8 @@ internal fun SettingsView(
                     SwitchRow(
                         title = "App lock",
                         detail = if (canLock || settings.appLock) {
-                            "Ask for your fingerprint, face or screen lock when Herald opens and after a minute away. " +
-                                "Hides Herald in Recents and blocks screenshots of it. Notification actions keep working."
+                            "Ask for your fingerprint, face or screen lock when Kyllene opens and after a minute away. " +
+                                "Hides Kyllene in Recents and blocks screenshots of it. Notification actions keep working."
                         } else {
                             "Set a screen lock in Android's settings first."
                         },
@@ -834,7 +852,7 @@ internal fun SettingsView(
     }
 }
 
-/** The Herald community server; the invite never expires. */
+/** The Kyllene community server; the invite never expires. */
 private const val DISCORD_INVITE = "https://discord.gg/wCtyvQ3KcM"
 
 /** The Phone tools row's line: off, or how many tools the agent may use. */
@@ -880,7 +898,7 @@ private fun pushDetail(on: Boolean, push: PushStatus): String {
             "The gateway's herald-push plugin is ${it.installed}; this needs ${it.available}. Update it below."
         } ?: "The gateway's herald-push plugin is too old."
         PushStatus.State.Failed -> "Couldn't set up: ${push.detail ?: "unknown error"}"
-        PushStatus.State.Unknown, PushStatus.State.Off -> "On. Checks with the gateway the next time Herald reaches it."
+        PushStatus.State.Unknown, PushStatus.State.Off -> "On. Checks with the gateway the next time Kyllene reaches it."
     }
 }
 
@@ -1094,6 +1112,24 @@ internal fun Divider() {
     // Searching, the rows that are left stand alone; a rule would mark where hidden ones were.
     if (LocalSettingsQuery.current.isNotBlank()) return
     Box(Modifier.padding(horizontal = 14.dp).fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
+}
+
+/** The whole row opens the picker; a bot keeps its face, either session choice uses the phone. */
+@Composable
+private fun CallTargetRow(target: CallTarget, faces: BotFaces, onClick: () -> Unit) {
+    val bot = target.profile?.let { name -> faces.bots.firstOrNull { it.name == name } ?: Bot(name = name, displayName = target.label) }
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick).padding(horizontal = 14.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (bot != null) BotAvatar(bot, faces.picture(bot), size = 32.dp)
+        else Box(Modifier.size(32.dp).background(Theme[colors][accent], RoundedCornerShape(Theme[radii][radiusSmall])), contentAlignment = Alignment.Center) {
+            UnstyledIcon(Lucide.Phone, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Default Call target", style = Theme[typography][body], color = Theme[colors][text], maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(bot?.label ?: target.label, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary], maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("Where your call is routed, when you use call Hermes. Hold the app icon from your app drawer to use it", style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
+        }
+        UnstyledIcon(Lucide.ChevronRight, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))
+    }
 }
 
 /** A label with its control underneath, for controls too wide to sit at the end of a row. */

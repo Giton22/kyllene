@@ -521,11 +521,11 @@ class ChatViewModel(
                 combine(connectionState, shown) { state, shown -> state.takeIf { it !is ConnectionState.Connected || shown } }
                     .first { it is ConnectionState.Connected || it is ConnectionState.Failed || it is ConnectionState.SessionExpired }
             }
-            if (this@ChatViewModel.target != target) return@launch
+            if (this@ChatViewModel.target?.copy(readUpTo = null) != target.copy(readUpTo = null)) return@launch
             when {
                 ready is ConnectionState.Connected -> _requests.send(ChatRequest.StartVoice)
                 ready is ConnectionState.Failed || (ready == null && connectionState.value !is ConnectionState.Connected) ->
-                    showAttachmentError("The call didn't start: Herald couldn't reach the gateway.")
+                    showAttachmentError("The call didn't start: Kyllene couldn't reach the gateway.")
             }
         }
     }

@@ -141,7 +141,7 @@ class PushApi(private val connection: GatewayConnection) {
 
     suspend fun register(registration: PushRegistration): PushPluginReply =
         command("register " + HermesJson.encodeToString(PushRegistration.serializer(), registration))
-            ?: throw RpcException(0, "Herald push isn't installed on the gateway.")
+            ?: throw RpcException(0, "The herald-push plugin isn't installed on the gateway.")
 
     suspend fun unregister(deviceId: String): Boolean = command("unregister $deviceId")?.ok == true
 
@@ -448,10 +448,10 @@ class PushApi(private val connection: GatewayConnection) {
         const val PLUGIN_REPO = "https://github.com/Giton22/hermes-herald-push"
 
         /** The plugin commit this Herald was built and reviewed against. */
-        const val PLUGIN_REF = "c88f02785286ca7d408e50ad530515be3885f8ba"
+        const val PLUGIN_REF = "eacf6dbab03f10e65f5eafb5fa3915dc99ddfd97"
 
         /** The version at [PLUGIN_REF]: an older copy on the gateway is offered this as an update. */
-        const val PLUGIN_VERSION = "0.5.1"
+        const val PLUGIN_VERSION = "0.5.2"
 
         /** The oldest plugin this Herald works with; an older copy waits for the user to update it. */
         const val MIN_PLUGIN_VERSION = "0.1.1"

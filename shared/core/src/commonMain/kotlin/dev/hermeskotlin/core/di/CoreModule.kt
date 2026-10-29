@@ -18,6 +18,7 @@ import io.ktor.util.date.getTimeMillis
 import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.chat.ToolRiskStore
 import dev.hermeskotlin.core.capabilities.CapabilitiesApi
+import dev.hermeskotlin.core.capabilities.SkillsHubApi
 import dev.hermeskotlin.core.plugins.NextPromptApi
 import dev.hermeskotlin.core.plugins.PluginsApi
 import dev.hermeskotlin.core.cron.CronApi
@@ -44,6 +45,7 @@ import dev.hermeskotlin.core.settings.startInstruction
 import dev.hermeskotlin.core.rpc.openGatewaySocket
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.slash.SlashApi
+import dev.hermeskotlin.core.update.RenameNotice
 import dev.hermeskotlin.core.update.UpdateChecker
 import dev.hermeskotlin.core.journey.JourneyApi
 import dev.hermeskotlin.core.pet.PetApi
@@ -91,6 +93,7 @@ val coreModule = module {
     single { SessionsApi(get()) }
     single { CronApi(get()) }
     single { CapabilitiesApi(get()) }
+    single { SkillsHubApi(get()) }
     single { PluginsApi(get()) }
     single { NextPromptApi(get(), get(), get()) }
     single { InsightsApi(get()) }
@@ -144,6 +147,7 @@ val coreModule = module {
     // Previews fetch without a tap, so their client also refuses addresses on the user's own networks.
     single { LinkPreviews(createHttpClient(publicWebEngine())) }
     single { UpdateChecker(get(named(OUTSIDE_CLIENT)), get()) }
+    single { RenameNotice(get(), get()) }
     // ntfy is someone else's server: never send it the gateway's cookies.
     single { NtfyClient(get(named(OUTSIDE_CLIENT))) }
     single { PushApi(get()) }

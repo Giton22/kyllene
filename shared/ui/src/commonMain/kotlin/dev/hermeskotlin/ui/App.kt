@@ -49,8 +49,11 @@ import dev.hermeskotlin.designsystem.components.SidebarLayout
 import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.designsystem.components.rememberSidebarState
 import dev.hermeskotlin.core.bots.Bot
+import dev.hermeskotlin.core.chat.DraftStart
 import dev.hermeskotlin.ui.bots.BotEditor
 import dev.hermeskotlin.ui.bots.BotFaces
+import dev.hermeskotlin.designsystem.components.Dialog
+import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.ui.bots.StartOverDialog
 import dev.hermeskotlin.ui.bots.BotsViewModel
 import dev.hermeskotlin.ui.bots.LocalBotFaces
@@ -65,6 +68,8 @@ import dev.hermeskotlin.ui.chat.GatewayFileViewer
 import dev.hermeskotlin.ui.chat.ChatViewModel
 import dev.hermeskotlin.ui.chat.ModelConfirmDialog
 import dev.hermeskotlin.ui.chat.ModelSheet
+import dev.hermeskotlin.ui.chat.ProvideReplySpeaker
+import dev.hermeskotlin.ui.chat.replySpeaker
 import dev.hermeskotlin.ui.sessions.CapabilitiesPage
 import dev.hermeskotlin.ui.sessions.ConfigPage
 import dev.hermeskotlin.core.chat.ChatState
@@ -82,7 +87,9 @@ import dev.hermeskotlin.ui.settings.PhoneQuestionDialog
 import dev.hermeskotlin.ui.settings.SettingsScreen
 import dev.hermeskotlin.ui.plugins.PluginWebView
 import dev.hermeskotlin.ui.signin.SignInScreen
+import dev.hermeskotlin.ui.update.LocalRenameOffer
 import dev.hermeskotlin.ui.update.LocalUpdateOffer
+import dev.hermeskotlin.ui.update.rememberRenameOffer
 import dev.hermeskotlin.ui.update.rememberUpdateOffer
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.filter
@@ -154,6 +161,7 @@ fun App(
             LocalGlow provides settings.glow,
             LocalAppVersion provides appVersion,
             LocalUpdateOffer provides rememberUpdateOffer(releasesRepo, appVersion, settings.checkForUpdates),
+            LocalRenameOffer provides rememberRenameOffer(),
             LocalDensity provides Density(density.density, density.fontScale * settings.textSize.scale),
             LocalDesktopLayout provides isDesktop,
         ) {
@@ -269,9 +277,14 @@ fun HeraldTheme(content: @Composable () -> Unit) {
 private fun Routes() {
     val app: AppViewModel = koinViewModel()
     val route by app.route.collectAsStateWithLifecycle()
+    val callError by app.callError.collectAsStateWithLifecycle()
+    val openingCall by app.openingCall.collectAsStateWithLifecycle()
 
     val choices by app.gatewayChoices.collectAsStateWithLifecycle()
     var gatewaysOpen by remember { mutableStateOf(false) }
+    LaunchedEffect((route as? Route.Chat)?.target) {
+        if ((route as? Route.Chat)?.target?.draft?.start == DraftStart.VoiceChat) gatewaysOpen = false
+    }
 
     PlatformBackHandler(enabled = (route as? Route.SignIn)?.adding == true || (route as? Route.Connect)?.canCancel == true) { app.back() }
 
@@ -303,6 +316,17 @@ private fun Routes() {
         is Route.Chat -> Home(r, app, onOpenGateways = { gatewaysOpen = true })
     }
 
+    val dismissCall = if (openingCall) app::cancelPendingCall else app::dismissCallError
+    Dialog(
+        visible = openingCall || callError != null, onDismissRequest = dismissCall,
+        title = if (openingCall) "Opening call…" else "Couldn't start call",
+        message = if (openingCall) null else callError,
+        actions = { Button(if (openingCall) "Cancel" else "OK", onClick = dismissCall) },
+        content = {
+            PlatformBackHandler(enabled = openingCall) { app.cancelPendingCall() }
+            if (openingCall) Spinner()
+        },
+    )
     GatewaysSheet(
         visible = gatewaysOpen,
         choices = choices,
@@ -364,9 +388,10 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // The open bot's chat was started over elsewhere (Desktop, another phone): follow it to the new one,
     // as Desktop does. Never mid-turn. A chat that only moved on by compression is still this one.
     val liveChat = openBot?.canonicalSession
-    LaunchedEffect(liveChat?.id, liveChat?.openId) {
+    LaunchedEffect(liveChat?.id, liveChat?.openId, route.target.takeIf { it.draft?.start == DraftStart.VoiceChat }) {
         val bot = openBot ?: return@LaunchedEffect
         val next = liveChat?.openId ?: return@LaunchedEffect
+        if (!app.shouldFollowBotChat(route.target, liveChat)) return@LaunchedEffect
         val open = openSessionId ?: return@LaunchedEffect
         // Just opened, the chat's state is still the previous chat's; the route already has the live one.
         if (next == route.target.storedSessionId) return@LaunchedEffect
@@ -399,8 +424,18 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // room too. Only a change counts: coming back to the same chat, e.g. after a rotation, keeps it open.
     var shownTarget by remember { mutableStateOf(route.target) }
     LaunchedEffect(route.target) {
-        if (route.target != shownTarget) {
+        val showCall = app.consumeCallNavigation(route.target)
+        if (route.target != shownTarget || showCall) {
             shownTarget = route.target
+            if (showCall) {
+                closeDrawer()
+                settingsOpen = false
+                menuOpen = false
+                startOver = null
+                pluginUrl = null
+                pluginLabel = null
+                editing = null
+            }
             rooms.close()
             openDesktopRoom = null
         }
@@ -430,6 +465,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     var shownInboxLink by remember { mutableStateOf<InboxLink?>(null) }
     LaunchedEffect(inboxLink) {
         val link = inboxLink ?: return@LaunchedEffect
+        app.cancelPendingCall()
         try {
             sidebar.open()
         } finally {
@@ -441,6 +477,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     val roomLink by roomLinks.pending.collectAsStateWithLifecycle()
     LaunchedEffect(roomLink) {
         val link = roomLink ?: return@LaunchedEffect
+        app.cancelPendingCall()
         rooms.openById(link.roomId, link.name)
         openDesktopRoom = null
         roomLinks.consume(link)
@@ -461,6 +498,16 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // the foreground; that keeps the gateway's live list polled then (every 10 s, as while the sidebar shows), and
     // never in the background.
     val sessions: SessionsViewModel = koinViewModel()
+    val profileRoster by sessions.roster.collectAsStateWithLifecycle()
+    // The bot answering in the open chat, named above its replies. Only a launch profile the gateway named counts:
+    // a guessed `default` could name the wrong bot. Equal unless what's drawn changed, so a roster refresh doesn't
+    // redraw the chat.
+    val speaker = replySpeaker(
+        faces,
+        route.target.bot?.name,
+        route.target.profile,
+        profileRoster?.takeIf { it.launchKnown }?.launch,
+    )
     val others: OtherChatsViewModel = koinViewModel { parametersOf(sessions) }
     val settings = LocalAppSettings.current
     val sidebarWidthStore = koinInject<SettingsStore>()
@@ -637,37 +684,40 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     onBack = { openDesktopRoom = null },
                     onOpenFile = openRoomFile,
                 )
-                else -> ChatScreen(
-                    target = route.target,
-                    onOpenSidebar = { scope.launch { sidebar.toggle() } },
-                    onNewChat = app::newChat,
-                    onOpenMenu = openSessionId?.let {
-                        { button ->
-                            menuAnchor = button
-                            menuOpen = true
-                        }
-                    },
-                    onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
-                    onSwitchProfile = app::switchProfile,
-                    viewModel = chat,
-                    // Not while a page or the chat's menu covers it: typing there mustn't land in the composer.
-                    keysEnabled = chatShown && !menuOpen,
-                    sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
-                    otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
-                    onOpenOtherChat = { event: OtherChatEvent ->
-                        others.dismissBanner(event)
-                        openOther(event.chatId, event.title, event.bot)
-                    },
-                    onDismissOtherChat = others::dismissBanner,
-                    onNextChat = if (!alerts) null else fun(): Boolean {
-                        val next = others.nextChat()
-                        if (next != null) {
-                            banner?.let(others::dismissBanner)
-                            openOther(next.id, next.title, next.bot)
-                        }
-                        return next != null
-                    },
-                )
+                // Rooms draw their own transcripts, each bot under its own name; only the chat has one speaker.
+                else -> ProvideReplySpeaker(speaker) {
+                    ChatScreen(
+                        target = route.target,
+                        onOpenSidebar = { scope.launch { sidebar.toggle() } },
+                        onNewChat = app::newChat,
+                        onOpenMenu = openSessionId?.let {
+                            { button ->
+                                menuAnchor = button
+                                menuOpen = true
+                            }
+                        },
+                        onOpenChat = { id, title -> app.openSession(id, title ?: "Untitled session") },
+                        onSwitchProfile = app::switchProfile,
+                        viewModel = chat,
+                        // Not while a page or the chat's menu covers it: typing there mustn't land in the composer.
+                        keysEnabled = chatShown && !menuOpen,
+                        sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
+                        otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },
+                        onOpenOtherChat = { event: OtherChatEvent ->
+                            others.dismissBanner(event)
+                            openOther(event.chatId, event.title, event.bot)
+                        },
+                        onDismissOtherChat = others::dismissBanner,
+                        onNextChat = if (!alerts) null else fun(): Boolean {
+                            val next = others.nextChat()
+                            if (next != null) {
+                                banner?.let(others::dismissBanner)
+                                openOther(next.id, next.title, next.bot)
+                            }
+                            return next != null
+                        },
+                    )
+                }
             }
         }
     }
@@ -809,6 +859,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                         CapabilitiesPage(
                             gateway = route.gateway,
                             profile = bot.name,
+                            profileLabel = bot.label,
                             onBack = { capabilitiesOpen = false },
                             onSessionExpired = app::onSessionExpired,
                             title = "${bot.label}'s capabilities",
@@ -842,6 +893,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         TimeOpening("settings")
         SettingsScreen(
             gateway = route.gateway,
+            botFaces = faces,
             onBack = { settingsOpen = false },
             onSignOut = app::signOut,
             onOpenGateways = onOpenGateways,

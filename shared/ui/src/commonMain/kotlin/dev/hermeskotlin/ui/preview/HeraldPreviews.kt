@@ -57,6 +57,9 @@ import dev.hermeskotlin.ui.chat.SessionControlSheetView
 import dev.hermeskotlin.ui.chat.UsageSheetView
 import dev.hermeskotlin.ui.sessions.CapabilitiesActions
 import dev.hermeskotlin.ui.sessions.CapabilitiesView
+import dev.hermeskotlin.ui.sessions.SkillsHubActions
+import dev.hermeskotlin.ui.sessions.SkillsHubView
+import dev.hermeskotlin.core.capabilities.HubSkill
 import dev.hermeskotlin.ui.sessions.ConfigActions
 import dev.hermeskotlin.ui.sessions.ConfigPlace
 import dev.hermeskotlin.ui.sessions.ConfigView
@@ -97,10 +100,13 @@ import dev.hermeskotlin.ui.sessions.ProjectDraft
 import dev.hermeskotlin.core.projects.FolderListing
 import dev.hermeskotlin.ui.sessions.ProjectActionsSheet
 import dev.hermeskotlin.ui.sessions.NewProjectDialog
+import dev.hermeskotlin.ui.settings.AppIconScreen
 import dev.hermeskotlin.ui.settings.ConnectionCheckSheet
 import dev.hermeskotlin.ui.settings.GatewayInfo
 import dev.hermeskotlin.ui.settings.SettingsView
 import dev.hermeskotlin.ui.settings.StartInstructionView
+import dev.hermeskotlin.ui.update.LocalRenameOffer
+import dev.hermeskotlin.ui.update.RenameOffer
 import androidx.compose.ui.tooling.preview.Preview
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatState
@@ -136,16 +142,22 @@ enum class PreviewScene(val label: String) {
     ReadAloudFailed("A reply the gateway couldn't voice"),
     NewChat("A new chat"),
     Sidebar("The sessions sidebar"),
+    Renamed("The sidebar after updating from Herald, with the rename card"),
     Bots("The bots and rooms"),
     Room("A room of bots"),
     NewRoom("A new room"),
     BotEditor("Editing a bot"),
     Settings("Settings"),
+    AppIcons("The app icons"),
     StartInstruction("The starting instruction for new chats"),
     Gateways("Saved gateways"),
     Journey("What the agent has learned"),
     Insights("Insights"),
     Capabilities("Capabilities"),
+    SkillsHub("The skills hub"),
+    SkillsHubDetail("A hub skill opened, scan clean"),
+    SkillsHubCaution("A hub skill whose scan wants a yes"),
+    SkillsHubBlocked("A hub skill the scan blocked"),
     Config("Hermes's settings"),
     ConfigVoice("Hermes's voice settings, one saving"),
     ConfigSearch("A search across Hermes's settings"),
@@ -234,6 +246,19 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         projects = ChatSamples.projects,
                     )
                 }
+                PreviewScene.Renamed -> OpenSidebar {
+                    CompositionLocalProvider(LocalRenameOffer provides RenameOffer(show = true) {}) {
+                        SessionsSidebarSample(
+                            ChatSamples.sessions(),
+                            selectedId = "s1",
+                            userLabel = ChatSamples.USER,
+                            statuses = ChatSamples.sessionStatuses,
+                            drafts = ChatSamples.sessionDrafts,
+                            projects = ChatSamples.projects,
+                        )
+                    }
+                }
+                PreviewScene.AppIcons -> AppIconScreen(onBack = {})
                 PreviewScene.Threads -> OpenSidebar {
                     SessionsSidebarSample(
                         ChatSamples.threadSessions(),
@@ -295,7 +320,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         ProjectActionsSheet(site, onDismiss = {}, onRename = {}, onDelete = {}, onSave = {})
                     } else {
                         NewProjectDialog(
-                            ProjectDraft(name = "Herald", folder = "/home/you/projects/herald"),
+                            ProjectDraft(name = "Kyllene", folder = "/home/you/projects/kyllene"),
                             busy = false,
                             error = null,
                             onDismiss = {},
@@ -371,6 +396,15 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                 }
                 PreviewScene.Capabilities -> OpenSidebar {
                     SidebarPage { CapabilitiesView(PageSamples.capabilities, remember { TextFieldState() }, PreviewCapabilitiesActions, onBack = {}) }
+                }
+                PreviewScene.SkillsHub, PreviewScene.SkillsHubDetail, PreviewScene.SkillsHubCaution, PreviewScene.SkillsHubBlocked -> OpenSidebar {
+                    val hub = when (scene) {
+                        PreviewScene.SkillsHubDetail -> PageSamples.skillsHubDetail
+                        PreviewScene.SkillsHubCaution -> PageSamples.skillsHubCaution
+                        PreviewScene.SkillsHubBlocked -> PageSamples.skillsHubBlocked
+                        else -> PageSamples.skillsHub
+                    }
+                    SidebarPage { SkillsHubView(hub, remember { TextFieldState() }, PreviewSkillsHubActions, onBack = {}, subtitle = "Installs into the main profile") }
                 }
                 PreviewScene.Config, PreviewScene.ConfigVoice, PreviewScene.ConfigSearch, PreviewScene.ConfigPicker -> OpenSidebar {
                     val config = PageSamples.config(place = "voice".takeIf { scene == PreviewScene.ConfigVoice || scene == PreviewScene.ConfigPicker })
@@ -602,6 +636,21 @@ private object PreviewCapabilitiesActions : CapabilitiesActions {
     override fun setServerEnabled(server: McpServer, enabled: Boolean) = Unit
     override fun testServer(server: McpServer) = Unit
     override fun dismissMessage() = Unit
+    override fun openHub() = Unit
+    override fun uninstallSkill(skill: Skill) = Unit
+}
+
+private object PreviewSkillsHubActions : SkillsHubActions {
+    override fun refresh() = Unit
+    override fun search(query: String) = Unit
+    override fun open(skill: HubSkill) = Unit
+    override fun closeDetail() = Unit
+    override fun install(skill: HubSkill) = Unit
+    override fun confirmInstall() = Unit
+    override fun cancelConfirm() = Unit
+    override fun uninstall(name: String) = Unit
+    override fun updateAll() = Unit
+    override fun dismissMessage() = Unit
 }
 
 private object PreviewConfigActions : ConfigActions {
@@ -736,6 +785,22 @@ private fun InsightsPreview() = HeraldPreview(PreviewScene.Insights)
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
 private fun CapabilitiesPreview() = HeraldPreview(PreviewScene.Capabilities)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun SkillsHubPreview() = HeraldPreview(PreviewScene.SkillsHub)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun SkillsHubDetailPreview() = HeraldPreview(PreviewScene.SkillsHubDetail)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun SkillsHubCautionPreview() = HeraldPreview(PreviewScene.SkillsHubCaution)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun SkillsHubBlockedPreview() = HeraldPreview(PreviewScene.SkillsHubBlocked)
 
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
