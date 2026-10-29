@@ -217,7 +217,7 @@ class WatchLink(
         val chat = store.chat.value
         val ask = WatchAsk(id, text.orEmpty().trim(), chat.id, speak = store.speak.value && speech.canPlay(), audioType = audioType, botProfile = chat.botProfile, scope = chat.scope)
         _turn.value = WatchTurn(id, text?.trim(), ReplyUpdate(id, if (audio != null) ReplyPhase.Transcribing else ReplyPhase.Sending, chatId = chat.id, title = chat.title))
-        if (chat.botProfile != null && !botChats) return fail(id, "Update Herald on your phone to talk to bots.")
+        if (chat.botProfile != null && !botChats) return fail(id, "Update Kyllene on your phone to talk to bots.")
         val generation = _profileReset.value
         askJob?.cancel()
         askJob = scope.launch(main) {
@@ -312,7 +312,7 @@ class WatchLink(
         _call.value = WatchCallState(id, CallStage.Starting)
         val chat = store.chat.value
         if (defaultRequestId != null && resolvedDefault != defaultRequestId) return finishCall(id, "Default Call Target changed. Tap Call again.")
-        if (defaultRequestId == null && chat.botProfile != null && !botChats) return finishCall(id, "Update Herald on your phone to call bots.")
+        if (defaultRequestId == null && chat.botProfile != null && !botChats) return finishCall(id, "Update Kyllene on your phone to call bots.")
         val generation = _profileReset.value
         callJob = scope.launch(main) {
             if (!synchronizeProfile()) return@launch finishCall(id, NOT_CONNECTED)
@@ -691,9 +691,9 @@ class WatchLink(
     }
 
     companion object {
-        private const val UPDATE_PROFILE = "Update Herald on your phone to use profile-aware calls."
+        private const val UPDATE_PROFILE = "Update Kyllene on your phone to use profile-aware calls."
         const val NOT_CONNECTED = "Your phone isn't connected."
-        const val NO_HERALD = "Herald on your phone didn't answer. Open it there, or update it."
+        const val NO_HERALD = "Kyllene on your phone didn't answer. Open it there, or update it."
         private const val ANSWER_WITHIN_MS = 30_000L
         private const val CALL_POLL_MS = 100L
         private const val EVENT_GATHER_MS = 120L
