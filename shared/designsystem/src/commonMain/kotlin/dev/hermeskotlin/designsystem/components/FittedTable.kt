@@ -6,6 +6,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -74,11 +76,14 @@ internal fun FittedTable(content: String, node: ASTNode, style: TextStyle) {
             .clip(shape),
     ) {
         val available = if (constraints.hasBoundedWidth) constraints.maxWidth else Int.MAX_VALUE
+        val sideways = rememberScrollState()
         CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
-            Box(Modifier.horizontalScroll(rememberScrollState())) {
+            Box(Modifier.horizontalScroll(sideways)) {
                 TableGrid(rows, content, style, available, LocalMarkdownColors.current.dividerColor, dimens.dividerThickness)
             }
         }
+        // A table wider than the reply shows the desktop's bar to drag it by, as a wide code block does.
+        Box(Modifier.matchParentSize()) { HorizontalScrollbar(sideways, Modifier.align(Alignment.BottomStart).fillMaxWidth()) }
     }
 }
 

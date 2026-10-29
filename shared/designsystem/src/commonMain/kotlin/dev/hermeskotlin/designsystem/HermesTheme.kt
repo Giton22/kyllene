@@ -10,7 +10,6 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.composeunstyled.theme.ColorScheme
 import com.composeunstyled.theme.buildThemeV2
-import com.composeunstyled.theme.rememberColoredIndication
 
 // Body text sits a hair tighter than the default, as the design's -0.005em does.
 // Content: every string takes its base direction from its own first strong character, so Arabic reads
@@ -63,21 +62,21 @@ private fun buildHermesTheme(palette: AccentPalette) = buildThemeV2 {
     colorScheme(ColorScheme.Light) {
         properties[colors] = lightColors(palette.light)
         defaultContentColor = Palette.LightText
-        defaultIndication = rememberColoredIndication(Palette.LightText)
+        defaultIndication = rememberHoverIndication(Palette.LightText, palette.light.accent)
         defaultTextSelectionColors = TextSelectionColors(palette.light.accent, palette.light.accent.copy(alpha = 0.25f))
     }
 
     colorScheme(ColorScheme.Dark) {
         properties[colors] = darkColors(palette.dark)
         defaultContentColor = Palette.Text
-        defaultIndication = rememberColoredIndication(Palette.Text)
+        defaultIndication = rememberHoverIndication(Palette.Text, palette.dark.accent)
         defaultTextSelectionColors = TextSelectionColors(palette.dark.text, palette.dark.text.copy(alpha = 0.35f))
     }
 
     colorScheme(PureBlack) {
         properties[colors] = pureBlackColors(palette.black)
         defaultContentColor = Palette.Text
-        defaultIndication = rememberColoredIndication(Palette.Text)
+        defaultIndication = rememberHoverIndication(Palette.Text, palette.black.accent)
         defaultTextSelectionColors = TextSelectionColors(palette.black.text, palette.black.text.copy(alpha = 0.35f))
     }
 
