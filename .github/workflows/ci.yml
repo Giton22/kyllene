@@ -33,12 +33,23 @@ jobs:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       # Lint fails on any issue that isn't in androidApp/lint-baseline.xml. --continue reports the tests and
-      # lint together instead of stopping at the first failure.
+      # lint together instead of stopping at the first failure. assembleDev is built like a release (R8), so
+      # a missing keep rule shows up here instead of as a crash on a phone.
       - name: Test, build and lint
         run: >
           ./gradlew --no-daemon --continue
           :shared:core:testAndroidHostTest :shared:designsystem:testAndroidHostTest :shared:ui:testAndroidHostTest :shared:wearlink:testAndroidHostTest
-          :androidApp:assembleDebug :androidApp:lintDebug :wearApp:testDebugUnitTest :wearApp:assembleDebug :wearApp:lintDebug
+          :androidApp:assembleDebug :androidApp:assembleDev :androidApp:lintDebug :wearApp:testDebugUnitTest :wearApp:assembleDebug :wearApp:lintDebug
+
+      # WebRTC's native code looks up org.jni_zero classes by name. If R8 renames them, live voice aborts in
+      # JNI_OnLoad, and only in minified builds.
+      - name: R8 kept WebRTC's JNI classes
+        run: |
+          apk=androidApp/build/outputs/apk/dev/androidApp-dev.apk
+          [ -f "$apk" ] || { echo "::error::No dev APK at $apk"; exit 1; }
+          count=$(unzip -p "$apk" 'classes*.dex' | { grep -a -o 'Lorg/jni_zero/[A-Za-z0-9_$/]*;' || true; } | sort -u | wc -l)
+          echo "$apk keeps $count org.jni_zero classes"
+          [ "$count" -gt 0 ] || { echo "::error::R8 renamed or removed org.jni_zero; check androidApp/proguard-rules.pro"; exit 1; }
 
       - name: Lint report
         if: failure()
