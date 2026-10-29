@@ -12,8 +12,17 @@ kotlin {
         minSdk = libs.versions.android.minSdk.get().toInt()
         withHostTest {}
     }
+    // The desktop app (experimental). Its lambdas are compiled as classes, not made at run time: the app's warm-up
+    // can load them ahead, so a page's first opening doesn't build them one by one on the UI thread.
+    jvm {
+        compilerOptions { freeCompilerArgs.add("-Xlambdas=class") }
+    }
 
     sourceSets {
+        // What Android and the desktop share: the selection menu, which reaches into Compose by JVM reflection.
+        val jvmShared by creating { dependsOn(commonMain.get()) }
+        androidMain.get().dependsOn(jvmShared)
+        jvmMain.get().dependsOn(jvmShared)
         commonMain.dependencies {
             api(projects.shared.core)
             api(projects.shared.designsystem)
@@ -35,6 +44,14 @@ kotlin {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.ktor.client.mock)
+        }
+        // The desktop's own menus, driven with a mouse.
+        jvmMain.dependencies {
+            implementation(libs.filekit.dialogs)
+        }
+        jvmTest.dependencies {
+            implementation(compose.desktop.uiTestJUnit4)
+            implementation(compose.desktop.currentOs)
         }
     }
 }

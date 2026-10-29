@@ -1,5 +1,8 @@
 package dev.hermeskotlin.ui.sessions
 
+import dev.hermeskotlin.ui.CopyableOnDesktop
+import androidx.compose.ui.geometry.Rect
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,10 +10,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.rememberTextFieldState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalInputModeManager
+import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,7 +39,7 @@ import dev.hermeskotlin.core.projects.FolderListing
 import dev.hermeskotlin.core.projects.Project
 import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.colors
-import dev.hermeskotlin.designsystem.components.BottomSheet
+import dev.hermeskotlin.designsystem.components.ActionSheet
 import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
@@ -66,11 +69,13 @@ internal fun ProjectActionsSheet(
     onRename: (Project) -> Unit,
     onDelete: (Project) -> Unit,
     onSave: (Project) -> Unit,
+    /** The options button it opened from, on the desktop; null opens it at the pointer. */
+    anchor: Rect? = null,
 ) {
     var shown by remember { mutableStateOf(project) }
     if (project != null) shown = project
     val p = shown ?: return
-    BottomSheet(visible = project != null, onDismiss = onDismiss) {
+    ActionSheet(visible = project != null, onDismiss = onDismiss, anchor = anchor) {
         SheetHeader(p.label, subtitle = p.path)
         val act = { action: (Project) -> Unit -> { onDismiss(); action(p) } }
         if (p.isUserMade) {
@@ -141,7 +146,7 @@ internal fun NewProjectDialog(
             FolderPicker(dir, onOpen = { browsing = it }, listFolders = listFolders)
             return@Dialog
         }
-        TextField(state = name, label = "Name", placeholder = "Herald", enabled = !busy)
+        TextField(state = name, label = "Name", placeholder = "Kyllene", enabled = !busy, autofocus = true)
         TextField(
             state = folder,
             label = "Folder on the gateway",
@@ -203,12 +208,12 @@ private fun FolderPicker(
         )
         TextField(state = filter, modifier = Modifier.weight(1f), placeholder = "Filter", leadingIcon = Lucide.Search)
     }
-    Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+    Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScrollWithBar()) {
         // Narrowed here too, so the last answer matches the filter while the gateway is asked again.
         val folders = listing?.folders.orEmpty()
             .filter { it.startsWith(prefix, ignoreCase = true) && (!it.startsWith(".") || prefix.startsWith(".")) }
         when {
-            failed != null -> Text(failed.orEmpty(), style = Theme[typography][bodySmall], color = Theme[colors][danger])
+            failed != null -> CopyableOnDesktop { Text(failed.orEmpty(), style = Theme[typography][bodySmall], color = Theme[colors][danger]) }
             listing == null -> Spinner(Modifier.padding(12.dp).size(20.dp))
             folders.isEmpty() -> Text("No folders here.", style = Theme[typography][bodySmall], color = secondary)
             else -> folders.forEach { SheetAction(it, Lucide.Folder, onClick = { onOpen(FolderPath.child(dir, it)) }) }
@@ -266,7 +271,8 @@ internal fun RenameProjectDialog(project: Project?, onDismiss: () -> Unit, onRen
     val p = shown ?: return
     val name = rememberTextFieldState(p.label)
     // On every open, so a cancelled edit doesn't come back.
-    LaunchedEffect(project != null, p.id) { if (project != null) name.edit { replace(0, length, p.label) } }
+    val inputMode = LocalInputModeManager.current
+    LaunchedEffect(project != null, p.id) { if (project != null) name.resetTo(p.label, inputMode) }
     val nameText = name.text.toString().trim()
     val submit = {
         if (nameText.isNotEmpty()) {
@@ -286,6 +292,7 @@ internal fun RenameProjectDialog(project: Project?, onDismiss: () -> Unit, onRen
         TextField(
             state = name,
             placeholder = p.label,
+            autofocus = true,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             onKeyboardAction = { submit() },
         )

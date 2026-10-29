@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -47,6 +48,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import com.composeunstyled.theme.Theme
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.sidebar as sidebarColor
 import dev.hermeskotlin.designsystem.stroke
@@ -109,15 +111,22 @@ class SidebarState internal constructor() {
 fun rememberSidebarState(): SidebarState = remember { SidebarState() }
 
 /**
- * A left sidebar next to the main [content]. Where [sidebarDocks] says there is room, it is docked beside the
- * content and collapses to zero width when closed; elsewhere it is a drawer that slides in over a dimmed
- * content area (swipe right anywhere to open, swipe left or tap outside to close).
+ * A left sidebar next to the main [content]. Where there is room it is docked beside the content and collapses to
+ * zero width when closed; elsewhere it is a drawer that slides in over a dimmed content area (swipe right anywhere to
+ * open, swipe left or tap outside to close). There is room from [dockedBreakpoint] up when one is given (a desktop's),
+ * and otherwise where [sidebarDocks] says so.
+ *
+ * Docked, it is [dockedWidth] wide. With [onDockedWidthChange] its edge drags to another width (a desktop's), which
+ * is handed over when the drag ends; a double-click on the edge goes back to the usual width.
  */
 @Composable
 fun SidebarLayout(
     state: SidebarState,
     sidebar: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    dockedBreakpoint: Dp? = null,
+    dockedWidth: Dp = DOCKED_WIDTH,
+    onDockedWidthChange: ((Dp) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -126,9 +135,12 @@ fun SidebarLayout(
         val sideInsets = with(density) {
             WindowInsets.safeDrawing.let { it.getLeft(this, layoutDirection) + it.getRight(this, layoutDirection) }.toDp()
         }
-        val docked = sidebarDocks(maxWidth, sideInsets)
+        val docked = dockedBreakpoint?.let { maxWidth >= it } ?: sidebarDocks(maxWidth, sideInsets)
         LaunchedEffect(docked) { state.updateDocked(docked) }
-        val width = if (docked) DOCKED_WIDTH else min(maxWidth * 0.86f, 340.dp)
+        // While the edge is dragged, the width it's at; the chat keeps at least as much room as the sidebar's least.
+        var dragged by remember { mutableStateOf<Dp?>(null) }
+        val most = maxOf(MIN_DOCKED_WIDTH, minOf(MAX_DOCKED_WIDTH, maxWidth - MIN_DOCKED_WIDTH))
+        val width = if (docked) (dragged ?: dockedWidth).coerceIn(MIN_DOCKED_WIDTH, most) else min(maxWidth * 0.86f, 340.dp)
         val p = state.fraction
         val hidden = Modifier.clearAndSetSemantics { }.takeIf { !state.isOpen && p == 0f } ?: Modifier
 
@@ -147,6 +159,32 @@ fun SidebarLayout(
                 if (p > 0f) Box(Modifier.width(DIVIDER_WIDTH).fillMaxHeight().background(Theme[colors][stroke]))
                 Box(Modifier.weight(1f).fillMaxHeight()) { content() }
             }
+            if (onDockedWidthChange != null && p == 1f) {
+                val density = LocalDensity.current
+                // The hairline is the edge to grab, with a few pixels either side of it to aim at.
+                Box(
+                    Modifier
+                        .offset(x = width - EDGE_GRIP / 2)
+                        .width(EDGE_GRIP)
+                        .fillMaxHeight()
+                        .pointerHoverIcon(ResizeHorizontalPointer)
+                        .pointerInput(onDockedWidthChange) {
+                            detectTapGestures(onDoubleTap = { onDockedWidthChange(DOCKED_WIDTH) })
+                        }
+                        .draggable(
+                            state = rememberDraggableState { delta ->
+                                dragged = ((dragged ?: width) + with(density) { delta.toDp() }).coerceIn(MIN_DOCKED_WIDTH, most)
+                            },
+                            orientation = Orientation.Horizontal,
+                            onDragStarted = { dragged = width },
+                            onDragStopped = {
+                                dragged?.let(onDockedWidthChange)
+                                dragged = null
+                            },
+                        )
+                        .clearAndSetSemantics { },
+                )
+            }
             return@BoxWithConstraints
         }
 
@@ -159,6 +197,8 @@ fun SidebarLayout(
                 .draggable(
                     state = dragState,
                     orientation = Orientation.Horizontal,
+                    // A phone's swipe; a mouse drag over the chat selects text instead of sliding the list in.
+                    enabled = !LocalDesktopLayout.current,
                     onDragStarted = { state.stopAnimation() },
                     onDragStopped = { velocity ->
                         val open = when {
@@ -223,8 +263,6 @@ fun SidebarLayout(
 internal fun sidebarDocks(width: Dp, sideInsets: Dp): Boolean =
     width - sideInsets - DOCKED_WIDTH - DIVIDER_WIDTH >= MIN_CONTENT_WIDTH
 
-private val DOCKED_WIDTH = 304.dp
-
 /** The hairline between the docked sidebar and the content. */
 private val DIVIDER_WIDTH = 1.dp
 
@@ -232,6 +270,13 @@ private val DIVIDER_WIDTH = 1.dp
 private val MIN_CONTENT_WIDTH = 360.dp
 
 private const val FLING_VELOCITY = 800f
+
+/** The docked sidebar's usual width, and the least and most its edge drags to. */
+val DOCKED_WIDTH = 304.dp
+private val MIN_DOCKED_WIDTH = 240.dp
+private val MAX_DOCKED_WIDTH = 480.dp
+
+private val EDGE_GRIP = 8.dp
 
 private val DRAWER_RADIUS = 28.dp
 private val DrawerShape = RoundedCornerShape(topEnd = DRAWER_RADIUS, bottomEnd = DRAWER_RADIUS)
