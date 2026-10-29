@@ -5,4 +5,5 @@
     <string name="shortcut_voice_short">Dictate</string>
     <string name="shortcut_voice">New chat with voice</string>
     <string name="shortcut_voice_chat">Call Hermes</string>
+    <string name="shortcut_voice_chat_moved">Call Hermes moved. Hold the app icon and pin it again.</string>
 </resources>
