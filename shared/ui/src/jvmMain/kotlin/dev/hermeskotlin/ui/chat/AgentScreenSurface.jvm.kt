@@ -10,6 +10,7 @@ internal actual val drawsAgentScreens: Boolean = false
 
 @Composable
 internal actual fun AgentScreenSurface(
+    key: String,
     screen: AgentScreen,
     live: Boolean,
     onAnswer: (surfaceId: String, result: JsonElement) -> Unit,

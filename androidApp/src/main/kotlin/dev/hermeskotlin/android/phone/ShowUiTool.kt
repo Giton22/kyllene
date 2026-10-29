@@ -1,5 +1,6 @@
 package dev.hermeskotlin.android.phone
 
+import android.content.Context
 import dev.hermeskotlin.core.chat.AgentScreen
 import dev.hermeskotlin.core.chat.SHOW_UI_TOOL
 import dev.hermeskotlin.core.phone.AgentScreens
@@ -12,17 +13,19 @@ import kotlinx.serialization.json.put
 
 /**
  * A screen the agent draws in the chat (experiment). The chat draws it from the call's own arguments; this checks
- * they're A2UI and, when the agent waits, hands back what the user tapped there.
+ * Kyllene can draw it and, when the agent waits, hands back what the user tapped there, in the chat that called.
  */
-class ShowUiTool(private val screens: AgentScreens) {
+class ShowUiTool(private val context: Context, private val screens: AgentScreens, private val chats: ChatTargets) {
 
-    suspend fun run(args: JsonObject): JsonElement {
+    suspend fun run(args: JsonObject, session: String): JsonElement {
         val screen = AgentScreen.from(SHOW_UI_TOOL, args)
             ?: throw PhoneToolException(
                 "messages must be a list of 1 to ${AgentScreen.MAX_MESSAGES} A2UI messages (JSON objects), each naming its surfaceId.",
             )
-        agentScreenProblem(screen)?.let { throw PhoneToolException(it) }
+        agentScreenProblem(context, screen)?.let { throw PhoneToolException(it) }
         if (!screen.wait) return buildJsonObject { put("shown", true) }
-        return screens.await(screen)
+        // The chat's stored id, as the chat screen knows it; the gateway may name it by its live id.
+        val chat = chats.of(session)?.storedSessionId ?: session.takeIf { it.isNotBlank() }
+        return screens.await(screen, chat)
     }
 }

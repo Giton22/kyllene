@@ -161,7 +161,7 @@ fun App(
     val agentScreens = koinInject<AgentScreens>()
     val liveScreens by agentScreens.live.collectAsStateWithLifecycle()
     val screenContext = remember(liveScreens) {
-        AgentScreenContext(liveScreens, { surface, result -> agentScreens.answer(surface, result) }, { surface, message -> agentScreens.fail(surface, message) })
+        AgentScreenContext(liveScreens, agentScreens::shown, agentScreens::answer, agentScreens::fail)
     }
     hermesTheme(palette)(schemeFor(settings, dark)) {
         CompositionLocalProvider(

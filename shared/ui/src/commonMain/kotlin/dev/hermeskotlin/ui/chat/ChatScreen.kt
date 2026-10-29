@@ -1010,6 +1010,7 @@ internal fun ChatView(
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
                             LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
+                            LocalAgentScreenChat provides state.storedSessionId,
                             LocalCommentHost provides commentHost,
                         ) {
                             Messages(
@@ -2625,8 +2626,6 @@ private fun AssistantReply(
         // While the turn runs its finished steps are listed as they land; once it ends they fold into the pill.
         if (showTools) if (message.streaming) LiveSteps(listedTools, message.key) else Tools(listedTools, message.key)
         if (generated.isNotEmpty()) ReplyMediaList(remember(generated) { generated.map { it.asMedia() } })
-        // Screens the agent drew, whatever the tool-activity setting: they're for the user to answer.
-        message.tools.filter { it.agentScreen != null }.forEach { key(it.id) { AgentScreenCard(it) } }
         // Shown whatever the tool-activity setting: the work happens out of sight, in other agents.
         message.tools.filter { it.name == "delegate_task" }.forEach { DelegationCard(it) }
         // Messages to other bots, said whatever the tool-activity setting: they're part of the conversation.
@@ -2645,6 +2644,8 @@ private fun AssistantReply(
                 MarkdownText(remember(text) { linkFileUris(text) }, streaming = message.streaming)
             }
         }
+        // Screens the agent drew, under what it said and whatever the tool-activity setting: they're for the user to answer.
+        message.tools.filter { it.agentScreen != null }.forEach { key(it.id) { AgentScreenCard(it) } }
         if (settings.showLinkPreviews && !message.streaming) LinkPreviewCards(text)
         if (media.isNotEmpty()) ReplyMediaList(media)
         when (message.outcome) {
