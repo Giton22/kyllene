@@ -59,6 +59,18 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # The token scrubbing above runs Claude's commands in a bubblewrap sandbox, which the runner doesn't have. The
+      # action installs it only for reviews of non-write users, so it's installed here the same way.
+      - name: Install the command sandbox
+        if: steps.token.outputs.set == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          # Ubuntu 24.04 and later keep unprivileged user namespaces, which bubblewrap needs, behind AppArmor.
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
       - uses: anthropics/claude-code-action@6fed3ca145920b639991cb756090506e1bcaf515 # v1.0.245
         if: steps.token.outputs.set == 'true'
         with:
