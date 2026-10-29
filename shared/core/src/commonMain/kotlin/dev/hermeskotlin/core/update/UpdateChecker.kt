@@ -73,10 +73,10 @@ class UpdateChecker(
 }
 
 /**
- * A release names one APK per ABI (`herald-1.2.3_arm64-v8a.apk`) beside the universal one (`herald-1.2.3.apk`):
+ * A release names one APK per ABI (`kyllene-1.2.3_arm64-v8a.apk`) beside the universal one (`kyllene-1.2.3.apk`):
  * the one for the first of [abis] that has its own wins, then the universal one, then any APK. The watch app's APK
- * (`herald-wear-1.2.3.apk`) is never offered: it installs on the watch, not the phone. It is known by `-wear-` after
- * the app's name, whatever that name is, so releases can rename their APKs (`kyllene-wear-1.2.3.apk`).
+ * (`kyllene-wear-1.2.3.apk`) is never offered: it installs on the watch, not the phone. It is known by `-wear-` after
+ * the app's name, whatever that name is, so older `herald-wear-1.2.3.apk` releases are skipped too.
  */
 internal fun parseRelease(release: JsonObject, abis: List<String>): AppUpdate? {
     val tag = release.text("tag_name") ?: return null

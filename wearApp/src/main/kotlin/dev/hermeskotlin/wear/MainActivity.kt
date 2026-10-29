@@ -183,12 +183,14 @@ class MainActivity : ComponentActivity() {
             callGeneration = app.link.profileReset.value
             val target = try { app.link.resolveDefaultCall() } catch (e: CancellationException) {
                 if (e !is kotlinx.coroutines.TimeoutCancellationException) throw e
-                listening.value = Listening(error = "Herald on your phone didn't answer. Try again.")
+                listening.value = Listening(error = "Kyllene on your phone didn't answer. Try again.")
                 return@launch
             }
             if (target.error != null) { listening.value = Listening(error = target.error); return@launch }
             listening.value = Listening()
             inputGeneration = app.link.profileReset.value
+            // No live voice there: the tile still talks to the target, one spoken ask at a time.
+            if (!target.live) return@launch listen()
             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                 app.link.startCall(target.requestId)
             } else {
@@ -291,7 +293,7 @@ class MainActivity : ComponentActivity() {
         private const val EXTRA_ANSWER_CALL = "call"
         private const val EXTRA_DEBUG_ASK = "ask"
         private const val PHONE_CHECK_MS = 30_000L
-        private const val NEEDS_MICROPHONE = "Herald needs the microphone to hear you."
+        private const val NEEDS_MICROPHONE = "Kyllene needs the microphone to hear you."
 
         /** For a PendingIntent, which starts it in its own task (it's singleTask) and to its onNewIntent when open. */
         fun callIntent(context: Context): Intent = Intent(context, MainActivity::class.java).putExtra(EXTRA_CALL, true)

@@ -18,19 +18,23 @@ import dev.hermeskotlin.core.bots.Bot
 object BotShortcuts {
     private var callPicture: ByteArray? = null
 
-    /** Refresh the call action without replacing the bot list; pinned copies receive the same artwork. */
+    /**
+     * Refresh the call action without replacing the bot list; pinned copies receive the same artwork. False when
+     * Android didn't take it (rate-limited, or it failed), so the caller tries again later.
+     */
     @Synchronized
-    internal fun publishCall(context: Context, picture: ByteArray? = null) {
+    internal fun publishCall(context: Context, picture: ByteArray? = null): Boolean {
         callPicture = picture
         val info = CallShortcut.info(context, picture)
-        runCatching {
+        return runCatching {
             ShortcutManagerCompat.updateShortcuts(context, listOf(info))
-            if (ShortcutManagerCompat.isRateLimitingActive(context) || callSlots(context) == 0) return
+            if (callSlots(context) == 0) return true
+            if (ShortcutManagerCompat.isRateLimitingActive(context)) return false
             val bots = ShortcutManagerCompat.getDynamicShortcuts(context).filter { it.id.startsWith(ID_PREFIX) }.sortedBy { it.rank }
             val extra = bots.drop(botSlots(context)).map { it.id }
             if (extra.isNotEmpty()) ShortcutManagerCompat.removeDynamicShortcuts(context, extra)
             ShortcutManagerCompat.addDynamicShortcuts(context, listOf(info))
-        }
+        }.getOrDefault(false)
     }
 
 
