@@ -72,6 +72,7 @@ jobs:
           fi
 
       - uses: anthropics/claude-code-action@6fed3ca145920b639991cb756090506e1bcaf515 # v1.0.245
+        id: claude
         if: steps.token.outputs.set == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -107,3 +108,13 @@ jobs:
             --effort medium
             --max-turns 30
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Write,Bash(gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --edit-last --create-if-none --body-file review-summary.md),Bash(gh api --paginate repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number || github.event.issue.number }}/comments),Bash(gh pr diff:*),Bash(gh pr view:*)"
+
+      # The action's log only counts refused tool calls. Which ones they were says why a review posted nothing; the
+      # inputs are Claude's own commands, shortened, and the tokens never reach them.
+      - name: List refused tool calls
+        if: always() && steps.claude.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          jq -r '[.[] | select(.type == "result")] | last | .permission_denials // [] | .[]
+            | "::warning::Refused \(.tool_name): \(.tool_input | tostring | .[0:300])"' "$EXECUTION_FILE" || true
