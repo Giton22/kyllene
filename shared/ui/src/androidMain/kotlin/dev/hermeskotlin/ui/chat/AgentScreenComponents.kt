@@ -5,6 +5,9 @@ import androidx.a2ui.compose.runtime.A2uiComponentScope
 import androidx.a2ui.compose.runtime.A2uiComponentState
 import androidx.a2ui.compose.ui.A2uiComponent
 import androidx.a2ui.compose.ui.catalog.A2uiBasicCatalogV1
+import androidx.a2ui.compose.ui.catalog.A2uiBasicCatalogV1.Companion.WeightProperty
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.BorderStroke
 import androidx.a2ui.compose.runtime.observeA2uiComponentState
 import androidx.compose.foundation.layout.Arrangement
@@ -170,7 +173,7 @@ internal object ScreenList : A2uiBasicCatalogV1.List {
         modifier: Modifier,
     ) {
         if (direction == A2uiBasicCatalogV1.List.Direction.Horizontal) {
-            CompositionLocalProvider(LocalInRow provides true) {
+            CompositionLocalProvider(LocalInRow provides true, LocalSideways provides true) {
                 with(material) { TypedContent(children, direction, align, accessibility, modifier) }
             }
             return
@@ -187,26 +190,39 @@ internal object ScreenList : A2uiBasicCatalogV1.List {
         ) {
             val item = if (align == A2uiBasicCatalogV1.List.Align.Stretch) Modifier.fillMaxWidth() else Modifier
             children.forEach { reference ->
-                key(reference.id, reference.baseDataPath) {
-                    when (val child = observeA2uiComponentState(reference)) {
-                        is A2uiComponentState.Success -> A2uiComponent(child.component, item)
-                        is A2uiComponentState.Error -> Text(
-                            "Couldn't draw this part",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        A2uiComponentState.Loading -> Box(Modifier.fillMaxWidth().height(40.dp))
-                    }
-                }
+                key(reference.id, reference.baseDataPath) { Child(observeA2uiComponentState(reference), item) }
             }
         }
     }
 }
 
-/** Material's row, which spreads its children across the column's width when asked to, rather than its own. */
-internal object ScreenRow : A2uiBasicCatalogV1.Row {
-    private val material = MaterialA2uiBasicCatalogV1Defaults.row
+@Composable
+private fun Child(state: A2uiComponentState, modifier: Modifier) {
+    when (state) {
+        is A2uiComponentState.Success -> A2uiComponent(state.component, modifier)
+        is A2uiComponentState.Error -> Text(
+            "Couldn't draw this part",
+            modifier,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        A2uiComponentState.Loading -> Box(modifier.height(40.dp))
+    }
+}
 
+/** Whether this part of the screen scrolls sideways (a horizontal list): there's no width to share out. */
+private val LocalSideways = staticCompositionLocalOf { false }
+
+/** Parts that are as wide as they are, as a web page's row leaves them: the rest share the width they leave. */
+private val FIXED_WIDTH = setOf("Icon", "Button", "CheckBox", "Divider")
+
+/**
+ * A row that shares its width as a web page's does. Material's gives each child all the width the ones before it
+ * left, so a long text took the whole row and pushed the rest out of sight; here a part without a `weight` that
+ * isn't [FIXED_WIDTH] gets at most an equal share of what the fixed ones leave, and `weight` takes the rest. It
+ * spreads its children across the column's width when asked to, rather than its own.
+ */
+internal object ScreenRow : A2uiBasicCatalogV1.Row {
     @Composable
     override fun A2uiComponentScope.TypedContent(
         children: List<A2uiComponentReference>,
@@ -220,8 +236,47 @@ internal object ScreenRow : A2uiBasicCatalogV1.Row {
             A2uiBasicCatalogV1.Row.Justify.SpaceAround,
             A2uiBasicCatalogV1.Row.Justify.SpaceEvenly,
         )
-        CompositionLocalProvider(LocalInRow provides true) {
-            with(material) { TypedContent(children, justify, align, accessibility, if (spread) modifier.fillMaxWidth() else modifier) }
+        val stretch = align == A2uiBasicCatalogV1.Row.Align.Stretch
+        val described = listOfNotNull(accessibility?.label, accessibility?.description).filter { it.isNotBlank() }
+        val sideways = LocalSideways.current
+        val base = if (stretch) Modifier.fillMaxHeight() else Modifier
+        Row(
+            modifier = (if (spread) modifier.fillMaxWidth() else modifier)
+                .then(if (stretch) Modifier.fillMaxHeight() else Modifier)
+                .then(if (described.isEmpty()) Modifier else Modifier.semantics { contentDescription = described.joinToString(" - ") }),
+            horizontalArrangement = when (justify) {
+                A2uiBasicCatalogV1.Row.Justify.Center -> Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                A2uiBasicCatalogV1.Row.Justify.End -> Arrangement.spacedBy(8.dp, Alignment.End)
+                A2uiBasicCatalogV1.Row.Justify.SpaceAround -> Arrangement.SpaceAround
+                A2uiBasicCatalogV1.Row.Justify.SpaceBetween -> Arrangement.SpaceBetween
+                A2uiBasicCatalogV1.Row.Justify.SpaceEvenly -> Arrangement.SpaceEvenly
+                else -> Arrangement.spacedBy(8.dp)
+            },
+            verticalAlignment = when (align) {
+                A2uiBasicCatalogV1.Row.Align.Center -> Alignment.CenterVertically
+                A2uiBasicCatalogV1.Row.Align.End -> Alignment.Bottom
+                else -> Alignment.Top
+            },
+        ) {
+            CompositionLocalProvider(LocalInRow provides true) {
+                children.forEach { reference ->
+                    key(reference.id, reference.baseDataPath) {
+                        val child = observeA2uiComponentState(reference)
+                        val component = (child as? A2uiComponentState.Success)?.component
+                        val weight = component?.properties?.get(WeightProperty)?.toFloat()?.takeIf { it > 0f }
+                            ?: 1f.takeIf { justify == A2uiBasicCatalogV1.Row.Justify.Stretch }
+                        Child(
+                            child,
+                            when {
+                                sideways -> base
+                                weight != null -> base.weight(weight)
+                                component?.type in FIXED_WIDTH -> base
+                                else -> base.weight(1f, fill = false)
+                            },
+                        )
+                    }
+                }
+            }
         }
     }
 }
