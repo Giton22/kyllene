@@ -10,7 +10,9 @@ kotlin {
         namespace = "dev.hermeskotlin.ui"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
-        withHostTest {}
+        // The RTL layout harness renders the real components under Robolectric, so the host test needs the
+        // module's merged Android resources (the app's fonts and theme) rather than stubs.
+        withHostTest { isIncludeAndroidResources = true }
     }
     // The desktop app (experimental). Its lambdas are compiled as classes, not made at run time: the app's warm-up
     // can load them ahead, so a page's first opening doesn't build them one by one on the UI thread.
@@ -52,6 +54,12 @@ kotlin {
         jvmTest.dependencies {
             implementation(compose.desktop.uiTestJUnit4)
             implementation(compose.desktop.currentOs)
+        }
+        // Rendered RTL layout tests: Robolectric hosts the real Compose measurement and pixels.
+        getByName("androidHostTest").dependencies {
+            implementation(libs.junit4)
+            implementation(libs.robolectric)
+            implementation(libs.compose.ui.test.junit4)
         }
     }
 }

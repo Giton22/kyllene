@@ -155,6 +155,7 @@ import dev.hermeskotlin.core.bots.botLook
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
@@ -190,8 +191,11 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.ArrowDown
@@ -255,10 +259,8 @@ import com.composables.icons.lucide.Wrench
 import com.composables.icons.lucide.X
 import com.composables.icons.lucide.Zap
 import com.composeunstyled.Text
-import com.composeunstyled.TextInput
 import com.composeunstyled.UnstyledButton
 import com.composeunstyled.UnstyledIcon
-import com.composeunstyled.UnstyledTextField
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.core.chat.Attachment
@@ -322,6 +324,7 @@ import dev.hermeskotlin.designsystem.body
 import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
+import dev.hermeskotlin.designsystem.components.BidiText
 import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.designsystem.components.Tooltip
 import dev.hermeskotlin.designsystem.components.handCursor
@@ -2332,6 +2335,9 @@ private fun UserBubble(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         if (message.attachments.isNotEmpty()) SentAttachments(message.attachments)
+                        // A prompt takes its direction from what was typed, so a Hebrew one reads right to left
+                        // without its text ever being changed.
+                        val promptStyle = Theme[typography][body].copy(textDirection = BidiText.direction(message.text))
                         when {
                             review != null -> SentReviewContent(review, onBubble)
                             // A mouse selects part of a prompt to copy, as it does a reply; a phone's long press is the menu's.
@@ -2347,12 +2353,12 @@ private fun UserBubble(
                                 CommentableSelection(source.takeIf { !message.pending }, selection) {
                                     Text(
                                         AnnotatedString(message.text).withHighlights(LocalTextHighlights.current, onBubble.copy(alpha = 0.24f)),
-                                        style = Theme[typography][body],
+                                        style = promptStyle,
                                         color = onBubble,
                                     )
                                 }
                             }
-                            message.text.isNotEmpty() -> Text(message.text, style = Theme[typography][body], color = onBubble)
+                            message.text.isNotEmpty() -> Text(message.text, style = promptStyle, color = onBubble)
                         }
                     }
                 }
@@ -3521,6 +3527,57 @@ private fun Banner(message: String, actionLabel: String?, onAction: () -> Unit, 
 }
 
 /**
+ * The composer's editable field, drawn with the draft's own paragraph directions. Split out of
+ * [Composer] unchanged so a rendered host test can measure the field the phone actually draws; [Composer]
+ * supplies the focus, key handling, padding and placeholder it always did.
+ *
+ * Direction is resolved per paragraph, never once for the whole draft: Compose resolves
+ * [TextDirection.Content] against each paragraph's first strong character (falling back to the ambient
+ * direction only for a paragraph without one). A single direction taken from the whole draft made an
+ * English paragraph typed after a newline read — and start — at the Hebrew side.
+ *
+ * Style only: nothing is inserted into the text, so what's sent, undone and copied is exactly what was
+ * typed.
+ */
+@Composable
+internal fun ComposerTextInput(
+    state: TextFieldState,
+    modifier: Modifier = Modifier,
+    maxHeightInLines: Int = 8,
+    onTextLayout: (Density.(getResult: () -> TextLayoutResult?) -> Unit)? = null,
+    placeholder: @Composable () -> Unit,
+) {
+    CompositionLocalProvider(LocalTextSelectionColors provides LocalTextSelectionColors.current) {
+        BasicTextField(
+            state = state,
+            textStyle = Theme[typography][body].copy(
+                color = Theme[colors][textColor],
+                textDirection = TextDirection.Content,
+            ),
+            cursorBrush = SolidColor(Theme[colors][accent]),
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            onTextLayout = onTextLayout,
+            modifier = modifier.semantics(mergeDescendants = true) {},
+            decorator = { innerTextField ->
+                Box(Modifier.fillMaxWidth()) {
+                    if (state.text.isEmpty()) {
+                        Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopStart) { placeholder() }
+                    }
+                    // Per-paragraph alignment only works if the editor's text box is the width of the
+                    // field. AndroidX measures the text with the minimum width it is given; the library's
+                    // TextInput Box resets that minimum to zero, so every paragraph shared one
+                    // intrinsic-width box anchored on a single side. Propagating the field's width to the
+                    // editor gives each paragraph the whole line, and each paragraph's own direction then
+                    // puts it at its own side. A paragraph that wraps keeps that side on every line.
+                    Box(Modifier.fillMaxWidth(), propagateMinConstraints = true) { innerTextField() }
+                }
+            },
+        )
+    }
+}
+
+/**
  * Desktop's composer stood up for a phone: a flat outlined box, the text on top; beneath it +, dictation
  * and voice chat, the model and thinking level as quiet text, and the round send button. While a task runs,
  * Stop is on the live task card above; a message typed mid-task gets a Send that steers, queues or stops and
@@ -3606,16 +3663,8 @@ private fun Composer(
                         CommentTray(comments, focusComment = focusComment, onFocused = onCommentFocused, onRemove = actions::removeComment)
                     }
                     if (attachments.isNotEmpty()) ComposerTray(attachments, onRemove = actions::removeAttachment)
-                    UnstyledTextField(
+                    ComposerTextInput(
                         state = actions.composer,
-                        textStyle = Theme[typography][body],
-                        textColor = Theme[colors][textColor],
-                        cursorBrush = SolidColor(Theme[colors][accent]),
-                        // UnstyledTextField defaults to unspecified colors, which hides the selection and its handles.
-                        selectionColors = LocalTextSelectionColors.current,
-                        // A desktop window is tall enough to see more of a long prompt before it scrolls.
-                        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (isDesktop) 14 else 8),
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
                             .onFocusChanged { fold.typing = it.hasFocus }
                             .then(
@@ -3628,23 +3677,21 @@ private fun Composer(
                                     }
                                 },
                             ),
-                    ) {
-                        TextInput(
-                            placeholder = {
-                                Text(
-                                    when {
-                                        !connected -> "Reconnecting to Hermes…"
-                                        comments.isNotEmpty() -> "Anything else? (optional)"
-                                        // Mid-task a message joins the running task, by Queue or Steer.
-                                        state.running -> "Add to this task…"
-                                        else -> placeholder
-                                    },
-                                    style = Theme[typography][body],
-                                    color = Theme[colors][textTertiary],
-                                )
-                            },
-                        )
-                    }
+                        maxHeightInLines = if (isDesktop) 14 else 8,
+                        placeholder = {
+                            Text(
+                                when {
+                                    !connected -> "Reconnecting to Hermes…"
+                                    comments.isNotEmpty() -> "Anything else? (optional)"
+                                    // Mid-task a message joins the running task, by Queue or Steer.
+                                    state.running -> "Add to this task…"
+                                    else -> placeholder
+                                },
+                                style = Theme[typography][body],
+                                color = Theme[colors][textTertiary],
+                            )
+                        },
+                    )
                     // The same test send() makes: with attachments, slash text goes out as a prompt, not a command.
                     val command = attachments.isEmpty() && SlashCommand.parse(actions.composer.text.toString().trim()) != null
                     // A steer can't carry files; send() queues those instead, so say that.
