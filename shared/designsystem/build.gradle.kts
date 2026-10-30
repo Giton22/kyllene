@@ -52,6 +52,12 @@ kotlin {
             implementation(libs.robolectric)
             implementation(libs.compose.ui.test.junit4)
         }
+        // The table scrollbar only draws on the desktop, so its geometry is rendered and measured on the desktop
+        // target. Test-only, like the host-test entries above.
+        jvmTest.dependencies {
+            implementation(compose.desktop.uiTestJUnit4)
+            implementation(compose.desktop.currentOs)
+        }
     }
 }
 
