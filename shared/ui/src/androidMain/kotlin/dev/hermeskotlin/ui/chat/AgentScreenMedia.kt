@@ -42,7 +42,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import android.content.Context
+import coil3.ImageLoader
 import coil3.compose.SubcomposeAsyncImage
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import dev.hermeskotlin.ui.LocalAppVersion
+import okhttp3.OkHttpClient
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
@@ -68,6 +73,7 @@ internal val ScreenImages = A2uiImageRenderer { url, description, scale, modifie
     } else {
         SubcomposeAsyncImage(
             model = url,
+            imageLoader = imageLoader(LocalContext.current, LocalAppVersion.current),
             contentDescription = description,
             contentScale = scale,
             modifier = modifier,
@@ -75,6 +81,23 @@ internal val ScreenImages = A2uiImageRenderer { url, description, scale, modifie
             error = { Missing("Picture didn't load", Modifier.matchParentSize()) },
         )
     }
+}
+
+private var loader: ImageLoader? = null
+
+/**
+ * The screens' pictures load through this, not Coil's own loader: that finds its web fetcher through a service
+ * file a minified build leaves out, and names itself as OkHttp, which some image hosts (Wikimedia) turn away.
+ */
+private fun imageLoader(context: Context, version: String?): ImageLoader = loader ?: run {
+    val agent = "Kyllene/${version ?: "dev"} (Android; https://github.com/Giton22/kyllene)"
+    val client = OkHttpClient.Builder()
+        .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent", agent).build()) }
+        .build()
+    ImageLoader.Builder(context.applicationContext)
+        .components { add(OkHttpNetworkFetcherFactory(callFactory = { client })) }
+        .build()
+        .also { loader = it }
 }
 
 /** A video with the system's controls: play, pause, seek. Nothing plays until the user starts it. */
