@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kyllene, Hermes Agent on Android</title>
-<meta name="description" content="A free, open source Android app for the Hermes Agent dashboard you run yourself. Chat with your agent, approve what it wants to do and follow its work from your phone.">
+<title>Kyllene: the Hermes Agent app for Android</title>
+<meta name="description" content="Kyllene is a free, open source Android app for Hermes Agent. Connect to your own Hermes dashboard, chat with your agent, approve what it wants to do and follow its work from your phone.">
 <meta name="theme-color" content="#0b0d14">
 <link rel="canonical" href="https://kyllene.app/">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icon-180.png">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://kyllene.app/">
-<meta property="og:title" content="Kyllene, Hermes Agent on Android">
+<meta property="og:title" content="Kyllene: the Hermes Agent app for Android">
 <meta property="og:description" content="Chat with Hermes and approve its work from your phone. Free, open source, no account.">
 <meta property="og:image" content="https://kyllene.app/og.png">
 <meta property="og:image:width" content="1200">
@@ -21,6 +21,26 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="styles.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Kyllene",
+  "alternateName": "Kyllene for Hermes Agent",
+  "description": "A free, open source Android app for Hermes Agent: chat with your agent, approve its actions and follow its work from your phone.",
+  "url": "https://kyllene.app/",
+  "image": "https://kyllene.app/og.png",
+  "operatingSystem": "Android 8.0 or newer",
+  "applicationCategory": "UtilitiesApplication",
+  "softwareVersion": "0.14.0",
+  "downloadUrl": "https://github.com/Giton22/kyllene/releases/latest",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "Giton22", "url": "https://github.com/Giton22" },
+  "sameAs": ["https://github.com/Giton22/kyllene"]
+}
+</script>
 </head>
 <body>
 
@@ -70,8 +90,8 @@
   </svg>
   <div class="wrap">
     <div class="hero-copy">
-      <h1>Chat with Hermes and approve its work from your phone</h1>
-      <p class="lede">Kyllene is a free, open source Android app for the Hermes Agent dashboard you run on your own server. It talks to your gateway directly, with no account and no server of its own. New to Hermes? <a href="https://github.com/NousResearch/hermes-agent">Set up Hermes Agent first</a>.</p>
+      <h1>Chat with Hermes and approve its work from your Android phone</h1>
+      <p class="lede">Kyllene is a free, open source Hermes Agent app for Android. It connects straight to the Hermes dashboard you run on your own server, with no account and no server of its own. New to Hermes? <a href="https://github.com/NousResearch/hermes-agent">Set up Hermes Agent first</a>.</p>
       <div class="actions">
         <a class="btn btn-primary" href="#install">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
@@ -160,7 +180,7 @@
         </li>
         <li>
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>
-          <div><h3>Stay connected</h3><p>Replies from a notification, encrypted push from outside your network, and recent chats offline</p></div>
+          <div><h3>Stay connected</h3><p>Replies from a notification, optional encrypted push from outside your network, and recent chats offline</p></div>
         </li>
       </ul>
     </div>
@@ -183,7 +203,7 @@
     <ul class="checks">
       <li><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Sign-in and offline chats encrypted with a key in the Android Keystore</li>
       <li><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg>No analytics and no tracking</li>
-      <li><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>Push from outside your network is end-to-end encrypted, without Google services</li>
+      <li><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/></svg>Optional push from outside your network, through the push plugin, is end-to-end encrypted and needs no Google services</li>
       <li><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Phone tools stay off until you switch each one on</li>
     </ul>
   </div>
@@ -229,6 +249,11 @@
 </footer>
 
 <script>
+  // The header isn't sticky, so close the phone menu once a link in it is used.
+  document.querySelectorAll(".menu nav a").forEach((a) => {
+    a.addEventListener("click", () => { a.closest("details").open = false; });
+  });
+
   // Point the download at the newest arm64 APK. The markup above is the fallback.
   fetch("https://api.github.com/repos/Giton22/kyllene/releases/latest")
     .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))

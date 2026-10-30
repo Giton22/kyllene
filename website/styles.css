@@ -36,7 +36,6 @@ a:hover { color: #c3d5ff; }
 a:focus-visible, button:focus-visible, summary:focus-visible {
   outline: 2px solid var(--link);
   outline-offset: 2px;
-  border-radius: 4px;
 }
 
 code, .mono { font-family: "Geist Mono", ui-monospace, monospace; }
@@ -103,7 +102,7 @@ code, .mono { font-family: "Geist Mono", ui-monospace, monospace; }
 }
 .hero-copy { display: flex; flex-direction: column; gap: 24px; padding-bottom: 112px; }
 .hero h1 { margin: 0; font-weight: 500; font-size: 60px; line-height: 1.04; letter-spacing: -0.03em; }
-.lede { margin: 0; max-width: 36rem; font-size: 19px; line-height: 30px; color: var(--text-2); }
+.lede { margin: 0; max-width: 32rem; font-size: 19px; line-height: 30px; color: var(--text-2); }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; padding-top: 8px; }
 
 .stage { position: relative; justify-self: center; width: 320px; height: 640px; }
@@ -112,7 +111,7 @@ code, .mono { font-family: "Geist Mono", ui-monospace, monospace; }
   border-radius: 32px; box-shadow: inset 0 0 0 1px var(--line), 0 16px 40px rgba(0, 0, 0, 0.35);
 }
 .notif {
-  position: absolute; left: -176px; top: 232px; width: 320px;
+  position: absolute; left: -160px; top: 232px; width: 320px;
   display: flex; flex-direction: column; gap: 12px; padding: 12px;
   border-radius: 20px; background: var(--raised);
   box-shadow: inset 0 0 0 1px var(--line), 0 16px 40px rgba(0, 0, 0, 0.4);
@@ -208,6 +207,11 @@ h1, h2 { text-wrap: balance; }
 .site-footer p { margin: 8px 0 0; max-width: 520px; }
 .site-footer nav { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; }
 .site-footer nav a { color: var(--text-2); }
+
+/* Two columns but narrow: keep the notification out of the text column */
+@media (min-width: 1041px) and (max-width: 1279px) {
+  .notif { left: -96px; }
+}
 
 @media (max-width: 1040px) {
   .nav { display: none; }
