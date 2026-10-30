@@ -13,6 +13,8 @@ import androidx.a2ui.model.protocol.A2uiException
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +35,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -111,16 +115,20 @@ internal actual fun AgentScreenSurface(
         // Material's text takes its color from a Surface around it; there's none here, so it's given the app's.
         CompositionLocalProvider(LocalContentColor provides textColor) {
             Box(modifier) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     surfaces.forEach { key(it.id) { A2uiSurface(surfaceModel = it) } }
                 }
-                // Answered, or never waited on: no taps on it. TalkBack still reads it; a click it sends goes
-                // nowhere, since onTap is off.
+                // Answered, or never waited on: no taps on it. Only presses are taken, so a drag still scrolls
+                // the card and the chat. TalkBack still reads it; a click it sends goes nowhere, since onTap is off.
                 if (!live) {
                     Box(
                         Modifier.matchParentSize().pointerInput(Unit) {
                             awaitPointerEventScope {
-                                while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+                                while (true) {
+                                    awaitPointerEvent(PointerEventPass.Initial).changes
+                                        .filter { it.changedToDownIgnoreConsumed() || it.changedToUpIgnoreConsumed() }
+                                        .forEach { it.consume() }
+                                }
                             }
                         },
                     )

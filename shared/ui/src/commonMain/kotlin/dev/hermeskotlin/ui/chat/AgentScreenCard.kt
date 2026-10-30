@@ -13,11 +13,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.currentStateAsState
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.AgentScreen
@@ -85,7 +88,12 @@ internal fun AgentScreenCard(call: ToolActivity) {
     val chat = LocalAgentScreenChat.current
     val waits = screen.wait && call.running
     val live = waits && context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it) } }
-    if (waits) {
+    // Saved, so it outlives the card scrolling out of the list: once live, a card that isn't is answered or ended.
+    var wasLive by rememberSaveable(call.id) { mutableStateOf(false) }
+    if (live) wasLive = true
+    // Only while the app is in front: in the background nobody sees the screen, and the call should know.
+    val resumed by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    if (waits && !wasLive && resumed.isAtLeast(Lifecycle.State.RESUMED)) {
         // Said again and again while the call runs: the phone may hear of the call after the card is drawn.
         LaunchedEffect(chat, screen.surfaceIds) {
             while (true) {
@@ -96,7 +104,7 @@ internal fun AgentScreenCard(call: ToolActivity) {
     }
     // The call ended unanswered here (stopped, or the agent gave up): the phone stops waiting too. Only a call
     // seen running: an old one in the history must not end a new call that reuses its surface id.
-    var wasRunning by remember { mutableStateOf(call.running) }
+    var wasRunning by rememberSaveable(call.id) { mutableStateOf(call.running) }
     LaunchedEffect(call.running) {
         if (wasRunning && !call.running) screen.surfaceIds.forEach { context.onFail(chat, it, ENDED) }
         wasRunning = call.running
@@ -111,7 +119,7 @@ internal fun AgentScreenCard(call: ToolActivity) {
             onFail = { surface, message -> context.onFail(chat, surface, message) },
             modifier = Modifier
                 .fillMaxWidth()
-                // Bounded: the chat is a lazy list, and a screen's own List is one too.
+                // Bounded, since the chat is a lazy list; a taller screen scrolls inside the card.
                 .heightIn(max = 560.dp)
                 .clip(shape)
                 .background(Theme[colors][surface])
@@ -120,7 +128,7 @@ internal fun AgentScreenCard(call: ToolActivity) {
         )
         val note = when {
             live -> "Waiting for your answer"
-            waits -> "Opening…"
+            waits && !wasLive -> "Opening…"
             else -> null
         }
         if (note != null) {
