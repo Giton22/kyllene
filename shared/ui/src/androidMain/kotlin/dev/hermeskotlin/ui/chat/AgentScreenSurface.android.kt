@@ -233,14 +233,19 @@ private fun AgentScreen.surfaceOf(error: A2uiClientErrorMessage): String =
 private fun A2uiClientErrorMessage.describe() = "$code: $message"
 
 /**
- * The Basic Catalog in Material 3. Pictures, video and audio draw nothing for now (the tool tells the agent so):
- * an error from one would end the wait for the whole screen.
+ * The Basic Catalog in Material 3, with the app's cards, buttons, fields and rows (AgentScreenComponents.kt).
+ * Pictures, video and audio draw nothing for now (the tool tells the agent so): an error from one would end the
+ * wait for the whole screen.
  */
 private fun catalog(context: Context): A2uiCatalog = materialA2uiBasicCatalogV1(
     image = MaterialA2uiBasicCatalogV1Defaults.image { _, _, _, _, _ -> },
     video = MaterialA2uiBasicCatalogV1Defaults.video { _, _, _ -> },
     audioPlayer = MaterialA2uiBasicCatalogV1Defaults.audioPlayer { _, _, _, _ -> },
     functions = A2uiBasicCatalogV1.Functions(context),
+    row = ScreenRow,
+    card = ScreenCard,
+    button = ScreenButton,
+    textField = ScreenTextField,
 )
 
 /** The app's colors in Material's roles, so the catalog's components look like the rest of the chat. */
