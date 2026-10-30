@@ -182,6 +182,15 @@ h1, h2 { text-wrap: balance; }
 .checks li:last-child { border-bottom: 0; }
 .checks .icon { margin-top: 3px; }
 
+/* Questions */
+.faq { margin: 0; }
+.faq div { padding: 24px 0; border-bottom: 1px solid var(--line); }
+.faq div:first-child { padding-top: 0; }
+.faq div:last-child { border-bottom: 0; }
+.faq dt { font-weight: 500; }
+.faq dd { margin: 8px 0 0; font-size: 15px; line-height: 22px; color: var(--text-2); }
+.faq code { font-size: 14px; color: var(--text); }
+
 /* Install */
 .install { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 64px; align-items: start; }
 .install-head { display: flex; flex-direction: column; gap: 24px; }
