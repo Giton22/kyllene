@@ -20,6 +20,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
+import androidx.compose.material3.Text
 import androidx.compose.material3.Typography
 import androidx.compose.material3.a2ui.A2uiSurface
 import androidx.compose.material3.a2ui.catalog.MaterialA2uiBasicCatalogV1Defaults
@@ -35,6 +36,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
@@ -46,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.AgentScreen
+import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.designsystem.accent
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
@@ -90,7 +100,9 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
+import java.time.Instant
 
 internal actual val drawsAgentScreens: Boolean = true
 
@@ -119,28 +131,44 @@ internal actual fun AgentScreenSurface(
         if (live) fail(surface, message)
     }
     val surfaces by drawn.processor.activeSurfaces.collectAsStateWithLifecycle()
+    val accents = remember(screen) { primaryColors(screen) }
     val textColor = Theme[colors][text]
     MaterialTheme(colorScheme = materialColors(), shapes = materialShapes(), typography = materialType()) {
         // Material's text takes its color from a Surface around it; there's none here, so it's given the app's.
         CompositionLocalProvider(LocalContentColor provides textColor) {
             Box(modifier) {
-                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    surfaces.forEach { key(it.id) { A2uiSurface(surfaceModel = it) } }
-                }
-                // Taking no taps: only presses are held back, so a drag still scrolls the card and the chat.
-                // TalkBack still reads it; a click it sends goes nowhere, since onTap is off.
-                if (!takesTaps) {
-                    Box(
-                        Modifier.matchParentSize().pointerInput(Unit) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    awaitPointerEvent(PointerEventPass.Initial).changes
-                                        .filter { it.changedToDownIgnoreConsumed() || it.changedToUpIgnoreConsumed() }
-                                        .forEach { it.consume() }
+                // Taking no taps: presses are held back before the screen sees them, so a drag still scrolls the
+                // card and the chat, and a player still plays. TalkBack still reads it; a click it sends goes
+                // nowhere, since onTap is off.
+                val players = remember { mutableStateMapOf<Any, Rect>() }
+                var placed by remember { mutableStateOf<LayoutCoordinates?>(null) }
+                val gate = if (takesTaps) Modifier else Modifier.pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            awaitPointerEvent(PointerEventPass.Initial).changes
+                                .filter { it.changedToDownIgnoreConsumed() || it.changedToUpIgnoreConsumed() }
+                                .filterNot { change ->
+                                    val at = placed?.takeIf { it.isAttached }?.localToWindow(change.position)
+                                    at != null && players.values.any { it.contains(at) }
                                 }
-                            }
-                        },
-                    )
+                                .forEach { it.consume() }
+                        }
+                    }
+                }
+                Column(
+                    Modifier.onGloballyPositioned { placed = it }.then(gate).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CompositionLocalProvider(LocalPlayerAreas provides players) {
+                        surfaces.forEach { key(it.id) { AgentColor(accents[it.id]) { A2uiSurface(surfaceModel = it) } } }
+                    }
+                    if (surfaces.isEmpty() && screen.messages.any { "\"deleteSurface\"" in it }) {
+                        Text(
+                            "The agent closed this screen.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
             }
         }
@@ -155,6 +183,7 @@ private class DrawnScreen(context: Context, screen: AgentScreen) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val processor: A2uiMessageProcessor = A2uiMessageProcessor(catalogs = listOf(catalog(context)))
     val error = MutableStateFlow<Pair<String, String>?>(null)
+    private val parser = A2uiMessageParser()
 
     @Volatile var onTap: ((A2uiClientEventMessage) -> Unit)? = null
 
@@ -168,9 +197,11 @@ private class DrawnScreen(context: Context, screen: AgentScreen) {
             }
         }
         scope.launch { processor.collectMessages() }
-        val parser = A2uiMessageParser()
-        screen.messages.forEach { processor.processInput(parser, it) }
+        feed(screen.messages)
     }
+
+    /** More messages for the screen: an update from a later call, drawn over what's there. */
+    fun feed(messages: List<String>) = messages.forEach { processor.processInput(parser, it) }
 
     fun close() = scope.cancel()
 }
@@ -184,8 +215,17 @@ private object DrawnScreens {
     }
 
     fun of(context: Context, key: String, screen: AgentScreen): DrawnScreen = synchronized(drawn) {
-        drawn[key]?.takeIf { it.first == screen }?.second
-            ?: DrawnScreen(context.applicationContext, screen).also { new ->
+        val (seen, kept) = drawn[key] ?: (null to null)
+        // The same screen, or the same with more messages after (a later call updated it): only those are drawn,
+        // over what's there.
+        if (seen != null && kept != null && screen.messages.size >= seen.messages.size &&
+            screen.messages.subList(0, seen.messages.size) == seen.messages
+        ) {
+            kept.feed(screen.messages.drop(seen.messages.size))
+            drawn[key] = screen to kept
+            return kept
+        }
+        DrawnScreen(context.applicationContext, screen).also { new ->
                 drawn.put(key, screen to new)?.second?.close()
             }
     }
@@ -205,6 +245,12 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
             return "Message ${i + 1} isn't A2UI: ${e.message}"
         }
     }
+    // A screen the messages close at the end has nothing left to show.
+    val closed = screen.messages.mapNotNullTo(HashSet()) { message ->
+        (runCatching { HermesJson.parseToJsonElement(message) }.getOrNull() as? JsonObject)
+            ?.let { it["deleteSurface"] as? JsonObject }?.let { (it["surfaceId"] as? JsonPrimitive)?.contentOrNull }
+    }
+    val shown = screen.surfaceIds - closed
     return coroutineScope {
         val processor = A2uiMessageProcessor(catalogs = listOf(catalog(context.applicationContext)))
         val errors = MutableStateFlow<String?>(null)
@@ -214,7 +260,7 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
         val run = launch { processor.collectMessages() }
         screen.messages.forEach { processor.processInput(parser, it) }
         withTimeoutOrNull(CHECK_MS) {
-            while (errors.value == null && !processor.activeSurfaces.value.map { it.id }.containsAll(screen.surfaceIds)) delay(20)
+            while (errors.value == null && !processor.activeSurfaces.value.map { it.id }.containsAll(shown)) delay(20)
             // A moment more for an error about a surface just made.
             delay(50)
         }
@@ -233,16 +279,16 @@ private fun AgentScreen.surfaceOf(error: A2uiClientErrorMessage): String =
 private fun A2uiClientErrorMessage.describe() = "$code: $message"
 
 /**
- * The Basic Catalog in Material 3, with the app's cards, buttons, fields and rows (AgentScreenComponents.kt).
- * Pictures, video and audio draw nothing for now (the tool tells the agent so): an error from one would end the
- * wait for the whole screen.
+ * The Basic Catalog in Material 3, with the app's cards, buttons, fields and rows (AgentScreenComponents.kt) and
+ * its pictures, video and audio (AgentScreenMedia.kt).
  */
 private fun catalog(context: Context): A2uiCatalog = materialA2uiBasicCatalogV1(
-    image = MaterialA2uiBasicCatalogV1Defaults.image { _, _, _, _, _ -> },
-    video = MaterialA2uiBasicCatalogV1Defaults.video { _, _, _ -> },
-    audioPlayer = MaterialA2uiBasicCatalogV1Defaults.audioPlayer { _, _, _, _ -> },
+    image = MaterialA2uiBasicCatalogV1Defaults.image(ScreenImages),
+    video = MaterialA2uiBasicCatalogV1Defaults.video(ScreenVideos),
+    audioPlayer = MaterialA2uiBasicCatalogV1Defaults.audioPlayer(ScreenAudio),
     functions = A2uiBasicCatalogV1.Functions(context),
     row = ScreenRow,
+    list = ScreenList,
     card = ScreenCard,
     button = ScreenButton,
     textField = ScreenTextField,
@@ -305,6 +351,46 @@ private fun materialType(): Typography {
     )
 }
 
+/**
+ * The color each surface's `createSurface` asked for (`theme.primaryColor`, `#RGB`, `#RRGGBB` or `#AARRGGBB`),
+ * by surface id: what the screen highlights with in place of the app's accent.
+ */
+internal fun primaryColors(screen: AgentScreen): Map<String, Color> = screen.messages.mapNotNull { message ->
+    val create = (runCatching { HermesJson.parseToJsonElement(message) }.getOrNull() as? JsonObject)
+        ?.get("createSurface") as? JsonObject ?: return@mapNotNull null
+    val id = (create["surfaceId"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+    val hex = ((create["theme"] as? JsonObject)?.get("primaryColor") as? JsonPrimitive)?.contentOrNull
+    hexColor(hex)?.let { id to it }
+}.toMap()
+
+internal fun hexColor(hex: String?): Color? {
+    val digits = hex?.trim()?.removePrefix("#")?.takeIf { it.all { c -> c.isDigit() || c.lowercaseChar() in 'a'..'f' } }
+        ?: return null
+    val argb = when (digits.length) {
+        3 -> "FF" + digits.map { "$it$it" }.joinToString("")
+        6 -> "FF$digits"
+        8 -> digits
+        else -> return null
+    }
+    return Color(argb.toLong(16).toInt())
+}
+
+/** [content] in the agent's [color], when it chose one: its main buttons, picked chips and focus take it. */
+@Composable
+private fun AgentColor(color: Color?, content: @Composable () -> Unit) {
+    if (color == null) return content()
+    val on = if (color.luminance() > 0.5f) Color.Black else Color.White
+    val soft = color.copy(alpha = 0.22f).compositeOver(Theme[colors][surface])
+    MaterialTheme(
+        colorScheme = MaterialTheme.colorScheme.copy(
+            primary = color, onPrimary = on, secondary = color, onSecondary = on,
+            primaryContainer = soft, secondaryContainer = soft,
+            onPrimaryContainer = Theme[colors][text], onSecondaryContainer = Theme[colors][text],
+        ),
+        content = content,
+    )
+}
+
 /** The app's corner radii in Material's shape steps: fields, menus and cards round off like the rest of the chat. */
 @Composable
 private fun materialShapes(): Shapes = Shapes(
@@ -320,6 +406,7 @@ private fun A2uiClientEventMessage.toAnswer(): JsonElement = buildJsonObject {
     put("event", type)
     put("surface_id", surfaceId)
     put("component_id", componentId)
+    put("timestamp", Instant.ofEpochMilli(timestamp).toString())
     put("context", toJson(context))
     clientDataModel?.surfaces?.get(surfaceId)?.let { put("data", toJson(it)) }
 }

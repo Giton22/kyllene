@@ -5,7 +5,13 @@ import androidx.a2ui.compose.runtime.A2uiComponentScope
 import androidx.a2ui.compose.runtime.A2uiComponentState
 import androidx.a2ui.compose.ui.A2uiComponent
 import androidx.a2ui.compose.ui.catalog.A2uiBasicCatalogV1
+import androidx.compose.foundation.BorderStroke
+import androidx.a2ui.compose.runtime.observeA2uiComponentState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.key
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -22,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -29,6 +36,8 @@ import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.radii
 import dev.hermeskotlin.designsystem.radiusLarge
+import dev.hermeskotlin.designsystem.radiusMedium
+import dev.hermeskotlin.designsystem.stroke
 import dev.hermeskotlin.designsystem.surface2
 import dev.hermeskotlin.designsystem.surface3
 import dev.hermeskotlin.designsystem.text
@@ -39,7 +48,13 @@ import dev.hermeskotlin.designsystem.text
  */
 private val LocalInRow = staticCompositionLocalOf { false }
 
-/** A card filled a step above the screen, with no line around it: the screen's own frame is the line. */
+/** Whether this part of the screen is inside a card: a card in a card is outlined, so it still stands apart. */
+private val LocalInCard = staticCompositionLocalOf { false }
+
+/**
+ * A card filled a step above the screen, with no line around it: the screen's own frame is the line. A card
+ * inside it has a line and no fill.
+ */
 internal object ScreenCard : A2uiBasicCatalogV1.Card {
     @Composable
     override fun A2uiComponentScope.TypedContent(
@@ -48,22 +63,29 @@ internal object ScreenCard : A2uiBasicCatalogV1.Card {
         modifier: Modifier,
     ) {
         val described = listOfNotNull(accessibility?.label, accessibility?.description).filter { it.isNotBlank() }
+        val inner = LocalInCard.current
         Surface(
             modifier = if (described.isEmpty()) modifier else modifier.semantics { contentDescription = described.joinToString(" - ") },
-            color = Theme[colors][surface2],
-            shape = RoundedCornerShape(Theme[radii][radiusLarge]),
+            color = if (inner) Color.Transparent else Theme[colors][surface2],
+            border = if (inner) BorderStroke(1.dp, Theme[colors][stroke]) else null,
+            shape = RoundedCornerShape(Theme[radii][if (inner) radiusMedium else radiusLarge]),
         ) {
-            when (val child = observeA2uiComponentState(childId)) {
-                is A2uiComponentState.Success -> A2uiComponent(child.component, Modifier.padding(16.dp))
-                // The agent hears why through the screen's error; the user needn't read it.
-                is A2uiComponentState.Error -> Text(
-                    "Couldn't draw this part",
-                    Modifier.padding(16.dp),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                A2uiComponentState.Loading -> Box(Modifier.fillMaxWidth().height(48.dp))
-            }
+            CompositionLocalProvider(LocalInCard provides true) { CardChild(childId) }
+        }
+    }
+
+    @Composable
+    private fun A2uiComponentScope.CardChild(childId: String) {
+        when (val child = observeA2uiComponentState(childId)) {
+            is A2uiComponentState.Success -> A2uiComponent(child.component, Modifier.padding(16.dp))
+            // The agent hears why through the screen's error; the user needn't read it.
+            is A2uiComponentState.Error -> Text(
+                "Couldn't draw this part",
+                Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            A2uiComponentState.Loading -> Box(Modifier.fillMaxWidth().height(48.dp))
         }
     }
 }
@@ -128,6 +150,55 @@ internal object ScreenTextField : A2uiBasicCatalogV1.TextField {
                 label, value, variant, validationRegexp, change, enabled, accessibility,
                 if (edited) checks else emptyList(), if (LocalInRow.current) modifier else modifier.fillMaxWidth(),
             )
+        }
+    }
+}
+
+/**
+ * A list. Down the screen it's a plain column: the screen already scrolls in the chat, and a scrolling list in it
+ * would have no height to fill. Across, it's Material's, which scrolls sideways.
+ */
+internal object ScreenList : A2uiBasicCatalogV1.List {
+    private val material = MaterialA2uiBasicCatalogV1Defaults.list
+
+    @Composable
+    override fun A2uiComponentScope.TypedContent(
+        children: List<A2uiComponentReference>,
+        direction: A2uiBasicCatalogV1.List.Direction,
+        align: A2uiBasicCatalogV1.List.Align,
+        accessibility: A2uiBasicCatalogV1.AccessibilityAttributes?,
+        modifier: Modifier,
+    ) {
+        if (direction == A2uiBasicCatalogV1.List.Direction.Horizontal) {
+            CompositionLocalProvider(LocalInRow provides true) {
+                with(material) { TypedContent(children, direction, align, accessibility, modifier) }
+            }
+            return
+        }
+        val described = listOfNotNull(accessibility?.label, accessibility?.description).filter { it.isNotBlank() }
+        Column(
+            modifier = if (described.isEmpty()) modifier else modifier.semantics { contentDescription = described.joinToString(" - ") },
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = when (align) {
+                A2uiBasicCatalogV1.List.Align.Center -> Alignment.CenterHorizontally
+                A2uiBasicCatalogV1.List.Align.End -> Alignment.End
+                else -> Alignment.Start
+            },
+        ) {
+            val item = if (align == A2uiBasicCatalogV1.List.Align.Stretch) Modifier.fillMaxWidth() else Modifier
+            children.forEach { reference ->
+                key(reference.id, reference.baseDataPath) {
+                    when (val child = observeA2uiComponentState(reference)) {
+                        is A2uiComponentState.Success -> A2uiComponent(child.component, item)
+                        is A2uiComponentState.Error -> Text(
+                            "Couldn't draw this part",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        A2uiComponentState.Loading -> Box(Modifier.fillMaxWidth().height(40.dp))
+                    }
+                }
+            }
         }
     }
 }
