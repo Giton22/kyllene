@@ -448,10 +448,10 @@ class PushApi(private val connection: GatewayConnection) {
         const val PLUGIN_REPO = "https://github.com/Giton22/hermes-herald-push"
 
         /** The plugin commit this Herald was built and reviewed against. */
-        const val PLUGIN_REF = "679fb5233a63f0caea7878f2488270ba18b54a9c"
+        const val PLUGIN_REF = "68669139fc8ea8c09b5e3004cb17a75b2377ea27"
 
         /** The version at [PLUGIN_REF]: an older copy on the gateway is offered this as an update. */
-        const val PLUGIN_VERSION = "0.6.0"
+        const val PLUGIN_VERSION = "0.6.1"
 
         /** The oldest plugin this Herald works with; an older copy waits for the user to update it. */
         const val MIN_PLUGIN_VERSION = "0.1.1"
