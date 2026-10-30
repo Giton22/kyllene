@@ -160,8 +160,17 @@ fun App(
     }
     val agentScreens = koinInject<AgentScreens>()
     val liveScreens by agentScreens.live.collectAsStateWithLifecycle()
-    val screenContext = remember(liveScreens) {
-        AgentScreenContext(liveScreens, agentScreens::shown, agentScreens::answer, agentScreens::fail)
+    val screensGot by agentScreens.got.collectAsStateWithLifecycle()
+    val screenContext = remember(liveScreens, screensGot) {
+        AgentScreenContext(
+            liveScreens,
+            agentScreens::shown,
+            agentScreens::answer,
+            agentScreens::fail,
+            // Only a chat Kyllene knows the id of: the phone's calls are kept by it.
+            onDrawn = { chat, screen -> if (chat != null) agentScreens.drawn(screen, chat) },
+            took = { chat, screen -> AgentScreens.took(screen, chat, screensGot) },
+        )
     }
     hermesTheme(palette)(schemeFor(settings, dark)) {
         CompositionLocalProvider(

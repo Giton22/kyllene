@@ -2,6 +2,7 @@ package dev.hermeskotlin.android.phone
 
 import android.content.Context
 import dev.hermeskotlin.core.chat.AgentScreen
+import dev.hermeskotlin.core.chat.NOT_DRAWN
 import dev.hermeskotlin.core.chat.SHOW_UI_TOOL
 import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.PhoneToolException
@@ -22,10 +23,24 @@ class ShowUiTool(private val context: Context, private val screens: AgentScreens
             ?: throw PhoneToolException(
                 "messages must be a list of 1 to ${AgentScreen.MAX_MESSAGES} A2UI messages (JSON objects), each naming its surfaceId.",
             )
-        agentScreenProblem(context, screen)?.let { throw PhoneToolException(it) }
-        if (!screen.wait) return buildJsonObject { put("shown", true) }
         // The chat's stored id, as the chat screen knows it; the gateway may name it by its live id.
         val chat = chats.of(session)?.storedSessionId ?: session.takeIf { it.isNotBlank() }
+        // An update is checked on top of the screen it changes, as the chat drew it.
+        val earlier = screens.earlier(screen, chat)
+        val problem = if (earlier == null) {
+            UNKNOWN_SURFACE
+        } else {
+            agentScreenProblem(context, screen.copy(messages = earlier + screen.messages))
+        }
+        // Said so the chat knows the screen stayed as it was.
+        problem?.let { throw PhoneToolException(NOT_DRAWN + it) }
+        screens.record(screen, chat)
+        if (!screen.wait) return buildJsonObject { put("shown", true) }
         return screens.await(screen, chat)
+    }
+
+    private companion object {
+        const val UNKNOWN_SURFACE = "A message updates a surface this chat doesn't show: start a new screen with " +
+            "createSurface, or use the surfaceId of a screen you showed in this chat."
     }
 }

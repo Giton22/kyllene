@@ -24,7 +24,9 @@ import androidx.lifecycle.compose.currentStateAsState
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.AgentScreen
-import dev.hermeskotlin.core.chat.ToolActivity
+import dev.hermeskotlin.core.chat.ChatMessage
+import dev.hermeskotlin.core.chat.ScreenView
+import dev.hermeskotlin.core.chat.screenViews
 import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
@@ -45,14 +47,16 @@ import kotlinx.serialization.json.contentOrNull
 
 /**
  * What the app lends the agent's screens: the screens a `phone_show_ui` call waits on now, and where it's said
- * that one is on screen ([onShown]), a tap ([onAnswer]) and a screen that failed or ended ([onFail]) go. Each
- * takes the chat's stored id first.
+ * that one is on screen ([onShown]), a tap ([onAnswer]), a screen that failed or ended ([onFail]) and what a card
+ * draws, for a later call that updates it ([onDrawn]) go. Each takes the chat's stored id first.
  */
 internal class AgentScreenContext(
     val live: List<AgentScreens.Live>,
     val onShown: (chat: String?, surfaceIds: Set<String>) -> Unit,
     val onAnswer: (chat: String?, surfaceId: String, result: JsonElement) -> Unit,
     val onFail: (chat: String?, surfaceId: String, message: String) -> Unit,
+    val onDrawn: (chat: String?, screen: AgentScreen) -> Unit = { _, _ -> },
+    val took: (chat: String?, screen: AgentScreen) -> Boolean = { _, _ -> true },
 ) {
     companion object {
         val None = AgentScreenContext(emptyList(), { _, _ -> }, { _, _, _ -> }, { _, _, _ -> })
@@ -90,13 +94,35 @@ internal expect fun AgentScreenSurface(
     modifier: Modifier = Modifier,
 )
 
-/** A screen the agent drew with `phone_show_ui`, under the reply that made it: a card, with an accent edge while it waits. */
+/**
+ * The chat's screens ([byCall], from [screenViews]) and the calls in its last message, once finished ([newest]):
+ * a tap on a screen that one of them made or changed, and no call waits on, is sent as the next message. A
+ * message after it (the user's own, or a new turn) means the conversation moved on.
+ */
+internal class ScreenViews(val byCall: Map<String, ScreenView>, val newest: Set<String>) {
+    companion object {
+        fun of(messages: List<ChatMessage>, took: (AgentScreen) -> Boolean = { true }) = ScreenViews(
+            screenViews(messages.flatMap { (it as? ChatMessage.Assistant)?.tools.orEmpty() }, took),
+            (messages.lastOrNull() as? ChatMessage.Assistant)?.takeUnless { it.streaming }?.tools.orEmpty().mapTo(HashSet()) { it.id },
+        )
+    }
+}
+
+internal val LocalScreenViews = compositionLocalOf { ScreenViews(emptyMap(), emptySet()) }
+
+/**
+ * A screen the agent drew with `phone_show_ui`, under the reply that made it, with what later calls changed on
+ * it: a card, with an accent edge while it waits. The newest of those calls is the one that waits or ended.
+ */
 @Composable
-internal fun AgentScreenCard(call: ToolActivity, newest: Boolean) {
-    val screen = call.agentScreen ?: return
+internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
+    val screen = view.screen
+    val call = view.latest
     if (!drawsAgentScreens) return
     val context = LocalAgentScreens.current
     val chat = LocalAgentScreenChat.current
+    // So a call that updates it is checked against what's here, even one made after Kyllene restarted.
+    LaunchedEffect(chat, screen.messages) { context.onDrawn(chat, screen) }
     val waits = screen.wait && call.running
     val live = waits && context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it) } }
     // Saved, so it outlives the card scrolling out of the list: once live, a card that isn't is answered or ended.
@@ -130,7 +156,8 @@ internal fun AgentScreenCard(call: ToolActivity, newest: Boolean) {
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         AgentScreenSurface(
-            key = call.id,
+            // The card's own call: a later update is drawn on the same screen, keeping what the user typed.
+            key = view.owner.id,
             screen = screen,
             live = live,
             takesTaps = live || replies,

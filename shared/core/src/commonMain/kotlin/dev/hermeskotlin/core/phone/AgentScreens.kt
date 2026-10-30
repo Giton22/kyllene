@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.phone
 
+import dev.hermeskotlin.core.chat.A2uiEnvelope
 import dev.hermeskotlin.core.chat.AgentScreen
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,45 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     }
 
     private val waiting = MutableStateFlow<List<Waiting>>(emptyList())
+
+    /** The messages each surface was sent, by chat and surface id, since Kyllene started: what a later call updates. */
+    private val sent = MutableStateFlow<Map<Pair<String?, String>, List<String>>>(emptyMap())
+
+    /**
+     * What [chat]'s surfaces got before [screen], for the surfaces [screen] changes without making them (an
+     * update), in the order they came: [screen] is checked on top of them. Null when one of them isn't known here
+     * (made before Kyllene started, or never).
+     */
+    fun earlier(screen: AgentScreen, chat: String?): List<String>? {
+        val parsed = screen.messages.mapNotNull(A2uiEnvelope::of)
+        val made = parsed.filter { it.creates }.mapTo(HashSet()) { it.surfaceId }
+        val known = sent.value
+        return parsed.map { it.surfaceId }.filterNot { it in made }.distinct().flatMap { known[chat to it] ?: return null }
+    }
+
+    /**
+     * A card in [chat] draws [screen], every message its surfaces got. Kept only for a surface not known here (made
+     * before Kyllene started): for the others [record] knows better, as a card may show a call the phone is still
+     * checking, or one drawn before a later call.
+     */
+    fun drawn(screen: AgentScreen, chat: String) = sent.update { known ->
+        val bySurface = screen.messages.groupBy { A2uiEnvelope.of(it)?.surfaceId }
+        bySurface.entries.fold(known) { map, (id, messages) ->
+            if (id == null || (chat to id) in map) map else map + ((chat to id) to messages)
+        }
+    }
+
+    /** What each surface was sent, by chat and surface id: changes when the phone takes a call. */
+    val got: StateFlow<Map<Pair<String?, String>, List<String>>> get() = sent.asStateFlow()
+
+    /** [screen] was drawn in [chat]: its messages join what its surfaces got, and a `createSurface` starts over. */
+    fun record(screen: AgentScreen, chat: String?) = sent.update { known ->
+        screen.messages.fold(known) { map, message ->
+            val envelope = A2uiEnvelope.of(message) ?: return@fold map
+            val key = chat to envelope.surfaceId
+            map + (key to if (envelope.creates) listOf(message) else map[key].orEmpty() + message)
+        }
+    }
 
     /** The screens that take a tap now. */
     val live: StateFlow<List<Live>> get() = _live.asStateFlow()
@@ -83,6 +123,19 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     private fun publish() = _live.update { waiting.value.map { it.live } }
 
     companion object {
+        /**
+         * Whether the phone took [screen]'s updates in [chat], with [got] what its surfaces got: each surface it
+         * changes without making it ends with them. A screen with no updates was always taken.
+         */
+        fun took(screen: AgentScreen, chat: String?, got: Map<Pair<String?, String>, List<String>>): Boolean {
+            val parsed = screen.messages.mapNotNull { message -> A2uiEnvelope.of(message)?.let { message to it } }
+            val made = parsed.filter { it.second.creates }.mapTo(HashSet()) { it.second.surfaceId }
+            return parsed.filterNot { it.second.surfaceId in made }.groupBy({ it.second.surfaceId }, { it.first }).all { (id, messages) ->
+                val known = got[chat to id] ?: got[null to id] ?: return@all false
+                known.size >= messages.size && known.subList(known.size - messages.size, known.size) == messages
+            }
+        }
+
         /** A screen the chat doesn't show by then isn't waited on: nobody would see it. */
         const val SHOWN_WITHIN_MS = 15_000L
 
