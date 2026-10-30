@@ -137,8 +137,8 @@ class BidiTest {
 
     @Test
     fun aBareUrlIsIsolatedAndItsSentencePeriodIsNot() {
-        val out = Bidi.isolateLtrRuns("افتح https://hermes.ispnet.online/docs ثم أكمل.")
-        assertTrue(out.contains("${lri}https://hermes.ispnet.online/docs$pdi ثم"))
+        val out = Bidi.isolateLtrRuns("افتح https://example.com/docs ثم أكمل.")
+        assertTrue(out.contains("${lri}https://example.com/docs$pdi ثم"))
         assertTrue(out.endsWith("أكمل."))
     }
 
@@ -165,5 +165,38 @@ class BidiTest {
         val out = Bidi.isolateLtrRuns("المجلدhome/data هنا")
         assertTrue(out.contains("${lri}home/data$pdi"))
         assertTrue(out.startsWith("المجلد"))
+    }
+
+    // MARK: what must stay untouched
+
+    @Test
+    fun anOrderedListMarkerStaysAtTheStartOfTheLine() {
+        val out = Bidi.isolateLtrRuns("1. الخطوة الأولى\n2) ثم الثانية\n10. والأخيرة")
+        assertEquals("1. الخطوة الأولى\n2) ثم الثانية\n10. والأخيرة", out)
+    }
+
+    @Test
+    fun aNumberThatOnlyLooksLikeAMarkerIsStillIsolated() {
+        val out = Bidi.isolateLtrRuns("التاريخ 1.5 ثم")
+        assertTrue(out.contains("${lri}1.5$pdi"))
+    }
+
+    @Test
+    fun aFormulaImageIsLeftExactlyAsItIs() {
+        val input = "قبل ![math](herald-math:i:YWJj) بعد"
+        assertEquals(input, Bidi.isolateLtrRuns(input))
+    }
+
+    @Test
+    fun aLinkWhoseTextIsLatinIsLeftAsItIs() {
+        val input = "راجع [the docs](https://example.com/x) بعدين"
+        assertEquals(input, Bidi.isolateLtrRuns(input))
+    }
+
+    @Test
+    fun isolatesAreStrippedForTextThatLeavesTheScreen() {
+        val wrapped = "قبل ${lri}hermes update$pdi بعد"
+        assertEquals("قبل hermes update بعد", stripBidiIsolates(wrapped))
+        assertEquals("clean", stripBidiIsolates("clean"))
     }
 }

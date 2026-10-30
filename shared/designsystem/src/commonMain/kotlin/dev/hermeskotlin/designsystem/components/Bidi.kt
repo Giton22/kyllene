@@ -134,9 +134,25 @@ internal object Bidi {
         while (i < line.length) {
             val c = line[i]
             when {
+                // A list marker starts the line: `1.`, `1)` or `12.`. CommonMark only reads an ordered
+                // list when the digits are the first thing on the line, so this must be copied untouched.
+                (c in '0'..'9' || c == '-' || c == '*' || c == '+') && startOfLine(line, i) -> {
+                    val markerEnd = listMarkerEnd(line, i)
+                    if (markerEnd > i) {
+                        out.append(line, i, markerEnd)
+                        i = markerEnd
+                    } else {
+                        out.append(c)
+                        i++
+                    }
+                }
                 // A code span: isolateInlineCode has already wrapped its content; copy it as it is.
                 c == '`' -> i = copyCodeSpan(line, i, out)
-                // A link destination `](url)`: bidi never sees it, and editing it would break the link.
+                // An image or a link: `![math](herald-math:…)`, `[text](url)`. The alt text is matched
+                // against patterns downstream, so neither side may be touched.
+                c == '!' && line.getOrNull(i + 1) == '[' -> i = copyUntil(line, i, ')', out)
+                c == '[' -> i = copyUntil(line, i, ')', out)
+                // A link destination `](url)` whose `[` we already passed.
                 c == ']' && line.getOrNull(i + 1) == '(' -> i = copyUntil(line, i, ')', out)
                 // Autolinks and inline HTML are markup, not prose.
                 c == '<' -> i = copyUntil(line, i, '>', out)
@@ -203,6 +219,41 @@ internal object Bidi {
 
     private fun Char.isAsciiLetter(): Boolean = this in 'A'..'Z' || this in 'a'..'z'
 
+    /** Whether [at] is the first non-space character of the line (up to three spaces of indent). */
+    private fun startOfLine(line: String, at: Int): Boolean {
+        var i = at - 1
+        var spaces = 0
+        while (i >= 0 && line[i] == ' ') {
+            spaces++
+            i--
+        }
+        return spaces <= 3 && (i < 0 || line[i] == '\n')
+    }
+
+    /** End of a list marker starting at [at], or [at] when there is none. `1. `, `1) `, `- `, `* `, `+ `. */
+    private fun listMarkerEnd(line: String, at: Int): Int {
+        var end = at
+        if (line[at] in '0'..'9') {
+            while (end < line.length && line[end] in '0'..'9') end++
+            if (end - at > 9) return at // CommonMark allows at most nine digits
+            if (end >= line.length || line[end] !in ".)") return at
+            end++
+        } else {
+            // A bullet: the marker is one character and needs a space after it.
+            end = at + 1
+        }
+        if (end >= line.length || line[end] != ' ') return at
+        return end + 1
+    }
+
+    /**
+     * [text] without the isolate characters this file adds. The app's copy actions put a message's raw
+     * text on the clipboard, but text selected on screen comes from the rendered string, so anything that
+     * copies what the user sees runs it through here first.
+     */
+    fun stripIsolates(text: String): String =
+        if (text.none { it in ISOLATES }) text else text.filterNot { it in ISOLATES }
+
     /** What a run may be made of: the characters of an identifier, a path, a URL, a date or an amount. */
     private fun Char.isRunChar(): Boolean = isAsciiLetter() || this in '0'..'9' || this in RUN_CHARS
 
@@ -247,4 +298,13 @@ internal object Bidi {
 
     /** Punctuation that ends a sentence rather than a run, so it stays in the prose around it. */
     private const val RUN_TRAILING = "./:-_=+&?#~\\"
+
+    /** The isolate characters: LRI, RLI, FSI, PDI. */
+    private const val ISOLATES = "\u2066\u2067\u2068\u2069"
 }
+
+/**
+ * [text] without the bidi isolate characters [Bidi] adds (U+2066…U+2069). What a user sees on screen
+ * carries them; anything that hands that text to a shell, a clipboard or the gateway runs it through here.
+ */
+fun stripBidiIsolates(text: String): String = Bidi.stripIsolates(text)
