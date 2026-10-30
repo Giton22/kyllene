@@ -17,7 +17,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.a2ui.A2uiSurface
 import androidx.compose.material3.a2ui.catalog.MaterialA2uiBasicCatalogV1Defaults
@@ -39,6 +41,7 @@ import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composeunstyled.theme.Theme
@@ -57,6 +60,11 @@ import dev.hermeskotlin.designsystem.display
 import dev.hermeskotlin.designsystem.heading
 import dev.hermeskotlin.designsystem.label
 import dev.hermeskotlin.designsystem.onAccent
+import dev.hermeskotlin.designsystem.radii
+import dev.hermeskotlin.designsystem.radiusLarge
+import dev.hermeskotlin.designsystem.radiusMedium
+import dev.hermeskotlin.designsystem.radiusSmall
+import dev.hermeskotlin.designsystem.radiusXLarge
 import dev.hermeskotlin.designsystem.stroke
 import dev.hermeskotlin.designsystem.strokeStrong
 import dev.hermeskotlin.designsystem.surface
@@ -91,6 +99,7 @@ internal actual fun AgentScreenSurface(
     key: String,
     screen: AgentScreen,
     live: Boolean,
+    takesTaps: Boolean,
     onAnswer: (surfaceId: String, result: JsonElement) -> Unit,
     onFail: (surfaceId: String, message: String) -> Unit,
     modifier: Modifier,
@@ -99,9 +108,9 @@ internal actual fun AgentScreenSurface(
     val drawn = remember(key, screen) { DrawnScreens.of(context, key, screen) }
     val answer by rememberUpdatedState(onAnswer)
     val fail by rememberUpdatedState(onFail)
-    // Taps reach the agent only while its call waits; at other times the screen is what it showed.
-    DisposableEffect(drawn, live) {
-        drawn.onTap = if (live) { tap -> answer(tap.surfaceId, tap.toAnswer()) } else null
+    // Taps go somewhere only when the card says so; at other times the screen is what the agent showed.
+    DisposableEffect(drawn, takesTaps) {
+        drawn.onTap = if (takesTaps) { tap -> answer(tap.surfaceId, tap.toAnswer()) } else null
         onDispose { drawn.onTap = null }
     }
     val error by drawn.error.collectAsStateWithLifecycle()
@@ -111,16 +120,16 @@ internal actual fun AgentScreenSurface(
     }
     val surfaces by drawn.processor.activeSurfaces.collectAsStateWithLifecycle()
     val textColor = Theme[colors][text]
-    MaterialTheme(colorScheme = materialColors(), typography = materialType()) {
+    MaterialTheme(colorScheme = materialColors(), shapes = materialShapes(), typography = materialType()) {
         // Material's text takes its color from a Surface around it; there's none here, so it's given the app's.
         CompositionLocalProvider(LocalContentColor provides textColor) {
             Box(modifier) {
                 Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     surfaces.forEach { key(it.id) { A2uiSurface(surfaceModel = it) } }
                 }
-                // Answered, or never waited on: no taps on it. Only presses are taken, so a drag still scrolls
-                // the card and the chat. TalkBack still reads it; a click it sends goes nowhere, since onTap is off.
-                if (!live) {
+                // Taking no taps: only presses are held back, so a drag still scrolls the card and the chat.
+                // TalkBack still reads it; a click it sends goes nowhere, since onTap is off.
+                if (!takesTaps) {
                     Box(
                         Modifier.matchParentSize().pointerInput(Unit) {
                             awaitPointerEventScope {
@@ -267,7 +276,11 @@ private fun materialColors(): ColorScheme {
     )
 }
 
-/** The app's type steps in Material's roles. */
+/**
+ * The app's type steps in Material's roles, sized for a card in a reply rather than a screen of its own. The
+ * catalog's Text takes h1-h3 from the headline roles and h4-h5 from the title ones: only h1 gets the title size,
+ * and the rest are no bigger than a heading, so a screen with three headings doesn't shout.
+ */
 @Composable
 private fun materialType(): Typography {
     val display = Theme[typography][display]
@@ -277,14 +290,25 @@ private fun materialType(): Typography {
     val small = Theme[typography][bodySmall]
     val label = Theme[typography][label]
     val caption = Theme[typography][caption]
+    val strong = body.copy(fontWeight = FontWeight.SemiBold)
     return Typography(
         displayLarge = display, displayMedium = display, displaySmall = display,
-        headlineLarge = title, headlineMedium = title, headlineSmall = title,
-        titleLarge = title, titleMedium = heading, titleSmall = label,
+        headlineLarge = title, headlineMedium = heading, headlineSmall = heading,
+        titleLarge = heading, titleMedium = strong, titleSmall = label,
         bodyLarge = body, bodyMedium = body, bodySmall = small,
         labelLarge = label, labelMedium = label, labelSmall = caption,
     )
 }
+
+/** The app's corner radii in Material's shape steps: its fields and buttons round off like the rest of the chat. */
+@Composable
+private fun materialShapes(): Shapes = Shapes(
+    extraSmall = RoundedCornerShape(Theme[radii][radiusSmall]),
+    small = RoundedCornerShape(Theme[radii][radiusSmall]),
+    medium = RoundedCornerShape(Theme[radii][radiusMedium]),
+    large = RoundedCornerShape(Theme[radii][radiusLarge]),
+    extraLarge = RoundedCornerShape(Theme[radii][radiusXLarge]),
+)
 
 /** What the agent reads back from a tap: which action, on which component, and what the screen's form holds. */
 private fun A2uiClientEventMessage.toAnswer(): JsonElement = buildJsonObject {

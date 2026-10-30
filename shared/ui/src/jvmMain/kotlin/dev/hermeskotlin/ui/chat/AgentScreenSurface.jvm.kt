@@ -13,6 +13,7 @@ internal actual fun AgentScreenSurface(
     key: String,
     screen: AgentScreen,
     live: Boolean,
+    takesTaps: Boolean,
     onAnswer: (surfaceId: String, result: JsonElement) -> Unit,
     onFail: (surfaceId: String, message: String) -> Unit,
     modifier: Modifier,

@@ -1011,6 +1011,7 @@ internal fun ChatView(
                             LocalNotice provides onNotice,
                             LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
                             LocalAgentScreenChat provides state.storedSessionId,
+                            LocalAgentScreenSend provides actions::sendPrompt,
                             LocalCommentHost provides commentHost,
                         ) {
                             Messages(
@@ -2645,7 +2646,7 @@ private fun AssistantReply(
             }
         }
         // Screens the agent drew, under what it said and whatever the tool-activity setting: they're for the user to answer.
-        message.tools.filter { it.agentScreen != null }.forEach { key(it.id) { AgentScreenCard(it) } }
+        message.tools.filter { it.agentScreen != null }.forEach { key(it.id) { AgentScreenCard(it, newest = last) } }
         if (settings.showLinkPreviews && !message.streaming) LinkPreviewCards(text)
         if (media.isNotEmpty()) ReplyMediaList(media)
         when (message.outcome) {

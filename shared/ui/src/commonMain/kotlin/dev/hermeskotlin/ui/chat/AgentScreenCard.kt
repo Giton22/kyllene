@@ -38,6 +38,10 @@ import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * What the app lends the agent's screens: the screens a `phone_show_ui` call waits on now, and where it's said
@@ -66,14 +70,21 @@ internal val LocalAgentScreenChat = compositionLocalOf<String?> { null }
 internal expect val drawsAgentScreens: Boolean
 
 /**
- * Draws [screen], the call [key]'s. Taps go to [onAnswer] only while [live]; at other times it's a picture of what
- * the agent showed. A drawing error goes to [onFail] once it's live, even if it came before.
+ * Where a tap on a screen goes when no call waits on it: the chat's next message, from the user. Null where
+ * taps can't be sent (a preview, a chat that isn't open).
+ */
+internal val LocalAgentScreenSend = compositionLocalOf<((String) -> Unit)?> { null }
+
+/**
+ * Draws [screen], the call [key]'s. Taps go to [onAnswer] only while [takesTaps]; at other times it's a picture of
+ * what the agent showed. A drawing error goes to [onFail] once [live] (a call waits on it), even if it came before.
  */
 @Composable
 internal expect fun AgentScreenSurface(
     key: String,
     screen: AgentScreen,
     live: Boolean,
+    takesTaps: Boolean,
     onAnswer: (surfaceId: String, result: JsonElement) -> Unit,
     onFail: (surfaceId: String, message: String) -> Unit,
     modifier: Modifier = Modifier,
@@ -81,7 +92,7 @@ internal expect fun AgentScreenSurface(
 
 /** A screen the agent drew with `phone_show_ui`, under the reply that made it: a card, with an accent edge while it waits. */
 @Composable
-internal fun AgentScreenCard(call: ToolActivity) {
+internal fun AgentScreenCard(call: ToolActivity, newest: Boolean) {
     val screen = call.agentScreen ?: return
     if (!drawsAgentScreens) return
     val context = LocalAgentScreens.current
@@ -109,13 +120,27 @@ internal fun AgentScreenCard(call: ToolActivity) {
         if (wasRunning && !call.running) screen.surfaceIds.forEach { context.onFail(chat, it, ENDED) }
         wasRunning = call.running
     }
+    // No call waits on it (the agent didn't wait, or the call ended without an answer): on the newest reply, a tap
+    // still reaches the agent, as the user's next message. Once only, and never for a screen already answered.
+    val send = LocalAgentScreenSend.current
+    var sent by rememberSaveable(call.id) { mutableStateOf(false) }
+    val answered = wasLive || (!call.failed && call.output.orEmpty().contains("\"event\""))
+    val replies = newest && send != null && !call.running && !answered && !sent
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         AgentScreenSurface(
             key = call.id,
             screen = screen,
             live = live,
-            onAnswer = { surface, result -> context.onAnswer(chat, surface, result) },
+            takesTaps = live || replies,
+            onAnswer = { surface, result ->
+                if (live) {
+                    context.onAnswer(chat, surface, result)
+                } else if (replies && send != null) {
+                    sent = true
+                    send(screenTapMessage(result))
+                }
+            },
             onFail = { surface, message -> context.onFail(chat, surface, message) },
             modifier = Modifier
                 .fillMaxWidth()
@@ -123,23 +148,39 @@ internal fun AgentScreenCard(call: ToolActivity) {
                 .heightIn(max = 560.dp)
                 .clip(shape)
                 .background(Theme[colors][surface])
-                .border(1.dp, if (live) Theme[colors][accentSoft] else Theme[colors][stroke], shape)
+                .border(1.dp, if (live || replies) Theme[colors][accentSoft] else Theme[colors][stroke], shape)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
         )
         val note = when {
             live -> "Waiting for your answer"
             waits && !wasLive -> "Opening…"
+            replies -> "A tap answers in the chat"
             else -> null
         }
         if (note != null) {
             Text(
                 note,
                 style = Theme[typography][caption],
-                color = if (live) Theme[colors][accentText] else Theme[colors][textTertiary],
+                color = if (live || replies) Theme[colors][accentText] else Theme[colors][textTertiary],
                 modifier = Modifier.padding(start = 4.dp),
             )
         }
     }
+}
+
+/**
+ * A tap on a screen no call waits on, as the user's message to the agent: the action's name, and what it and
+ * the screen's form carried, so the agent reads the same as a waiting call would have returned.
+ */
+internal fun screenTapMessage(result: JsonElement): String {
+    val tap = result as? JsonObject ?: return "Tapped a button on the screen you showed."
+    val event = (tap["event"] as? JsonPrimitive)?.contentOrNull ?: "a button"
+    val more = buildJsonObject {
+        (tap["context"] as? JsonObject)?.takeIf { it.isNotEmpty() }?.let { put("context", it) }
+        (tap["data"] as? JsonObject)?.takeIf { it.isNotEmpty() }?.let { put("data", it) }
+    }
+    val said = "Tapped “$event” on the screen you showed"
+    return if (more.isEmpty()) "$said." else "$said: $more"
 }
 
 private const val SHOWN_EVERY_MS = 2_000L
