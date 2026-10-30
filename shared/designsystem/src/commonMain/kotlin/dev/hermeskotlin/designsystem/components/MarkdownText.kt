@@ -384,7 +384,8 @@ private fun HighlightedParagraph(content: String, node: ASTNode) {
     // what is drawn here, never from the whole reply (which the library hands to every block component) and
     // never from link destinations. A short Hebrew block is a narrow text box, so it needs the full reply width
     // *and* a right-anchored start to sit at the right margin; neither alone moves it. An English paragraph
-    // inside a Hebrew-heavy reply keeps the left, and a neutral block keeps the ambient side.
+    // inside a Hebrew-heavy reply keeps the left; a blank paragraph keeps the ambient side, and one with no
+    // letters at all — digits, punctuation — goes left, like any other text without a Hebrew letter majority.
     val base = LocalMarkdownTypography.current.paragraph
     val settings = annotatorSettings()
     val annotated = remember(content, node, base, settings) {
