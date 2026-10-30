@@ -123,9 +123,10 @@ internal fun AgentScreenCard(call: ToolActivity, newest: Boolean) {
     // No call waits on it (the agent didn't wait, or the call ended without an answer): on the newest reply, a tap
     // still reaches the agent, as the user's next message. Once only, and never for a screen already answered.
     val send = LocalAgentScreenSend.current
-    var sent by rememberSaveable(call.id) { mutableStateOf(false) }
+    // Read when the tap comes, not as composed: taps come one after another, faster than the card recomposes.
+    val sent = rememberSaveable(call.id) { mutableStateOf(false) }
     val answered = wasLive || (!call.failed && call.output.orEmpty().contains("\"event\""))
-    val replies = newest && send != null && !call.running && !answered && !sent
+    val replies = newest && send != null && !call.running && !answered && !sent.value
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         AgentScreenSurface(
@@ -136,8 +137,8 @@ internal fun AgentScreenCard(call: ToolActivity, newest: Boolean) {
             onAnswer = { surface, result ->
                 if (live) {
                     context.onAnswer(chat, surface, result)
-                } else if (replies && send != null) {
-                    sent = true
+                } else if (replies && send != null && !sent.value) {
+                    sent.value = true
                     send(screenTapMessage(result))
                 }
             },

@@ -300,7 +300,7 @@ private fun materialType(): Typography {
     )
 }
 
-/** The app's corner radii in Material's shape steps: its fields and buttons round off like the rest of the chat. */
+/** The app's corner radii in Material's shape steps: fields, menus and cards round off like the rest of the chat. */
 @Composable
 private fun materialShapes(): Shapes = Shapes(
     extraSmall = RoundedCornerShape(Theme[radii][radiusSmall]),

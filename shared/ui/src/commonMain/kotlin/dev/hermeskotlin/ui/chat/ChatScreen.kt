@@ -1751,6 +1751,9 @@ private fun Messages(
     var confirm by remember { mutableStateOf<Pair<MessageChange, String>?>(null) }
     val lastPrompt = messages.lastOrNull { it is ChatMessage.User }?.key
     val lastReply = messages.lastOrNull { it is ChatMessage.Assistant && it.text.isNotBlank() }?.key
+    // The one reply whose screens may send a tap as the next message: the chat's very last message, finished. A
+    // message after it (the user's own, or a new turn) means the conversation moved on.
+    val screensReply = (messages.lastOrNull() as? ChatMessage.Assistant)?.takeUnless { it.streaming }?.key
     val faces = LocalBotFaces.current
     val partners = remember(messages, faces) { messages.map { exchangePartner(it, faces) } }
     // The rewind rules read only the messages.
@@ -1931,6 +1934,7 @@ private fun Messages(
                                         rewind(MessageChange.Regenerate, prompt.key, message.key) { actions.regenerate(message.key) }
                                     },
                                     last = message.key == lastReply,
+                                    screensReply = message.key == screensReply,
                                     unservable = unservable,
                                     reading = message.key == reading,
                                     onReadAloud = if (canReadAloud) ({ text -> actions.readAloud(message.key, text) }) else null,
@@ -2578,6 +2582,8 @@ private fun AssistantReply(
     onRegenerate: (() -> Unit)?,
     /** The newest reply, which comments call "your last reply". */
     last: Boolean,
+    /** The chat's last message, finished: a tap on a screen in it that no call waits on is sent as the next message. */
+    screensReply: Boolean = false,
     /** The chat's generated pictures' paths that can't be loaded, taken out wherever they're repeated. */
     unservable: List<GeneratedImage> = emptyList(),
     /** This reply is being read aloud: Stop shows in place of Read aloud. */
@@ -2646,7 +2652,7 @@ private fun AssistantReply(
             }
         }
         // Screens the agent drew, under what it said and whatever the tool-activity setting: they're for the user to answer.
-        message.tools.filter { it.agentScreen != null }.forEach { key(it.id) { AgentScreenCard(it, newest = last) } }
+        message.tools.filter { it.agentScreen != null }.forEach { key(it.id) { AgentScreenCard(it, newest = screensReply) } }
         if (settings.showLinkPreviews && !message.streaming) LinkPreviewCards(text)
         if (media.isNotEmpty()) ReplyMediaList(media)
         when (message.outcome) {
