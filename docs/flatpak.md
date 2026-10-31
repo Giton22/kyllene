@@ -37,3 +37,14 @@ The package keeps Compose's native launcher and generated runtime. Its fontconfi
 fragment excludes WOFF/WOFF2 entries, which stalled Skia enumeration in installed
 tests; ordinary host fonts remain available. Remove this exclusion once those
 formats pass startup and rendering checks with the selected Skia/runtime versions.
+
+## Advisory CI
+
+The separate Linux workflow runs JVM/packaging tests and exports an x86_64 bundle.
+It builds the public Git revision tested by the workflow, including a pull
+request's merge ref, with the same locked build inputs. It never packages a
+recursive copy of the runner workspace. Only the bundle is uploaded.
+
+Keep these Linux checks non-required in branch rules. Failures stay visibly
+failed; Android checks and release publication remain independent. A built CI
+bundle still needs installed-sandbox and Bazzite acceptance before publication.
