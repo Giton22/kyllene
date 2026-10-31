@@ -814,6 +814,50 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aReasoningReadYieldsToAPickThatLandedWhileItWasOut() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1","reasoning_effort":"high"}}""",
+                "config.get" to SILENT,
+            ),
+        )
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        chat.state.first { it.reasoningEffort == "high" }
+        val read = transport.awaitSent { it.isCall("config.get") }
+
+        chat.setReasoningEffort("low")
+        chat.setReasoningEffort("high")
+        transport.push("""{"jsonrpc":"2.0","id":${read["id"]},"result":{"value":"max","display":"hide"}}""")
+        testScheduler.runCurrent()
+
+        assertEquals("high", chat.state.value.reasoningEffort)
+    }
+
+    @Test
+    fun aReasoningReadYieldsToASessionInfoThatLandedWhileItWasOut() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1","reasoning_effort":"high"}}""",
+                "config.get" to SILENT,
+            ),
+        )
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        chat.state.first { it.reasoningEffort == "high" }
+        val read = transport.awaitSent { it.isCall("config.get") }
+
+        transport.push(event("session.info", "rt1", """{"model":"m1","reasoning_effort":"high"}"""))
+        testScheduler.runCurrent()
+        transport.push("""{"jsonrpc":"2.0","id":${read["id"]},"result":{"value":"max","display":"hide"}}""")
+        testScheduler.runCurrent()
+
+        assertEquals("high", chat.state.value.reasoningEffort)
+    }
+
+    @Test
     fun attachmentsAreUploadedBeforeThePromptAndFilesBecomeReferences() = runTest {
         val (connection, transport) = setup(
             backgroundScope,

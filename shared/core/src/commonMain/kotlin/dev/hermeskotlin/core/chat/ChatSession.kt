@@ -889,7 +889,7 @@ class ChatSession(
         val client = connectedClient() ?: return
         val runtimeId = _state.value.runtimeSessionId ?: return
         // A pick or session.info that lands while the read is out is newer than the read's answer.
-        val before = _state.value.reasoningEffort
+        val before = _state.value.reasoningRevision
         val result = try {
             client.request(
                 "config.get",
@@ -905,7 +905,7 @@ class ChatSession(
         }
         val value = result.string("value")
         if (ReasoningEffort.fromWire(value) != null) {
-            _state.update { if (it.reasoningEffort != before) it else it.copy(reasoningEffort = value) }
+            _state.update { if (it.reasoningRevision != before) it else it.copy(reasoningEffort = value) }
         }
     }
 
@@ -1116,7 +1116,9 @@ class ChatSession(
             ) as? JsonObject
             val applied = result.string("value") ?: value
             settled = applied
-            if (ReasoningEffort.fromWire(applied) != null) _state.update { it.copy(reasoningEffort = applied) }
+            if (ReasoningEffort.fromWire(applied) != null) {
+                _state.update { it.copy(reasoningEffort = applied, reasoningRevision = it.reasoningRevision + 1) }
+            }
             when (applied) {
                 "show" -> "Thinking is shown."
                 "hide" -> "Thinking is hidden."
@@ -1505,9 +1507,10 @@ class ChatSession(
     }
 
     /** Sets the reasoning effort ([effort] `none` turns thinking off) for this chat only. */
-    suspend fun setReasoningEffort(effort: String) = setLive({ it.copy(reasoningEffort = effort) }) {
-        configSet("reasoning", JsonPrimitive(effort))
-    }
+    suspend fun setReasoningEffort(effort: String) =
+        setLive({ it.copy(reasoningEffort = effort, reasoningRevision = it.reasoningRevision + 1) }) {
+            configSet("reasoning", JsonPrimitive(effort))
+        }
 
     /** Turns the priority tier on or off for this chat only. */
     suspend fun setFast(fast: Boolean) = setLive({ it.copy(fast = fast) }) {

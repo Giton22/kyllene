@@ -156,6 +156,8 @@ data class ChatState(
     val provider: String? = null,
     /** `none`, a level such as `medium`, or null for the profile default (see ReasoningEffort). */
     val reasoningEffort: String? = null,
+    /** Advances whenever a newer reasoning value lands (a pick, `/reasoning`, or `session.info`), so a late read yields to it. */
+    val reasoningRevision: Long = 0,
     /** Priority tier on; null until the gateway reports it. */
     val fast: Boolean? = null,
     /** Tool approvals skipped for this chat (`/yolo`); null until the gateway reports it. */
