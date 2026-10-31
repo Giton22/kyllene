@@ -1,6 +1,5 @@
 package dev.hermeskotlin.ui.chat
 
-import dev.hermeskotlin.ui.PlatformTextContextMenu
 import dev.hermeskotlin.ui.imeVisible
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
@@ -3607,46 +3606,45 @@ private fun Composer(
                         CommentTray(comments, focusComment = focusComment, onFocused = onCommentFocused, onRemove = actions::removeComment)
                     }
                     if (attachments.isNotEmpty()) ComposerTray(attachments, onRemove = actions::removeAttachment)
-                    PlatformTextContextMenu {
-                        UnstyledTextField(
-                            state = actions.composer,
-                            textStyle = Theme[typography][body],
-                            textColor = Theme[colors][textColor],
-                            cursorBrush = SolidColor(Theme[colors][accent]),
-                            // UnstyledTextField defaults to unspecified colors, which hides the selection and its handles.
-                            selectionColors = LocalTextSelectionColors.current,
-                            // A desktop window is tall enough to see more of a long prompt before it scrolls.
-                            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (isDesktop) 14 else 8),
-                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
-                                .onFocusChanged { fold.typing = it.hasFocus }
-                                .then(
-                                    if (!enterSends) {
-                                        Modifier
-                                    } else {
-                                        Modifier.onPreviewKeyEvent { event ->
-                                            onKey(event) ||
-                                                onComposerKey(composerKey(event) ?: return@onPreviewKeyEvent false, actions, state, recall, connected, editing, attachments, comments)
-                                        }
-                                    },
-                                ),
-                        ) {
-                            TextInput(
-                                placeholder = {
-                                    Text(
-                                        when {
-                                            !connected -> "Reconnecting to Hermes…"
-                                            comments.isNotEmpty() -> "Anything else? (optional)"
-                                            // Mid-task a message joins the running task, by Queue or Steer.
-                                            state.running -> "Add to this task…"
-                                            else -> placeholder
-                                        },
-                                        style = Theme[typography][body],
-                                        color = Theme[colors][textTertiary],
-                                    )
+                    UnstyledTextField(
+                        state = actions.composer,
+                        textStyle = Theme[typography][body],
+                        textColor = Theme[colors][textColor],
+                        cursorBrush = SolidColor(Theme[colors][accent]),
+                        // UnstyledTextField defaults to unspecified colors, which hides the selection and its handles.
+                        selectionColors = LocalTextSelectionColors.current,
+                        // A desktop window is tall enough to see more of a long prompt before it scrolls.
+                        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (isDesktop) 14 else 8),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
+                            .onSecondaryPress { }
+                            .onFocusChanged { fold.typing = it.hasFocus }
+                            .then(
+                                if (!enterSends) {
+                                    Modifier
+                                } else {
+                                    Modifier.onPreviewKeyEvent { event ->
+                                        onKey(event) ||
+                                            onComposerKey(composerKey(event) ?: return@onPreviewKeyEvent false, actions, state, recall, connected, editing, attachments, comments)
+                                    }
                                 },
-                            )
-                        }
+                            ),
+                    ) {
+                        TextInput(
+                            placeholder = {
+                                Text(
+                                    when {
+                                        !connected -> "Reconnecting to Hermes…"
+                                        comments.isNotEmpty() -> "Anything else? (optional)"
+                                        // Mid-task a message joins the running task, by Queue or Steer.
+                                        state.running -> "Add to this task…"
+                                        else -> placeholder
+                                    },
+                                    style = Theme[typography][body],
+                                    color = Theme[colors][textTertiary],
+                                )
+                            },
+                        )
                     }
                     // The same test send() makes: with attachments, slash text goes out as a prompt, not a command.
                     val command = attachments.isEmpty() && SlashCommand.parse(actions.composer.text.toString().trim()) != null
