@@ -39,7 +39,6 @@ import org.koin.compose.koinInject
 import com.composables.icons.lucide.File
 import com.composables.icons.lucide.Folder
 import androidx.compose.foundation.text.input.TextFieldState
-import androidx.compose.ui.text.TextRange
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.text.input.placeCursorAtEnd
 import androidx.compose.animation.AnimatedVisibility
