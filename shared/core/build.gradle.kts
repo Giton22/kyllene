@@ -14,10 +14,14 @@ kotlin {
         withHostTest {}
     }
 
-    // iOS targets are added here once the Android app is in shape.
+    iosArm64()
+    iosSimulatorArm64()
 
     // The desktop app (experimental).
     jvm()
+
+    // Asked for by name: a hand-made source set (jvmShared) otherwise turns it off, and iosMain with it.
+    applyDefaultHierarchyTemplate()
 
     sourceSets {
         // What Android and the desktop share: the JDK's crypto, text and time, jsoup and OkHttp.
@@ -54,6 +58,10 @@ kotlin {
             implementation(libs.androidx.core.ktx)
             implementation(libs.webrtc.android)
         }
+        iosMain.dependencies {
+            implementation(libs.ktor.client.darwin)
+            implementation(libs.sqlite.bundled)
+        }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.kotlinx.coroutines.test)
@@ -64,6 +72,8 @@ kotlin {
 
 dependencies {
     add("kspAndroid", libs.room.compiler)
+    add("kspIosArm64", libs.room.compiler)
+    add("kspIosSimulatorArm64", libs.room.compiler)
     add("kspJvm", libs.room.compiler)
 }
 

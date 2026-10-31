@@ -19,6 +19,9 @@ kotlin {
         compilerOptions { freeCompilerArgs.add("-Xlambdas=class") }
     }
 
+    iosArm64()
+    iosSimulatorArm64()
+
     sourceSets {
         jvmMain {
             // The same Geist files, loaded from the classpath.
