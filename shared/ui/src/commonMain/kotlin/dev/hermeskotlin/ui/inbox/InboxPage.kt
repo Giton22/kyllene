@@ -49,6 +49,7 @@ import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.ui.sessions.SwipeAction
 import dev.hermeskotlin.ui.sessions.SwipeKind
 import dev.hermeskotlin.ui.sessions.SwipeRow
+import dev.hermeskotlin.ui.sessions.onSecondaryPress
 import com.composables.icons.lucide.Folder
 import com.composables.icons.lucide.FolderPlus
 import com.composables.icons.lucide.FolderTree
@@ -498,6 +499,7 @@ private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean,
             .clip(shape)
             .background(Theme[colors][surface])
             .border(1.dp, Theme[colors][stroke], shape)
+            .then(if (isDesktop && onLongClick != null) Modifier.onSecondaryPress(onPress = onLongClick) else Modifier)
             .combinedClickable(
                 onClickLabel = "Open ${folder.label}",
                 onClick = onClick,
@@ -634,6 +636,8 @@ private fun RunCard(
             .clip(shape)
             .background(Theme[colors][surface])
             .border(1.dp, Theme[colors][stroke], shape)
+            // A right-click is a desktop's long press, as on the session rows.
+            .then(if (isDesktop) Modifier.onSecondaryPress(onPress = onLongClick) else Modifier)
             .combinedClickable(onClickLabel = "Read $name", onClick = onClick, onLongClickLabel = "More for this report", onLongClick = onLongClick)
             .padding(14.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
