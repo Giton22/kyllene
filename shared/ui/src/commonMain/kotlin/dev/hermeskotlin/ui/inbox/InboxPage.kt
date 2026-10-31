@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -695,6 +697,7 @@ private fun MoreRow(loading: Boolean, error: String?, onClick: () -> Unit) {
  * One run in full, as Markdown, with a way to talk about it: a new chat with the report attached ([onAsk]), or the
  * run's own chat ([onContinue], null when the gateway didn't say which it was).
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun RunView(
     run: InboxRun,
@@ -720,7 +723,8 @@ internal fun RunView(
             .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // On a narrow sidebar Continue goes under Ask, rather than its label breaking over two lines.
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 "Ask about this",
                 onClick = onAsk,
