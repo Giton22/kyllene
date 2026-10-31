@@ -15,6 +15,7 @@ import dev.hermeskotlin.core.settings.SettingsStore
 import java.time.LocalTime
 import dev.hermeskotlin.android.push.PushStore
 import dev.hermeskotlin.core.inbox.InboxApi
+import dev.hermeskotlin.core.inbox.InboxNotices
 import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushSetup
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
@@ -37,7 +38,7 @@ val notifyModule = module {
                 koin.get<SettingsStore>().settings.value?.takeIf { it.quietNow(now.hour * 60 + now.minute) }?.quietUntil
             }
         }
-    }
+    } bind InboxNotices::class
     // Why the agent called, from the call picked up on the watch to the call the watch starts.
     single { CallOpeners() }
     single { VoiceCallKeeper(androidContext()) } bind VoiceKeepAlive::class
