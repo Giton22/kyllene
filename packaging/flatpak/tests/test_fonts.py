@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -22,8 +23,8 @@ class FontFilterTest(unittest.TestCase):
             config = root / 'fonts.conf'
 
             def listed(fragment):
-                config.write_text('<fontconfig><dir>' + str(fonts) + '</dir>'
-                                  '<cachedir>' + str(root / 'cache') + '</cachedir>'
+                config.write_text('<fontconfig><dir>' + escape(str(fonts)) + '</dir>'
+                                  '<cachedir>' + escape(str(root / 'cache')) + '</cachedir>'
                                   + fragment + '</fontconfig>')
                 result = subprocess.run(['fc-list', '-f', '%{file}\n'], check=True,
                                         capture_output=True, text=True,
@@ -31,5 +32,5 @@ class FontFilterTest(unittest.TestCase):
                 return {Path(line).suffix for line in result.stdout.splitlines()}
 
             self.assertEqual(listed(''), {'.ttf', '.otf', '.woff', '.woff2'})
-            fragment = '<include>' + str(ROOT / 'packaging/flatpak/fonts.conf') + '</include>'
+            fragment = '<include>' + escape(str(ROOT / 'packaging/flatpak/fonts.conf')) + '</include>'
             self.assertEqual(listed(fragment), {'.ttf', '.otf'})
