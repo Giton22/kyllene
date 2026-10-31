@@ -460,7 +460,7 @@ class InboxTest {
         val store = InboxStore(InMemoryKeyValueStore())
         store.bind(GW, now = 0)
         store.add(GW, run(at = 5).copy(session = "s1"))
-        // Plugin 0.5.2 names every listed run's chat: none, once the gateway deleted the old session.
+        // Plugin 0.5.3 names every listed run's chat: none, once the gateway deleted the old session.
         store.replace(GW, listOf(run(at = 5).copy(sessionSaid = true)), complete = true)
         assertNull(store.state.value.runs.single().session)
         store.add(GW, run(at = 5).copy(session = "s1"))
