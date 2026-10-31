@@ -3659,24 +3659,6 @@ private fun Composer(
                             RowMenuItem("Copy", Lucide.Copy) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
                             },
-                            RowMenuItem("Cut", Lucide.Scissors) {
-                                composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
-                                val before = actions.composer.text.subSequence(0, selection.start)
-                                val after = actions.composer.text.subSequence(selection.end, actions.composer.text.length)
-                                actions.composer.text = before + AnnotatedString("") + after
-                            },
-                            RowMenuItem("Paste", Lucide.ClipboardPaste) {
-                                composerScope.launch {
-                                    val clip = clipboard.getClipEntry()
-                                    val text = clip?.let { it.text } ?: ""
-                                    val before = actions.composer.text.subSequence(0, selection.start)
-                                    val after = actions.composer.text.subSequence(selection.end, actions.composer.text.length)
-                                    actions.composer.text = before + AnnotatedString(text) + after
-                                }
-                            },
-                            RowMenuItem("Select all", Lucide.TextSelect) {
-                                actions.composer.selection = TextRange(0, actions.composer.text.length)
-                            },
                         )
                     }
                     // The same test send() makes: with attachments, slash text goes out as a prompt, not a command.
