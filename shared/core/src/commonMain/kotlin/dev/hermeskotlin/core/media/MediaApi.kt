@@ -116,13 +116,14 @@ class MediaApi(
      * Makes the folder [path] on the gateway's machine, and any folders above it that are missing
      * (`POST /api/files/mkdir`, Desktop's New folder). One already there is fine. `~/` paths are the
      * gateway's home; like the managed downloads, this is the host's disk, not a sandboxed profile's.
+     * The route makes missing folders rather than answering 404, so any 404 is a gateway without it.
      */
     suspend fun makeFolder(url: GatewayUrl, path: String): ApiResult<Unit> = apiCall {
         client.post(url.resolve("api/files/mkdir")) {
             contentType(ContentType.Application.Json)
             setBody(buildJsonObject { put("path", path) })
         }
-    }.map { }
+    }.map { }.let { if (it is ApiResult.Failed && it.status == 404) ApiResult.Failed(404, NO_MKDIR) else it }
 
     /** A reply's picture from the web (`![alt](https://...)`). */
     suspend fun remote(url: String): ApiResult<ByteArray> = apiCall { web.get(url) }.map { response ->
@@ -137,6 +138,9 @@ class MediaApi(
         const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
 
         const val TOO_LARGE = "It's over 64 MB, too large to fetch to the phone from the chat."
+
+        /** Why [makeFolder] failed on a gateway older than `POST /api/files/mkdir`. */
+        const val NO_MKDIR = "This gateway can't make folders. Update Hermes, or make the folder on the gateway's machine."
 
         const val NO_PROFILE_DOWNLOAD = "This gateway can't hand over whole files from a profile yet. Update Hermes on it."
     }

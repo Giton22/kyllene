@@ -58,6 +58,20 @@ class MediaApiFilesTest {
     }
 
     @Test
+    fun aGatewayWithoutMkdirSaysItCantMakeFolders() = runTest {
+        // An older dashboard's own 404, FastAPI's, and a proxy's non-JSON page.
+        val replies = listOf(
+            """{"detail":"No such API endpoint: /api/files/mkdir"}""" to json,
+            """{"detail":"Not Found"}""" to json,
+            "<html>404</html>" to headersOf(HttpHeaders.ContentType, "text/html"),
+        )
+        for ((body, headers) in replies) {
+            val api = MediaApi(createHttpClient(MockEngine { respond(body, HttpStatusCode.NotFound, headers) }))
+            assertEquals(MediaApi.NO_MKDIR, assertIs<ApiResult.Failed>(api.makeFolder(url, "/srv/a")).message, body)
+        }
+    }
+
+    @Test
     fun plainTextHasNoLanguage() = runTest {
         val api = MediaApi(createHttpClient(MockEngine {
             respond("""{"binary":false,"byteSize":2,"language":"text","text":"hi","truncated":false}""", HttpStatusCode.OK, json)
