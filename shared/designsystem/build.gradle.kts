@@ -10,7 +10,9 @@ kotlin {
         namespace = "dev.hermeskotlin.designsystem"
         compileSdk = libs.versions.android.compileSdk.get().toInt()
         minSdk = libs.versions.android.minSdk.get().toInt()
-        withHostTest {}
+        // The RTL layout harness renders the real components under Robolectric, so the host test needs the
+        // module's merged Android resources (the bundled Geist fonts) rather than stubs.
+        withHostTest { isIncludeAndroidResources = true }
         // For the bundled Geist fonts in res/font (license: GEIST-OFL.txt).
         androidResources { enable = true }
     }
@@ -43,6 +45,18 @@ kotlin {
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
+        }
+        // Rendered RTL layout tests: Robolectric hosts the real Compose measurement and pixels.
+        getByName("androidHostTest").dependencies {
+            implementation(libs.junit4)
+            implementation(libs.robolectric)
+            implementation(libs.compose.ui.test.junit4)
+        }
+        // The table scrollbar only draws on the desktop, so its geometry is rendered and measured on the desktop
+        // target. Test-only, like the host-test entries above.
+        jvmTest.dependencies {
+            implementation(compose.desktop.uiTestJUnit4)
+            implementation(compose.desktop.currentOs)
         }
     }
 }
