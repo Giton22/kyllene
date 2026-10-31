@@ -20,6 +20,7 @@ import com.composeunstyled.UnstyledIcon
 import dev.hermeskotlin.designsystem.rememberHoverIndication
 import com.mikepenz.markdown.compose.elements.listDepth
 import com.mikepenz.markdown.compose.elements.MarkdownListItems
+import com.mikepenz.markdown.compose.elements.MarkdownOrderedList
 import dev.hermeskotlin.designsystem.radiusSmall
 import dev.hermeskotlin.designsystem.surface3
 import dev.hermeskotlin.designsystem.textMuted
@@ -62,6 +63,7 @@ import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
+import com.mikepenz.markdown.compose.elements.MarkdownParagraph
 import com.mikepenz.markdown.compose.elements.MarkdownText as LibraryMarkdownText
 import dev.hermeskotlin.designsystem.accent
 import dev.hermeskotlin.designsystem.LocalDesktopLayout
@@ -157,11 +159,15 @@ internal fun DefaultMarkdownTypography.withTextStyle(style: TextStyle?): Default
  */
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean = false, textStyle: TextStyle? = null) {
-    // Never inject layout characters into parser input: every selectable surface shares this path.
-    val prepared = remember(text) { prepareMarkdown(text) }
+    val rtl = remember(text) { Bidi.prefersRightToLeft(text) }
+    val prepared = remember(text) {
+        val parsed = Bidi.isolateInlineCode(MathMarkup.prepare(text), rightToLeft = rtl)
+        // An Arabic sentence also needs the dates, amounts, identifiers and URLs inside it kept whole.
+        if (rtl) Bidi.isolateLtrRuns(parsed) else parsed
+    }
     // An Arabic reply is laid out right to left as a whole (ordered, and start-aligned, from the right);
     // anything else falls back to Content, so each block follows its own first strong character.
-    val direction = remember(text) { BidiText.direction(text) }
+    val direction = if (rtl) TextDirection.Rtl else TextDirection.Content
     val replyStyle = Theme[typography][body].copy(color = Theme[colors][textColor], textDirection = direction)
     val compact = compactStyle(replyStyle, textStyle)
     val bodyStyle = compact ?: replyStyle
@@ -203,6 +209,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
             codeFence = { MarkdownCodeFence(it.content, it.node, block = { code, language, style -> CodeBlock(code, language, style) }) },
             codeBlock = { MarkdownCodeBlock(it.content, it.node, block = { code, language, style -> CodeBlock(code, language, style) }) },
             paragraph = { HighlightedParagraph(it.content, it.node) },
+            orderedList = { ListInItsDirection(it.content, it.node) { MarkdownOrderedList(it.content, it.node, depth = it.listDepth) } },
             unorderedList = { DotList(it.content, it.node, it.listDepth) },
             table = { FittedTable(it.content, it.node, it.typography.table) },
         )
@@ -228,7 +235,15 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
             copy = { url -> scope.launch { clipboard.setClipEntry(plainTextClipEntry(url)) } },
         )
     }
-    CompositionLocalProvider(LocalUriHandler provides webOnly, LocalStreaming provides streaming, LocalMathStyle provides math) {
+    // An Arabic reply is laid out from the right as a whole, so headings, quotes and short lines start there;
+    // code, and paragraphs and lists in another direction, set their own.
+    val layout = if (rtl) LayoutDirection.Rtl else LocalLayoutDirection.current
+    CompositionLocalProvider(
+        LocalUriHandler provides webOnly,
+        LocalStreaming provides streaming,
+        LocalMathStyle provides math,
+        LocalLayoutDirection provides layout,
+    ) {
         Markdown(
             content = prepared,
             colors = markdownColors,
@@ -380,38 +395,38 @@ private fun HighlightedParagraph(content: String, node: ASTNode) {
         DisplayFormula(display, math)
         return
     }
-    // One build of this paragraph's own rendered text, used by both branches: direction and placement come from
-    // what is drawn here, never from the whole reply (which the library hands to every block component) and
-    // never from link destinations. A short Hebrew block is a narrow text box, so it needs the full reply width
-    // *and* a right-anchored start to sit at the right margin; neither alone moves it. An English paragraph
-    // inside a Hebrew-heavy reply keeps the left; a blank paragraph keeps the ambient side, and one with no
-    // letters at all — digits, punctuation — goes left, like any other text without a Hebrew letter majority.
-    val base = LocalMarkdownTypography.current.paragraph
-    val settings = annotatorSettings()
-    val annotated = remember(content, node, base, settings) {
-        buildAnnotatedString {
-            pushStyle(base.toSpanStyle())
-            buildMarkdownAnnotatedString(content, node, settings)
-            pop()
-        }
+    // Each paragraph reads in the direction most of its words take: an English paragraph that opens with an
+    // Arabic greeting stays left to right, and "409 MB" opening an Arabic one doesn't turn it left to right.
+    // One with no words keeps the reply's direction. The layout follows too, and the paragraph takes the full
+    // width: a short line is otherwise only as wide as its text and sits where the reply around it starts.
+    val rtl = remember(content, node) { Bidi.proseDirection(node.getTextInNode(content)) }
+    val replyStyle = LocalMarkdownTypography.current.paragraph
+    val style = when (rtl) {
+        true -> replyStyle.copy(textDirection = TextDirection.Rtl)
+        false -> replyStyle.copy(textDirection = TextDirection.Ltr)
+        null -> replyStyle
+    }
+    val layout = when (rtl) {
+        true -> LayoutDirection.Rtl
+        false -> LayoutDirection.Ltr
+        null -> LocalLayoutDirection.current
     }
     val highlights = LocalTextHighlights.current
-    val color = highlightColor()
-    val text = remember(annotated, highlights, color) { annotated.withHighlights(highlights, color) }
-    val rendered = text.text
-    val style = base.copy(textDirection = BidiText.direction(rendered))
-    // The library's link wrapper draws a content-sized leaf inside a Box, so the paragraph's own layout
-    // direction is what anchors that leaf on the right; the width alone would not.
-    val ambient = LocalLayoutDirection.current
-    CompositionLocalProvider(LocalLayoutDirection provides BidiText.placement(rendered, ambient)) {
-        LibraryMarkdownText(
-            text,
-            node,
-            modifier = Modifier.fillMaxWidth(),
-            style = style,
-            // Block images still resolve against the paragraph's original source.
-            sourceContent = content,
-        )
+    CompositionLocalProvider(LocalLayoutDirection provides layout) {
+        if (highlights.isEmpty()) {
+            MarkdownParagraph(content, node, Modifier.fillMaxWidth(), style = style)
+            return@CompositionLocalProvider
+        }
+        val settings = annotatorSettings()
+        val color = highlightColor()
+        val text = remember(content, node, style, settings, highlights, color) {
+            buildAnnotatedString {
+                pushStyle(style.toSpanStyle())
+                buildMarkdownAnnotatedString(content, node, settings)
+                pop()
+            }.withHighlights(highlights, color)
+        }
+        LibraryMarkdownText(text, node, Modifier.fillMaxWidth(), style = style)
     }
 }
 
@@ -424,13 +439,25 @@ private fun DotList(content: String, node: ASTNode, depth: Int) {
     // Only an sp line height converts to dp; any other falls back to the body's.
     val lineHeight = LocalMarkdownTypography.current.list.lineHeight.takeIf { it.isSp } ?: Theme[typography][body].lineHeight
     val top = with(LocalDensity.current) { ((lineHeight.toDp() - BULLET_DOT) / 2) }
-    // An Arabic list hangs off the right margin: the marker takes that side and the text follows it.
-    val rtl = Bidi.prefersRightToLeft(node.getTextInNode(content).toString())
-    CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+    ListInItsDirection(content, node) {
         MarkdownListItems(content, node, depth, markerModifier = { Modifier.padding(start = 2.dp, end = 10.dp) }) { _, _, _ ->
             Box(Modifier.padding(top = top).size(BULLET_DOT).background(dot, CircleShape))
         }
     }
+}
+
+/**
+ * An Arabic list hangs off the right margin: the marker takes that side and the text follows it. A list with
+ * no words of its own (`1. 2026`) keeps the direction around it.
+ */
+@Composable
+private fun ListInItsDirection(content: String, node: ASTNode, list: @Composable () -> Unit) {
+    val rtl = remember(content, node) { Bidi.proseDirection(node.getTextInNode(content)) }
+    if (rtl == null) {
+        list()
+        return
+    }
+    CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr, content = list)
 }
 
 private val BULLET_DOT = 5.dp
@@ -451,7 +478,9 @@ private fun CodeBlock(code: String, language: String?, style: TextStyle) {
         highlightedCode(shown, syntax, palette).withHighlights(highlights, color)
     }
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
-    Column(
+    // Code is laid out left to right even in an Arabic reply: the label and Copy keep their sides, and a long
+    // line scrolls from the left.
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) { Column(
         Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
@@ -476,19 +505,16 @@ private fun CodeBlock(code: String, language: String?, style: TextStyle) {
             CopyPill(code)
         } }
         val scroll = rememberScrollState()
-        // Code is always laid out left to right, even under an Arabic paragraph around it: both the text and
-        // the viewport it scrolls in, so a long line starts at its left edge under a Hebrew device locale too.
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-            Box {
-                val sideways = if (wrap) Modifier else Modifier.horizontalScroll(scroll)
-                Box(Modifier.fillMaxWidth().then(sideways).padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)) {
-                    BasicText(text, style = style.copy(textDirection = TextDirection.Ltr), softWrap = wrap)
-                }
-                // In the bottom padding, so a line running past the edge shows it does, to a mouse too.
-                if (!wrap) HorizontalScrollbar(scroll, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 6.dp, vertical = 3.dp))
+        Box {
+            val sideways = if (wrap) Modifier else Modifier.horizontalScroll(scroll)
+            Box(Modifier.fillMaxWidth().then(sideways).padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp)) {
+                // Code is always laid out left to right, even under an Arabic paragraph around it.
+                BasicText(text, style = style.copy(textDirection = TextDirection.Ltr), softWrap = wrap)
             }
+            // In the bottom padding, so a line running past the edge shows it does, to a mouse too.
+            if (!wrap) HorizontalScrollbar(scroll, Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 6.dp, vertical = 3.dp))
         }
-    }
+    } }
 }
 
 /** Highlighted code, shared by every block on screen and kept as long as it's among the recent ones. */

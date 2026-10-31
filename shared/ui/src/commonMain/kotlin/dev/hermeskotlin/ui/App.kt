@@ -597,8 +597,9 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     SidebarLayout(
         state = sidebar,
         // A desktop window keeps its sidebar docked down to the window's smallest size: a phone's drawer, with a
-        // scrim and the chat dragged aside, has no place in one.
-        dockedBreakpoint = if (isDesktop) DESKTOP_DOCKED_FROM else 840.dp,
+        // scrim and the chat dragged aside, has no place in one. A phone or tablet docks it where the chat keeps a
+        // phone's width beside it.
+        dockedBreakpoint = if (isDesktop) DESKTOP_DOCKED_FROM else null,
         // A desktop's sidebar is as wide as its edge was last dragged.
         dockedWidth = settings.sidebarWidth.dp,
         onDockedWidthChange = if (isDesktop) { width -> sidebarWidthStore.update { it.copy(sidebarWidth = width.value.roundToInt()) } } else null,

@@ -19,6 +19,11 @@ and issues already in `androidApp/lint-baseline.xml`.
 - Hosted rooms: `groups.send` sends `room_id`, `event_id` (so a retry isn't sent twice) and a payload of `text`,
   `thread_id` and optional `attachments`. See `RoomsApi.send`.
 
+### Common fixes
+
+- Each item in "What reviews usually fix" in CONTRIBUTING.md holds. Fetches the rule there forbids are of addresses a
+  reply or page links to, not calls to the gateway, which is often on the user's own network.
+
 ### Release builds (R8)
 
 - Release and `dev` builds are minified; debug isn't. A library whose native code looks up classes by name needs a
