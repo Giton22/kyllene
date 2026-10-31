@@ -208,6 +208,12 @@ fun reportAttachment(run: InboxRun, name: String): OutgoingAttachment {
 /** The new chat that asks about [run] ([name], what the Inbox calls its job): the report attached, the composer empty for the question. */
 fun reportDraft(run: InboxRun, name: String) = ComposeDraft(attachments = listOf(reportAttachment(run, name)), start = DraftStart.Typing)
 
+/**
+ * What opening [run]'s own chat is called: it goes on where the gateway lets it, and is only there to read where
+ * the run's session runs nothing but its job ([InboxRun.sessionReadOnly]); Ask about this takes the question then.
+ */
+internal fun runChatLabel(run: InboxRun): String = if (run.sessionReadOnly) "Open its chat" else "Continue its chat"
+
 /** The first line of a report the gateway cut short ([InboxRun.truncated]). */
 internal const val TRUNCATED_NOTE = "> The gateway cut this report at 48 KB; the rest isn't included."
 

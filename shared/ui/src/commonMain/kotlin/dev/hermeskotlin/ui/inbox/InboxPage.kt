@@ -434,7 +434,7 @@ private fun RunMenu(
         val r = shown ?: return@BottomSheet
         SheetHeader(shownName, (if (r.failed) "Failed · " else "") + timeLabel(r.at))
         SheetAction("Ask about this", Lucide.MessageSquarePlus, onClick = { onAsk(r) })
-        if (r.session != null) SheetAction("Continue its chat", Lucide.MessageSquareReply, onClick = { onContinue(r) })
+        if (r.session != null) SheetAction(runChatLabel(r), Lucide.MessageSquareReply, onClick = { onContinue(r) })
         when {
             unread -> SheetAction("Mark read", Lucide.Check, onClick = { onSetRead(r, true) })
             canMarkUnread -> SheetAction("Mark unread", Lucide.CircleDot, onClick = { onSetRead(r, false) })
@@ -737,7 +737,7 @@ internal fun RunView(
             )
             if (onContinue != null) {
                 Button(
-                    "Continue its chat",
+                    runChatLabel(run),
                     onClick = onContinue,
                     size = ButtonSize.Small,
                     variant = ButtonVariant.Ghost,

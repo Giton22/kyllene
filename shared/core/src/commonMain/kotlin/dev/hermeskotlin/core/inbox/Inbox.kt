@@ -71,6 +71,13 @@ data class InboxRun(
     /** The job's name as the gateway has it, without a Bot Mode routine's `[bot:…]` tag. */
     val title: String get() = Routines.title(label).trim().ifBlank { job }
 
+    /**
+     * Whether the run's chat ([session]) can only be read. From hermes-agent 0.22.3 an agent job's run keeps the
+     * runtime's `local-…` id, and that session runs only its own scheduled fire: anything typed in it is refused.
+     * An older gateway's run (`cron_<job>_<time>`) goes on like any chat.
+     */
+    val sessionReadOnly: Boolean get() = session?.startsWith(UNIFIED_RUN_SESSION) == true
+
     /** This run without a [session] that isn't a plausible stored session id: one the app would open as a chat. */
     fun withCheckedSession(): InboxRun = if (session == null || SESSION_ID.matches(session)) this else copy(session = null)
 
@@ -109,6 +116,9 @@ data class InboxRun(
         private val JOB_ID = Regex("^[A-Za-z0-9_.-]{1,64}$")
         private val PROFILE = Regex("^[A-Za-z0-9_.-]{1,64}$")
         private val RUN_ID = Regex("^\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}$")
+
+        /** The id prefix of a session hermes-agent's unified runtime made (0.22.3 on). */
+        private const val UNIFIED_RUN_SESSION = "local-"
 
         /** A stored session id as the gateway makes them, and as bot pushes are checked. */
         private val SESSION_ID = Regex("^[A-Za-z0-9_.:-]{1,128}$")

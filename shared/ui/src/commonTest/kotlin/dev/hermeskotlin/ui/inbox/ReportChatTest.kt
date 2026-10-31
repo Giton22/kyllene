@@ -15,6 +15,16 @@ class ReportChatTest {
     private val run = InboxRun(bot = "work", job = "006998ffc458", run = "2026-10-12_08-02-07", label = "morning-briefing", at = 1_000, text = "Rain later.")
 
     @Test
+    fun aRunsChatOfTheUnifiedRuntimeIsOpenedToReadNotContinued() {
+        // An older gateway's run session goes on like any chat.
+        assertEquals("Continue its chat", runChatLabel(run.copy(session = "cron_006998ffc458_20261012_080150")))
+        // From hermes-agent 0.22.3 a run keeps the runtime's local id, and its session only runs its job.
+        val unified = run.copy(session = "local-" + "a".repeat(64)).withCheckedSession()
+        assertTrue(unified.sessionReadOnly)
+        assertEquals("Open its chat", runChatLabel(unified))
+    }
+
+    @Test
     fun aReportIsAttachedWhole() {
         val long = run.copy(text = "x".repeat(50_000))
         val file = reportAttachment(long, "Morning briefing")
