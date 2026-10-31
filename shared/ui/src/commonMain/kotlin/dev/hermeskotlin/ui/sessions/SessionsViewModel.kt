@@ -18,6 +18,7 @@ import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.profiles.ProfileRoster
@@ -167,6 +168,8 @@ class SessionsViewModel(
     private val threadsRepo: ThreadsRepository,
     /** The list as last read, shown while the gateway can't be. */
     private val cache: OfflineCache? = null,
+    /** Makes a new project's folder on the gateway's machine. */
+    private val files: MediaApi? = null,
 ) : ViewModel() {
 
     /** Stamps an archive's undo offer, so it runs out on time even if the screen goes and comes back. */
@@ -402,6 +405,13 @@ class SessionsViewModel(
     /** The folders in [dir] on the gateway's machine starting with [prefix], for picking a project's folder; throws when it can't ask. */
     suspend fun projectFolders(dir: String, prefix: String): FolderListing =
         projectsApi.folders(bound.value?.second, dir, prefix)
+
+    /** Makes the folder [name] in [dir] on the gateway's machine; answers why not, or null once it's there. */
+    suspend fun makeProjectFolder(dir: String, name: String): String? {
+        val url = bound.value?.first ?: return "Not connected."
+        val api = files ?: return "This build can't make folders."
+        return api.makeFolder(url, FolderPath.picked(FolderPath.child(dir, name))).errorMessage
+    }
 
     /** [id]'s chip and the picked project renamed to [label]; with [unless], only while they still show that. */
     private fun SessionsUiState.withProjectLabel(id: String, label: String, unless: String? = null): SessionsUiState {
