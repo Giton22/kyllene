@@ -489,7 +489,7 @@ class InboxViewModelTest {
             val a = run("a", 50)
             when {
                 arg.startsWith("inbox") -> """{"ok":true,"runs":${runsJsonWithSession(a to "20261012_000050_abc")}}"""
-                // Plugin 0.5.2's read: the run's chat, or null once the gateway let the session go.
+                // Plugin 0.5.3's read: the run's chat, or null once the gateway let the session go.
                 arg.startsWith("read") -> """{"ok":true,"run":{"job":"a","run":"${a.run}","at":50,"text":"All","session":$session}}"""
                 else -> """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
             }
@@ -583,5 +583,34 @@ class InboxViewModelTest {
         held.complete(Unit)
         assertNull(vm.state.value.fetching)
         assertTrue(vm.events.let { flow -> withTimeoutOrNull(10) { flow.first() } } == null)
+    }
+
+    @Test
+    fun theFetchSaysWhetherItIsForAskingOrCopying() = runTest(dispatcher) {
+        var held = CompletableDeferred<Unit>()
+        val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->
+            when {
+                arg.startsWith("inbox") -> """{"ok":true,"runs":${runsJson(run("a", 50))}}"""
+                arg.startsWith("read") -> {
+                    held.await()
+                    """{"ok":true,"run":{"job":"a","run":"${run("a", 50).run}","at":50,"text":"All"}}"""
+                }
+                else -> """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
+            }
+        }
+        store.bind(one.gatewayUrl.value, now = 0)
+        val vm = viewModel(socket)
+        vm.bind(one)
+        val a = vm.state.value.runs.single()
+        vm.copy(a)
+        assertEquals(ReportFetch(a.key, ask = false), vm.state.value.fetching)
+        held.complete(Unit)
+        vm.events.first()
+        held = CompletableDeferred()
+        vm.ask(a)
+        assertEquals(ReportFetch(a.key, ask = true), vm.state.value.fetching)
+        held.complete(Unit)
+        vm.events.first()
+        assertNull(vm.state.value.fetching)
     }
 }

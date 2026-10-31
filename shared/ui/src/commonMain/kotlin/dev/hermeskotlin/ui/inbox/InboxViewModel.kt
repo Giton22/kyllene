@@ -179,6 +179,9 @@ data class ReportChat(
     val draft: ComposeDraft? = null,
 )
 
+/** [key]'s whole report on its way from the gateway: to ask about it ([ask]), or to copy it. */
+data class ReportFetch(val key: String, val ask: Boolean)
+
 /** What the Inbox hands the app to do, once. */
 sealed interface InboxEvent {
     data class OpenChat(val chat: ReportChat) : InboxEvent
@@ -309,7 +312,7 @@ data class InboxUiState(
     val loadingMore: Boolean = false,
     val moreError: String? = null,
     /** The run whose whole report is being fetched, to ask about or copy. */
-    val fetching: String? = null,
+    val fetching: ReportFetch? = null,
 ) {
     /** Whether the follow page's controls take a change now. */
     val canEditFollowing: Boolean get() = followingLoaded && !saving
@@ -714,7 +717,7 @@ class InboxViewModel(
         notices.runsRead(url, runs.map { it.key })
     }
 
-    override fun ask(run: InboxRun) = fetchWhole(run) { url, whole, note ->
+    override fun ask(run: InboxRun) = fetchWhole(run, ask = true) { url, whole, note ->
         if (whole == null) {
             _state.update { it.copy(message = note.askText()) }
             return@fetchWhole
@@ -736,7 +739,7 @@ class InboxViewModel(
         }
     }
 
-    override fun copy(run: InboxRun) = fetchWhole(run) { _, whole, note ->
+    override fun copy(run: InboxRun) = fetchWhole(run, ask = false) { _, whole, note ->
         _events.send(InboxEvent.Copy(whole?.text ?: run.text))
         _state.update { it.copy(message = if (whole != null) "Copied the report." else "Copied the start of the report: ${note.copyText()}") }
     }
@@ -746,11 +749,11 @@ class InboxViewModel(
      * or with null and why there's only the start. One at a time: a second tap waits for nothing. Dropped once the
      * Inbox moves to another gateway.
      */
-    private fun fetchWhole(run: InboxRun, then: suspend (url: String, whole: InboxRun?, note: RunNote) -> Unit) {
+    private fun fetchWhole(run: InboxRun, ask: Boolean, then: suspend (url: String, whole: InboxRun?, note: RunNote) -> Unit) {
         val url = gateway?.gatewayUrl?.value ?: return
         if (fetchJob?.isActive == true) return
         val gen = generation
-        _state.update { it.copy(fetching = run.key) }
+        _state.update { it.copy(fetching = ReportFetch(run.key, ask)) }
         fetchJob = viewModelScope.launch {
             try {
                 bindJob?.join()

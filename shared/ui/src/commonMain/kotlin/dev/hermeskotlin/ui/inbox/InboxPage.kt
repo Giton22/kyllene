@@ -45,6 +45,7 @@ import com.composables.icons.lucide.MessageSquarePlus
 import com.composables.icons.lucide.MessageSquareReply
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.ui.sessions.SwipeAction
 import dev.hermeskotlin.ui.sessions.SwipeKind
 import dev.hermeskotlin.ui.sessions.SwipeRow
@@ -226,7 +227,7 @@ internal fun InboxPage(
                     state.openLoading,
                     state.openNote,
                     onBack = viewModel::closeRun,
-                    fetching = state.fetching == state.open.key,
+                    fetching = state.fetching,
                     onAsk = { viewModel.ask(state.open) },
                     onContinue = state.open.session?.let { { viewModel.continueChat(state.open) } },
                     onCopy = { viewModel.copy(state.open) },
@@ -348,6 +349,7 @@ internal fun InboxView(
                             onClick = { viewModel.open(run) },
                             onLongClick = { runMenu = run },
                             modifier = swipeActions,
+                            fetching = state.fetching?.key == run.key,
                         )
                     }
                 }
@@ -614,7 +616,16 @@ private fun DayLabel(day: String) {
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RunCard(run: InboxRun, name: String, unread: Boolean, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun RunCard(
+    run: InboxRun,
+    name: String,
+    unread: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Its whole report is on its way, for Ask or Copy from its menu. */
+    fetching: Boolean = false,
+) {
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     val (tile, tint) = if (run.failed) Theme[colors][dangerSoft] to Theme[colors][danger] else Theme[colors][accentSoft] to Theme[colors][accentText]
     Row(
@@ -628,7 +639,8 @@ private fun RunCard(run: InboxRun, name: String, unread: Boolean, onClick: () ->
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(Modifier.size(36.dp).background(tile, RoundedCornerShape(Theme[radii][radiusSmall])), contentAlignment = Alignment.Center) {
-            UnstyledIcon(if (run.failed) Lucide.TriangleAlert else Lucide.Inbox, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+            if (fetching) Spinner(Modifier.size(16.dp), color = tint)
+            else UnstyledIcon(if (run.failed) Lucide.TriangleAlert else Lucide.Inbox, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -686,14 +698,16 @@ internal fun RunView(
     loading: Boolean,
     note: RunNote?,
     onBack: () -> Unit,
-    /** The whole report is being fetched for [onAsk] or [onCopy]. */
-    fetching: Boolean = false,
+    /** A whole report being fetched for [onAsk] or [onCopy], this one's or one asked for from the list. */
+    fetching: ReportFetch? = null,
     onAsk: () -> Unit = {},
     onContinue: (() -> Unit)? = null,
     onCopy: () -> Unit = {},
 ) {
+    // One fetch at a time: while one runs, a tap here would do nothing.
+    val busy = fetching != null
     SubpageHeader(name, onBack = onBack, subtitle = (if (run.failed) "Failed · " else "") + messageTime(run.at.toDouble(), uses24HourClock())) {
-        IconButton(Lucide.Copy, contentDescription = "Copy report", onClick = onCopy, enabled = !fetching)
+        IconButton(Lucide.Copy, contentDescription = "Copy report", onClick = onCopy, enabled = !busy)
     }
     Column(
         Modifier
@@ -709,8 +723,9 @@ internal fun RunView(
                 size = ButtonSize.Small,
                 variant = ButtonVariant.Secondary,
                 leadingIcon = Lucide.MessageSquarePlus,
-                loading = fetching,
-                enabled = !fetching,
+                // Copy's fetch disables it too, but only Ask's turns it: no chat is on its way for a copy.
+                loading = fetching != null && fetching.key == run.key && fetching.ask,
+                enabled = !busy,
             )
             if (onContinue != null) {
                 Button(
@@ -719,7 +734,7 @@ internal fun RunView(
                     size = ButtonSize.Small,
                     variant = ButtonVariant.Ghost,
                     leadingIcon = Lucide.MessageSquareReply,
-                    enabled = !fetching,
+                    enabled = !busy,
                 )
             }
         }
