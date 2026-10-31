@@ -21,6 +21,46 @@ class AgentScreenTest {
 
     private fun args(json: String) = HermesJson.parseToJsonElement(json)
 
+    private fun layout(vararg components: String) = AgentScreen(
+        listOf(create, """{"version":"v0.9","updateComponents":{"surfaceId":"pick","components":[${components.joinToString(",")}]}}"""),
+        setOf("pick"),
+        wait = true,
+    ).layoutProblem
+
+    /** A column [id] holding [children]. */
+    private fun column(id: String, vararg children: String) =
+        """{"id":"$id","component":"Column","children":[${children.joinToString(",") { "\"$it\"" }}]}"""
+
+    @Test
+    fun aLayoutThatHoldsItselfIsTurnedDown() {
+        assertNull(layout(column("root", "a", "b"), """{"id":"a","component":"Text","text":"root"}""", column("b")))
+        // Straight, through a card's child, through a list's template and away from root.
+        listOf(
+            arrayOf(column("root", "root")),
+            arrayOf(column("root", "card"), """{"id":"card","component":"Card","child":"root"}"""),
+            arrayOf(column("root", "list"), """{"id":"list","component":"List","children":{"componentId":"list","path":"/items"}}"""),
+            arrayOf(column("root"), column("x", "y"), column("y", "x")),
+        ).forEach { components ->
+            assertEquals(true, layout(*components)?.contains("contains itself"), components.joinToString())
+        }
+    }
+
+    @Test
+    fun aLayoutTooDeepOrTooBigIsTurnedDown() {
+        fun chain(depth: Int) = (0 until depth).map { i -> column(if (i == 0) "root" else "c$i", "c${i + 1}") }
+        assertNull(layout(*chain(AgentScreen.MAX_DEPTH - 1).toTypedArray()))
+        assertEquals(true, layout(*chain(AgentScreen.MAX_DEPTH + 5).toTypedArray())?.contains("deep"))
+        // Listed leaf first, so the deepest part is looked at before root.
+        assertEquals(true, layout(*chain(AgentScreen.MAX_DEPTH + 5).reversed().toTypedArray())?.contains("deep"))
+        val many = (0..AgentScreen.MAX_COMPONENTS).map { """{"id":"t$it","component":"Text","text":"x"}""" }
+        assertEquals(true, layout(column("root"), *many.toTypedArray())?.contains("more than"))
+    }
+
+    @Test
+    fun otherToolsArePassedByUnread() {
+        assertNull(AgentScreen.from("terminal", args("""{"messages":[$create,$components]}""")))
+    }
+
     @Test
     fun theMessagesAreKeptInOrderWithTheirSurface() {
         val screen = AgentScreen.from(SHOW_UI_TOOL, args("""{"messages":[$create,$components]}"""))!!

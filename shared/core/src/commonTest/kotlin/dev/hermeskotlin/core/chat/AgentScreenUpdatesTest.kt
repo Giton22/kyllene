@@ -62,6 +62,22 @@ class AgentScreenUpdatesTest {
     }
 
     @Test
+    fun aScreenThePhoneWouldNotDrawHasNoCard() {
+        val refused = call("a", create("pick"), components("pick", "One"), failed = true, output = """{"error":"${NOT_DRAWN}Unknown component"}""")
+        assertEquals(emptyMap(), screenViews(listOf(refused)))
+    }
+
+    @Test
+    fun aScreenThatHoldsItselfHasNoCardAndAnUpdateThatWouldIsLeftOut() {
+        val loop = """{"version":"v0.9","updateComponents":{"surfaceId":"pick","components":[{"id":"root","component":"Column","children":["root"]}]}}"""
+        assertEquals(emptyMap(), screenViews(listOf(call("a", create("pick"), loop))))
+        val first = call("a", create("pick"), components("pick", "One"))
+        val view = screenViews(listOf(first, call("b", loop))).getValue("a")
+        assertEquals(2, view.screen.messages.size)
+        assertEquals("a", view.latest.id)
+    }
+
+    @Test
     fun anUpdateThatEndedUnansweredStaysDrawn() {
         val first = call("a", create("pick"), components("pick", "One"))
         val stopped = call("b", components("pick", "Two"), failed = true, output = """{"error":"Stopped before the phone answered."}""")

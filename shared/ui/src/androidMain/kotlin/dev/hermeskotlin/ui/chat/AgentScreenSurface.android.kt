@@ -84,6 +84,7 @@ import dev.hermeskotlin.designsystem.text
 import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.title
 import dev.hermeskotlin.designsystem.typography
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -177,12 +178,19 @@ internal actual fun AgentScreenSurface(
 
 /**
  * A screen's processor, run apart from the chat's list: scrolled out of sight and back, the screen keeps what the
- * user typed or picked. The first error drawing it is kept for the agent until the screen is waited on.
+ * user typed or picked. The first error drawing what a call sent is kept for the agent until the screen is waited on;
+ * a later call's update starts afresh.
  */
-private class DrawnScreen(context: Context, screen: AgentScreen) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val processor: A2uiMessageProcessor = A2uiMessageProcessor(catalogs = listOf(catalog(context)))
+private class DrawnScreen(context: Context, private val screen: AgentScreen) {
     val error = MutableStateFlow<Pair<String, String>?>(null)
+
+    // Whatever the screen's processing throws is this screen's error, never the app's.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e ->
+            error.compareAndSet(null, screen.surfaceIds.first() to "The screen couldn't be drawn: ${e.message ?: e::class.simpleName}")
+        },
+    )
+    val processor: A2uiMessageProcessor = A2uiMessageProcessor(catalogs = listOf(catalog(context)))
     private val parser = A2uiMessageParser()
 
     @Volatile var onTap: ((A2uiClientEventMessage) -> Unit)? = null
@@ -200,8 +208,15 @@ private class DrawnScreen(context: Context, screen: AgentScreen) {
         feed(screen.messages)
     }
 
-    /** More messages for the screen: an update from a later call, drawn over what's there. */
-    fun feed(messages: List<String>) = messages.forEach { processor.processInput(parser, it) }
+    /**
+     * More messages for the screen: an update from a later call, drawn over what's there. An error the earlier
+     * messages had was said already; the update is judged on its own.
+     */
+    fun feed(messages: List<String>) {
+        if (messages.isEmpty()) return
+        error.value = null
+        messages.forEach { processor.processInput(parser, it) }
+    }
 
     fun close() = scope.cancel()
 }
@@ -237,6 +252,8 @@ private object DrawnScreens {
  * found here, before the call waits, rather than once the user looks.
  */
 suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
+    // Before anything draws it: a layout that holds itself would never finish drawing.
+    screen.layoutProblem?.let { return it }
     val parser = A2uiMessageParser()
     screen.messages.forEachIndexed { i, message ->
         try {

@@ -24,21 +24,22 @@ fun screenViews(calls: List<ToolActivity>, took: (AgentScreen) -> Boolean = { tr
     val ownerOf = HashMap<String, String>()
     for (call in calls) {
         val screen = call.agentScreen ?: continue
-        val parsed = screen.messages.map { it to A2uiEnvelope.of(it) }
+        val parsed = screen.messages.zip(screen.envelopes)
         val made = parsed.mapNotNullTo(HashSet()) { (_, e) -> e?.surfaceId?.takeIf { e.creates } }
         val own = parsed.filter { (_, e) -> e == null || e.surfaceId in made || e.surfaceId !in ownerOf }
-        // An update the phone turned down never changed the screen; one that ended later (stopped, not seen) did.
-        val refused = if (call.running) !took(screen) else call.failed && NOT_DRAWN in call.output.orEmpty()
+        // What the phone turned down was never drawn there, and isn't here either. An update the phone hasn't
+        // taken yet waits; one that ended later (stopped, not seen) did change the screen.
+        val notDrawn = !call.running && call.failed && NOT_DRAWN in call.output.orEmpty()
+        val refused = notDrawn || call.running && !took(screen)
         if (!refused) parsed.filterNot { it in own }.groupBy { (_, e) -> ownerOf.getValue(e!!.surfaceId) }.forEach { (owner, sent) ->
             val view = views.getValue(owner)
-            views[owner] = view.copy(
-                latest = call,
-                screen = view.screen.copy(messages = view.screen.messages + sent.map { it.first }, wait = screen.wait),
-            )
+            val updated = view.screen.copy(messages = view.screen.messages + sent.map { it.first }, wait = screen.wait)
+            // One that would leave a layout Kyllene won't draw is left out: the screen stays as it was.
+            if (updated.layoutProblem == null) views[owner] = view.copy(latest = call, screen = updated)
         }
         // Only a call that makes a surface gets a card. One that updates a surface the chat hasn't loaded (an
         // older page) has none to draw on; one that updates a surface never made was turned down by the phone.
-        if (own.any { (_, e) -> e?.creates == true }) {
+        if (!notDrawn && screen.layoutProblem == null && own.any { (_, e) -> e?.creates == true }) {
             val ids = own.mapNotNullTo(LinkedHashSet()) { (_, e) -> e?.surfaceId }
             ids.forEach { ownerOf[it] = call.id }
             views[call.id] = ScreenView(call, call, AgentScreen(own.map { it.first }, ids, screen.wait))
