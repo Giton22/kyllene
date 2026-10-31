@@ -1,10 +1,14 @@
 """Exercise a real installed sandbox on a private Xvfb display."""
+import sys
+
+if __name__ == '__main__' and sys.platform != 'linux':
+    raise SystemExit('This installed-Flatpak test requires Linux.')
+
 import argparse
 from contextlib import ExitStack
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -12,6 +16,7 @@ from PIL import ImageGrab
 from smoke_gateway import server
 
 APP = 'io.github.Giton22.Kyllene.Devel'
+BUTTON = (18, 69, 171)
 
 
 def run(*args):
@@ -39,13 +44,38 @@ def pixels(color):
     return points if len(points) > 1000 else None
 
 
+def verify_resize(window, app, before):
+    run('xdotool', 'windowsize', window, '1200', '800')
+    until(lambda: {'WIDTH=1200', 'HEIGHT=800'} <=
+          set(run('xdotool', 'getwindowgeometry', '--shell', window).splitlines()), 'window resize', app)
+    # X11 geometry changes before Compose relocates Chromium; wait for its new frame.
+    old_origin = (min(x for x, y in before), min(y for x, y in before))
+    def relocated():
+        points = pixels(BUTTON)
+        return points if points and (min(x for x, y in points), min(y for x, y in points)) != old_origin else None
+    painted = until(relocated, 'resized widget layout', app)
+    run('xdotool', 'mousemove', '--window', window, str((min(x for x, y in painted) + max(x for x, y in painted)) // 2),
+        str((min(y for x, y in painted) + max(y for x, y in painted)) // 2), 'click', '1')
+    until(lambda: pixels((25, 195, 125)), 'post-resize widget click', app)
+
+
 def main(bundle):
     existing = run('flatpak', 'list', '--user', '--app', '--columns=application').splitlines()
     if APP in existing:
         raise RuntimeError('Refusing to replace an installed app; use a disposable Flatpak user installation')
     with ExitStack() as resources:
-        run('flatpak', 'install', '--user', '--noninteractive', '-y', str(bundle))
-        commit = run('flatpak', 'info', '--user', '--show-commit', APP)
+        try:
+            run('flatpak', 'install', '--user', '--noninteractive', '-y', str(bundle))
+            commit = run('flatpak', 'info', '--user', '--show-commit', APP)
+        except Exception as failure:
+            state = 'unknown'
+            try:
+                if APP in run('flatpak', 'list', '--user', '--app', '--columns=application').splitlines():
+                    state = 'retained'
+            except Exception:
+                pass
+            raise RuntimeError(f'Installation {state}; commit unknown. No uninstall attempted. '
+                               'Inspect the disposable user installation before retrying.') from failure
         resources.callback(uninstall, commit)
         service = server()
         resources.callback(service.server_close)
@@ -89,11 +119,12 @@ def main(bundle):
             until(lambda: ('GET', '/api/sessions') in service.calls, 'session list', app)
             time.sleep(1)
             click(140, 424)
-            green = until(lambda: pixels((25, 195, 125)), 'local HTML widget rendering', app)
-            click(min(x for x, y in green) + 65, min(y for x, y in green) + 35)
+            until(lambda: pixels((25, 195, 125)), 'local HTML widget rendering', app)
+            button = until(lambda: pixels(BUTTON), 'painted widget button', app)
+            click((min(x for x, y in button) + max(x for x, y in button)) // 2,
+                  (min(y for x, y in button) + max(y for x, y in button)) // 2)
             until(lambda: pixels((195, 25, 224)), 'widget JavaScript click', app)
-            xdo('windowsize', window, '1200', '800')
-            until(lambda: pixels((195, 25, 224)), 'widget after resize', app)
+            verify_resize(window, app, button)
             print('Installed sandbox: address input, synthetic login, HTML/JavaScript and resize passed')
         except Exception:
             log.seek(0)

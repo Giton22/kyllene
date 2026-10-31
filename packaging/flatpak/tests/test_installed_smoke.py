@@ -1,12 +1,15 @@
 import os
+import sys
 from pathlib import Path
 import unittest
 from unittest.mock import Mock, patch
 
-from PIL import Image
-import installed_smoke as smoke
+if sys.platform == 'linux':
+    from PIL import Image
+    import installed_smoke as smoke
 
 
+@unittest.skipUnless(sys.platform == 'linux', 'Installed Flatpak integration requires Linux')
 class InstalledSmokeTest(unittest.TestCase):
     def test_failed_private_capture_never_falls_back_to_desktop_screenshot(self):
         with patch.dict(os.environ, DISPLAY=':9876'), \
@@ -69,3 +72,52 @@ class InstalledSmokeTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Refusing to replace'):
                 smoke.main(Path('fixture.flatpak'))
         self.assertEqual(commands, [('flatpak', 'list', '--user', '--app', '--columns=application')])
+
+    def test_ignored_resize_cannot_pass_using_existing_widget_pixels(self):
+        app = Mock()
+        app.poll.return_value = None
+        with patch.object(smoke, 'run', return_value='WIDTH=1280\nHEIGHT=840'), \
+             patch.object(smoke, 'pixels', return_value=[(430, 400)]), \
+             patch.object(smoke.time, 'monotonic', side_effect=[0, 0, 31]), \
+             patch.object(smoke.time, 'sleep'):
+            with self.assertRaisesRegex(TimeoutError, 'window resize'):
+                smoke.verify_resize('owned-window', app, [(430, 400)])
+
+    def test_stale_pixels_after_resize_do_not_prove_a_fresh_widget_response(self):
+        app = Mock()
+        app.poll.return_value = None
+        with patch.object(smoke, 'run', return_value='WIDTH=1200\nHEIGHT=800'), \
+             patch.object(smoke, 'pixels', side_effect=lambda color: [(390, 360)] if color == smoke.BUTTON else None), \
+             patch.object(smoke.time, 'monotonic', side_effect=[0, 0, 0, 0, 0, 0, 31]), \
+             patch.object(smoke.time, 'sleep'):
+            with self.assertRaisesRegex(TimeoutError, 'post-resize widget click'):
+                smoke.verify_resize('owned-window', app, [(430, 400)])
+
+    def test_post_install_lookup_failure_reports_retained_or_unknown_state_without_deletion(self):
+        for reconciliation_fails in (False, True):
+            commands = []
+            def run(*args):
+                commands.append(args)
+                if args[:2] == ('flatpak', 'info'):
+                    raise OSError('commit lookup failed')
+                if args[:2] == ('flatpak', 'list') and len(commands) > 1:
+                    if reconciliation_fails:
+                        raise OSError('reconciliation unavailable')
+                    return smoke.APP
+                return ''
+            with self.subTest(reconciliation_fails=reconciliation_fails), patch.object(smoke, 'run', side_effect=run):
+                with self.assertRaisesRegex(RuntimeError, 'commit unknown'):
+                    smoke.main(Path('fixture.flatpak'))
+            self.assertEqual(sum(c[:2] == ('flatpak', 'list') for c in commands), 2)
+            self.assertFalse(any(c[:2] == ('flatpak', 'uninstall') for c in commands))
+
+    def test_stale_layout_is_not_used_for_the_post_resize_click(self):
+        app = Mock()
+        app.poll.return_value = None
+        with patch.object(smoke, 'run', return_value='WIDTH=1200\nHEIGHT=800') as commands, \
+             patch.object(smoke, 'pixels', return_value=[(430, 400)]), \
+             patch.object(smoke.time, 'monotonic', side_effect=[0, 0, 0, 0, 31]), \
+             patch.object(smoke.time, 'sleep'):
+            with self.assertRaisesRegex(TimeoutError, 'resized widget layout'):
+                smoke.verify_resize('owned-window', app, [(430, 400)])
+        self.assertFalse(any('mousemove' in call.args for call in commands.call_args_list))

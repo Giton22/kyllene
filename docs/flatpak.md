@@ -62,10 +62,17 @@ The workflow installs its bundle and exercises the actual sandbox on a private
 Xvfb display: gateway address input, synthetic sign-in, local HTML rendering,
 JavaScript interaction and window resize. The loopback-only fixture never calls
 a provider or reads host files. The runner stops its exact owned instance and
-uninstalls its app without deleting data, including after a failed check.
+uninstalls its verified app without deleting data after failed checks. If the
+installed commit cannot be verified, it reports retained/unknown state and leaves
+the installation for inspection instead of deleting an unverified ref.
 
 Run `python3 packaging/flatpak/tests/installed_smoke.py build/kyllene.flatpak`
-with Xvfb, xauth, xdotool and Pillow installed. It refuses to replace an existing
+on Linux with Flatpak, its matching runtime, Xvfb, xauth, xdotool and Pillow
+installed. Direct invocation on Windows/macOS exits before optional imports or
+external actions; use a suitable Linux environment or open/update a PR to trigger
+the Ubuntu GitHub Actions job. Portable fixture/platform contracts still run in
+normal test discovery; Linux-only integration coverage is explicitly skipped
+on unsupported platforms. It refuses to replace an existing
 user installation; use a disposable Flatpak user installation with its matching
 runtime available. Screenshots and profiles are not uploaded. Xvfb smoke does
 not qualify KDE focus, context menus, portals, voice or live-provider behavior;

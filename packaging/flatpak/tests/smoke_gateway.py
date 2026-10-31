@@ -7,7 +7,7 @@ import struct
 from urllib.parse import parse_qs, urlsplit
 
 HTML = '''<!doctype html><html><body style="margin:0;background:#19c37d;height:100vh">
-<button style="padding:30px" onclick="document.body.style.background='#c319e0'">Widget fixture</button>
+<button style="background:#1245ab;color:white;border:0;width:240px;height:112px" onclick="document.body.style.background=this.dataset.on?'#19c37d':'#c319e0';this.dataset.on=this.dataset.on?'':'1'">Widget fixture</button>
 <p>LOCAL_WIDGET_READY</p></body></html>'''
 SESSION = {'id': 'smoke-session', 'title': 'Flatpak fixture', 'source': 'desktop', 'message_count': 1}
 
