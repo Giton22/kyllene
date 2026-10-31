@@ -18,11 +18,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.requiredWidth
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -45,6 +50,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import com.composeunstyled.theme.Theme
@@ -132,10 +138,16 @@ fun SidebarLayout(
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
-        val sideInsets = with(density) {
-            WindowInsets.safeDrawing.let { it.getLeft(this, layoutDirection) + it.getRight(this, layoutDirection) }.toDp()
+        // A side navigation bar or a cutout. Not safeDrawing: its keyboard part would recompose this on every frame
+        // the keyboard moves, and it has no sides.
+        val insets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
+        val (startInset, endInset) = with(density) {
+            val left = insets.getLeft(this, layoutDirection).toDp()
+            val right = insets.getRight(this, layoutDirection).toDp()
+            if (layoutDirection == LayoutDirection.Ltr) left to right else right to left
         }
-        val docked = dockedBreakpoint?.let { maxWidth >= it } ?: sidebarDocks(maxWidth, sideInsets)
+        val docked = dockedBreakpoint?.let { maxWidth >= it }
+            ?: sidebarDocks(maxWidth, maxHeight, startInset + endInset, dockedWidth)
         LaunchedEffect(docked) { state.updateDocked(docked) }
         // While the edge is dragged, the width it's at; the chat keeps at least as much room as the sidebar's least.
         var dragged by remember { mutableStateOf<Dp?>(null) }
@@ -145,26 +157,30 @@ fun SidebarLayout(
         val hidden = Modifier.clearAndSetSemantics { }.takeIf { !state.isOpen && p == 0f } ?: Modifier
 
         if (docked) {
+            // The docked sidebar takes the start inset on top of its width, as it pads itself by it, and the content
+            // beside it doesn't pad by it again.
+            val outer = width + startInset
             Row(Modifier.fillMaxSize()) {
                 Box(
                     Modifier
-                        .width(width * p)
+                        .width(outer * p)
                         .fillMaxHeight()
                         .clipToBounds()
                         .background(Theme[colors][sidebarColor])
                         .then(hidden),
                 ) {
-                    Box(Modifier.requiredWidth(width).fillMaxHeight().align(Alignment.CenterEnd)) { sidebar() }
+                    Box(Modifier.requiredWidth(outer).fillMaxHeight().align(Alignment.CenterEnd)) { sidebar() }
                 }
                 if (p > 0f) Box(Modifier.width(DIVIDER_WIDTH).fillMaxHeight().background(Theme[colors][stroke]))
-                Box(Modifier.weight(1f).fillMaxHeight()) { content() }
+                val consumed = if (p > 0f) insets.only(WindowInsetsSides.Start) else WindowInsets(0.dp)
+                Box(Modifier.weight(1f).fillMaxHeight().consumeWindowInsets(consumed)) { content() }
             }
             if (onDockedWidthChange != null && p == 1f) {
                 val density = LocalDensity.current
                 // The hairline is the edge to grab, with a few pixels either side of it to aim at.
                 Box(
                     Modifier
-                        .offset(x = width - EDGE_GRIP / 2)
+                        .offset(x = outer - EDGE_GRIP / 2)
                         .width(EDGE_GRIP)
                         .fillMaxHeight()
                         .pointerHoverIcon(ResizeHorizontalPointer)
@@ -256,18 +272,26 @@ fun SidebarLayout(
 }
 
 /**
- * Whether the sidebar docks in a window [width] wide: when the content beside it still gets a phone's width, so an
- * unfolded foldable or a tablet held upright docks too, not only the widest screens. [sideInsets] (a side navigation
- * bar, a cutout) come off that width, since the content pads itself by them.
+ * Whether the sidebar docks in a window [width] by [height]. A window from [WIDE_WIDTH] always docks it. A narrower
+ * one docks it when the content beside a [sidebarWidth] sidebar still gets a phone's width, so an unfolded foldable
+ * or a tablet held upright docks too. A phone on its side doesn't: it's too short for a sidebar that stays open.
+ * [sideInsets] (a side navigation bar, a cutout) come off the content's width.
  */
-internal fun sidebarDocks(width: Dp, sideInsets: Dp): Boolean =
-    width - sideInsets - DOCKED_WIDTH - DIVIDER_WIDTH >= MIN_CONTENT_WIDTH
+internal fun sidebarDocks(width: Dp, height: Dp, sideInsets: Dp, sidebarWidth: Dp = DOCKED_WIDTH): Boolean =
+    width >= WIDE_WIDTH ||
+        height >= MIN_DOCKED_HEIGHT && width - sideInsets - sidebarWidth - DIVIDER_WIDTH >= MIN_CONTENT_WIDTH
 
 /** The hairline between the docked sidebar and the content. */
 private val DIVIDER_WIDTH = 1.dp
 
 /** The narrowest common phone, which every screen already fits, so the chat beside the sidebar is never narrower. */
 private val MIN_CONTENT_WIDTH = 360.dp
+
+/** From here up the sidebar docks whatever the height, as it always has: a wide phone on its side, a tablet. */
+private val WIDE_WIDTH = 840.dp
+
+/** Below this a window is a phone on its side, and a narrower one keeps the drawer. */
+private val MIN_DOCKED_HEIGHT = 480.dp
 
 private const val FLING_VELOCITY = 800f
 
