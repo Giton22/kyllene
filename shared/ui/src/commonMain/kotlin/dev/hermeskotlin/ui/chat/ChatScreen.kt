@@ -457,9 +457,9 @@ fun ChatScreen(
     }
     val attachmentPicker = rememberAttachmentPicker(onPicked = viewModel::addAttachments, onError = viewModel::showAttachmentError)
     val microphone = rememberMicrophonePermission()
-    val startVoiceChat = {
+    val startVoiceChat = { ringback: Boolean ->
         microphone.withMicrophone(onDenied = { notice = "Voice needs the microphone. Allow it in Android's settings." }) {
-            viewModel.startVoiceChat()
+            viewModel.startVoiceChat(ringback)
         }
     }
     val toggleDictation = {
@@ -501,7 +501,8 @@ fun ChatScreen(
                 // The goal may have been cleared since the menu offered it; an empty sheet would stay up.
                 ChatRequest.OpenControl -> controlOpen = viewModel.state.value.control != null
                 // `/voice` and the like on the desktop, which has no voice yet: say so, as a silent no-op reads as broken.
-                ChatRequest.StartVoice -> if (hasVoice) startVoiceChat() else notice = "Voice chat isn't on the desktop yet."
+                ChatRequest.StartVoice -> if (hasVoice) startVoiceChat(false) else notice = "Voice chat isn't on the desktop yet."
+                ChatRequest.StartCall -> if (hasVoice) startVoiceChat(true) else notice = "Voice chat isn't on the desktop yet."
                 ChatRequest.StartDictation -> if (hasVoice) toggleDictation() else notice = "Dictation isn't on the desktop yet."
             }
         }
@@ -590,7 +591,7 @@ fun ChatScreen(
         // A desktop has no camera, and its file dialog picks photos as well: + goes straight to it.
         onAttach = { if (isDesktop) attachmentPicker.pickFiles() else attachOpen = true },
         onDictate = toggleDictation,
-        onVoiceChat = startVoiceChat,
+        onVoiceChat = { startVoiceChat(false) },
         onOpenPets = { petsOpen = true },
         onOpenControl = viewModel::openControl,
         onViewImage = { viewing = it },
