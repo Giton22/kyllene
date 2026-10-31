@@ -23,6 +23,12 @@ class FolderPathTest {
     }
 
     @Test
+    fun onlyAFolderFromARootOrHomeCanHaveOneMadeInIt() {
+        for (dir in listOf("~/", "~/src/", "/", "/srv/", "C:/", "c:/Users/")) assertTrue(FolderPath.isAbsolute(dir), dir)
+        for (dir in listOf("projects/", "./", "~x/", "C:")) assertFalse(FolderPath.isAbsolute(dir), dir)
+    }
+
+    @Test
     fun upGoesOneFolderAndStopsAtARoot() {
         assertEquals("~/", FolderPath.parent("~/src/"))
         assertEquals("/", FolderPath.parent("~/"))

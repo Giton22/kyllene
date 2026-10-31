@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -190,6 +191,9 @@ private fun FolderPicker(
     var making by remember(dir) { mutableStateOf(false) }
     var makeError by remember(dir) { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val current by rememberUpdatedState(dir)
+    // The gateway makes folders by absolute path only; a relative one is the cwd's when listed.
+    val canMake = makeFolder != null && FolderPath.isAbsolute(dir)
     LaunchedEffect(dir) {
         filter.edit { replace(0, length, "") }
         newName.edit { replace(0, length, "") }
@@ -219,7 +223,7 @@ private fun FolderPicker(
             onClick = { onOpen(FolderPath.HOME) },
             enabled = dir != FolderPath.HOME,
         )
-        if (makeFolder != null) {
+        if (canMake) {
             IconButton(Lucide.FolderPlus, contentDescription = "New folder", onClick = {
                 naming = !naming
                 makeError = null
@@ -227,15 +231,20 @@ private fun FolderPicker(
         }
         TextField(state = filter, modifier = Modifier.weight(1f), placeholder = "Filter", leadingIcon = Lucide.Search)
     }
-    if (naming && makeFolder != null) {
+    if (naming && canMake && makeFolder != null) {
         val name = newName.text.toString().trim()
         val valid = FolderPath.isName(name)
         val make: () -> Unit = {
-            if (valid && !making) scope.launch {
+            if (valid && !making) {
+                // Set before the launch, so Done and Create in the same frame make it once.
                 making = true
-                makeError = makeFolder(dir, name)
-                making = false
-                if (makeError == null) onOpen(FolderPath.child(dir, name))
+                val asked = dir
+                scope.launch {
+                    makeError = makeFolder(asked, name)
+                    making = false
+                    // Not if Up, Home or a folder moved the picker on while the gateway was asked.
+                    if (makeError == null && current == asked) onOpen(FolderPath.child(asked, name))
+                }
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -290,6 +299,9 @@ internal object FolderPath {
 
     /** Whether [name] can be a folder's own name: not blank, no separator, not `.` or `..`. */
     fun isName(name: String): Boolean = name.isNotBlank() && '/' !in name && '\\' !in name && name != "." && name != ".."
+
+    /** Whether [dir] starts at a root or home (`/`, `C:/`, `~/`) rather than wherever the gateway runs. */
+    fun isAbsolute(dir: String): Boolean = dir.startsWith("/") || dir.startsWith(HOME) || ROOT.matches(dir.take(3))
 
     /** The folder above [dir], or null at a root (`/`, `C:/`). Above home is `/`. */
     fun parent(dir: String): String? {
