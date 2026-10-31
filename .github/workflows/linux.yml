@@ -40,7 +40,17 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.flatpak.Builder org.freedesktop.Sdk//26.08 org.freedesktop.Platform//26.08
       - name: Packaging contracts
-        run: python3 -m unittest discover -s packaging/flatpak/tests -v
+        run: |
+          mkdir -p "$RUNNER_TEMP/fontconfig-sdk"
+          cat > "$RUNNER_TEMP/fontconfig-sdk/fc-list" <<'SH'
+          #!/bin/sh
+          set -eu
+          fixture="$(dirname "$(realpath "$FONTCONFIG_FILE")")"
+          exec flatpak run --filesystem="$fixture" --filesystem="$GITHUB_WORKSPACE:ro" \
+            --env="FONTCONFIG_FILE=$FONTCONFIG_FILE" --command=fc-list org.freedesktop.Sdk//26.08 "$@"
+          SH
+          chmod +x "$RUNNER_TEMP/fontconfig-sdk/fc-list"
+          PATH="$RUNNER_TEMP/fontconfig-sdk:$PATH" python3 -m unittest discover -s packaging/flatpak/tests -v
       - name: Select tested source
         run: >
           python3 packaging/flatpak/prepare-ci.py
