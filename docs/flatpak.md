@@ -10,7 +10,7 @@ runtime in the user installation. From the repository root, build and install:
 
 ```sh
 user_flatpak="$(realpath "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak")"
-flatpak run --env=FLATPAK_USER_DIR="$user_flatpak" --filesystem="$user_flatpak" org.flatpak.Builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/io.github.Giton22.Kyllene.Devel.json
+flatpak run --filesystem="$user_flatpak" --filesystem="$PWD" --command=env org.flatpak.Builder XDG_DATA_HOME="$(dirname "$user_flatpak")" flatpak-builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/io.github.Giton22.Kyllene.Devel.json
 flatpak build-bundle build/flatpak-repo build/kyllene.flatpak io.github.Giton22.Kyllene.Devel devel
 flatpak install --user build/kyllene.flatpak
 flatpak run io.github.Giton22.Kyllene.Devel
