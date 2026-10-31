@@ -18,6 +18,7 @@ import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.AccessTokens
+import dev.hermeskotlin.core.gateway.ClientCertAliases
 import dev.hermeskotlin.core.gateway.GatewayList
 import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.inbox.InboxStore
@@ -84,6 +85,8 @@ class AppViewModel(
     private val seen: SeenStore? = null,
     /** Each gateway's Inbox kept on the phone, which goes with the gateway. */
     private val inbox: InboxStore? = null,
+    /** Aliases picked on the Connect screen before their gateway is saved; saved gateways carry their own. */
+    private val certs: ClientCertAliases,
 ) : ViewModel() {
 
     private val _route = MutableStateFlow<Route>(Route.Loading)
@@ -251,6 +254,10 @@ class AppViewModel(
         viewModelScope.launch {
             if (signedInGateway()?.url != gateway.url) host.close()
             val saved = gateways.save(gateway)
+            // The Connect-screen pick is persisted on the gateway now, and the add flow is over: drop every
+            // pending pick so none shadows a saved gateway's certificate.
+            certs.clear()
+            if (saved.clientCertAlias != null) certs.changed(saved.gatewayUrl.host)
             sessionsChanged.update { it + 1 }
             connection.start(saved.gatewayUrl)
             _route.value = home(saved)
@@ -267,6 +274,8 @@ class AppViewModel(
     fun cancelAddGateway() {
         cancelPendingCall()
         viewModelScope.launch {
+            // A pick for the address abandoned would otherwise shadow saved gateways on its host until restart.
+            certs.clear()
             val current = gateways.current() ?: return@launch
             _route.value = if (auth.hasStoredSession(current.gatewayUrl)) home(current).also { connection.start(current.gatewayUrl) }
             else Route.SignIn(current)
@@ -288,6 +297,16 @@ class AppViewModel(
         viewModelScope.launch { gateways.rename(gateway.url, name) }
     }
 
+    /** Picks the client certificate to present to [gateway]; a null [alias] goes back to presenting none. */
+    fun setClientCert(gateway: SavedGateway, alias: String?) {
+        viewModelScope.launch {
+            gateways.setClientCert(gateway.url, alias)
+            // Saved gateways carry their own alias: a pending pick for the host would shadow this one (and the
+            // other gateways there). Dropping it also tells the engine to stop reusing connections to the host.
+            certs.set(gateway.gatewayUrl.host, null)
+        }
+    }
+
     /** Signs out of [gateway] and forgets it; removing the current one moves to the primary (or to [Route.Connect]). */
     fun removeGateway(gateway: SavedGateway) {
         if (gateway.url == currentGateway()?.url) cancelPendingCall()
@@ -305,6 +324,8 @@ class AppViewModel(
             // Again: a list read that was under way may have saved itself since.
             cache?.forgetGateway(gateway.gatewayUrl)
             gateways.remove(gateway.url)
+            // The saved alias goes with the gateway: no connection made with it is reused.
+            if (gateway.clientCertAlias != null) certs.changed(gateway.gatewayUrl.host)
             inbox?.forget(gateway.gatewayUrl.value)
             forgetUnusedAccessTokens()
             sessionsChanged.update { it + 1 }
