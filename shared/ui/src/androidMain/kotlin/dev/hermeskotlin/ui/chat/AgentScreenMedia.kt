@@ -40,7 +40,10 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import dev.hermeskotlin.core.media.publicOnly
 import androidx.media3.ui.PlayerView
 import android.content.Context
 import coil3.ImageLoader
@@ -83,19 +86,31 @@ internal val ScreenImages = A2uiImageRenderer { url, description, scale, modifie
     }
 }
 
+private var client: OkHttpClient? = null
 private var loader: ImageLoader? = null
 
 /**
- * The screens' pictures load through this, not Coil's own loader: that finds its web fetcher through a service
- * file a minified build leaves out, and names itself as OkHttp, which some image hosts (Wikimedia) turn away.
+ * What the screens' pictures and media load through. The agent picks the addresses and they load without a tap,
+ * so only the open internet, never the user's own networks (as for link previews). It names itself, as OkHttp's own
+ * name is turned away by some image hosts (Wikimedia).
  */
-private fun imageLoader(context: Context, version: String?): ImageLoader = loader ?: run {
+private fun webClient(version: String?): OkHttpClient = client ?: run {
     val agent = "Kyllene/${version ?: "dev"} (Android; https://github.com/Giton22/kyllene)"
-    val client = OkHttpClient.Builder()
+    OkHttpClient.Builder()
+        .publicOnly()
         .addInterceptor { chain -> chain.proceed(chain.request().newBuilder().header("User-Agent", agent).build()) }
         .build()
+        .also { client = it }
+}
+
+/**
+ * The screens' pictures load through this, not Coil's own loader: that finds its web fetcher through a service
+ * file a minified build leaves out, and doesn't keep to the open internet.
+ */
+private fun imageLoader(context: Context, version: String?): ImageLoader = loader ?: run {
+    val web = webClient(version)
     ImageLoader.Builder(context.applicationContext)
-        .components { add(OkHttpNetworkFetcherFactory(callFactory = { client })) }
+        .components { add(OkHttpNetworkFetcherFactory(callFactory = { web })) }
         .build()
         .also { loader = it }
 }
@@ -119,12 +134,14 @@ private fun Player(url: String, description: String?, audio: Boolean, modifier: 
         return
     }
     val context = LocalContext.current
+    val version = LocalAppVersion.current
     var failed by remember(url) { mutableStateOf(false) }
     val player = remember(url) {
-        ExoPlayer.Builder(context.applicationContext).build().apply {
+        val media = DefaultMediaSourceFactory(OkHttpDataSource.Factory(webClient(version)))
+        // Not prepared: nothing downloads until the user presses play (the controls prepare it then).
+        ExoPlayer.Builder(context.applicationContext).setMediaSourceFactory(media).build().apply {
             setMediaItem(MediaItem.fromUri(url))
             playWhenReady = false
-            prepare()
         }
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
