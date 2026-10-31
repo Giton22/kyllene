@@ -3660,13 +3660,13 @@ private fun Composer(
                             RowMenuItem("Copy", Lucide.Copy) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
                             },
-                            RowMenuItem("Cut", Lucide.Scissors) {
+                            RowMenuItem("Cut", Lucide.Edit) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
                                 actions.composer.edit {
                                     replace(selection.start, selection.end, AnnotatedString(""))
                                 }
                             },
-                            RowMenuItem("Paste", Lucide.ClipboardPaste) {
+                            RowMenuItem("Paste", Lucide.Copy) {
                                 composerScope.launch {
                                     val clipText = clipboardText()
                                     if (clipText != null) {
@@ -3676,7 +3676,7 @@ private fun Composer(
                                     }
                                 }
                             },
-                            RowMenuItem("Select all", Lucide.TextSelect) {
+                            RowMenuItem("Select all", Lucide.Copy) {
                                 composerScope.launch {
                                     actions.composer.edit {
                                         selection = TextRange(0, actions.composer.text.length)
