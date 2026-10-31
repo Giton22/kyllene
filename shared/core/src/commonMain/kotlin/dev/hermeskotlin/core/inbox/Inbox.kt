@@ -58,12 +58,12 @@ data class InboxRun(
      */
     val session: String? = null,
     /**
-     * Whether the copy this came in said [session], an id or none (plugin 0.5.3's lists and reads always do): then
+     * Whether the copy this came in said [session], an id or none (plugin 0.7.2's lists and reads always do): then
      * a null [session] means the run has no chat now (deleted with the gateway's old sessions, say). An older
      * plugin's copy, and a push, say nothing of it, so the chat an earlier copy knew is kept. Never saved.
      */
     @Transient val sessionSaid: Boolean = false,
-    /** Whether the plugin cut [text] short for a read (at 48 KB, from 0.5.3). Never saved: kept text is cut anyway. */
+    /** Whether the plugin cut [text] short for a read (at 48 KB, from 0.7.2). Never saved: kept text is cut anyway. */
     @Transient val truncated: Boolean = false,
 ) {
     val key: String get() = "$bot/$job/$run"

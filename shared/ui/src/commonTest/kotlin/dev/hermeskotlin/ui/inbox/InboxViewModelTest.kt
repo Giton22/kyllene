@@ -489,7 +489,7 @@ class InboxViewModelTest {
             val a = run("a", 50)
             when {
                 arg.startsWith("inbox") -> """{"ok":true,"runs":${runsJsonWithSession(a to "20261012_000050_abc")}}"""
-                // Plugin 0.5.3's read: the run's chat, or null once the gateway let the session go.
+                // Plugin 0.7.2's read: the run's chat, or null once the gateway let the session go.
                 arg.startsWith("read") -> """{"ok":true,"run":{"job":"a","run":"${a.run}","at":50,"text":"All","session":$session}}"""
                 else -> """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
             }
