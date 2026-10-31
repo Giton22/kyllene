@@ -427,9 +427,6 @@ fun ChatScreen(
     var processesOpen by remember { mutableStateOf(false) }
     var checkpointsOpen by remember { mutableStateOf(false) }
     var controlOpen by remember { mutableStateOf(false) }
-    var contextMenuOpen by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboard.current
-    val composerScope = rememberCoroutineScope()
     // Cleared (here or on another client) while open, there is nothing left to show.
     val hasControl = state.control != null
     LaunchedEffect(hasControl) { if (!hasControl) controlOpen = false }
@@ -3580,6 +3577,9 @@ private fun Composer(
     // How open the composer stands, 1 open to 0 folded to a line. It tracks the scroll as it goes, and springs
     // across when a tap, the keyboard or a draft holds it open or lets go.
     val open = remember { Animatable(1f) }
+    var contextMenuOpen by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboard.current
+    val composerScope = rememberCoroutineScope()
     // Something being written keeps it open: worked out here, where the text is read anyway, not in ChatView,
     // which would then recompose on every keystroke.
     val busyNow by rememberUpdatedState(hasText || dictation.active)
