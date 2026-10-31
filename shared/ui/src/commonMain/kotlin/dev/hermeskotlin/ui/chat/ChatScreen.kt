@@ -3660,7 +3660,7 @@ private fun Composer(
                             RowMenuItem("Copy", Lucide.Copy) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
                             },
-                            RowMenuItem("Cut", Lucide.Edit) {
+                            RowMenuItem("Cut", Lucide.Pencil) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
                                 actions.composer.edit {
                                     replace(selection.start, selection.end, AnnotatedString(""))
