@@ -323,6 +323,7 @@ import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.Button
+import dev.hermeskotlin.designsystem.components.clipboardText
 import dev.hermeskotlin.designsystem.components.Tooltip
 import dev.hermeskotlin.designsystem.components.handCursor
 import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
@@ -3658,6 +3659,29 @@ private fun Composer(
                         listOfNotNull(
                             RowMenuItem("Copy", Lucide.Copy) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
+                            },
+                            RowMenuItem("Cut", Lucide.Scissors) {
+                                composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
+                                actions.composer.edit {
+                                    replace(selection.start, selection.end, AnnotatedString(""))
+                                }
+                            },
+                            RowMenuItem("Paste", Lucide.ClipboardPaste) {
+                                composerScope.launch {
+                                    val clipText = clipboardText()
+                                    if (clipText != null) {
+                                        actions.composer.edit {
+                                            replace(selection.start, selection.end, AnnotatedString(clipText))
+                                        }
+                                    }
+                                }
+                            },
+                            RowMenuItem("Select all", Lucide.TextSelect) {
+                                composerScope.launch {
+                                    actions.composer.edit {
+                                        selection = TextRange(0, actions.composer.text.length)
+                                    }
+                                }
                             },
                         )
                     }
