@@ -4,6 +4,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.ast.getTextInNode
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import org.intellij.markdown.flavours.gfm.GFMTokenTypes
+import org.intellij.markdown.parser.MarkdownParser
 
 class BidiTest {
 
@@ -137,9 +143,83 @@ class BidiTest {
 
     @Test
     fun aBareUrlIsIsolatedAndItsSentencePeriodIsNot() {
-        val out = Bidi.isolateLtrRuns("افتح https://example.com/docs ثم أكمل.")
-        assertTrue(out.contains("${lri}https://example.com/docs$pdi ثم"))
+        val out = Bidi.isolateLtrRuns("افتح https://example.com/docs. ثم أكمل.")
+        assertTrue(out.contains("$lri[https://example.com/docs](https://example.com/docs)$pdi. ثم"), out)
         assertTrue(out.endsWith("أكمل."))
+    }
+
+    @Test
+    fun aBareUrlLinksToItsAddressWithoutTheIsolates() {
+        // An isolated autolink would run on to the next space and take the closing isolate into its address.
+        val text = Bidi.isolateLtrRuns("افتح https://example.com/search?q=1&x=2 ثم www.example.com/a، وبعدها")
+        val links = mutableListOf<String>()
+        fun walk(node: ASTNode) {
+            // The address the renderer opens; an autolink in the link's text only shows it.
+            if (node.type == MarkdownElementTypes.LINK_DESTINATION) links += node.getTextInNode(text).toString()
+            if (node.type == GFMTokenTypes.GFM_AUTOLINK) assertFalse(node.getTextInNode(text).any { it == lri || it == pdi }, text)
+            node.children.forEach(::walk)
+        }
+        walk(MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(text))
+        assertEquals(listOf("https://example.com/search?q=1&x=2", "http://www.example.com/a"), links)
+        assertEquals(text, Bidi.isolateLtrRuns(text))
+    }
+
+    @Test
+    fun aUrlAfterAnEnglishPhraseIsARunOfItsOwn() {
+        val out = Bidi.isolateLtrRuns("راجع the docs https://example.com/x هنا")
+        assertTrue(out.contains("${lri}the docs$pdi $lri[https://example.com/x]"), out)
+    }
+
+    @Test
+    fun aTaskBoxOrAComparisonDoesNotHideTheRunsAfterIt() {
+        assertTrue(Bidi.isolateLtrRuns("- [ ] مهمة 2026-11-20 (مهم)").contains("${lri}2026-11-20$pdi"))
+        val out = Bidi.isolateLtrRuns("إذا كان 3 < 5 و v2.1 > 2")
+        assertTrue(out.contains("${lri}5$pdi") && out.contains("${lri}v2.1$pdi"), out)
+    }
+
+    @Test
+    fun aLinkWhoseAddressHasBracketsIsLeftWhole() {
+        val input = "راجع [هذا](https://example.com/wiki/Foo_(bar)) و 2026"
+        assertEquals("راجع [هذا](https://example.com/wiki/Foo_(bar)) و ${lri}2026$pdi", Bidi.isolateLtrRuns(input))
+    }
+
+    @Test
+    fun aNestedListItemIsProseNotIndentedCode() {
+        val input = "- الأول\n    - شغّل `hermes update` الآن\n    1. بعد 2026-11-20"
+        val out = Bidi.isolateLtrRuns(Bidi.isolateInlineCode(input))
+        assertTrue(out.contains("`${lri}hermes update$pdi`"), out)
+        assertTrue(out.contains("    1. بعد ${lri}2026-11-20$pdi"), out)
+    }
+
+    @Test
+    fun indentedCodeAfterABlankLineIsStillCode() {
+        val input = "قبل:\n\n    chown www-data `x`\nبعد"
+        assertEquals(input, Bidi.isolateLtrRuns(Bidi.isolateInlineCode(input)))
+    }
+
+    @Test
+    fun inlineCodeOnALeftToRightLineIsLeftAloneUnlessTheReplyIsRightToLeft() {
+        val input = "Run `npm install` first"
+        assertEquals(input, Bidi.isolateInlineCode(input))
+        assertEquals("Run `${lri}npm install$pdi` first", Bidi.isolateInlineCode(input, rightToLeft = true))
+    }
+
+    @Test
+    fun anArabicGreetingDoesNotTurnAnEnglishReplyRightToLeft() {
+        assertFalse(Bidi.prefersRightToLeft("أهلاً وسهلاً بك، Here is the full explanation of how the gateway prunes old sessions."))
+    }
+
+    @Test
+    fun aUrlOrAPathCountsAsOneWord() {
+        assertTrue(Bidi.prefersRightToLeft("الموعد حتى 2026-11-20 افتح https://example.com/search?q=1 للتفاصيل"))
+        assertTrue(Bidi.prefersRightToLeft("راجع الملف /root/.hermes/config.yaml الآن"))
+    }
+
+    @Test
+    fun aParagraphWithoutWordsHasNoDirectionOfItsOwn() {
+        assertEquals(null, Bidi.wordDirection("12:30 — 409"))
+        assertEquals(true, Bidi.wordDirection("409 MB مكتوبة صراحةً"))
+        assertEquals(false, Bidi.wordDirection("أهلاً، here is the full explanation"))
     }
 
     @Test

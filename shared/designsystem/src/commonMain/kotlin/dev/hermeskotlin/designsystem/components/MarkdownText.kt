@@ -20,6 +20,7 @@ import com.composeunstyled.UnstyledIcon
 import dev.hermeskotlin.designsystem.rememberHoverIndication
 import com.mikepenz.markdown.compose.elements.listDepth
 import com.mikepenz.markdown.compose.elements.MarkdownListItems
+import com.mikepenz.markdown.compose.elements.MarkdownOrderedList
 import dev.hermeskotlin.designsystem.radiusSmall
 import dev.hermeskotlin.designsystem.surface3
 import dev.hermeskotlin.designsystem.textMuted
@@ -158,14 +159,15 @@ internal fun DefaultMarkdownTypography.withTextStyle(style: TextStyle?): Default
  */
 @Composable
 fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean = false, textStyle: TextStyle? = null) {
+    val rtl = remember(text) { Bidi.prefersRightToLeft(text) }
     val prepared = remember(text) {
-        val parsed = Bidi.isolateInlineCode(MathMarkup.prepare(text))
+        val parsed = Bidi.isolateInlineCode(MathMarkup.prepare(text), rightToLeft = rtl)
         // An Arabic sentence also needs the dates, amounts, identifiers and URLs inside it kept whole.
-        if (Bidi.prefersRightToLeft(text)) Bidi.isolateLtrRuns(parsed) else parsed
+        if (rtl) Bidi.isolateLtrRuns(parsed) else parsed
     }
     // An Arabic reply is laid out right to left as a whole (ordered, and start-aligned, from the right);
     // anything else falls back to Content, so each block follows its own first strong character.
-    val direction = remember(text) { if (Bidi.prefersRightToLeft(text)) TextDirection.Rtl else TextDirection.Content }
+    val direction = if (rtl) TextDirection.Rtl else TextDirection.Content
     val replyStyle = Theme[typography][body].copy(color = Theme[colors][textColor], textDirection = direction)
     val compact = compactStyle(replyStyle, textStyle)
     val bodyStyle = compact ?: replyStyle
@@ -207,6 +209,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
             codeFence = { MarkdownCodeFence(it.content, it.node, block = { code, language, style -> CodeBlock(code, language, style) }) },
             codeBlock = { MarkdownCodeBlock(it.content, it.node, block = { code, language, style -> CodeBlock(code, language, style) }) },
             paragraph = { HighlightedParagraph(it.content, it.node) },
+            orderedList = { ListInItsDirection(it.content, it.node) { MarkdownOrderedList(it.content, it.node, depth = it.listDepth) } },
             unorderedList = { DotList(it.content, it.node, it.listDepth) },
             table = { FittedTable(it.content, it.node, it.typography.table) },
         )
@@ -384,12 +387,22 @@ private fun HighlightedParagraph(content: String, node: ASTNode) {
         DisplayFormula(display, math)
         return
     }
+    // Each paragraph reads in the direction most of its words take: an English paragraph that opens with an
+    // Arabic greeting stays left to right, and "409 MB" opening an Arabic one doesn't turn it left to right.
+    // One with no words keeps the reply's direction.
+    val replyStyle = LocalMarkdownTypography.current.paragraph
+    val style = remember(content, node, replyStyle) {
+        when (Bidi.wordDirection(node.getTextInNode(content))) {
+            true -> replyStyle.copy(textDirection = TextDirection.Rtl)
+            false -> replyStyle.copy(textDirection = TextDirection.Ltr)
+            null -> replyStyle
+        }
+    }
     val highlights = LocalTextHighlights.current
     if (highlights.isEmpty()) {
-        MarkdownParagraph(content, node)
+        MarkdownParagraph(content, node, style = style)
         return
     }
-    val style = LocalMarkdownTypography.current.paragraph
     val settings = annotatorSettings()
     val color = highlightColor()
     val text = remember(content, node, style, settings, highlights, color) {
@@ -411,13 +424,18 @@ private fun DotList(content: String, node: ASTNode, depth: Int) {
     // Only an sp line height converts to dp; any other falls back to the body's.
     val lineHeight = LocalMarkdownTypography.current.list.lineHeight.takeIf { it.isSp } ?: Theme[typography][body].lineHeight
     val top = with(LocalDensity.current) { ((lineHeight.toDp() - BULLET_DOT) / 2) }
-    // An Arabic list hangs off the right margin: the marker takes that side and the text follows it.
-    val rtl = Bidi.prefersRightToLeft(node.getTextInNode(content).toString())
-    CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
+    ListInItsDirection(content, node) {
         MarkdownListItems(content, node, depth, markerModifier = { Modifier.padding(start = 2.dp, end = 10.dp) }) { _, _, _ ->
             Box(Modifier.padding(top = top).size(BULLET_DOT).background(dot, CircleShape))
         }
     }
+}
+
+/** An Arabic list hangs off the right margin: the marker takes that side and the text follows it. */
+@Composable
+private fun ListInItsDirection(content: String, node: ASTNode, list: @Composable () -> Unit) {
+    val rtl = remember(content, node) { Bidi.prefersRightToLeft(node.getTextInNode(content).toString()) }
+    CompositionLocalProvider(LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr, content = list)
 }
 
 private val BULLET_DOT = 5.dp

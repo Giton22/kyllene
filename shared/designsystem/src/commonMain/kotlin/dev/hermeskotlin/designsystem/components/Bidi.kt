@@ -24,14 +24,30 @@ internal object Bidi {
      * Isolates every inline code span in [markdown]: `` `hermes update` `` becomes `` `\u2066hermes update\u2069` ``
      * so the span stays one left-to-right unit inside an Arabic sentence.
      *
-     * Fenced blocks (``` / ~~~), indented code lines and four-space indented lines are left alone — a code
-     * block is already its own left-to-right paragraph. A span whose text is right to left (Arabic inside
-     * backticks) is left alone too: isolating it to the left would force the wrong order. Text that already
-     * carries an isolate character is not wrapped again, so the pass is idempotent.
+     * Fenced blocks (``` / ~~~) and indented code are left alone — a code block is already its own
+     * left-to-right paragraph. A span whose text is right to left (Arabic inside backticks) is left alone
+     * too: isolating it to the left would force the wrong order. Text that already carries an isolate
+     * character is not wrapped again, so the pass is idempotent.
+     *
+     * Only lines with right-to-left letters are touched, or every line when the whole reply is laid out
+     * [rightToLeft]: a code span in a left-to-right line needs no isolate, and what the user selects and
+     * copies from it then holds none.
      */
-    fun isolateInlineCode(markdown: String): String {
+    fun isolateInlineCode(markdown: String, rightToLeft: Boolean = false): String {
         if (markdown.indexOf('`') < 0) return markdown
+        return mapProseLines(markdown) { line -> if (rightToLeft || line.any(::isRightToLeft)) isolateSpans(line) else line }
+    }
+
+    /**
+     * [markdown] with [transform] applied to every line that is not code: fenced blocks (``` / ~~~) and
+     * indented code are kept as they are. A line indented four spaces is only code after a blank line or
+     * more code, and never inside a list, where that indent belongs to a nested item or its text.
+     */
+    private inline fun mapProseLines(markdown: String, transform: (String) -> String): String {
         var fence: String? = null
+        var previousBlank = true
+        var previousCode = false
+        var inList = false
         val out = StringBuilder(markdown.length + 32)
         var start = 0
         while (start <= markdown.length) {
@@ -43,10 +59,17 @@ internal object Bidi {
                 trimmed.startsWith("~~~") -> "~~~"
                 else -> null
             }
-            val codeLine = fence != null || opener != null || line.startsWith("    ") || line.startsWith("\t")
+            val blank = trimmed.isEmpty()
+            val indented = line.startsWith("    ") || line.startsWith("\t")
+            val listItem = !blank && listMarkerEnd(trimmed, 0) > 0
+            if (listItem) inList = true else if (!blank && !indented && previousBlank) inList = false
+            val indentedCode = fence == null && indented && !inList && (previousBlank || previousCode)
+            val code = fence != null || opener != null || indentedCode
             if (opener != null) fence = if (fence == opener) null else opener
-            out.append(if (codeLine) line else isolateSpans(line))
+            out.append(if (code) line else transform(line))
             if (end < markdown.length) out.append('\n')
+            previousBlank = blank
+            previousCode = indentedCode || (previousCode && blank)
             start = end + 1
         }
         return out.toString()
@@ -101,30 +124,11 @@ internal object Bidi {
      *
      * Wrapping them matters because a run such as `2026-11-20` or `www-data` between Arabic words
      * otherwise drags the punctuation and the words around it across the line. Markdown structure is left
-     * alone: code spans (already isolated by [isolateInlineCode]), fenced and indented code, link
-     * destinations, autolinks and inline HTML.
+     * alone: code spans (already isolated by [isolateInlineCode]), fenced and indented code, links and
+     * images, autolinks and inline HTML. A bare URL becomes a link with the same text, since an autolink
+     * would take the closing isolate into its address.
      */
-    fun isolateLtrRuns(markdown: String): String {
-        var fence: String? = null
-        val out = StringBuilder(markdown.length + 32)
-        var start = 0
-        while (start <= markdown.length) {
-            val end = markdown.indexOf('\n', start).let { if (it < 0) markdown.length else it }
-            val line = markdown.substring(start, end)
-            val trimmed = line.trimStart()
-            val opener = when {
-                trimmed.startsWith("```") -> "```"
-                trimmed.startsWith("~~~") -> "~~~"
-                else -> null
-            }
-            val codeLine = fence != null || opener != null || line.startsWith("    ") || line.startsWith("\t")
-            if (opener != null) fence = if (fence == opener) null else opener
-            out.append(if (codeLine) line else isolateRuns(line))
-            if (end < markdown.length) out.append('\n')
-            start = end + 1
-        }
-        return out.toString()
-    }
+    fun isolateLtrRuns(markdown: String): String = mapProseLines(markdown, ::isolateRuns)
 
     /** One line's left-to-right runs, each isolated on its own. */
     private fun isolateRuns(line: String): String {
@@ -149,13 +153,24 @@ internal object Bidi {
                 // A code span: isolateInlineCode has already wrapped its content; copy it as it is.
                 c == '`' -> i = copyCodeSpan(line, i, out)
                 // An image or a link: `![math](herald-math:…)`, `[text](url)`. The alt text is matched
-                // against patterns downstream, so neither side may be touched.
-                c == '!' && line.getOrNull(i + 1) == '[' -> i = copyUntil(line, i, ')', out)
-                c == '[' -> i = copyUntil(line, i, ')', out)
+                // against patterns downstream, so neither side may be touched. A bracket that opens no
+                // link — a task box, a note — is prose.
+                c == '!' && linkEnd(line, i + 1) > 0 -> {
+                    val end = linkEnd(line, i + 1)
+                    out.append(line, i, end)
+                    i = end
+                }
+                c == '[' && linkEnd(line, i) > 0 -> {
+                    val end = linkEnd(line, i)
+                    out.append(line, i, end)
+                    i = end
+                }
                 // A link destination `](url)` whose `[` we already passed.
                 c == ']' && line.getOrNull(i + 1) == '(' -> i = copyUntil(line, i, ')', out)
-                // Autolinks and inline HTML are markup, not prose.
-                c == '<' -> i = copyUntil(line, i, '>', out)
+                // Autolinks and inline HTML are markup, not prose; `3 < 5` is not.
+                c == '<' && line.getOrNull(i + 1).let { it != null && (it.isAsciiLetter() || it in "/!?") } ->
+                    i = copyUntil(line, i, '>', out)
+                urlAt(line, i) -> i = appendUrl(line, i, out)
                 c.isAsciiLetter() || c in '0'..'9' || (c == '/' && line.getOrNull(i + 1)?.isAsciiLetter() == true) -> {
                     // One word, then any further words joined to it by single spaces: an English phrase
                     // inside an Arabic sentence is one run, or its words would come out in reverse.
@@ -166,7 +181,8 @@ internal object Bidi {
                         if (end == tokenStart) break
                         var next = end
                         while (next < line.length && line[next] == ' ') next++
-                        val continues = next > end && next < line.length &&
+                        // A URL after the phrase is a run of its own, see appendUrl.
+                        val continues = next > end && next < line.length && !urlAt(line, next) &&
                             (line[next].isAsciiLetter() || line[next] in '0'..'9' || (line[next] == '/' && line.getOrNull(next + 1)?.isAsciiLetter() == true))
                         if (!continues) break
                         end = next
@@ -207,6 +223,64 @@ internal object Bidi {
         return close + run
     }
 
+    /**
+     * The end of the link `[text](url)` or `[text](<url>)` whose `[` is at [at], or -1 when the bracket
+     * opens no link. A destination may hold balanced brackets, as `…/wiki/Foo_(bar)` does.
+     */
+    private fun linkEnd(line: String, at: Int): Int {
+        if (line.getOrNull(at) != '[') return -1
+        val close = line.indexOf(']', at + 1)
+        if (close < 0 || line.getOrNull(close + 1) != '(') return -1
+        var j = close + 2
+        if (line.getOrNull(j) == '<') {
+            val gt = line.indexOf('>', j)
+            if (gt < 0) return -1
+            j = gt + 1
+        }
+        var depth = 0
+        while (j < line.length) {
+            when (line[j]) {
+                '(' -> depth++
+                ')' -> if (depth == 0) return j + 1 else depth--
+            }
+            j++
+        }
+        return -1
+    }
+
+    /** Whether a bare URL, which GFM turns into an autolink, starts at [at]. */
+    private fun urlAt(line: String, at: Int): Boolean {
+        if (at > 0 && (line[at - 1].isAsciiLetter() || line[at - 1] in '0'..'9')) return false
+        return URL_STARTS.any { line.startsWith(it, at, ignoreCase = true) }
+    }
+
+    /**
+     * Appends the bare URL at [at] as a link with the same text, isolated: `⁦[https://x](https://x)⁩`.
+     * Isolating the bare URL instead would not work: an autolink runs to the next space, so it would take
+     * the closing isolate into its address and open a broken page. Returns where the URL ends.
+     */
+    private fun appendUrl(line: String, at: Int, out: StringBuilder): Int {
+        var end = at
+        while (end < line.length && !line[end].isWhitespace() && line[end] != '<' && line[end] !in ISOLATES && !isRightToLeft(line[end])) end++
+        // As GFM does: sentence punctuation after the address, and a `)` that closes none, are prose.
+        while (end > at) {
+            val last = line[end - 1]
+            val unbalanced = last == ')' && line.substring(at, end).count { it == '(' } < line.substring(at, end).count { it == ')' }
+            if (last in URL_TRAILING || unbalanced) end-- else break
+        }
+        val url = line.substring(at, end)
+        if (url.any { it in "[]<>\\`*" } || url.count { it == '(' } != url.count { it == ')' }) {
+            // Text the link would read as markup, or brackets that would end its address early: left as
+            // the autolink it was.
+            out.append(url)
+            return end
+        }
+        // The renderer only takes the address of `(url)`; `(<url>)` parses as an autolink and opens nothing.
+        val address = if (url.startsWith("www.", ignoreCase = true)) "http://$url" else url
+        out.append(LRI).append('[').append(url).append("](").append(address).append(')').append(PDI)
+        return end
+    }
+
     private fun copyUntil(line: String, at: Int, closing: Char, out: StringBuilder): Int {
         val close = line.indexOf(closing, at + 1)
         if (close < 0) {
@@ -219,15 +293,11 @@ internal object Bidi {
 
     private fun Char.isAsciiLetter(): Boolean = this in 'A'..'Z' || this in 'a'..'z'
 
-    /** Whether [at] is the first non-space character of the line (up to three spaces of indent). */
+    /** Whether [at] is the first non-space character of the line; a nested item is indented further. */
     private fun startOfLine(line: String, at: Int): Boolean {
         var i = at - 1
-        var spaces = 0
-        while (i >= 0 && line[i] == ' ') {
-            spaces++
-            i--
-        }
-        return spaces <= 3 && (i < 0 || line[i] == '\n')
+        while (i >= 0 && line[i] == ' ') i--
+        return i < 0 || line[i] == '\n'
     }
 
     /** End of a list marker starting at [at], or [at] when there is none. `1. `, `1) `, `- `, `* `, `+ `. */
@@ -258,24 +328,39 @@ internal object Bidi {
     private fun Char.isRunChar(): Boolean = isAsciiLetter() || this in '0'..'9' || this in RUN_CHARS
 
     /**
-     * Whether [text] should be laid out right to left: true when most of its letters are Arabic or
-     * Hebrew, false when they are Latin or when it has no letters at all (digits, punctuation).
+     * Whether [text] should be laid out right to left: true when most of its words are Arabic or Hebrew,
+     * false when they are Latin or when it has no words at all (digits, punctuation).
      *
-     * Counting letters rather than taking the first strong character matters for real replies: a
-     * sentence such as "409 MB مكتوبة صراحةً…" would otherwise be laid out left to right because it opens
-     * with a number and a unit, and its Arabic clauses would read in the wrong order.
+     * Counting words rather than taking the first strong character matters for real replies: a sentence
+     * such as "409 MB مكتوبة صراحةً…" would otherwise be laid out left to right because it opens with a
+     * number and a unit, and its Arabic clauses would read in the wrong order. Every word counts: a reply
+     * that greets in Arabic and then explains in English is an English reply.
      */
-    fun prefersRightToLeft(text: String): Boolean {
+    fun prefersRightToLeft(text: CharSequence): Boolean = wordDirection(text) == true
+
+    /**
+     * True when most of [text]'s words are right to left, false when most are left to right, null when it
+     * has none. Words, not letters: a URL, a path or an identifier in an Arabic sentence is one word, not
+     * the dozens of Latin letters that would outvote the Arabic around it.
+     */
+    fun wordDirection(text: CharSequence): Boolean? {
         var rtl = 0
         var ltr = 0
-        for (c in text) {
-            when {
-                isRightToLeft(c) -> rtl++
-                isLeftToRight(c) -> ltr++
+        var word = 0 // 1 for a right-to-left word, -1 for a left-to-right one, 0 until its first letter
+        for (i in 0..text.length) {
+            val c = if (i < text.length) text[i] else ' '
+            if (c.isWhitespace() || c == LRI || c == PDI) {
+                if (word > 0) rtl++ else if (word < 0) ltr++
+                word = 0
+            } else if (word == 0) {
+                word = when {
+                    isRightToLeft(c) -> 1
+                    isLeftToRight(c) -> -1
+                    else -> 0
+                }
             }
-            if (rtl > ltr + 8) return true // decided early on a long Arabic run
         }
-        return rtl > ltr
+        return if (rtl + ltr == 0) null else rtl > ltr
     }
 
     private fun isRightToLeft(c: Char): Boolean = when (c) {
@@ -298,6 +383,12 @@ internal object Bidi {
 
     /** Punctuation that ends a sentence rather than a run, so it stays in the prose around it. */
     private const val RUN_TRAILING = "./:-_=+&?#~\\"
+
+    /** How a bare URL starts, the ones GFM links on its own. */
+    private val URL_STARTS = listOf("https://", "http://", "www.")
+
+    /** Punctuation GFM leaves out of the end of an autolink. */
+    private const val URL_TRAILING = "?!.,:*_~'\""
 
     /** The isolate characters: LRI, RLI, FSI, PDI. */
     private const val ISOLATES = "\u2066\u2067\u2068\u2069"
