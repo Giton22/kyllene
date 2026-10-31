@@ -36,7 +36,7 @@ jobs:
       - name: Install Flatpak tools and SDK
         run: |
           sudo apt-get update
-          sudo apt-get install -y flatpak fontconfig
+          sudo apt-get install -y flatpak fontconfig xvfb xauth xdotool python3-pil
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.flatpak.Builder org.freedesktop.Sdk//26.08 org.freedesktop.Platform//26.08
       - name: Packaging contracts
@@ -52,6 +52,8 @@ jobs:
           user_flatpak="$(realpath "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak")"
           flatpak run --env=FLATPAK_USER_DIR="$user_flatpak" --filesystem="$user_flatpak" org.flatpak.Builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/ci.json
           flatpak build-bundle build/flatpak-repo build/kyllene.flatpak io.github.Giton22.Kyllene.Devel devel
+      - name: Installed sandbox smoke
+        run: python3 packaging/flatpak/tests/installed_smoke.py build/kyllene.flatpak
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kyllene-flatpak-x86_64

@@ -54,3 +54,16 @@ recursive copy of the runner workspace. Only the bundle is uploaded.
 Keep these Linux checks non-required in branch rules. Failures stay visibly
 failed; Android checks and release publication remain independent. A built CI
 bundle still needs installed-sandbox and Bazzite acceptance before publication.
+
+The workflow installs its bundle and exercises the actual sandbox on a private
+Xvfb display: gateway address input, synthetic sign-in, local HTML rendering,
+JavaScript interaction and window resize. The loopback-only fixture never calls
+a provider or reads host files. The runner stops its exact owned instance and
+uninstalls its app without deleting data, including after a failed check.
+
+Run `python3 packaging/flatpak/tests/installed_smoke.py build/kyllene.flatpak`
+with Xvfb, xauth, xdotool and Pillow installed. It refuses to replace an existing
+user installation; use a disposable Flatpak user installation with its matching
+runtime available. Screenshots and profiles are not uploaded. Xvfb smoke does
+not qualify KDE focus, context menus, portals, voice or live-provider behavior;
+real Bazzite acceptance remains a separate release gate.
