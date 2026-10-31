@@ -43,3 +43,17 @@ restores the Chromium helper's executable bit. Its fontconfig
 fragment excludes WOFF/WOFF2 entries, which stalled Skia enumeration in installed
 tests; ordinary host fonts remain available. Remove this exclusion once those
 formats pass startup and rendering checks with the selected Skia/runtime versions.
+
+### Microphone backend
+
+Linux has a recorder behind the existing `VoiceRecorder` contract, using the default
+microphone through webrtc-java 0.20.0 and PulseAudio compatibility on PipeWire.
+The package grants the PulseAudio socket for this feature. This socket can access
+microphone and output devices; it is not a per-recording permission prompt.
+Recording begins only when requested, uses bounded PCM buffering, and releases its
+native device on completion, cancellation or failure. It changes no device defaults
+or system volume and writes no temporary recording files.
+The existing desktop voice UI remains disabled until playback is implemented;
+this backend alone does not enable dictation, spoken replies or live calls.
+Unit tests use synthetic PCM. Installed capture, audio quality and live-provider
+behavior require separate qualification; synthetic frames do not prove them.

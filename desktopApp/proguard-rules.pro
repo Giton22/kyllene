@@ -73,3 +73,6 @@
 -dontwarn org.slf4j.**
 -dontwarn kotlinx.coroutines.debug.**
 -dontwarn org.jetbrains.annotations.**
+
+# The Linux audio backend's native library resolves WebRTC classes and members by name.
+-keep class dev.onvoid.webrtc.** { *; }
