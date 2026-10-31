@@ -85,7 +85,9 @@ class SessionsApi(private val client: HttpClient) {
             parameter("limit", limit)
         }
     }.map { response ->
-        response.body<SearchResponse>().results.map { it.copy(snippet = it.snippet?.stripMatchMarkers()) }
+        response.body<SearchResponse>().results
+            .distinctBy { it.id }
+            .map { it.copy(snippet = it.snippet?.stripMatchMarkers()) }
     }
 
     /**
