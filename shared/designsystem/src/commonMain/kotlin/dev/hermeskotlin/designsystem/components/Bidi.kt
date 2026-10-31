@@ -39,16 +39,20 @@ internal object Bidi {
     }
 
     /**
-     * [markdown] with [transform] applied to every line that is not code: fenced blocks (``` / ~~~) and
-     * indented code are kept as they are. A line indented four spaces is only code after a blank line or
-     * more code, and never inside a list, where that indent belongs to a nested item or its text.
+     * [markdown] with [transform] applied to every line that is not code, and [code] to every line that is:
+     * fenced blocks (``` / ~~~), indented code and link reference definitions (`[1]: https://…`), whose
+     * address must stay as written.
+     *
+     * A line indented four spaces is code unless it continues a paragraph (indented code can't interrupt
+     * one) or sits in a list, where that indent belongs to a nested item or its text. A list starts at a
+     * marker indented less than four spaces and ends at an unindented line after a blank one.
      */
-    private inline fun mapProseLines(markdown: String, transform: (String) -> String): String {
+    private inline fun mapProseLines(markdown: String, code: (String) -> String = { it }, transform: (String) -> String): String {
         var fence: String? = null
-        var previousBlank = true
-        var previousCode = false
+        var previousParagraph = false
         var inList = false
         val out = StringBuilder(markdown.length + 32)
+        var previousBlank = true
         var start = 0
         while (start <= markdown.length) {
             val end = markdown.indexOf('\n', start).let { if (it < 0) markdown.length else it }
@@ -61,19 +65,26 @@ internal object Bidi {
             }
             val blank = trimmed.isEmpty()
             val indented = line.startsWith("    ") || line.startsWith("\t")
-            val listItem = !blank && listMarkerEnd(trimmed, 0) > 0
-            if (listItem) inList = true else if (!blank && !indented && previousBlank) inList = false
-            val indentedCode = fence == null && indented && !inList && (previousBlank || previousCode)
-            val code = fence != null || opener != null || indentedCode
+            val inFence = fence != null || opener != null
+            val listItem = !inFence && !blank && (!indented || inList) && listMarkerEnd(trimmed, 0) > 0
+            if (listItem) inList = true else if (!inFence && !blank && !indented && previousBlank) inList = false
+            val indentedCode = !inFence && indented && !inList && !previousParagraph
+            val isCode = inFence || indentedCode || (!indented && LINK_DEFINITION.matches(line))
             if (opener != null) fence = if (fence == opener) null else opener
-            out.append(if (code) line else transform(line))
+            out.append(if (isCode) code(line) else transform(line))
             if (end < markdown.length) out.append('\n')
+            // Only paragraph text can be continued by an indented line; a heading, a rule or a table can't.
+            previousParagraph = !isCode && !blank && !trimmed.startsWith('#') && !trimmed.startsWith('|') &&
+                !THEMATIC_BREAK.matches(trimmed)
             previousBlank = blank
-            previousCode = indentedCode || (previousCode && blank)
             start = end + 1
         }
         return out.toString()
     }
+
+    /** [markdown]'s prose without code blocks and code spans: the words that decide its direction. */
+    private fun prose(markdown: String): String =
+        mapProseLines(markdown, code = { "" }) { line -> if (line.indexOf('`') < 0) line else CODE_SPAN.replace(line, " ") }
 
     /** One line's backtick spans, each isolated on its own. Handles runs of two or more backticks. */
     private fun isolateSpans(line: String): String {
@@ -128,7 +139,7 @@ internal object Bidi {
      * images, autolinks and inline HTML. A bare URL becomes a link with the same text, since an autolink
      * would take the closing isolate into its address.
      */
-    fun isolateLtrRuns(markdown: String): String = mapProseLines(markdown, ::isolateRuns)
+    fun isolateLtrRuns(markdown: String): String = mapProseLines(markdown, transform = ::isolateRuns)
 
     /** One line's left-to-right runs, each isolated on its own. */
     private fun isolateRuns(line: String): String {
@@ -160,6 +171,17 @@ internal object Bidi {
                     out.append(line, i, end)
                     i = end
                 }
+                // The label of a reference link, `[text][1]`: it must match its `[1]: …` definition as written.
+                c == '[' && line.getOrNull(i - 1) == ']' && line.indexOf(']', i + 1) > 0 -> {
+                    val end = line.indexOf(']', i + 1) + 1
+                    out.append(line, i, end)
+                    i = end
+                }
+                // A task box `[ ]` / `[x]`: isolating the x would turn it into a link reference.
+                c == '[' && line.getOrNull(i + 1)?.let { it in " xX" } == true && line.getOrNull(i + 2) == ']' -> {
+                    out.append(line, i, i + 3)
+                    i += 3
+                }
                 c == '[' && linkEnd(line, i) > 0 -> {
                     val end = linkEnd(line, i)
                     out.append(line, i, end)
@@ -177,7 +199,8 @@ internal object Bidi {
                     var end = i
                     while (true) {
                         val tokenStart = end
-                        while (end < line.length && line[end].isRunChar()) end++
+                        // A URL glued on (`Docs:https://…`) ends the run here and is appended as a link.
+                        while (end < line.length && line[end].isRunChar() && !(end > tokenStart && urlAt(line, end))) end++
                         if (end == tokenStart) break
                         var next = end
                         while (next < line.length && line[next] == ' ') next++
@@ -336,14 +359,21 @@ internal object Bidi {
      * number and a unit, and its Arabic clauses would read in the wrong order. Every word counts: a reply
      * that greets in Arabic and then explains in English is an English reply.
      */
-    fun prefersRightToLeft(text: CharSequence): Boolean = wordDirection(text) == true
+    fun prefersRightToLeft(text: CharSequence): Boolean = proseDirection(text) == true
+
+    /**
+     * True when most of the words in [markdown]'s prose are right to left, false when most are left to
+     * right, null when it has none. Code blocks and code spans don't vote: an Arabic answer with a Kotlin
+     * sample is still an Arabic answer.
+     */
+    fun proseDirection(markdown: CharSequence): Boolean? = wordDirection(prose(markdown.toString()))
 
     /**
      * True when most of [text]'s words are right to left, false when most are left to right, null when it
      * has none. Words, not letters: a URL, a path or an identifier in an Arabic sentence is one word, not
      * the dozens of Latin letters that would outvote the Arabic around it.
      */
-    fun wordDirection(text: CharSequence): Boolean? {
+    private fun wordDirection(text: CharSequence): Boolean? {
         var rtl = 0
         var ltr = 0
         var word = 0 // 1 for a right-to-left word, -1 for a left-to-right one, 0 until its first letter
@@ -383,6 +413,15 @@ internal object Bidi {
 
     /** Punctuation that ends a sentence rather than a run, so it stays in the prose around it. */
     private const val RUN_TRAILING = "./:-_=+&?#~\\"
+
+    /** A link reference definition, `[1]: https://…`: its address must not be touched. */
+    private val LINK_DEFINITION = Regex("""^ {0,3}\[[^\]]+]:\s*\S.*""")
+
+    /** A thematic break, `---` / `***` / `___`. */
+    private val THEMATIC_BREAK = Regex("""^([-*_])( *\1){2,} *$""")
+
+    /** An inline code span, any number of backticks. */
+    private val CODE_SPAN = Regex("""(`+).*?\1""")
 
     /** How a bare URL starts, the ones GFM links on its own. */
     private val URL_STARTS = listOf("https://", "http://", "www.")

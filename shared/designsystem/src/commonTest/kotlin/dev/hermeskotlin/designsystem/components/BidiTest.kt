@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.getTextInNode
@@ -217,9 +218,71 @@ class BidiTest {
 
     @Test
     fun aParagraphWithoutWordsHasNoDirectionOfItsOwn() {
-        assertEquals(null, Bidi.wordDirection("12:30 — 409"))
-        assertEquals(true, Bidi.wordDirection("409 MB مكتوبة صراحةً"))
-        assertEquals(false, Bidi.wordDirection("أهلاً، here is the full explanation"))
+        assertEquals(null, Bidi.proseDirection("12:30 — 409"))
+        assertEquals(null, Bidi.proseDirection("1. 2026\n2. 2027"))
+        assertEquals(true, Bidi.proseDirection("409 MB مكتوبة صراحةً"))
+        assertEquals(false, Bidi.proseDirection("أهلاً، here is the full explanation"))
+    }
+
+    @Test
+    fun codeDoesNotOutvoteTheArabicAroundIt() {
+        val reply = "هذا مثال قصير جدا:\n\n```kotlin\nfun main() { println(\"hello world from the gateway client\") }\n" +
+            "val items = listOf(one, two, three, four)\n```\n\nبعد 2026-11-20 افتح الملف"
+        assertTrue(Bidi.prefersRightToLeft(reply))
+        assertTrue(Bidi.prefersRightToLeft("شغّل `hermes sessions prune --older-than 30d --dry-run` الآن"))
+    }
+
+    // MARK: markdown the passes must leave as it parses
+
+    private fun isolatesInside(markdown: String, vararg types: IElementType): List<String> {
+        val found = mutableListOf<String>()
+        fun walk(node: ASTNode) {
+            val text = node.getTextInNode(markdown)
+            if (node.type in types && text.any { it == lri || it == pdi }) found += text.toString()
+            node.children.forEach(::walk)
+        }
+        walk(MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(markdown))
+        return found
+    }
+
+    private fun prepared(markdown: String) = Bidi.isolateLtrRuns(Bidi.isolateInlineCode(markdown, rightToLeft = true))
+
+    @Test
+    fun indentedCodeAfterAHeadingGetsNoIsolates() {
+        val out = prepared("## مثال على الأمر\n    chown www-data /srv\n\nثم شغل الخدمة")
+        assertEquals(emptyList(), isolatesInside(out, MarkdownElementTypes.CODE_BLOCK))
+    }
+
+    @Test
+    fun indentedCodeThatLooksLikeAListGetsNoIsolates() {
+        val out = prepared("شرح الملف هنا:\n\n    - run 2026-11-20\n    - stop")
+        assertEquals(emptyList(), isolatesInside(out, MarkdownElementTypes.CODE_BLOCK))
+        // A list line inside a fence doesn't start a list that outlives it.
+        val fenced = prepared("```\n- one\n```\n\n    chown www-data /srv")
+        assertEquals(emptyList(), isolatesInside(fenced, MarkdownElementTypes.CODE_BLOCK))
+    }
+
+    @Test
+    fun aLinkReferenceDefinitionKeepsItsAddress() {
+        val input = "راجع [الدليل][1] الآن\n\n[1]: https://example.com/docs"
+        val out = prepared(input)
+        assertTrue(out.endsWith("\n[1]: https://example.com/docs"), out)
+        assertTrue(out.startsWith("راجع [الدليل][1] الآن"), out)
+        assertEquals(emptyList(), isolatesInside(out, MarkdownElementTypes.LINK_DEFINITION))
+    }
+
+    @Test
+    fun aTickedTaskBoxStaysACheckbox() {
+        val out = prepared("مهام اليوم:\n\n- [x] تم النشر 2026\n- [ ] لم يتم")
+        assertTrue(out.contains("- [x] تم النشر ${lri}2026$pdi"), out)
+        assertTrue(isolatesInside(out, GFMTokenTypes.CHECK_BOX).isEmpty())
+    }
+
+    @Test
+    fun aUrlGluedToAWordKeepsTheIsolatesOutOfItsAddress() {
+        val out = prepared("افتح الصفحة Docs:https://example.com/x ثم site:www.example.com أكمل")
+        assertEquals(emptyList(), isolatesInside(out, MarkdownElementTypes.LINK_DESTINATION, GFMTokenTypes.GFM_AUTOLINK))
+        assertTrue(out.contains("${lri}Docs$pdi:$lri[https://example.com/x](https://example.com/x)$pdi"), out)
     }
 
     @Test
