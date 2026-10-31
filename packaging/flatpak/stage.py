@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Install Compose's source-built app image and its native launcher."""
+"""Install Compose's source-built app image and a launcher using its bundled Java."""
 import argparse
 from pathlib import Path
 import shutil
+import shlex
 
 
-def stage(image, prefix):
+def stage(image, prefix, java):
     values = {}
     for line in (image / 'lib/app/Kyllene.cfg').read_text().splitlines():
         if '=' in line:
@@ -20,21 +21,46 @@ def stage(image, prefix):
                  'locales/en-US.pak'):
         if not (native / name).is_file():
             raise ValueError(f'Missing Chromium payload: {name}')
+    if not java.is_file():
+        raise ValueError('Missing bundled Java launcher')
     if not (image / 'bin/Kyllene').is_file():
         raise ValueError('Missing Compose native launcher')
 
     target = prefix / 'lib/kyllene'
     shutil.copytree(image, target)
+    (target / 'lib/runtime/bin').mkdir(exist_ok=True)
+    shutil.copy2(java, target / 'lib/runtime/bin/java')
     # Upstream restores JCEF's bin payload with copyTo, which loses executable mode.
     (target / 'lib/runtime/lib/jcef_helper').chmod(0o755)
     launcher = prefix / 'bin/kyllene'
     launcher.parent.mkdir(parents=True, exist_ok=True)
-    launcher.symlink_to('../lib/kyllene/bin/Kyllene')
+    app = target / 'lib/app'
+    def quote(value):
+        for token, path in (('APPDIR', app), ('BINDIR', target / 'bin'),
+                            ('ROOTDIR', target)):
+            value = value.replace('${' + token + '}', str(path))
+            value = value.replace('$' + token, str(path))
+        return shlex.quote(value)
+
+    args = [str(target / 'lib/runtime/bin/java'), '-classpath',
+            ':'.join(values['app.classpath']), *values.get('java-options', []),
+            '-Djpackage.app-path=' + str(target / 'bin/Kyllene'),
+            values['app.mainclass'][0]]
+    defaults = ' '.join(quote(x) for x in values.get('arguments', []))
+    # jpackage's Linux fork/pipe launcher can consume a partial configuration read.
+    # Derive arguments from Compose's configuration; keep its image unchanged.
+    launcher.write_text('#!/bin/sh\n' +
+                        'export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}":' + quote(str(app)) + '\n' +
+                        'export _JPACKAGE_LAUNCHER=0\n' +
+                        'if [ "$#" -eq 0 ]; then set -- ' + defaults + '; fi\n' +
+                        'exec ' + ' '.join(quote(x) for x in args) + ' "$@"\n')
+    launcher.chmod(0o755)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('image', type=Path)
     parser.add_argument('prefix', type=Path)
+    parser.add_argument('java', type=Path)
     options = parser.parse_args()
-    stage(options.image, options.prefix)
+    stage(options.image, options.prefix, options.java)

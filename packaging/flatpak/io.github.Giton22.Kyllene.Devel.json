@@ -24,7 +24,7 @@
       },
       "build-commands": [
         "./gradle/bin/gradle --offline --no-daemon --max-workers=2 --no-configuration-cache -I packaging/flatpak/offline.init.gradle :desktopApp:createReleaseDistributable",
-        "python3 packaging/flatpak/stage.py desktopApp/build/compose/binaries/main-release/app/Kyllene /app",
+        "python3 packaging/flatpak/stage.py desktopApp/build/compose/binaries/main-release/app/Kyllene /app jdk/bin/java",
         "install -Dm644 packaging/flatpak/fonts.conf /app/etc/fonts/local.conf",
         "install -Dm644 packaging/flatpak/io.github.Giton22.Kyllene.Devel.desktop /app/share/applications/io.github.Giton22.Kyllene.Devel.desktop",
         "install -Dm644 packaging/flatpak/io.github.Giton22.Kyllene.Devel.metainfo.xml /app/share/metainfo/io.github.Giton22.Kyllene.Devel.metainfo.xml",
@@ -39,7 +39,7 @@
         {
           "type": "git",
           "url": "https://github.com/Giton22/kyllene.git",
-          "commit": "4e82d0aaba02e99100931facaa62f43e63761014"
+          "commit": "1e219af1cd05f557f3577c0c7ff4220e06589ccf"
         },
         {
           "type": "archive",

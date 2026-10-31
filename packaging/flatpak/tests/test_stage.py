@@ -30,6 +30,10 @@ java-options=-Dherald.version=1.2.3
 java-options=-Dcompose.application.resources.dir=$APPDIR/resources
 java-options=-Dliteral=space;$(touch INJECTED) café
 ''')
+        java = self.root / 'jdk/bin/java'
+        java.parent.mkdir(parents=True)
+        java.write_text('#!' + sys.executable + '\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n')
+        java.chmod(0o755)
         (app / 'main.jar').touch()
         native = self.image / 'lib/runtime/lib'
         (native / 'locales').mkdir(parents=True)
@@ -40,7 +44,7 @@ java-options=-Dliteral=space;$(touch INJECTED) café
 
     def stage(self):
         return subprocess.run([sys.executable, str(STAGE), str(self.image),
-                               str(self.prefix)], capture_output=True, text=True)
+                               str(self.prefix), str(self.root / 'jdk/bin/java')], capture_output=True, text=True)
 
     def test_launcher_preserves_literal_arguments(self):
         result = self.stage()
@@ -49,17 +53,42 @@ java-options=-Dliteral=space;$(touch INJECTED) café
         run = subprocess.run([str(self.prefix / 'bin/kyllene'), *args],
                              cwd=self.root, capture_output=True, text=True, check=True)
         actual = json.loads(run.stdout)
-        self.assertEqual(actual, args)
+        self.assertEqual(actual[-len(args):], args)
         self.assertFalse((self.root / 'INJECTED').exists())
 
-    def test_qualified_native_launcher_is_preserved(self):
+    def test_matching_java_uses_generated_configuration(self):
+        config = self.image / 'lib/app/Kyllene.cfg'
+        config.write_text(config.read_text() + '\n[ArgOptions]\narguments=default café\n')
         result = self.stage()
         self.assertEqual(result.returncode, 0, result.stderr)
         launcher = self.prefix / 'bin/kyllene'
-        self.assertTrue(launcher.is_symlink())
-        run = subprocess.run([str(launcher), 'space café', '$(literal)'],
+        self.assertFalse(launcher.is_symlink())
+        run = subprocess.run([str(launcher)], cwd=self.root,
                              capture_output=True, text=True, check=True)
-        self.assertEqual(json.loads(run.stdout), ['space café', '$(literal)'])
+        app = self.prefix / 'lib/kyllene/lib/app'
+        actual = json.loads(run.stdout)
+        self.assertEqual(actual, [
+            '-classpath', str(app / 'main.jar'), '-Dherald.version=1.2.3',
+            '-Dcompose.application.resources.dir=' + str(app / 'resources'),
+            '-Dliteral=space;$(touch INJECTED) café',
+            '-Djpackage.app-path=' + str(self.prefix / 'lib/kyllene/bin/Kyllene'),
+            'fixture.Main', 'default café'])
+        self.assertFalse((self.root / 'INJECTED').exists())
+        self.assertEqual((app / 'Kyllene.cfg').read_bytes(), config.read_bytes())
+        self.assertEqual((self.prefix / 'lib/kyllene/bin/Kyllene').read_bytes(),
+                         (self.image / 'bin/Kyllene').read_bytes())
+
+    def test_classpath_larger_than_native_pipe_is_preserved(self):
+        config = self.image / 'lib/app/Kyllene.cfg'
+        entries = ['$APPDIR/' + ('x' * 100) + str(i) + '.jar' for i in range(160)]
+        config.write_text('[Application]\napp.mainclass=fixture.Main\n' +
+                          ''.join('app.classpath=' + x + '\n' for x in entries))
+        self.assertEqual(self.stage().returncode, 0)
+        run = subprocess.run([str(self.prefix / 'bin/kyllene')],
+                             capture_output=True, text=True, check=True)
+        expected = ':'.join(x.replace('$APPDIR', str(self.prefix / 'lib/kyllene/lib/app'))
+                            for x in entries)
+        self.assertEqual(json.loads(run.stdout)[:2], ['-classpath', expected])
 
     def test_missing_chromium_payload_refuses_staging(self):
         (self.image / 'lib/runtime/lib/icudtl.dat').unlink()

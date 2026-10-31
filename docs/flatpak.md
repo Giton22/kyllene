@@ -33,8 +33,11 @@ Voice and Linux credential encryption are separate work. Do not use personal
 credentials until secure storage is qualified. A successful build alone does not
 qualify login, clipboard, window movement, portals or embedded content.
 
-The package keeps Compose's native launcher and generated runtime, restoring the
-Chromium helper's executable bit after staging. Its fontconfig
+The package keeps Compose's app image and generated runtime. Its shell entry point
+uses the bundled Java with the classpath, JVM options and main class derived from
+Compose's generated configuration, avoiding a native jpackage launcher short-read
+crash on small-capacity pipes. User arguments are forwarded literally. Staging also
+restores the Chromium helper's executable bit. Its fontconfig
 fragment excludes WOFF/WOFF2 entries, which stalled Skia enumeration in installed
 tests; ordinary host fonts remain available. Remove this exclusion once those
 formats pass startup and rendering checks with the selected Skia/runtime versions.
