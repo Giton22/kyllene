@@ -3656,26 +3656,26 @@ private fun Composer(
                             actions.composer.text.subSequence(selection.start, selection.end).toString()
                         } else ""
                         listOfNotNull(
-                            RowMenuItem("Copy", Lucide.Copy, enabled = hasSelection) {
+                            RowMenuItem("Copy", Lucide.Copy) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
-                                contextMenuOpen = false
                             },
-                            RowMenuItem("Cut", Lucide.Scissors, enabled = hasSelection) {
+                            RowMenuItem("Cut", Lucide.Scissors) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
-                                actions.composer.replace(selection.start, selection.end, AnnotatedString(""))
-                                contextMenuOpen = false
+                                val before = actions.composer.text.subSequence(0, selection.start)
+                                val after = actions.composer.text.subSequence(selection.end, actions.composer.text.length)
+                                actions.composer.text = before + AnnotatedString("") + after
                             },
                             RowMenuItem("Paste", Lucide.ClipboardPaste) {
                                 composerScope.launch {
                                     val clip = clipboard.getClipEntry()
-                                    val text = clip?.primary?.text?.toString() ?: ""
-                                    actions.composer.replace(selection.start, selection.end, AnnotatedString(text))
+                                    val text = clip?.let { it.text } ?: ""
+                                    val before = actions.composer.text.subSequence(0, selection.start)
+                                    val after = actions.composer.text.subSequence(selection.end, actions.composer.text.length)
+                                    actions.composer.text = before + AnnotatedString(text) + after
                                 }
-                                contextMenuOpen = false
                             },
                             RowMenuItem("Select all", Lucide.TextSelect) {
                                 actions.composer.selection = TextRange(0, actions.composer.text.length)
-                                contextMenuOpen = false
                             },
                         )
                     }
