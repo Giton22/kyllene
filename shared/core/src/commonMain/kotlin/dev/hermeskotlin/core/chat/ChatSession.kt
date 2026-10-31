@@ -881,6 +881,35 @@ class ChatSession(
     }
 
     /**
+     * Reads the session's reasoning effort once (`config.get reasoning`), since `session.create` and a
+     * lazy `session.resume` leave `reasoning_effort` out of `info`; later changes arrive as `session.info`
+     * events. Best effort: an older gateway or any failure leaves the state as it is.
+     */
+    suspend fun refreshReasoning() {
+        val client = connectedClient() ?: return
+        val runtimeId = _state.value.runtimeSessionId ?: return
+        // A pick or session.info that lands while the read is out is newer than the read's answer.
+        val before = _state.value.reasoningEffort
+        val result = try {
+            client.request(
+                "config.get",
+                buildJsonObject {
+                    put("key", "reasoning")
+                    put("session_id", runtimeId)
+                },
+            ) as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        val value = result.string("value")
+        if (ReasoningEffort.fromWire(value) != null) {
+            _state.update { if (it.reasoningEffort != before) it else it.copy(reasoningEffort = value) }
+        }
+    }
+
+    /**
      * Runs one `session.control` action (pause a goal, add a sub-goal, ...) and applies the snapshot it
      * returns at once rather than waiting for the event. A `send` dispatch (a resumed goal's kickoff)
      * goes out as a prompt with its `display` on the bubble, queued behind a running turn. Returns null
@@ -2020,11 +2049,12 @@ class ChatSession(
                 }
             }
         }
-        // session.resume doesn't carry the goal/loop/heartbeat; read them once, events take it from there.
+        // session.resume doesn't carry the goal/loop/heartbeat or reasoning effort; read them once, events take it from there.
         // After the catch-up: a missed update it replays is older than the read, so it mustn't land after it.
         scope.launch {
             if (catchingUp) catchUp(client, runtimeId)
             refreshControl()
+            refreshReasoning()
         }
         runtimeId
     }
@@ -2081,6 +2111,7 @@ class ChatSession(
                 error = if (movedFrom != null) "The project's folder $movedFrom wasn't found, so this chat runs in $ranIn." else it.error,
             ).withInfo(result["info"] as? JsonObject)
         }
+        scope.launch { refreshReasoning() }
         runtimeId
     }
 

@@ -755,6 +755,65 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aResumedChatReadsItsReasoningEffortFromTheGateway() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1","provider":"p1"}}""",
+                "config.get" to """{"value":"max","display":"hide"}""",
+            ),
+        )
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+
+        assertEquals("max", chat.state.first { it.reasoningEffort != null }.reasoningEffort)
+        val get = transport.awaitSent { it.isCall("config.get") }
+        assertEquals("reasoning", get.param("key"))
+        assertEquals("rt1", get.param("session_id"))
+    }
+
+    @Test
+    fun aNewChatReadsItsReasoningEffortOnceCreated() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-9","info":{"model":"m1","provider":"p1"}}""",
+                "config.get" to """{"value":"max","display":"hide"}""",
+                "prompt.submit" to """{"status":"streaming"}""",
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+
+        assertTrue(chat.send("hi"))
+
+        assertEquals("max", chat.state.first { it.reasoningEffort != null }.reasoningEffort)
+        val get = transport.awaitSent { it.isCall("config.get") }
+        assertEquals("reasoning", get.param("key"))
+        assertEquals("rt9", get.param("session_id"))
+    }
+
+    @Test
+    fun anEmptyOrFailedReasoningReadLeavesTheEffortUnset() = runTest {
+        val results = mutableMapOf(
+            "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1"}}""",
+            "config.get" to "{}",
+        )
+        val (connection, transport) = setup(backgroundScope, results)
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+
+        transport.awaitSent { it.isCall("config.get") }
+        testScheduler.runCurrent()
+        assertNull(chat.state.value.reasoningEffort)
+
+        results["config.get"] = "error:-32601"
+        chat.refreshReasoning()
+        assertNull(chat.state.value.reasoningEffort)
+    }
+
+    @Test
     fun attachmentsAreUploadedBeforeThePromptAndFilesBecomeReferences() = runTest {
         val (connection, transport) = setup(
             backgroundScope,
@@ -775,7 +834,7 @@ class ChatSessionTest {
         val file = OutgoingAttachment("a3", "notes.txt", "text/plain", "hi".encodeToByteArray())
         assertTrue(chat.send("  summarise  ", listOf(image, pdf, file)))
 
-        val sent = transport.sent.value.mapNotNull { it["method"]?.jsonPrimitive?.contentOrNull }.filter { it != "client.capabilities" && it != "ping" }
+        val sent = transport.sent.value.mapNotNull { it["method"]?.jsonPrimitive?.contentOrNull }.filter { it != "client.capabilities" && it != "ping" && it != "config.get" }
         assertEquals(listOf("session.create", "image.attach_bytes", "pdf.attach", "file.attach", "file.attach", "prompt.submit"), sent)
         val upload = transport.sent.value.first { it.isCall("image.attach_bytes") }
         assertEquals("AQID", upload.param("content_base64"))
