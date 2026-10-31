@@ -323,6 +323,7 @@ import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.Button
+import dev.hermeskotlin.designsystem.components.clipboardText
 import dev.hermeskotlin.designsystem.components.Tooltip
 import dev.hermeskotlin.designsystem.components.handCursor
 import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
@@ -3577,6 +3578,9 @@ private fun Composer(
     // How open the composer stands, 1 open to 0 folded to a line. It tracks the scroll as it goes, and springs
     // across when a tap, the keyboard or a draft holds it open or lets go.
     val open = remember { Animatable(1f) }
+    var contextMenuOpen by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboard.current
+    val composerScope = rememberCoroutineScope()
     // Something being written keeps it open: worked out here, where the text is read anyway, not in ChatView,
     // which would then recompose on every keystroke.
     val busyNow by rememberUpdatedState(hasText || dictation.active)
@@ -3617,6 +3621,7 @@ private fun Composer(
                         lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (isDesktop) 14 else 8),
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
+                            .onSecondaryPress { contextMenuOpen = true }
                             .onFocusChanged { fold.typing = it.hasFocus }
                             .then(
                                 if (!enterSends) {
@@ -3642,6 +3647,41 @@ private fun Composer(
                                     style = Theme[typography][body],
                                     color = Theme[colors][textTertiary],
                                 )
+                            },
+                        )
+                    }
+                    RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
+                        val selection = actions.composer.selection
+                        val hasSelection = selection.start != selection.end
+                        val selectedText = if (hasSelection) {
+                            actions.composer.text.subSequence(selection.start, selection.end).toString()
+                        } else ""
+                        listOfNotNull(
+                            RowMenuItem("Copy", Lucide.Copy) {
+                                composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
+                            },
+                            RowMenuItem("Cut", Lucide.Pencil) {
+                                composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
+                                actions.composer.edit {
+                                    replace(selection.start, selection.end, AnnotatedString(""))
+                                }
+                            },
+                            RowMenuItem("Paste", Lucide.Copy) {
+                                composerScope.launch {
+                                    val clipText = clipboardText()
+                                    if (clipText != null) {
+                                        actions.composer.edit {
+                                            replace(selection.start, selection.end, AnnotatedString(clipText))
+                                        }
+                                    }
+                                }
+                            },
+                            RowMenuItem("Select all", Lucide.Copy) {
+                                composerScope.launch {
+                                    actions.composer.edit {
+                                        this.selection = TextRange(0, actions.composer.text.length)
+                                    }
+                                }
                             },
                         )
                     }
