@@ -73,6 +73,8 @@ compose.desktop {
             // jdk.accessibility carries the Java Access Bridge that Windows screen readers (NVDA, JAWS) talk to; jcef
             // the Chromium that shows widgets and plugin pages, with its own files.
             modules("java.naming", "java.net.http", "java.sql", "jdk.unsupported", "jdk.accessibility", "jcef")
+            // D-Bus EXTERNAL authentication reads UnixSystem from this module.
+            if (System.getProperty("os.name").startsWith("Linux")) modules("jdk.security.auth")
             windows {
                 menuGroup = "Kyllene"
                 // Keeps upgrades in place: one Kyllene in Programs and Features, whatever the version.
