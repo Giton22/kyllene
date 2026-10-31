@@ -25,6 +25,8 @@ def stage(image, prefix):
 
     target = prefix / 'lib/kyllene'
     shutil.copytree(image, target)
+    # Upstream restores JCEF's bin payload with copyTo, which loses executable mode.
+    (target / 'lib/runtime/lib/jcef_helper').chmod(0o755)
     launcher = prefix / 'bin/kyllene'
     launcher.parent.mkdir(parents=True, exist_ok=True)
     launcher.symlink_to('../lib/kyllene/bin/Kyllene')

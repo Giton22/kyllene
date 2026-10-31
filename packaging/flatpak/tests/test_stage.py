@@ -68,6 +68,16 @@ java-options=-Dliteral=space;$(touch INJECTED) café
         self.assertIn('icudtl.dat', result.stderr)
         self.assertFalse((self.prefix / 'bin/kyllene').exists())
 
+    def test_restored_chromium_helper_can_be_executed(self):
+        helper = self.image / 'lib/runtime/lib/jcef_helper'
+        helper.write_text('#!' + sys.executable + '\nprint("helper-ready")\n')
+        helper.chmod(0o644)
+        result = self.stage()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = subprocess.run([str(self.prefix / 'lib/kyllene/lib/runtime/lib/jcef_helper')],
+                             check=True, capture_output=True, text=True)
+        self.assertEqual(run.stdout.strip(), 'helper-ready')
+
     def test_missing_main_class_refuses_staging(self):
         config = self.image / 'lib/app/Kyllene.cfg'
         config.write_text('[Application]\napp.classpath=$APPDIR/main.jar\n')
