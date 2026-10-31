@@ -612,6 +612,23 @@ class InboxViewModelTest {
     }
 
     @Test
+    fun copyingAReportTheGatewayCutShortSaysItIsCut() = runTest(dispatcher) {
+        val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->
+            when {
+                arg.startsWith("inbox") -> """{"ok":true,"runs":${runsJson(run("a", 50))}}"""
+                arg.startsWith("read") -> """{"ok":true,"run":{"job":"a","run":"${run("a", 50).run}","at":50,"text":"The first 48 KB","truncated":true}}"""
+                else -> """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
+            }
+        }
+        store.bind(one.gatewayUrl.value, now = 0)
+        val vm = viewModel(socket)
+        vm.bind(one)
+        vm.copy(vm.state.value.runs.single())
+        assertEquals("The first 48 KB", (vm.events.first() as InboxEvent.Copy).text)
+        assertTrue(vm.state.value.message!!.contains("48 KB"), vm.state.value.message)
+    }
+
+    @Test
     fun theFetchSaysWhetherItIsForAskingOrCopying() = runTest(dispatcher) {
         var held = CompletableDeferred<Unit>()
         val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->

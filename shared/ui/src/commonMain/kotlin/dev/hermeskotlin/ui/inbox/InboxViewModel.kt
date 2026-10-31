@@ -741,7 +741,13 @@ class InboxViewModel(
 
     override fun copy(run: InboxRun) = fetchWhole(run, ask = false) { _, whole, note ->
         _events.send(InboxEvent.Copy(whole?.text ?: run.text))
-        _state.update { it.copy(message = if (whole != null) "Copied the report." else "Copied the start of the report: ${note.copyText()}") }
+        val message = when {
+            whole == null -> "Copied the start of the report: ${note.copyText()}"
+            // The ask's file says so on its first line; the clipboard keeps the report's own text, so this says it.
+            whole.truncated -> "Copied the report as far as the gateway sends it: the first 48 KB."
+            else -> "Copied the report."
+        }
+        _state.update { it.copy(message = message) }
     }
 
     /**
