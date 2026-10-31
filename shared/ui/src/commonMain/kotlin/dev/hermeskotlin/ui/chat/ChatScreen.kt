@@ -3679,7 +3679,7 @@ private fun Composer(
                             RowMenuItem("Select all", Lucide.Copy) {
                                 composerScope.launch {
                                     actions.composer.edit {
-                                        selection = TextRange(0, actions.composer.text.length)
+                                        this.selection = TextRange(0, actions.composer.text.length)
                                     }
                                 }
                             },
