@@ -744,6 +744,28 @@ class AppViewModelTest {
     }
 
     @Test
+    fun aReportChatOpenedWhileACallIsLookedUpEndsTheLookup() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        gateways.save(home)
+        signedIn(home)
+        val vm = viewModel()
+        runCurrent()
+        sessionGate = CompletableDeferred()
+        callSettings.update { it.copy(callTargets = mapOf(home.url to CallTarget(sessionId = "s1"))) }
+        links.follow(AppLink.VoiceChat)
+        runCurrent()
+        assertTrue(vm.openingCall.value)
+
+        assertTrue(vm.openReportChat(ReportChat(home.gatewayUrl.value, "default", "Briefing", storedSessionId = "r1"), launch = "default"))
+        assertFalse(vm.openingCall.value)
+        sessionGate!!.complete(Unit)
+        runCurrent()
+        // The report's chat stays: the call looked up before it doesn't take its place.
+        assertEquals("r1", assertIs<Route.Chat>(vm.route.value).target.storedSessionId)
+        assertFalse(vm.openingCall.value)
+    }
+
+    @Test
     fun aReportChatAlreadyOpenInItsProfileStaysAsItIs() = runTest {
         gateways.save(home)
         signedIn(home)

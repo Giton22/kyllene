@@ -375,6 +375,8 @@ class AppViewModel(
      */
     fun openReportChat(chat: ReportChat, launch: String? = null): Boolean {
         val gateway = signedInGateway()?.takeIf { it.gatewayUrl.value == chat.gatewayUrl } ?: return false
+        // As every other way into a chat: a call still being looked up goes, spinner and all.
+        cancelPendingCall()
         val profile = reportChatProfile(chat.profile, currentProfile(), launch)
         val open = (_route.value as? Route.Chat)?.target
         val stored = chat.storedSessionId
