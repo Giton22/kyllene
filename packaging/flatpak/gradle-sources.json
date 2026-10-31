@@ -5891,20 +5891,30 @@
   },
   {
     "type": "file",
-    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/junixsocket/junixsocket-common/2.10.1/junixsocket-common-2.10.1.jar",
-    "sha512": "55787044d1cd3ade11364d1c0ea10660e1521561cdcf7b1266168ebe26d63340364a9679058100afa096ef09378f5d647efbbebfcb78004f7c5a38d7c77aab78",
-    "dest": "offline-repository/com/kohlschutter/junixsocket/junixsocket-common/2.10.1",
-    "dest-filename": "junixsocket-common-2.10.1.jar",
+    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/junixsocket/junixsocket/2.11.1/junixsocket-2.11.1.pom",
+    "sha512": "32e737be14c148180e909ad2fc6a7c52a789dbba709f3c98fac130e3572d735d4530912fbcc975807641894d42051c8acde63913f9477a73f98f8c7f891d353b",
+    "dest": "offline-repository/com/kohlschutter/junixsocket/junixsocket/2.11.1",
+    "dest-filename": "junixsocket-2.11.1.pom",
     "only-arches": [
       "x86_64"
     ]
   },
   {
     "type": "file",
-    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/junixsocket/junixsocket-common/2.10.1/junixsocket-common-2.10.1.pom",
-    "sha512": "c32e4e0be1564e102aab22d89ae0a9ed31dffb7f9879285361af6a00ba9d3702ad75929ab06f8d9ebbd374136c852af098bd5064e8797764b6791bd654ffd779",
-    "dest": "offline-repository/com/kohlschutter/junixsocket/junixsocket-common/2.10.1",
-    "dest-filename": "junixsocket-common-2.10.1.pom",
+    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/junixsocket/junixsocket-common/2.11.1/junixsocket-common-2.11.1.jar",
+    "sha512": "03729d673dc33bc2e45e9cf04b1df68de9f836efbcbada2670a53baa24816dea5fa10d45fb27288e7637d9df449c62effd939079b466109a1a6e8985ebea6d8a",
+    "dest": "offline-repository/com/kohlschutter/junixsocket/junixsocket-common/2.11.1",
+    "dest-filename": "junixsocket-common-2.11.1.jar",
+    "only-arches": [
+      "x86_64"
+    ]
+  },
+  {
+    "type": "file",
+    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/junixsocket/junixsocket-common/2.11.1/junixsocket-common-2.11.1.pom",
+    "sha512": "479cd977437a809bb9bbd67ffab5e021c52f2005f33e03d3c238f8260031d4e104a6f22981235be40cd86c5f79feb77b721ab322e4547883ab3b35e63fefa20a",
+    "dest": "offline-repository/com/kohlschutter/junixsocket/junixsocket-common/2.11.1",
+    "dest-filename": "junixsocket-common-2.11.1.pom",
     "only-arches": [
       "x86_64"
     ]
@@ -5941,6 +5951,26 @@
   },
   {
     "type": "file",
+    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/junixsocket/junixsocket-native-common/2.11.1/junixsocket-native-common-2.11.1.jar",
+    "sha512": "9c00b58c796d166b0a2dda310cc66818facc2a91a9ebd72bcb60fb73792b6ba9375210685653b13251812e9ac165da0db20fdf3be1e2bf98363f980906de3b76",
+    "dest": "offline-repository/com/kohlschutter/junixsocket/junixsocket-native-common/2.11.1",
+    "dest-filename": "junixsocket-native-common-2.11.1.jar",
+    "only-arches": [
+      "x86_64"
+    ]
+  },
+  {
+    "type": "file",
+    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/junixsocket/junixsocket-native-common/2.11.1/junixsocket-native-common-2.11.1.pom",
+    "sha512": "c64940a2677b77cdc3aa23a6439df4a2ccfa51ab15c533615aec9edd58997d8b3c47d3b0830b875eb3c606ebb9f8b1de7d43397c7ffda9ed2a503d6a83ab8ff4",
+    "dest": "offline-repository/com/kohlschutter/junixsocket/junixsocket-native-common/2.11.1",
+    "dest-filename": "junixsocket-native-common-2.11.1.pom",
+    "only-arches": [
+      "x86_64"
+    ]
+  },
+  {
+    "type": "file",
     "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/kohlschutter-parent/1.7.4/kohlschutter-parent-1.7.4.pom",
     "sha512": "de28f8334466f867f497d1c68561781a5ae02db8e48e1baa8db217923ced20925cb66e8ad7f77dfed8d63f4d1aed78930fdd40f85c4a64f454eee8f3e9ad2cb6",
     "dest": "offline-repository/com/kohlschutter/kohlschutter-parent/1.7.4",
@@ -5951,10 +5981,30 @@
   },
   {
     "type": "file",
+    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/kohlschutter-parent/1.8.7/kohlschutter-parent-1.8.7.pom",
+    "sha512": "de307869d10d70e7c25e8a582f91017b8fe0b8726089027f58aba74bbc7c15e04d6709903adeaa463286a938067d6c452964deae88ab3a7aa4754d479e17f305",
+    "dest": "offline-repository/com/kohlschutter/kohlschutter-parent/1.8.7",
+    "dest-filename": "kohlschutter-parent-1.8.7.pom",
+    "only-arches": [
+      "x86_64"
+    ]
+  },
+  {
+    "type": "file",
     "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/kohlschutter-parent-multirelease/1.7.4/kohlschutter-parent-multirelease-1.7.4.pom",
     "sha512": "ef2cf5e85528a9a4c64c9ec7b782478cf13abb9980103a98e5a84f6bfd6f02bee549cfb3269344f45ca74f9392078355e594455457bfe69609d4e9b49e6906ba",
     "dest": "offline-repository/com/kohlschutter/kohlschutter-parent-multirelease/1.7.4",
     "dest-filename": "kohlschutter-parent-multirelease-1.7.4.pom",
+    "only-arches": [
+      "x86_64"
+    ]
+  },
+  {
+    "type": "file",
+    "url": "https://repo.maven.apache.org/maven2/com/kohlschutter/kohlschutter-parent-multirelease/1.8.7/kohlschutter-parent-multirelease-1.8.7.pom",
+    "sha512": "d24c4a9ad3e3f68595e586376f24e9a948c989ff60286f0f6592302c269cd434ee6c343fff7be474e1be5b6e5b072721bc55cb434cf0d4c39ff69d275b42d95d",
+    "dest": "offline-repository/com/kohlschutter/kohlschutter-parent-multirelease/1.8.7",
+    "dest-filename": "kohlschutter-parent-multirelease-1.8.7.pom",
     "only-arches": [
       "x86_64"
     ]
@@ -13255,6 +13305,16 @@
     "sha512": "ec795b2f32982c1af8dccef57553aa9d959c13ee829aebd6459ba22b4ef434aeb4184aa89f63ad2f0d8c45d59cd020a15cd976ddb4bf20f1044b492a406e029e",
     "dest": "offline-repository/org/junit/junit-bom/5.13.4",
     "dest-filename": "junit-bom-5.13.4.pom",
+    "only-arches": [
+      "x86_64"
+    ]
+  },
+  {
+    "type": "file",
+    "url": "https://repo.maven.apache.org/maven2/org/junit/junit-bom/5.14.4/junit-bom-5.14.4.pom",
+    "sha512": "f67ed3eefc040e64eea675272704320fb449a2d696651ec2fded42f5914711b2a15e947427b42ac53a3750f5066b44987425644baaf8e2eb832f04711d03bc54",
+    "dest": "offline-repository/org/junit/junit-bom/5.14.4",
+    "dest-filename": "junit-bom-5.14.4.pom",
     "only-arches": [
       "x86_64"
     ]

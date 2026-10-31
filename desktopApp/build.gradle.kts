@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractProguardTask
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -179,6 +180,45 @@ if (System.getProperty("os.name").startsWith("Windows")) {
                     java.delete()
                 }
             }
+        }
+    }
+}
+
+// ProGuard reads junixsocket's Java 7 fallback classes, whose enclosing-method metadata is incompatible with
+// shrinking. Keep its matching multi-release Java/native libraries intact, but analyze them when shrinking the app.
+if (System.getProperty("os.name").startsWith("Linux")) {
+    val junixsocketVersion = libs.versions.junixsocket.get()
+    afterEvaluate {
+        val shrinker = tasks.named<AbstractProguardTask>("proguardReleaseJars").get()
+        // Snapshot the sources: inputFiles.from is a live set, so retaining it would make this collection recursive.
+        val original = files(shrinker.inputFiles.from.toList())
+        val nativeJars = original.filter {
+            it.name.startsWith("junixsocket-common-") || it.name.startsWith("junixsocket-native-common-")
+        }
+        val expected = setOf("junixsocket-common-$junixsocketVersion.jar", "junixsocket-native-common-$junixsocketVersion.jar")
+        val rules = layout.buildDirectory.file("secret-transport/native-libraries.pro")
+        val prepare = tasks.register("prepareSecretTransportLibraries") {
+            inputs.files(nativeJars)
+            inputs.property("expectedJars", expected)
+            outputs.file(rules)
+            doLast {
+                val jars = nativeJars.files
+                check(jars.size == 2 && jars.map { it.name }.toSet() == expected) {
+                    "Expected matching junixsocket libraries $expected, found ${jars.map { it.name }}"
+                }
+                val file = rules.get().asFile
+                file.parentFile.mkdirs()
+                file.writeText(jars.sortedBy { it.name }.joinToString("\n", postfix = "\n") {
+                    "-libraryjars \"${it.invariantSeparatorsPath}\""
+                })
+            }
+        }
+        shrinker.inputFiles.setFrom(original - nativeJars)
+        shrinker.inputs.files(nativeJars)
+        shrinker.configurationFiles.from(prepare)
+        val output = shrinker.destinationDir
+        shrinker.doLast {
+            nativeJars.forEach { it.copyTo(output.get().asFile.resolve(it.name), overwrite = true) }
         }
     }
 }

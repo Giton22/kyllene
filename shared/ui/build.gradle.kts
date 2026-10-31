@@ -48,7 +48,9 @@ kotlin {
         // The desktop's own menus, driven with a mouse.
         jvmMain.dependencies {
             implementation(libs.filekit.dialogs.get().toString()) {
-                exclude(group = "com.github.hypfvieh", module = "dbus-java-transport-native-unixsocket")
+                if (System.getProperty("os.name").startsWith("Linux")) {
+                    exclude(group = "com.github.hypfvieh", module = "dbus-java-transport-native-unixsocket")
+                }
             }
         }
         jvmTest.dependencies {
