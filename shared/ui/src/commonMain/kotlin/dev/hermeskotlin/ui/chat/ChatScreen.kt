@@ -3651,9 +3651,9 @@ private fun Composer(
                     }
                     RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
                         val selection = actions.composer.selection
-                        val hasSelection = selection.first != selection.second
+                        val hasSelection = selection.start != selection.end
                         val selectedText = if (hasSelection) {
-                            actions.composer.text.subSequence(selection.first, selection.second).toString()
+                            actions.composer.text.subSequence(selection.start, selection.end).toString()
                         } else ""
                         listOfNotNull(
                             RowMenuItem("Copy", Lucide.Copy, enabled = hasSelection) {
@@ -3662,14 +3662,14 @@ private fun Composer(
                             },
                             RowMenuItem("Cut", Lucide.Scissors, enabled = hasSelection) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
-                                actions.composer.replace(selection.first, selection.second, AnnotatedString(""))
+                                actions.composer.replace(selection.start, selection.end, AnnotatedString(""))
                                 contextMenuOpen = false
                             },
                             RowMenuItem("Paste", Lucide.ClipboardPaste) {
                                 composerScope.launch {
                                     val clip = clipboard.getClipEntry()
-                                    val text = clip?.let { it.getText() } ?: ""
-                                    actions.composer.replace(selection.first, selection.second, AnnotatedString(text))
+                                    val text = clip?.primary?.text?.toString() ?: ""
+                                    actions.composer.replace(selection.start, selection.end, AnnotatedString(text))
                                 }
                                 contextMenuOpen = false
                             },
