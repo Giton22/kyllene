@@ -3,6 +3,7 @@ package dev.hermeskotlin.ui.chat
 import dev.hermeskotlin.core.voice.ReadAloudVoices
 import dev.hermeskotlin.core.voice.InMemoryReadAloudVoices
 import androidx.compose.foundation.text.input.TextFieldState
+import dev.hermeskotlin.designsystem.components.stripBidiIsolates
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.lifecycle.ViewModel
@@ -783,7 +784,8 @@ class ChatViewModel(
     }
 
     override fun askAside(source: CommentSource, anchor: SelectionAnchor) {
-        val quote = anchor.text.replace(Regex("""\s+"""), " ").trim().let { if (it.length > ASIDE_QUOTE_MAX) it.take(ASIDE_QUOTE_MAX).trimEnd() + "…" else it }
+        // The selection comes off the rendered text, so it carries the bidi isolates; the composer must not.
+        val quote = stripBidiIsolates(anchor.text).replace(Regex("""\s+"""), " ").trim().let { if (it.length > ASIDE_QUOTE_MAX) it.take(ASIDE_QUOTE_MAX).trimEnd() + "…" else it }
         composer.setTextAndPlaceCursorAtEnd("/btw About “$quote” in ${source.label}: ")
     }
 

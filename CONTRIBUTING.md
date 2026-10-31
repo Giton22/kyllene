@@ -47,6 +47,22 @@ Unit tests aren't enough for anything you can see or that talks to the gateway. 
 - **Check narrow screens.** Many phones are 360 dp wide. On an emulator, try `adb shell wm density 480` (and `adb shell wm density reset` afterwards) to make sure rows and the composer still fit.
 - **Check both themes** if you touched colours or layout.
 
+## What reviews usually fix
+
+Nearly every contributed PR so far got fixes in review, and most were the same few things. Check these before you ask for a review.
+
+- **Answers that come in late.** A reply can arrive after the user switched profile, gateway or chat. Drop it instead of showing it. Also check that a lost and regained connection reloads what's on screen, that a rotation keeps it, that a second tap doesn't send or create something twice, and that every spinner or request ends, with a result or an error.
+- **Data from another gateway or profile.** Users can have several of each. Key anything you cache or store by gateway and profile.
+- **Guesses about the gateway.** Follow the hermes-agent source for the method or route, including which fields can be missing or null. Older gateways don't have newer methods: fall back, don't fail.
+- **Unusual text.** Replies contain code fences, very long words, very tall tables, CRLF line ends and empty values. Test with them. The app must not crash on any of them.
+- **Secrets and private addresses.** Don't put tokens or tickets in URLs. Never fetch an address on the user's own network because a reply links to it. Give a component only the token it needs.
+- **New UI where the app already has some.** Reuse its rows, composer, viewers, banners, sheets and menus. Actions on a chat message are inline icons under the reply, or a long-press dropdown on the user's prompt, never a sheet or a ⋯ button. Give icon buttons a content description. Menus and sheets must fit a short landscape window. A new kind of alert is off by default.
+- **Words.** Say what happened, in the user's terms: a job that didn't run is "missed" and a process the user stopped is "stopped", not "failed". When something fails, say why.
+- **Leftovers.** Remove fields and helpers that nothing uses, and don't add a second loader or provider for something that has one. Don't sort, copy or read again on every frame.
+- **The desktop app.** `shared:core`, `shared:designsystem` and `shared:ui` also run in the desktop app. Build it too (`./gradlew :desktopApp:compileKotlinJvm`), and hide in it what doesn't apply to a desktop. The command under "Tests" already builds the watch app.
+- **An old branch.** Merge `master` into your branch before you ask for a review, and again if it falls behind.
+- **Previews.** A new screen gets a `PreviewScene` in `HeraldPreviews.kt`, which the debug `PreviewGalleryActivity` shows, with made-up sample data.
+
 ## Screenshots
 
 For a PR that changes the UI, add before/after screenshots **to the PR description**. Don't commit them to the repo.
