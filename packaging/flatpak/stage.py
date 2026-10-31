@@ -50,6 +50,7 @@ def stage(image, prefix, java):
     # jpackage's Linux fork/pipe launcher can consume a partial configuration read.
     # Derive arguments from Compose's configuration; keep its image unchanged.
     launcher.write_text('#!/bin/sh\n' +
+                        'export XDG_SESSION_TYPE=x11\nunset WAYLAND_DISPLAY\n' +
                         'export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}":' + quote(str(app)) + '\n' +
                         'export _JPACKAGE_LAUNCHER=0\n' +
                         'if [ "$#" -eq 0 ]; then set -- ' + defaults + '; fi\n' +

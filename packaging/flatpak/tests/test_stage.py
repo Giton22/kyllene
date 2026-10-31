@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -32,7 +33,7 @@ java-options=-Dliteral=space;$(touch INJECTED) café
 ''')
         java = self.root / 'jdk/bin/java'
         java.parent.mkdir(parents=True)
-        java.write_text('#!' + sys.executable + '\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n')
+        java.write_text('#!' + sys.executable + '\nimport json,sys,os\nprint(json.dumps(sys.argv[1:]))\nprint(json.dumps({k:os.environ.get(k) for k in ["XDG_SESSION_TYPE","WAYLAND_DISPLAY"]}),file=sys.stderr)\n')
         java.chmod(0o755)
         (app / 'main.jar').touch()
         native = self.image / 'lib/runtime/lib'
@@ -77,6 +78,14 @@ java-options=-Dliteral=space;$(touch INJECTED) café
         self.assertEqual((app / 'Kyllene.cfg').read_bytes(), config.read_bytes())
         self.assertEqual((self.prefix / 'lib/kyllene/bin/Kyllene').read_bytes(),
                          (self.image / 'bin/Kyllene').read_bytes())
+
+    def test_runtime_uses_the_packaged_x11_transport(self):
+        self.assertEqual(self.stage().returncode, 0)
+        env = dict(os.environ, XDG_SESSION_TYPE='wayland', WAYLAND_DISPLAY='wayland-0')
+        run = subprocess.run([str(self.prefix / 'bin/kyllene')], env=env,
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(run.stderr),
+                         {'XDG_SESSION_TYPE': 'x11', 'WAYLAND_DISPLAY': None})
 
     def test_classpath_larger_than_native_pipe_is_preserved(self):
         config = self.image / 'lib/app/Kyllene.cfg'
