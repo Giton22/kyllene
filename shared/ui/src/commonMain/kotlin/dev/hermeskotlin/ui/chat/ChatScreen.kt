@@ -39,6 +39,7 @@ import org.koin.compose.koinInject
 import com.composables.icons.lucide.File
 import com.composables.icons.lucide.Folder
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.TextRange
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.text.input.placeCursorAtEnd
 import androidx.compose.animation.AnimatedVisibility
@@ -427,6 +428,9 @@ fun ChatScreen(
     var processesOpen by remember { mutableStateOf(false) }
     var checkpointsOpen by remember { mutableStateOf(false) }
     var controlOpen by remember { mutableStateOf(false) }
+    var contextMenuOpen by remember { mutableStateOf(false) }
+    val clipboard = LocalClipboard.current
+    val composerScope = rememberCoroutineScope()
     // Cleared (here or on another client) while open, there is nothing left to show.
     val hasControl = state.control != null
     LaunchedEffect(hasControl) { if (!hasControl) controlOpen = false }
@@ -3617,7 +3621,7 @@ private fun Composer(
                         lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (isDesktop) 14 else 8),
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
-                            .onSecondaryPress { }
+                            .onSecondaryPress { contextMenuOpen = true }
                             .onFocusChanged { fold.typing = it.hasFocus }
                             .then(
                                 if (!enterSends) {
@@ -3643,6 +3647,36 @@ private fun Composer(
                                     style = Theme[typography][body],
                                     color = Theme[colors][textTertiary],
                                 )
+                            },
+                        )
+                    }
+                    RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
+                        val selection = actions.composer.selection
+                        val hasSelection = selection.first != selection.second
+                        val selectedText = if (hasSelection) {
+                            actions.composer.text.subSequence(selection.first, selection.second).toString()
+                        } else ""
+                        listOfNotNull(
+                            RowMenuItem("Copy", Lucide.Copy, enabled = hasSelection) {
+                                composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
+                                contextMenuOpen = false
+                            },
+                            RowMenuItem("Cut", Lucide.Scissors, enabled = hasSelection) {
+                                composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
+                                actions.composer.replace(selection.first, selection.second, AnnotatedString(""))
+                                contextMenuOpen = false
+                            },
+                            RowMenuItem("Paste", Lucide.ClipboardPaste) {
+                                composerScope.launch {
+                                    val clip = clipboard.getClipEntry()
+                                    val text = clip?.let { it.getText() } ?: ""
+                                    actions.composer.replace(selection.first, selection.second, AnnotatedString(text))
+                                }
+                                contextMenuOpen = false
+                            },
+                            RowMenuItem("Select all", Lucide.TextSelect) {
+                                actions.composer.selection = TextRange(0, actions.composer.text.length)
+                                contextMenuOpen = false
                             },
                         )
                     }
