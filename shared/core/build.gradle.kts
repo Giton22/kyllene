@@ -34,6 +34,8 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.sqlite.bundled)
             implementation(libs.jna.platform)
+            implementation(libs.dbus.core)
+            implementation(libs.dbus.unix)
         }
         commonMain.dependencies {
             api(libs.kotlinx.coroutines.core)
