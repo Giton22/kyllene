@@ -60,7 +60,7 @@ jobs:
       - name: Build offline and bundle
         run: |
           user_flatpak="$(realpath "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak")"
-          flatpak run --env=FLATPAK_USER_DIR="$user_flatpak" --filesystem="$user_flatpak" org.flatpak.Builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/ci.json
+          flatpak run --filesystem="$user_flatpak" --filesystem="$GITHUB_WORKSPACE" --command=env org.flatpak.Builder XDG_DATA_HOME="$(dirname "$user_flatpak")" flatpak-builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/ci.json
           flatpak build-bundle build/flatpak-repo build/kyllene.flatpak io.github.Giton22.Kyllene.Devel devel
       - name: Installed sandbox smoke
         run: python3 packaging/flatpak/tests/installed_smoke.py build/kyllene.flatpak
