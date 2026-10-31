@@ -364,6 +364,43 @@ class SessionsViewModelTest {
     }
 
     @Test
+    fun aChangeWhileTheListIsClosedShowsOnceItOpens() = runTest(dispatcher) {
+        val socket = LiveGateway(live = emptyMap(), projects = mapOf("projects.tree" to tree(chats = 1)))
+        val vm = viewModel(socket = socket)
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.state.first { it.projects.isNotEmpty() }
+
+        // A chat starts in the project while the sidebar is closed, moments after the last ask.
+        socket.projects["projects.tree"] = tree(chats = 2)
+        vm.refreshQuietly()
+        vm.awaitLoaded()
+        vm.setVisible(true)
+        advanceTimeBy(1_000)
+        assertEquals(2, vm.state.value.projects.first().sessionCount)
+    }
+
+    @Test
+    fun aChangeInsideTheWaitIsAskedForOnceItEnds() = runTest(dispatcher) {
+        val socket = LiveGateway(live = emptyMap(), projects = mapOf("projects.tree" to tree(chats = 1)))
+        val vm = viewModel(socket = socket)
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.setVisible(true)
+        vm.state.first { it.projects.isNotEmpty() }
+
+        socket.projects["projects.tree"] = tree(chats = 2)
+        vm.refreshQuietly()
+        vm.awaitLoaded()
+        advanceTimeBy(30_001)
+        assertEquals(2, vm.state.value.projects.first().sessionCount)
+    }
+
+    private fun tree(chats: Int) = """{"projects":[
+        {"id":"p1","label":"herald","path":"/srv/herald","sessionCount":$chats},
+        {"id":"__no_project__","label":"Home","isNoProject":true,"sessionCount":1}]}"""
+
+    @Test
     fun undoInsideAProjectPutsTheRowBackInTheProject() = runTest(dispatcher) {
         val patches = mutableListOf<String>()
         val socket = LiveGateway(
