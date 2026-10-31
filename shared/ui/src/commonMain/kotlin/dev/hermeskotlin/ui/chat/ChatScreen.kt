@@ -151,6 +151,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import dev.hermeskotlin.core.bots.botLook
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -2126,12 +2127,12 @@ private const val UNREACHABLE = "Can't reach gateway"
 
 /** The banner over the chat while the gateway can't be reached: where, what's being done about it, and Retry now. */
 @Composable
-private fun OfflineBanner(place: String?, status: String, onRetry: () -> Unit) {
+internal fun OfflineBanner(place: String?, status: String, onRetry: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .background(Theme[colors][dangerSoft], RoundedCornerShape(Theme[radii][radiusMedium]))
+            .background(Theme[colors][dangerSoft].compositeOver(Theme[colors][surface]), RoundedCornerShape(Theme[radii][radiusMedium]))
             .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
             .semantics(mergeDescendants = true) {},
         horizontalArrangement = Arrangement.spacedBy(10.dp),
