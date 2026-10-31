@@ -204,6 +204,9 @@ internal fun VoiceScreen(
                         // An empty slot keeps End in the middle.
                         else -> Spacer(Modifier.size(52.dp))
                     }
+                    // Chained chat: mute beside End; the loop keeps the mic shut while it's on.
+                    if (!state.live && state.phase != VoicePhase.Connecting)
+                        SideButton(Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff, "Mute", onMute, on = state.muted, toggle = true)
                     EndButton(onEnd)
                     SideButton(Lucide.Keyboard, "Type instead", onType)
                 }

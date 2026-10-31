@@ -52,6 +52,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -262,6 +263,8 @@ class VoiceController(
                 speak(said, gateway, profile)
             }
             while (currentCoroutineContext().isActive) {
+                // Muted: don't open the mic between turns; coughs and room noise stay unheard.
+                while (_chat.value.muted && currentCoroutineContext().isActive) delay(200)
                 val turn = converseOnce(session, gateway, profile, VoiceActivity(silenceMs = pauseMs), cutIn)
                 cutIn = null
                 when (turn) {
@@ -327,12 +330,17 @@ class VoiceController(
         return true
     }
 
-    /** Turns the microphone off or on in a live call. */
+    /** Turns the microphone off or on in a live call, or in a chained voice chat. */
     fun toggleMute() {
-        val conversation = live ?: return
-        val muted = !_chat.value.muted
-        conversation.setMuted(muted)
-        _chat.update { it.copy(muted = muted) }
+        val conversation = live
+        if (conversation != null) {
+            val muted = !_chat.value.muted
+            conversation.setMuted(muted)
+            _chat.update { it.copy(muted = muted) }
+        } else if (chatJob != null) {
+            // Chained chat: the loop checks this between turns and keeps the mic shut while it's set.
+            _chat.update { it.copy(muted = !it.muted) }
+        }
     }
 
     fun stopChat() {
@@ -648,18 +656,36 @@ class VoiceController(
     private suspend fun hear(gateway: GatewayUrl, profile: String?, activity: VoiceActivity): Heard {
         _chat.update { it.copy(phase = VoicePhase.Listening, level = 0f, hearing = false) }
         val recording = try {
-            recorder.record(
-                activity,
-                onLevel = { level -> _chat.update { it.copy(level = level) } },
-                onSpeech = { _chat.update { it.copy(hearing = true) } },
-            )
+            coroutineScope {
+                val rec = async {
+                    recorder.record(
+                        activity,
+                        onLevel = { level -> _chat.update { it.copy(level = level) } },
+                        onSpeech = { _chat.update { it.copy(hearing = true) } },
+                    )
+                }
+                // Mute kills the recording in flight: a sentence abandoned midway is never transcribed.
+                val watcher = launch {
+                    _chat.first { it.muted }
+                    rec.cancel()
+                }
+                try {
+                    rec.await()
+                } catch (_: CancellationException) {
+                    // Only the watcher's cancel is a discarded sentence; the chat ending still ends it.
+                    currentCoroutineContext().ensureActive()
+                    null
+                } finally {
+                    watcher.cancel()
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             _chat.update { it.copy(error = e.message ?: "Couldn't use the microphone.") }
             return Heard.Broken
         }
-        if (!recording.heardSpeech) return Heard.Silence
+        if (recording?.heardSpeech != true) return Heard.Silence
         _chat.update { it.copy(phase = VoicePhase.Transcribing, level = 0f, hearing = false) }
         val transcript = when (val result = audio.transcribe(gateway, recording.bytes, recording.mimeType, profile)) {
             is ApiResult.Success -> result.value
