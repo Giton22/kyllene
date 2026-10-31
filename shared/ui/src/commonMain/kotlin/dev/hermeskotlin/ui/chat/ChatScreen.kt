@@ -25,6 +25,7 @@ import dev.hermeskotlin.core.chat.PathRefKind
 import dev.hermeskotlin.core.chat.PathRefQuery
 import dev.hermeskotlin.core.chat.completion
 import dev.hermeskotlin.core.chat.pathRefQuery
+import dev.hermeskotlin.core.chat.screenViews
 import dev.hermeskotlin.core.projects.PathEntry
 import dev.hermeskotlin.core.projects.ProjectsApi
 import kotlin.coroutines.cancellation.CancellationException
@@ -1013,8 +1014,11 @@ internal fun ChatView(
                             LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
                             LocalAgentScreenChat provides state.storedSessionId,
                             LocalScreenViews provides LocalAgentScreens.current.let { screens ->
-                                remember(state.messages, screens, state.storedSessionId) {
-                                    ScreenViews.of(state.messages) { screens.took(state.storedSessionId, it) }
+                                // Worked out again when a tool call changes, not on every token of a reply.
+                                val calls = ScreenViews.calls(state.messages)
+                                val newest = ScreenViews.newest(state.messages)
+                                remember(calls, newest, screens, state.storedSessionId) {
+                                    ScreenViews(screenViews(calls) { screens.took(state.storedSessionId, it) }, newest)
                                 }
                             },
                             LocalAgentScreenSend provides actions::sendPrompt,

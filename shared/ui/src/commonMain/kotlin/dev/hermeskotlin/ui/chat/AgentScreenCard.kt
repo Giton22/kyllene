@@ -26,6 +26,7 @@ import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.AgentScreen
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ScreenView
+import dev.hermeskotlin.core.chat.ToolActivity
 import dev.hermeskotlin.core.chat.screenViews
 import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.designsystem.accentSoft
@@ -101,10 +102,16 @@ internal expect fun AgentScreenSurface(
  */
 internal class ScreenViews(val byCall: Map<String, ScreenView>, val newest: Set<String>) {
     companion object {
-        fun of(messages: List<ChatMessage>, took: (AgentScreen) -> Boolean = { true }) = ScreenViews(
-            screenViews(messages.flatMap { (it as? ChatMessage.Assistant)?.tools.orEmpty() }, took),
-            (messages.lastOrNull() as? ChatMessage.Assistant)?.takeUnless { it.streaming }?.tools.orEmpty().mapTo(HashSet()) { it.id },
-        )
+        fun of(messages: List<ChatMessage>, took: (AgentScreen) -> Boolean = { true }) =
+            ScreenViews(screenViews(calls(messages), took), newest(messages))
+
+        /** Every tool call in the chat, in order: what the screens are made from. */
+        fun calls(messages: List<ChatMessage>): List<ToolActivity> =
+            messages.flatMap { (it as? ChatMessage.Assistant)?.tools.orEmpty() }
+
+        /** The calls of the newest reply, once it finished. */
+        fun newest(messages: List<ChatMessage>): Set<String> =
+            (messages.lastOrNull() as? ChatMessage.Assistant)?.takeUnless { it.streaming }?.tools.orEmpty().mapTo(HashSet()) { it.id }
     }
 }
 
@@ -125,8 +132,9 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     LaunchedEffect(chat, screen.messages) { context.onDrawn(chat, screen) }
     val waits = screen.wait && call.running
     val live = waits && context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it) } }
-    // Saved, so it outlives the card scrolling out of the list: once live, a card that isn't is answered or ended.
+    // Saved, so it outlives the card scrolling out of the list.
     var wasLive by rememberSaveable(call.id) { mutableStateOf(false) }
+    var tappedLive by rememberSaveable(call.id) { mutableStateOf(false) }
     if (live) wasLive = true
     // Only while the app is in front: in the background nobody sees the screen, and the call should know.
     val resumed by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
@@ -151,7 +159,9 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     val send = LocalAgentScreenSend.current
     // Read when the tap comes, not as composed: taps come one after another, faster than the card recomposes.
     val sent = rememberSaveable(call.id) { mutableStateOf(false) }
-    val answered = wasLive || (!call.failed && call.output.orEmpty().contains("\"event\""))
+    // Answered: the call returned a tap, or one was tapped here while it waited (its result may not be in yet). A
+    // call that failed wasn't, even after a tap (the answer was too long, say): the user can tap again.
+    val answered = !call.failed && (tappedLive || call.output.orEmpty().contains("\"event\""))
     val replies = newest && send != null && !call.running && !answered && !sent.value
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -163,6 +173,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
             takesTaps = live || replies,
             onAnswer = { surface, result ->
                 if (live) {
+                    tappedLive = true
                     context.onAnswer(chat, surface, result)
                 } else if (replies && send != null && !sent.value) {
                     sent.value = true
