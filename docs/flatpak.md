@@ -10,7 +10,7 @@ runtime in the user installation. From the repository root, build and install:
 
 ```sh
 user_flatpak="$(realpath "${XDG_DATA_HOME:-$HOME/.local/share}/flatpak")"
-flatpak run --filesystem="$user_flatpak" --filesystem="$PWD" --command=env org.flatpak.Builder XDG_DATA_HOME="$(dirname "$user_flatpak")" flatpak-builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/io.github.Giton22.Kyllene.Devel.json
+flatpak run --env=FLATPAK_USER_DIR="$user_flatpak" --filesystem="$user_flatpak" org.flatpak.Builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/io.github.Giton22.Kyllene.Devel.json
 flatpak build-bundle build/flatpak-repo build/kyllene.flatpak io.github.Giton22.Kyllene.Devel devel
 flatpak install --user build/kyllene.flatpak
 flatpak run io.github.Giton22.Kyllene.Devel
@@ -51,7 +51,8 @@ It builds the public Git revision tested by the workflow, including a pull
 request's merge ref, with the same locked build inputs. It never packages a
 recursive copy of the runner workspace. Only the bundle is uploaded. The
 font-filter contract uses the selected SDK's fontconfig, independent of the
-runner host's fontconfig version.
+runner host's fontconfig version. CI uses the native `flatpak-builder` package;
+the Builder application needs a desktop host-command service unavailable there.
 
 Keep these Linux checks non-required in branch rules. Failures stay visibly
 failed; Android checks and release publication remain independent. A built CI
