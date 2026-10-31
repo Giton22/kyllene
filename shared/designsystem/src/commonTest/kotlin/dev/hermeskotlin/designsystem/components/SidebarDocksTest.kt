@@ -18,6 +18,13 @@ class SidebarDocksTest {
         // Wide enough for the chat beside the sidebar, but too short for a sidebar that stays open.
         assertFalse(sidebarDocks(780.dp, 360.dp, 0.dp))
         assertFalse(sidebarDocks(800.dp, 360.dp, 24.dp))
+        assertFalse(sidebarDocks(839.dp, 400.dp, 0.dp))
+    }
+
+    @Test
+    fun itDocksFromATabletsHeight() {
+        assertFalse(sidebarDocks(700.dp, 479.dp, 0.dp))
+        assertTrue(sidebarDocks(700.dp, 480.dp, 0.dp))
     }
 
     @Test

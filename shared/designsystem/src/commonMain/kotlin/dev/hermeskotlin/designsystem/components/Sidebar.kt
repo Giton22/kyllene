@@ -18,13 +18,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.union
@@ -172,7 +170,9 @@ fun SidebarLayout(
                     Box(Modifier.requiredWidth(outer).fillMaxHeight().align(Alignment.CenterEnd)) { sidebar() }
                 }
                 if (p > 0f) Box(Modifier.width(DIVIDER_WIDTH).fillMaxHeight().background(Theme[colors][stroke]))
-                val consumed = if (p > 0f) insets.only(WindowInsetsSides.Start) else WindowInsets(0.dp)
+                // Only as much as the sidebar covers right now, so the content doesn't jump as it slides open or shut.
+                val covered = if (p > 0f) min(startInset, outer * p + DIVIDER_WIDTH) else 0.dp
+                val consumed = if (layoutDirection == LayoutDirection.Ltr) WindowInsets(left = covered) else WindowInsets(right = covered)
                 Box(Modifier.weight(1f).fillMaxHeight().consumeWindowInsets(consumed)) { content() }
             }
             if (onDockedWidthChange != null && p == 1f) {
