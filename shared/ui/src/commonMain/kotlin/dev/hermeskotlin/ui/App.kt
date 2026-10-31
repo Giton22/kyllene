@@ -339,6 +339,7 @@ private fun Routes() {
         onSetPrimary = app::setPrimaryGateway,
         onRename = app::renameGateway,
         onRemove = app::removeGateway,
+        onSetClientCert = app::setClientCert,
     )
 }
 

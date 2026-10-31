@@ -53,6 +53,17 @@ For a PR that changes the UI, add before/after screenshots **to the PR descripti
 
 Never show private data: no real chats, prompts, scheduled jobs, bots or gateway addresses. Use a test gateway, or the debug `PreviewGalleryActivity`, which draws each screen from sample data (see the README).
 
+## Website
+
+The landing page at [kyllene.app](https://kyllene.app) is the static site in `website/`: plain HTML and CSS, no build
+step. Preview it with any static server, for example `npx http-server website`, and check it at 375 px wide as well as
+on a desktop. Its screenshots are copies from `docs/screenshots`, so the same rules apply. Maintainers deploy it to
+Cloudflare Pages by hand:
+
+```bash
+npx wrangler pages deploy website --project-name kyllene --branch master
+```
+
 ## Pull requests
 
 - Say **what** changed and **why**, and **how you tested it**: which tests you added, and what you checked on a device.
