@@ -757,6 +757,8 @@ class InboxViewModel(
         fetchJob = viewModelScope.launch {
             try {
                 bindJob?.join()
+                // The run still opening is being read already: that read is the one to wait for, not a second.
+                if (_state.value.let { it.open?.key == run.key && it.openLoading }) openJob?.join()
                 val s = _state.value
                 val shown = s.open?.takeIf { it.key == run.key && !s.openLoading && s.openNote == null }
                 val (whole, note) = when {

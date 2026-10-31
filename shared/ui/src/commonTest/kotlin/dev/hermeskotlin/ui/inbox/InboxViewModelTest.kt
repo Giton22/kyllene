@@ -586,6 +586,32 @@ class InboxViewModelTest {
     }
 
     @Test
+    fun askingWhileTheReportIsStillOpeningWaitsForThatReadRatherThanASecond() = runTest(dispatcher) {
+        val held = CompletableDeferred<Unit>()
+        val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->
+            when {
+                arg.startsWith("inbox") -> """{"ok":true,"runs":${runsJson(run("a", 50))}}"""
+                arg.startsWith("read") -> {
+                    held.await()
+                    """{"ok":true,"run":{"job":"a","run":"${run("a", 50).run}","at":50,"text":"The whole report"}}"""
+                }
+                else -> """{"ok":true,"jobs":{},"failures":false,"default":"quiet"}"""
+            }
+        }
+        store.bind(one.gatewayUrl.value, now = 0)
+        val vm = viewModel(socket)
+        vm.bind(one)
+        val a = vm.state.value.runs.single()
+        vm.open(a)
+        assertTrue(vm.state.value.openLoading)
+        vm.ask(a)
+        held.complete(Unit)
+        val draft = (vm.events.first() as InboxEvent.OpenChat).chat.draft!!
+        assertEquals("The whole report", draft.attachments.single().bytes.decodeToString())
+        assertEquals(1, socket.sent("read").size)
+    }
+
+    @Test
     fun theFetchSaysWhetherItIsForAskingOrCopying() = runTest(dispatcher) {
         var held = CompletableDeferred<Unit>()
         val socket = PluginGateway(CoroutineScope(dispatcher)) { arg ->
