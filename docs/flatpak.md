@@ -28,12 +28,18 @@ diff and rebuild offline. Set `JAVA_HOME` to JBR 25 for generation and the Gradl
 JBR includes Chromium: security updates require updating its pinned archive and
 checksum together, checking the JCEF API version, rebuilding, and testing embedded
 content in the installed sandbox. Review native dependencies alongside JVM ones.
-The package uses XWayland under KDE Wayland; native Wayland is not qualified.
+The package uses XWayland under KDE Wayland. The entry point selects X11 for
+child runtimes, preventing Chromium from choosing an unavailable Wayland socket.
+Native Wayland is not qualified.
 Voice and Linux credential encryption are separate work. Do not use personal
 credentials until secure storage is qualified. A successful build alone does not
 qualify login, clipboard, window movement, portals or embedded content.
 
-The package keeps Compose's native launcher and generated runtime. Its fontconfig
+The package keeps Compose's app image and generated runtime. Its shell entry point
+uses the bundled Java with the classpath, JVM options and main class derived from
+Compose's generated configuration, avoiding a native jpackage launcher short-read
+crash on small-capacity pipes. User arguments are forwarded literally. Staging also
+restores the Chromium helper's executable bit. Its fontconfig
 fragment excludes WOFF/WOFF2 entries, which stalled Skia enumeration in installed
 tests; ordinary host fonts remain available. Remove this exclusion once those
 formats pass startup and rendering checks with the selected Skia/runtime versions.
