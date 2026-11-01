@@ -98,6 +98,7 @@ import dev.hermeskotlin.ui.rooms.CreateRoomDialog
 import dev.hermeskotlin.ui.bots.BotEditor
 import dev.hermeskotlin.core.bots.BotDetails
 import dev.hermeskotlin.ui.plugins.PluginsView
+import dev.hermeskotlin.ui.screen.ScreenView
 import dev.hermeskotlin.ui.assistant.AssistantBackdrop
 import dev.hermeskotlin.ui.assistant.AssistantCard
 import dev.hermeskotlin.ui.sessions.ProjectDraft
@@ -150,6 +151,7 @@ enum class PreviewScene(val label: String) {
     Renamed("The sidebar after updating from Herald, with the rename card"),
     Bots("The bots and rooms"),
     Room("A room of bots"),
+    Screen("A bot's screen, with the bot still in control"),
     NewRoom("A new room"),
     BotEditor("Editing a bot"),
     Settings("Settings"),
@@ -208,6 +210,7 @@ enum class PreviewScene(val label: String) {
     Connect("Connecting to a gateway that answered"),
     ConnectFailed("A gateway that didn't answer"),
     SignIn("Signing in"),
+    BotScreen("A bot's screen"),
 }
 
 /**
@@ -292,6 +295,22 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         rooms = BotSamples.rooms,
                     )
                 }
+                PreviewScene.Screen -> OpenSidebar {
+                    SidebarPage {
+                        ScreenView(
+                            state = ScreenSamples.watching,
+                            title = "Scribe",
+                            onBack = {},
+                            onStart = {},
+                            onReopen = {},
+                            onTakeOver = {},
+                            onHandBack = {},
+                            onPointer = { _, _, _ -> },
+                            onKey = {},
+                            onCharacter = {},
+                        )
+                    }
+                }
                 PreviewScene.Room -> {
                     val faces = remember { BotFaces(BotSamples.roster.all) }
                     CompositionLocalProvider(LocalBotFaces provides faces) {
@@ -348,6 +367,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         )
                     }
                 }
+                PreviewScene.BotScreen -> SampleScreen()
                 PreviewScene.Comments -> SampleChat(ChatSamples.reply, comments = remember { ChatSamples.comments() })
                 PreviewScene.LongChat -> SampleChat(ChatSamples.longChat)
                 PreviewScene.MidTask ->SampleChat(ChatSamples.working, composerText = "Also check the photos share")

@@ -39,6 +39,8 @@ kotlin {
             implementation(libs.compose.ui.tooling.preview)
             implementation(libs.haze)
             implementation(libs.haze.blur)
+            // The screen's session takes the shared client; the core keeps it, this only names its type.
+            implementation(libs.ktor.client.core)
         }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
