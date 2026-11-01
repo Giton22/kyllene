@@ -3182,7 +3182,7 @@ internal fun MentionSuggestions(
 
 /** A tappable one-line header that opens to show more, as the reply's reasoning does. */
 @Composable
-private fun Disclosure(
+internal fun Disclosure(
     icon: @Composable () -> Unit,
     label: String,
     expanded: Boolean,

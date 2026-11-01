@@ -12,6 +12,96 @@ import kotlin.test.assertIs
 
 class HistoryToMessagesTest {
 
+    @Test
+    fun compactionHandoffsNeverBecomePromptsOrMergeIntoReplies() {
+        val checkpoint = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted.\r\n```text\r\nbackground\r\n```"
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "assistant", content = JsonPrimitive("Before")),
+            SessionMessage(id = 2, role = "assistant", content = JsonPrimitive(checkpoint)),
+            SessionMessage(id = 3, role = "user", content = JsonPrimitive(checkpoint)),
+            SessionMessage(id = 4, role = "assistant", content = JsonPrimitive("After")),
+        ))
+        assertEquals(3, messages.size)
+        assertEquals("Before", assertIs<ChatMessage.Assistant>(messages[0]).text)
+        val handoffs = assertIs<TranscriptEvent.SystemMessages>(assertIs<ChatMessage.Event>(messages[1]).event)
+        assertEquals(listOf(checkpoint, checkpoint), handoffs.entries.map { assertIs<TranscriptEvent.Compaction>(it).body })
+        assertEquals("After", assertIs<ChatMessage.Assistant>(messages[2]).text)
+    }
+
+    @Test
+    fun consecutiveRoutineAndSuccessfulProcessEventsShareOneDisplayRow() {
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("[Cronjob \"Morning\" output — scheduled job, not the user.]\n\n3 new emails"), timestamp = 10.0),
+            SessionMessage(id = 2, role = "user", content = JsonPrimitive("[Cron delivery: Calendar]\n2 meetings"), timestamp = 20.0),
+            SessionMessage(id = 3, role = "user", content = JsonPrimitive("[IMPORTANT: Background process p1 completed normally (exit code 0).\nCommand: ls\nOutput:\nnotes]"), displayKind = "process_complete", timestamp = 30.0),
+        ))
+        assertEquals(1, messages.size)
+        val group = assertIs<ChatMessage.Event>(messages.single())
+        assertEquals("row-1", group.key)
+        assertEquals(30.0, group.timestamp)
+        val entries = assertIs<TranscriptEvent.SystemMessages>(group.event).entries
+        assertEquals(listOf("Morning", "Calendar"), entries.take(2).map { assertIs<TranscriptEvent.Routine>(it).name })
+        assertEquals("notes", assertIs<TranscriptEvent.Process>(entries.last()).output)
+    }
+
+    @Test
+    fun failuresOtherBotsAndRealConversationBreakSystemGroups() {
+        fun row(id: Long, text: String, role: String = "user", kind: String? = null) =
+            SessionMessage(id = id, role = role, content = JsonPrimitive(text), displayKind = kind)
+        val routine = "[Cron delivery: Monitor]\nNothing new"
+        val messages = historyToMessages(listOf(
+            row(1, routine),
+            row(2, "[IMPORTANT: Background process p1 exited (exit code 2).\nCommand: scan\nOutput:\nfailed]", kind = "process_complete"),
+            row(3, routine),
+            row(4, "Message from 🤖 scribe (@scribe): hello"),
+            row(5, routine),
+            row(6, "Please review the compaction checkpoint and cron messages"),
+            row(7, "Here is your summary", "assistant"),
+            row(8, routine),
+            row(9, "Your request was not processed.", "assistant", "failed_turn"),
+        ))
+        assertEquals(9, messages.size)
+        assertEquals(true, assertIs<TranscriptEvent.Process>(assertIs<ChatMessage.Event>(messages[1]).event).failed)
+        assertIs<TranscriptEvent.FromBot>(assertIs<ChatMessage.Event>(messages[3]).event)
+        assertIs<ChatMessage.User>(messages[5])
+        assertEquals("Here is your summary", assertIs<ChatMessage.Assistant>(messages[6]).text)
+        assertIs<TranscriptEvent.FailedTurn>(assertIs<ChatMessage.Event>(messages[8]).event)
+    }
+
+    @Test
+    fun hiddenScaffoldingStaysHiddenAndDisplayProjectionWins() {
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("[CONTEXT COMPACTION — REFERENCE ONLY] secret"), displayKind = "hidden"),
+            SessionMessage(id = 2, role = "user", content = JsonPrimitive("[CONTEXT COMPACTION — REFERENCE ONLY] internal"), displayContent = JsonPrimitive("Actual prompt")),
+            SessionMessage(id = 3, role = "assistant", content = JsonPrimitive("")),
+            SessionMessage(id = 4, role = "user", content = JsonPrimitive("An example: [CONTEXT COMPACTION — REFERENCE ONLY]")),
+        ))
+        assertEquals(listOf("Actual prompt", "An example: [CONTEXT COMPACTION — REFERENCE ONLY]"), messages.filterIsInstance<ChatMessage.User>().map { it.text })
+    }
+
+    @Test
+    fun regroupingHistoryKeepsContentAndChronologyAsOlderRowsArrive() {
+        val text = "| Name | Result |\r\n|---|---|\r\n| scan | ${"word".repeat(200)} |\r\n\r\n```text\r\nready\r\n```"
+        val older = SessionMessage(id = 1, role = "user", content = JsonPrimitive("[Cron delivery: Earlier]\n"))
+        val newer = SessionMessage(id = 2, role = "user", content = JsonPrimitive("[Cron delivery: Latest]\n$text"))
+        val loaded = historyToMessages(listOf(newer))
+        val reloaded = historyToMessages(listOf(older, newer))
+        assertEquals(1, loaded.size)
+        assertEquals(1, reloaded.size)
+        assertEquals(reloaded, historyToMessages(listOf(older, newer)))
+        val entries = assertIs<TranscriptEvent.SystemMessages>(assertIs<ChatMessage.Event>(reloaded.single()).event).entries
+        assertEquals(listOf("", text), entries.map { assertIs<TranscriptEvent.Routine>(it).body })
+    }
+
+    @Test
+    fun aLegacyCompactionCarrierWithALiveAskRemainsARealPrompt() {
+        val text = "[CONTEXT COMPACTION — REFERENCE ONLY] Old context\n\n" +
+            "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---\n\nPlease check the backup."
+        val message = historyToMessages(listOf(SessionMessage(id = 9, role = "user", content = JsonPrimitive(text)))).single()
+        assertEquals(text, assertIs<ChatMessage.User>(message).text)
+        assertEquals(9L, message.rowId)
+    }
+
     private fun toolCall(name: String) = buildJsonArray {
         add(buildJsonObject { put("id", "c-$name"); put("function", buildJsonObject { put("name", name) }) })
     }

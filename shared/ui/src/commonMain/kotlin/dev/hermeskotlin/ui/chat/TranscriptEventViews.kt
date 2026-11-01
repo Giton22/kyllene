@@ -33,6 +33,7 @@ import com.composables.icons.lucide.Bot
 import com.composables.icons.lucide.CheckCheck
 import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
+import com.composables.icons.lucide.Settings
 import com.composables.icons.lucide.CircleAlert
 import com.composables.icons.lucide.CornerDownRight
 import com.composables.icons.lucide.Hourglass
@@ -87,6 +88,8 @@ import dev.hermeskotlin.ui.bots.LocalBotFaces
 @Composable
 internal fun TranscriptEventRow(event: TranscriptEvent) {
     when (event) {
+        is TranscriptEvent.SystemMessages -> SystemMessages(event.entries)
+        is TranscriptEvent.Compaction -> SystemMessages(listOf(event))
         is TranscriptEvent.FromBot -> FromBotNote(event)
         is TranscriptEvent.Delivery -> DeliveryLine(event)
         is TranscriptEvent.Process -> FoldedLine(
@@ -108,6 +111,39 @@ internal fun TranscriptEventRow(event: TranscriptEvent) {
         )
         is TranscriptEvent.Label -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text(event.text, style = Theme[typography][caption], color = Theme[colors][textTertiary])
+        }
+    }
+}
+
+/** The same disclosure as Reasoning, with all background entries readable in one expansion. */
+@Composable
+private fun SystemMessages(entries: List<TranscriptEvent>) {
+    var expanded by remember { mutableStateOf(false) }
+    Disclosure(
+        icon = { UnstyledIcon(Lucide.Settings, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp)) },
+        label = "System messages · ${entries.size}",
+        expanded = expanded,
+        onToggle = { expanded = !expanded },
+    ) {
+        CopyableOnDesktop {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                entries.forEach { event ->
+                    val (title, body) = when (event) {
+                        is TranscriptEvent.Compaction -> "Compaction checkpoint" to event.body
+                        is TranscriptEvent.Routine -> "Routine “${event.name}” ran" to event.body
+                        is TranscriptEvent.Process -> event.title to event.output
+                        is TranscriptEvent.Label -> event.text to ""
+                        else -> return@forEach
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(title, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary])
+                        if (body.isNotBlank()) {
+                            if (event is TranscriptEvent.Process) Monospace(body)
+                            else MarkdownText(body, textStyle = Theme[typography][bodySmall].copy(color = Theme[colors][textSecondary]))
+                        }
+                    }
+                }
+            }
         }
     }
 }
