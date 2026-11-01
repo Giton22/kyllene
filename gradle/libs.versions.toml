@@ -38,6 +38,9 @@ media3 = "1.11.1"
 wear-protolayout = "1.4.2"
 wear-complications = "1.3.0"
 android-wear-minSdk = "30"
+# Rendered Compose layout tests on the Android host. Test-only: no production code or SDK changes.
+robolectric = "4.17"
+junit4 = "4.13.2"
 
 android-compileSdk = "37"
 # Compose 1.13 and A2UI need 37.1.
@@ -147,6 +150,10 @@ filekit-dialogs = { module = "io.github.vinceglb:filekit-dialogs", version = "0.
 # Testing
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
+junit4 = { module = "junit:junit", version.ref = "junit4" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+# Host-rendered Compose tests: the same androidx Compose version the multiplatform build resolves.
+compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4", version.ref = "compose-multiplatform" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
