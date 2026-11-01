@@ -11,6 +11,9 @@ import dev.hermeskotlin.core.storage.FileKeyValueStore
 import dev.hermeskotlin.core.storage.KeyValueStore
 import dev.hermeskotlin.core.storage.appDataDir
 import dev.hermeskotlin.core.voice.DeviceDictation
+import dev.hermeskotlin.core.voice.FfmpegSpeechDecoder
+import dev.hermeskotlin.core.voice.LinuxSpeechPlayer
+import dev.hermeskotlin.core.voice.WebRtcSpeaker
 import dev.hermeskotlin.core.voice.LinuxVoiceRecorder
 import dev.hermeskotlin.core.voice.WebRtcMicrophone
 import dev.hermeskotlin.core.voice.LiveCalls
@@ -28,13 +31,17 @@ actual val platformModule: Module = module {
     // No app link to send the browser back to: its tab says it's done.
     single<LoopbackReceiver> { LoopbackHttpReceiver(returnUri = null) }
     single { WallpaperStore(FileBlobFile(File(appDataDir, "wallpaper.jpg")), get()) }
-    // Recording is available on Linux; playback and live calls remain separate.
+    // Native recording and playback are Linux backends; live calls remain separate.
     single<VoiceRecorder> {
         if (System.getProperty("os.name") == "Linux" && System.getProperty("os.arch") in setOf("amd64", "x86_64", "aarch64")) {
             LinuxVoiceRecorder(::WebRtcMicrophone)
         } else NoVoiceRecorder
     }
-    single<SpeechPlayer> { NoSpeechPlayer }
+    single<SpeechPlayer> {
+        if (System.getProperty("os.name") == "Linux" && System.getProperty("os.arch") in setOf("amd64", "x86_64", "aarch64")) {
+            LinuxSpeechPlayer(FfmpegSpeechDecoder(), ::WebRtcSpeaker)
+        } else NoSpeechPlayer
+    }
     single<DeviceDictation> { NoDeviceDictation }
     single { LiveCalls { null } }
     single { offlineDatabase(appDataDir) }
