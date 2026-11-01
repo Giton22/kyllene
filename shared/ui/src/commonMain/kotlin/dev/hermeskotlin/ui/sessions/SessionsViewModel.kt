@@ -18,6 +18,7 @@ import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.profiles.ProfileRoster
@@ -40,6 +41,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -166,6 +168,8 @@ class SessionsViewModel(
     private val threadsRepo: ThreadsRepository,
     /** The list as last read, shown while the gateway can't be. */
     private val cache: OfflineCache? = null,
+    /** Makes a new project's folder on the gateway's machine. */
+    private val files: MediaApi? = null,
 ) : ViewModel() {
 
     /** Stamps an archive's undo offer, so it runs out on time even if the screen goes and comes back. */
@@ -252,7 +256,7 @@ class SessionsViewModel(
     /** The list is on screen (the sidebar open or docked), or no longer is. */
     fun setVisible(shown: Boolean) {
         visible.value = shown
-        if (shown && _state.value.filter == SessionListFilter.Recent) loadProjects()
+        if (shown && _state.value.filter == SessionListFilter.Recent) loadProjects(force = projectsStale)
     }
 
     val query = TextFieldState()
@@ -402,6 +406,13 @@ class SessionsViewModel(
     suspend fun projectFolders(dir: String, prefix: String): FolderListing =
         projectsApi.folders(bound.value?.second, dir, prefix)
 
+    /** Makes the folder [name] in [dir] on the gateway's machine; answers why not, or null once it's there. */
+    suspend fun makeProjectFolder(dir: String, name: String): String? {
+        val url = bound.value?.first ?: return "Not connected."
+        val api = files ?: return "This build can't make folders."
+        return api.makeFolder(url, FolderPath.picked(FolderPath.child(dir, name))).errorMessage
+    }
+
     /** [id]'s chip and the picked project renamed to [label]; with [unless], only while they still show that. */
     private fun SessionsUiState.withProjectLabel(id: String, label: String, unless: String? = null): SessionsUiState {
         fun Project.relabeled() = if (this.id == id && (unless == null || this.label == unless)) copy(label = label) else this
@@ -442,6 +453,12 @@ class SessionsViewModel(
     /** A change came in while the projects were being asked for; ask once more when that answer is in. */
     private var projectsAgain = false
 
+    /** A change came in while the list was closed; ask at once when it opens, however recently the last ask was. */
+    private var projectsStale = false
+
+    /** The ask put off until [PROJECTS_EVERY_MS] since the last one is over. */
+    private var projectsLater: Job? = null
+
     /**
      * The project list, again, since no event says a chat moved between projects. The gateway groups the
      * newest sessions each time, so this is asked only while the list shows, at most every
@@ -449,9 +466,22 @@ class SessionsViewModel(
      */
     private fun loadProjects(force: Boolean = false) {
         if (connection.state.value !is ConnectionState.Connected) return
-        if (!force && !visible.value && _state.value.projects.isNotEmpty()) return
+        if (!force && !visible.value && _state.value.projects.isNotEmpty()) {
+            projectsStale = true
+            return
+        }
         val now = getTimeMillis()
-        if (!force && now - projectsAskedAt < PROJECTS_EVERY_MS) return
+        val wait = projectsAskedAt + PROJECTS_EVERY_MS - now
+        if (!force && wait > 0) {
+            // Too soon to ask again, but the change still counts: ask once the wait is over.
+            if (projectsLater?.isActive != true) projectsLater = viewModelScope.launch {
+                delay(wait)
+                if (visible.value) loadProjects(force = true) else projectsStale = true
+            }
+            return
+        }
+        projectsStale = false
+        projectsLater?.cancel()
         if (projectsJob?.isActive == true) {
             projectsAgain = true
             return

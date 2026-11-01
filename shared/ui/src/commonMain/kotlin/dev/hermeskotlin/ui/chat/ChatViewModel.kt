@@ -3,6 +3,7 @@ package dev.hermeskotlin.ui.chat
 import dev.hermeskotlin.core.voice.ReadAloudVoices
 import dev.hermeskotlin.core.voice.InMemoryReadAloudVoices
 import androidx.compose.foundation.text.input.TextFieldState
+import dev.hermeskotlin.designsystem.components.stripBidiIsolates
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.lifecycle.ViewModel
@@ -133,6 +134,9 @@ sealed interface ChatRequest {
 
     /** The voice shortcut: the screen asks for the microphone, then dictates into the composer. */
     data object StartDictation : ChatRequest
+
+    /** A chat opened to type in: the composer takes the keyboard. */
+    data object FocusComposer : ChatRequest
 
     /** [profile] null is the gateway's launch profile. */
     data class SwitchProfile(val profile: String?) : ChatRequest
@@ -544,6 +548,7 @@ class ChatViewModel(
         // After the notice: when the files overfill a tray that already held some, the tray limit is what to tell.
         if (draft.attachments.isNotEmpty()) addAttachments(draft.attachments)
         if (draft.start == DraftStart.Dictation) viewModelScope.launch { _requests.send(ChatRequest.StartDictation) }
+        if (draft.start == DraftStart.Typing) viewModelScope.launch { _requests.send(ChatRequest.FocusComposer) }
     }
 
     fun startVoiceChat(ringback: Boolean = false) {
@@ -783,7 +788,8 @@ class ChatViewModel(
     }
 
     override fun askAside(source: CommentSource, anchor: SelectionAnchor) {
-        val quote = anchor.text.replace(Regex("""\s+"""), " ").trim().let { if (it.length > ASIDE_QUOTE_MAX) it.take(ASIDE_QUOTE_MAX).trimEnd() + "…" else it }
+        // The selection comes off the rendered text, so it carries the bidi isolates; the composer must not.
+        val quote = stripBidiIsolates(anchor.text).replace(Regex("""\s+"""), " ").trim().let { if (it.length > ASIDE_QUOTE_MAX) it.take(ASIDE_QUOTE_MAX).trimEnd() + "…" else it }
         composer.setTextAndPlaceCursorAtEnd("/btw About “$quote” in ${source.label}: ")
     }
 

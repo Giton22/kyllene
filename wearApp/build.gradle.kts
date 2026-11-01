@@ -13,7 +13,11 @@ val releasesRepo = (findProperty("releasesRepo") as String?).orEmpty()
 
 android {
     namespace = "dev.hermeskotlin.wear"
-    compileSdk = libs.versions.android.compileSdk.get().toInt()
+    compileSdk {
+        version = release(libs.versions.android.compileSdk.get().toInt()) {
+            minorApiLevel = libs.versions.android.compileSdkMinor.get().toInt()
+        }
+    }
 
     defaultConfig {
         applicationId = "dev.herald.android"
