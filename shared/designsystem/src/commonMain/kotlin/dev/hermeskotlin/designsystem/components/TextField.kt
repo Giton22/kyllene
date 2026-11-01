@@ -79,7 +79,14 @@ import dev.hermeskotlin.designsystem.typography
 /** Shows every character as a bullet; the underlying [TextFieldState] keeps the real text. */
 private object PasswordMask : OutputTransformation {
     override fun TextFieldBuffer.transformOutput() {
-        replace(0, length, "•".repeat(length))
+        val characters = asCharSequence()
+        var index = 0
+        while (index < length) {
+            val end = if (characters[index].isHighSurrogate() && index + 1 < length && characters[index + 1].isLowSurrogate()) index + 2 else index + 1
+            // Each replacement is an editing unit. Keep a code point together, not the whole password.
+            replace(index, end, "•".repeat(end - index))
+            index = end
+        }
     }
 }
 
