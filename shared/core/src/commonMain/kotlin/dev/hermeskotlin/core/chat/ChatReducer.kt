@@ -378,7 +378,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         agentScreen = AgentScreen.from(call.name, call.arguments),
                     )
                 }
-                val reasoning = row.reasoning.orEmpty()
+                val reasoning = row.reasoningText
                 val previous = (messages.lastOrNull() as? ChatMessage.Assistant)?.takeUnless { before ->
                     val at = row.timestamp
                     val ended = before.timestamp
@@ -392,7 +392,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         // The reply is dated by its last step, when it finished.
                         timestamp = row.timestamp ?: previous.timestamp,
                     )
-                } else if (text.isNotEmpty() || tools.isNotEmpty()) {
+                } else if (text.isNotEmpty() || (reasoning.isNotEmpty() && !TranscriptRows.isSilence(row.text.trim())) || tools.isNotEmpty()) {
                     messages += ChatMessage.Assistant(
                         key,
                         text = text,
