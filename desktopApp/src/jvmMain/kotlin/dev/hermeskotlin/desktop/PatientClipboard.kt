@@ -2,6 +2,7 @@ package dev.hermeskotlin.desktop
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
@@ -19,6 +20,12 @@ internal class PatientClipboard(private val system: Clipboard) : Clipboard {
     override suspend fun setClipEntry(clipEntry: ClipEntry?) {
         patiently { system.setClipEntry(clipEntry) }
     }
+
+    /** Forwards to the system clipboard so Compose's desktop right-click handling can access it. */
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+    @OptIn(ExperimentalComposeUiApi::class)
+    override val nativeClipboard: Any
+        get() = system.nativeClipboard
 
     private suspend fun <T> patiently(block: suspend () -> T): T? {
         repeat(TRIES) { attempt ->

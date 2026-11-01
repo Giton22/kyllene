@@ -2369,6 +2369,7 @@ internal class RowMenuItem(
     val icon: ImageVector,
     val destructive: Boolean = false,
     val key: Key? = null,
+    val enabled: Boolean = true,
     val run: () -> Unit,
 )
 
@@ -2377,7 +2378,7 @@ internal class RowMenuItem(
 internal fun RowContextMenu(visible: Boolean, onDismiss: () -> Unit, items: () -> List<RowMenuItem>) {
     ContextMenu(visible, onDismiss) {
         for (item in items()) {
-            MenuRow(item.label, item.icon, onClick = { onDismiss(); item.run() }, destructive = item.destructive, keys = item.key?.let(::keyName))
+            MenuRow(item.label, item.icon, onClick = { onDismiss(); item.run() }, destructive = item.destructive, keys = item.key?.let(::keyName), enabled = item.enabled)
         }
     }
 }

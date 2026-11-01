@@ -11,12 +11,12 @@ actual fun plainTextClipEntry(text: String): ClipEntry = ClipEntry(StringSelecti
 
 /** Reads plain text from the clipboard on the desktop JVM. */
 actual fun clipboardText(): String? {
-    val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-    return if (clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)) {
-        try {
+    return try {
+        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+        if (clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)) {
             clipboard.getData(DataFlavor.stringFlavor) as String
-        } catch (_: Exception) {
-            null
-        }
-    } else null
+        } else null
+    } catch (_: Exception) {
+        null
+    }
 }

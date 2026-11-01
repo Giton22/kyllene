@@ -3707,18 +3707,26 @@ private fun Composer(
                     )
                     RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
                         val selection = actions.composer.selection
-                        val hasSelection = selection.start != selection.end
+                        val first = selection.first
+                        val last = selection.last
+                        val hasSelection = first != last
                         val selectedText = if (hasSelection) {
-                            actions.composer.text.subSequence(selection.start, selection.end).toString()
+                            actions.composer.text.subSequence(first, last).toString()
                         } else ""
                         listOfNotNull(
-                            RowMenuItem("Copy", Lucide.Copy) {
+                            RowMenuItem("Copy", Lucide.Copy, enabled = hasSelection) {
                                 composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
                             },
-                            RowMenuItem("Cut", Lucide.Pencil) {
-                                composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
-                                actions.composer.edit {
-                                    replace(selection.start, selection.end, AnnotatedString(""))
+                            RowMenuItem("Cut", Lucide.Pencil, enabled = hasSelection) {
+                                composerScope.launch {
+                                    try {
+                                        clipboard.setClipEntry(plainTextClipEntry(selectedText))
+                                    } catch (_: Exception) {
+                                        return@launch
+                                    }
+                                    actions.composer.edit {
+                                        replace(first, last, AnnotatedString(""))
+                                    }
                                 }
                             },
                             RowMenuItem("Paste", Lucide.Copy) {
@@ -3726,7 +3734,7 @@ private fun Composer(
                                     val clipText = clipboardText()
                                     if (clipText != null) {
                                         actions.composer.edit {
-                                            replace(selection.start, selection.end, AnnotatedString(clipText))
+                                            replace(first, last, AnnotatedString(clipText))
                                         }
                                     }
                                 }
