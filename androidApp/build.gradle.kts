@@ -12,7 +12,11 @@ val releasesRepo = (findProperty("releasesRepo") as String?).orEmpty()
 
 android {
     namespace = "dev.hermeskotlin.android"
-    compileSdk = libs.versions.android.compileSdk.get().toInt()
+    compileSdk {
+        version = release(libs.versions.android.compileSdk.get().toInt()) {
+            minorApiLevel = libs.versions.android.compileSdkMinor.get().toInt()
+        }
+    }
 
     defaultConfig {
         // The installed identity; the Kotlin packages keep their original dev.hermeskotlin name.

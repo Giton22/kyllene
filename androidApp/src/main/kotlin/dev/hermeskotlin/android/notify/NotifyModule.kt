@@ -52,6 +52,6 @@ val notifyModule = module {
     single { PhoneConfirmations(androidContext()) }
     single { Geofences(androidContext(), get(), get()) } bind WatchedPlaces::class
     single { ChatTargets(get(), get(), get(), get()) }
-    single { AndroidPhoneTools(androidContext(), get(), get(), get(), get()) } bind PhoneToolRunner::class
+    single { AndroidPhoneTools(androidContext(), get(), get(), get(), get(), get()) } bind PhoneToolRunner::class
     single { PhoneToolsBridge(get(), get(), get(), get(), get(), get(), get(), get(), deviceName = { Build.MODEL ?: "Android phone" }) }
 }
