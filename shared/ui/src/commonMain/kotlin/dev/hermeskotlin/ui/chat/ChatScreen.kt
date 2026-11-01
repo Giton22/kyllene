@@ -3678,7 +3678,7 @@ private fun Composer(
                     ComposerTextInput(
                         state = actions.composer,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
-                            .onSecondaryPress { contextMenuOpen = true }
+                            .then(if (isDesktop) Modifier.onSecondaryPress { contextMenuOpen = true } else Modifier)
                             .onFocusChanged { fold.typing = it.hasFocus }
                             .then(
                                 if (!enterSends) {
