@@ -907,7 +907,10 @@ class ChatSession(
         }
         val value = result.string("value")
         if (ReasoningEffort.fromWire(value) != null) {
-            _state.update { if (it.reasoningRevision != before) it else it.copy(reasoningEffort = value) }
+            // A re-attach while the read was out made a new runtime session; its own read answers for it.
+            _state.update {
+                if (it.reasoningRevision != before || it.runtimeSessionId != runtimeId) it else it.copy(reasoningEffort = value)
+            }
         }
     }
 
