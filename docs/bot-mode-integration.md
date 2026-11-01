@@ -151,6 +151,8 @@ Adjacent routine outputs, compaction handoffs, successful process completions an
 collapsed **System messages · N** disclosure with a gear icon, styled like Reasoning. Expanding it shows
 those entries in order. Replies, other bots' messages, delivery outcomes and failures remain outside the
 group. Gateway-hidden rows remain hidden; `display_content` takes precedence over raw stored content.
+User rows typed `internal_notification` are also shown when they match either known cron envelope above.
+This is best-effort format recognition; other internal notifications remain hidden.
 
 **Delivery outcome** (parse the process `Output:`):
 - plain text, `{"reply",…,"status":"settled"}` or `Reply from X:` → "💬 Reply from @x", collapsed. Strip
