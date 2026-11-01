@@ -185,6 +185,7 @@ internal fun ChatState.withInfo(info: JsonObject?): ChatState {
         provider = info.string("provider")?.takeIf { it.isNotBlank() } ?: provider,
         // "" means the profile default, which is worth showing as such rather than as a stale pick.
         reasoningEffort = info.string("reasoning_effort")?.let { it.ifBlank { null } } ?: reasoningEffort.takeIf { "reasoning_effort" !in info },
+        reasoningRevision = if ("reasoning_effort" in info) reasoningRevision + 1 else reasoningRevision,
         fast = info.boolean("fast") ?: fast,
         yolo = info.boolean("yolo") ?: yolo,
         usage = SessionUsage.parse(info["usage"] as? JsonObject) ?: usage,
