@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -130,7 +131,8 @@ private fun SystemMessages(entries: List<TranscriptEvent>) {
         expanded = expanded,
         onToggle = { expanded = !expanded },
     ) {
-        Column { entries.forEach { TranscriptEventRow(it) } }
+        // Counted from the newest, as the group is keyed: one opened stays open when an earlier page adds entries above.
+        Column { entries.forEachIndexed { i, entry -> key(entries.size - i) { TranscriptEventRow(entry) } } }
     }
 }
 

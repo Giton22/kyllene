@@ -108,7 +108,7 @@ class HistoryToMessagesTest {
         val reloaded = historyToMessages(listOf(older, newer))
         assertEquals(1, loaded.size)
         assertEquals(1, reloaded.size)
-        // Same key before and after the earlier page, so the list keeps its place and the group stays open.
+        // Same key before and after the earlier page, so the list keeps its place.
         assertEquals(loaded.single().key, reloaded.single().key)
         assertEquals(reloaded, historyToMessages(listOf(older, newer)))
         val entries = assertIs<TranscriptEvent.SystemMessages>(assertIs<ChatMessage.Event>(reloaded.single()).event).entries
