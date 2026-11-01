@@ -142,9 +142,24 @@ data class SessionMessage(
     @Serializable(with = LenientBooleanSerializer::class) val active: Boolean = true,
     /** Kept only to show what a compression summarized. */
     @Serializable(with = LenientBooleanSerializer::class) val compacted: Boolean = false,
+    @SerialName("display_reasoning") val displayReasoning: String? = null,
+    @SerialName("display_commentary") val displayCommentary: List<String>? = null,
 ) {
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
+
+    /** Prefer the gateway's display projection; older gateways only send [reasoning]. */
+    val reasoningText: String
+        get() {
+            val base = displayReasoning ?: reasoning.orEmpty()
+            // Some gateways still flatten public commentary into legacy reasoning. Match whole lines,
+            // including multiline commentary, without changing the stored text's line endings.
+            val lines = "\n${base.replace("\r\n", "\n")}\n"
+            val commentary = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.replace("\r\n", "\n") }.filterNot {
+                lines.contains("\n${it.replace("\r\n", "\n")}\n")
+            }
+            return (listOf(base) + commentary).filter { it.isNotBlank() }.joinToString("\n\n")
+        }
 
     /** Image parts of a multimodal row (`image_url` / `image` / `input_image`). */
     val imageCount: Int
