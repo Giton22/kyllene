@@ -176,6 +176,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -421,6 +422,12 @@ fun ChatScreen(
     LaunchedEffect(target) { viewModel.open(target) }
     val transcript = viewModel.transcript.collectAsStateWithLifecycle().value
     val state = transcript.state
+    // The same chat reopened with a new position (a notification for it) keeps the last one until the new one is read.
+    val readPosition = viewModel.readPosition.collectAsStateWithLifecycle().value
+        ?.takeIf { it.target.copy(readUpTo = null) == target.copy(readUpTo = null) }
+    val ownsTranscript = transcript.owner?.copy(readUpTo = null) == target.copy(readUpTo = null)
+    // Keep this small lifecycle signal observable through stop/start, when transcript collection is paused.
+    val screenShown = viewModel.screenShown.collectAsState().value
     val picker = viewModel.picker.collectAsStateWithLifecycle().value
     val connection = viewModel.connectionState.collectAsStateWithLifecycle().value
     val connected = connection is ConnectionState.Connected
@@ -481,7 +488,7 @@ fun ChatScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
         if (!changingConfigurations()) viewModel.voice.onBackground()
         viewModel.onScreen(false)
-        // What's on screen now counts as read, so a reply that comes in while away is new.
+        // Preserve the actual reading position and remember a turn still running while away.
         viewModel.markLooked()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onScreen(true) }
@@ -557,7 +564,7 @@ fun ChatScreen(
         titleFace = LocalBotFaces.current.let { faces ->
             faces.find(target.bot?.name)?.let { bot -> { BotAvatar(bot, faces.picture(bot), size = 22.dp) } }
         },
-        state = state,
+        state = if (readPosition == null || !ownsTranscript) state.copy(historyLoaded = false) else state,
         conversationKey = Triple(target.gateway.gatewayUrl, target.profile, target.storedSessionId),
         picker = picker,
         connected = connected,
@@ -592,7 +599,10 @@ fun ChatScreen(
         widgetFiles = transcript.widgetFiles,
         editing = viewModel.editing.collectAsStateWithLifecycle().value,
         // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
-        readUpTo = target.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
+        readUpTo = readPosition?.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
+        onReadLatest = if (readPosition != null && ownsTranscript && screenShown && connected && state.historyRead && !state.running) {
+            { viewModel.readLatest(target, state) }
+        } else null,
         onOpenSidebar = onOpenSidebar,
         // Already on an untouched new chat: nothing to start over from.
         onNewChat = onNewChat.takeIf { target.storedSessionId != null || state.messages.isNotEmpty() },
@@ -753,6 +763,7 @@ internal fun ChatView(
     editing: String? = null,
     /** How far this chat had been read when it was opened (epoch seconds); later messages are marked new. */
     readUpTo: Double? = null,
+    onReadLatest: (() -> Unit)? = null,
     onOpenSidebar: () -> Unit,
     onNewChat: (() -> Unit)?,
     onOpenMenu: ((Rect?) -> Unit)?,
@@ -1052,25 +1063,26 @@ internal fun ChatView(
                             LocalCommentHost provides commentHost,
                         ) {
                             key(conversationKey) {
-                            Messages(
-                                listed,
-                                olderMessages = state.olderMessages,
-                                loadingOlder = state.loadingOlder,
-                                savedCopy = state.savedCopyAt != null,
-                                bottomInset = listInset,
-                                controlsInset = dockInset,
-                                fold = composerFold,
-                                actions = actions,
-                                connected = connected,
-                                // A saved copy may lack what changed since; edits wait for the gateway's transcript.
-                                canChange = state.canChangeChat(connected && state.savedCopyAt == null),
-                                editing = editing,
-                                readUpTo = readUpTo,
-                                reading = readAloud.key,
-                                // The voice chat and dictation have the speaker and the microphone.
-                                canReadAloud = hasVoice && !voiceOn && !dictation.active,
-                                found = found,
-                            )
+                                Messages(
+                                    listed,
+                                    olderMessages = state.olderMessages,
+                                    loadingOlder = state.loadingOlder,
+                                    savedCopy = state.savedCopyAt != null,
+                                    bottomInset = listInset,
+                                    controlsInset = dockInset,
+                                    fold = composerFold,
+                                    actions = actions,
+                                    connected = connected,
+                                    // A saved copy may lack what changed since; edits wait for the gateway's transcript.
+                                    canChange = state.canChangeChat(connected && state.savedCopyAt == null),
+                                    editing = editing,
+                                    readUpTo = readUpTo,
+                                    onReadLatest = onReadLatest,
+                                    reading = readAloud.key,
+                                    // The voice chat and dictation have the speaker and the microphone.
+                                    canReadAloud = hasVoice && !voiceOn && !dictation.active,
+                                    found = found,
+                                )
                             }
                         }
                     } else Box(
@@ -1783,6 +1795,7 @@ private fun Messages(
     editing: String?,
     /** How far the chat had been read when it was opened (epoch seconds); later messages are marked new. */
     readUpTo: Double? = null,
+    onReadLatest: (() -> Unit)? = null,
     /** The reply being read aloud, by its key. */
     reading: String? = null,
     /** Replies offer Read aloud. */
@@ -1817,6 +1830,9 @@ private fun Messages(
     var readerNavigated by remember(readUpTo) { mutableStateOf(false) }
     // Once the user sends from here, what follows is their own conversation, not news to mark or jump to.
     var unreadSettled by remember(readUpTo) { mutableStateOf(false) }
+    // The opening jump is done; only then may reaching the end mark the chat read. A saved copy giving way to
+    // current history looks for the unread line again, so it waits for that too.
+    var positioned by remember(readUpTo, savedCopy) { mutableStateOf(readUpTo == null || unreadSettled) }
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo }.collect { info ->
             when (followStep(pinned, info.hiddenBelow(), listState.isScrollInProgress)) {
@@ -1850,7 +1866,10 @@ private fun Messages(
     LaunchedEffect(newest?.key) {
         // A fast submit can acknowledge the local prompt before the screen ever draws it pending.
         val sentHere = newest is ChatMessage.User && (newest.pending || newest.key.startsWith("local-"))
-        if (sentHere) unreadSettled = true
+        if (sentHere) {
+            unreadSettled = true
+            positioned = true
+        }
         if (newest is ChatMessage.User && (sentHere || !readerNavigated)) {
             pinned = true
             listState.scrollToItem(messages.lastIndex, LIST_END)
@@ -1874,6 +1893,7 @@ private fun Messages(
         if (readUpTo == null || unreadFrom != null || unreadSettled) return@LaunchedEffect
         if (messages.any { it is ChatMessage.User && it.pending }) {
             unreadSettled = true
+            positioned = true
             return@LaunchedEffect
         }
         if (loadingOlder) return@LaunchedEffect
@@ -1893,6 +1913,7 @@ private fun Messages(
                     pinned = true
                     listState.scrollToItem(messages.lastIndex, LIST_END)
                 }
+                positioned = true
                 return@LaunchedEffect
             }
             is UnreadLineStep.Above -> step.key
@@ -1904,6 +1925,18 @@ private fun Messages(
             pinned = false
             listState.scrollToItem(index)
         }
+        positioned = true
+    }
+    val readLatest by rememberUpdatedState(onReadLatest)
+    val messageCount by rememberUpdatedState(messages.size)
+    // Asked again whenever the messages change, not just the tail: a page loaded above, or a row redrawn, can turn
+    // down an ask made while the rendered list and the chat's differed for a frame.
+    LaunchedEffect(listState, positioned, onReadLatest != null, messages) {
+        if (!positioned || onReadLatest == null) return@LaunchedEffect
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.isNotEmpty() &&
+                listState.layoutInfo.totalItemsCount == messageCount && !listState.canScrollForward
+        }.collect { atEnd -> if (atEnd) readLatest?.invoke() }
     }
     val unservable = remember(messages) { unservableEchoes(messages) }
     val unreadLine = remember(messages, unreadFrom, readUpTo) { unreadLineKey(messages, unreadFrom, readUpTo) }
