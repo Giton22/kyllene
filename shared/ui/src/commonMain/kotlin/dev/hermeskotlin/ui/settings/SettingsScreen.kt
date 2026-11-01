@@ -257,6 +257,7 @@ fun SettingsScreen(
     // Read again when the App icon page closes, so its row names the icon just applied.
     val appIcons = key(appIconOpen) { rememberAppIcons() }
     val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
+    val voiceInstall by viewModel.voiceInstall.collectAsStateWithLifecycle()
     LaunchedEffect(gateway, profile) { viewModel.bind(gateway, profile) }
     PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen && !startInstructionOpen && !callTargetOpen, onBack = onBack)
     // The desktop lists the sections beside the page; they say here where they start.
@@ -290,7 +291,9 @@ fun SettingsScreen(
         suggestions = suggestions,
         onInstallSuggestions = viewModel::installSuggestions,
         onCheckSuggestions = viewModel::checkSuggestions,
+        onInstallVoice = viewModel::openVoiceInstall,
     ) }
+    VoiceInstallSheet(voiceInstall, viewModel::closeVoiceInstall, viewModel::selectVoiceProfile, viewModel::confirmVoiceInstall)
     if (callTargetOpen) CallTargetPicker(gateway, viewModel, botFaces, onDismiss = { callTargetOpen = false }) { target ->
         viewModel.update { it.copy(callTargets = it.callTargets + (gateway.url to target)) }
         callTargetOpen = false
@@ -390,6 +393,7 @@ internal fun SettingsView(
     suggestions: SuggestionsPlugin = SuggestionsPlugin.Checking,
     onInstallSuggestions: () -> Unit = {},
     onCheckSuggestions: () -> Unit = {},
+    onInstallVoice: () -> Unit = {},
 ) {
     Box(
         Modifier
@@ -613,6 +617,17 @@ internal fun SettingsView(
 
                 if (hasVoice) Section("Voice") {
                     CallTargetRow(settings.callTargets[gatewayUrl] ?: CallTarget(), botFaces, onChooseCallTarget)
+                    Divider()
+                    SwitchRow(
+                        title = "Subscription live voice",
+                        detail = "Outgoing calls and configured incoming calls use your ChatGPT subscription, with no voice API fallback. Chat history and profile voice instructions go to the provider. Delegated chat may incur separate charges.",
+                        checked = settings.subscriptionVoicePreview,
+                        onCheckedChange = { on -> onUpdate { it.copy(subscriptionVoicePreview = on) } },
+                    )
+                    if (settings.subscriptionVoicePreview) {
+                        Divider()
+                        ActionRow("Install subscription voice plugin", Lucide.Download, onClick = onInstallVoice)
+                    }
                     Divider()
                     SwitchRow(
                         title = "Dictation",
