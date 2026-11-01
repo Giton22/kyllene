@@ -66,3 +66,8 @@ kotlin {
 
 // Lint only ever gets this module's test sources, and the app's lint ignores those (see androidApp).
 tasks.matching { it.name == "lintAnalyzeAndroidHostTest" }.configureEach { enabled = false }
+
+// `-Drtl.geometry=<dir>` asks the RTL layout tests to write their geometry and pixels there.
+providers.systemProperty("rtl.geometry").orNull?.let { dir ->
+    tasks.withType<Test>().configureEach { systemProperty("rtl.geometry", dir) }
+}
