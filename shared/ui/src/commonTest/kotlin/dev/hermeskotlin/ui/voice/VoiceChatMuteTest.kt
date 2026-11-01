@@ -70,10 +70,15 @@ class VoiceChatMuteTest {
         fun event(type: String, payload: String = "{}") {
             inbound.trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"$type","session_id":"rt9","payload":$payload}}""")
         }
+
+        /** A request of the gateway's own, as a question Hermes stops on. */
+        fun push(raw: String) {
+            inbound.trySend(raw)
+        }
     }
 
-    /** Answers the first listen; every later one is a sentence still being spoken until it's cancelled. */
-    private class MidSentence : VoiceRecorder {
+    /** Answers the first [answered] listens; every later one is a sentence still being spoken until it's cancelled. */
+    private class MidSentence(val answered: Int = 1) : VoiceRecorder {
         var recordings = 0
         val started = MutableStateFlow(0)
         val cancelled = CompletableDeferred<Unit>()
@@ -81,7 +86,7 @@ class VoiceChatMuteTest {
             recordings++
             started.value = recordings
             onSpeech()
-            if (recordings >= 2) {
+            if (recordings > answered) {
                 try {
                     awaitCancellation()
                 } catch (e: CancellationException) {
@@ -99,13 +104,24 @@ class VoiceChatMuteTest {
         override suspend fun play(audio: SpokenAudio) = Unit
     }
 
-    /** A chained voice chat, started and past its first spoken sentence. */
-    private suspend fun TestScope.chat(recorder: VoiceRecorder): Pair<Socket, VoiceController> {
+    /**
+     * A chained voice chat, started and its first spoken sentence sent. [answer]: the first turn is answered, so the
+     * loop listens again. [transcribing] runs as each recording goes to be written down, by its number.
+     */
+    private suspend fun TestScope.chat(
+        recorder: VoiceRecorder,
+        answer: Boolean = true,
+        transcribing: suspend (Int) -> Unit = {},
+    ): Pair<Socket, VoiceController> {
+        var transcribed = 0
         val client = createHttpClient(
             MockEngine { request ->
                 when (request.url.encodedPath) {
                     "/api/auth/ws-ticket" -> respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
-                    "/api/audio/transcribe" -> respond("""{"ok":true,"transcript":"Turn the lights down"}""", HttpStatusCode.OK, json)
+                    "/api/audio/transcribe" -> {
+                        transcribing(++transcribed)
+                        respond("""{"ok":true,"transcript":"Turn the lights down"}""", HttpStatusCode.OK, json)
+                    }
                     else -> respond("""{"ok":true}""", HttpStatusCode.OK, json)
                 }
             },
@@ -120,11 +136,60 @@ class VoiceChatMuteTest {
         val voice = VoiceController(AudioApi(client), recorder, Silent, backgroundScope, backgroundScope, speechStreams = { _, _ -> null })
         voice.startChat(session, gateway, "rin")
         socket.submits.first { it.isNotEmpty() }
-        // The first sentence gets an answer, so the loop listens again.
-        socket.event("message.start")
-        socket.event("message.delta", """{"text":"Dimming."}""")
-        socket.event("message.complete")
+        if (answer) {
+            // The first sentence gets an answer, so the loop listens again.
+            socket.event("message.start")
+            socket.event("message.delta", """{"text":"Dimming."}""")
+            socket.event("message.complete")
+        }
         return socket to voice
+    }
+
+    /** Muted while Hermes asks aloud: the microphone waits for unmute, rather than opening and closing on and on. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun aQuestionAskedWhileMutedWaitsForUnmute() = runTest {
+        val recorder = MidSentence()
+        val (socket, voice) = chat(recorder, answer = false)
+        socket.event("message.start")
+        voice.chat.first { it.phase == VoicePhase.Thinking }
+        voice.toggleMute()
+        socket.push("""{"jsonrpc":"2.0","id":"srq-3","method":"clarify","params":{"session_id":"rt9","questions":[{"qid":"q1","question":"Which room?","choices":["Kitchen","Hall"]}]}}""")
+
+        voice.chat.first { it.phase == VoicePhase.Listening }
+        advanceTimeBy(5_000)
+        testScheduler.runCurrent()
+        assertEquals(1, recorder.recordings, "the mic opened while muted")
+        assertEquals(VoicePhase.Listening, voice.chat.value.phase)
+
+        voice.toggleMute()
+        recorder.started.first { it >= 2 }
+        voice.stopChat()
+    }
+
+    /** Muted once the recording ended but before it's written down: it's dropped all the same. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun muteWhileItsWrittenDownDropsIt() = runTest {
+        val recorder = MidSentence(answered = 2)
+        val second = CompletableDeferred<Unit>()
+        val transcribing = MutableStateFlow(0)
+        val (socket, voice) = chat(recorder) { n ->
+            transcribing.value = n
+            if (n == 2) second.await()
+        }
+        transcribing.first { it == 2 }
+        voice.chat.first { it.phase == VoicePhase.Transcribing }
+
+        voice.toggleMute()
+        second.complete(Unit)
+        // Written down, then dropped: back to listening, the microphone shut.
+        voice.chat.first { it.phase == VoicePhase.Listening }
+        advanceTimeBy(5_000)
+        testScheduler.runCurrent()
+        assertEquals(1, socket.submits.value.size, "a sentence muted while it was written down was sent")
+        assertEquals(2, recorder.recordings, "the mic opened again while muted")
+        voice.stopChat()
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)

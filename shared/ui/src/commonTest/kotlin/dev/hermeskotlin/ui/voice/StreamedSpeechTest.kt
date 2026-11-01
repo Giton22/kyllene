@@ -341,6 +341,30 @@ class StreamedSpeechTest {
         setup.voice.stopChat()
     }
 
+    /** Muted, the microphone doesn't listen over the agent at work either: talking then cuts nothing off. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun mutedNobodyCutsIn() = runTest {
+        val recorder = CutsIn()
+        val setup = chat(recorder = recorder, transcripts = listOf("How was your day?", "Never mind that, check the weather")) { null }
+
+        setup.socket.event("message.start")
+        recorder.listening.first { it >= 1 }
+        setup.voice.toggleMute()
+        setup.voice.chat.first { it.muted && !it.bargeIn }
+        recorder.cut.complete(Unit)
+        testScheduler.advanceTimeBy(5_000)
+        testScheduler.runCurrent()
+        assertEquals(1, recorder.listening.value)
+        assertTrue(setup.socket.calls.value.none { "session.interrupt" in it })
+        assertEquals(1, setup.socket.submits.value.size)
+
+        // Unmuted, it listens over the agent again.
+        setup.voice.toggleMute()
+        recorder.listening.first { it >= 2 }
+        setup.voice.stopChat()
+    }
+
     /**
      * Over a loudspeaker the phone can hear itself; that isn't anyone cutting in. A voice that can't hold is told
      * by its words: nothing is sent, the reply goes on, and the microphone listens over it again.
