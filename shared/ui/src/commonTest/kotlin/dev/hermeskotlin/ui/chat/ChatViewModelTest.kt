@@ -702,7 +702,7 @@ class ChatViewModelTest {
     }
 
     /** A chat with a prompt at 1100 and a reply at 1300; the detail route answers [detail], PATCHes go to [writes]. */
-    private fun readableChat(seen: SeenStore, detail: String, writes: MutableList<String>, pending: CompletableDeferred<Unit>? = null) =
+    private fun readableChat(seen: SeenStore, detail: String, writes: MutableList<String>, pending: () -> CompletableDeferred<Unit>? = { null }) =
         viewModel(seenStore = seen, readState = { request ->
             when {
                 request.url.encodedPath.endsWith("/messages") -> respond(
@@ -715,7 +715,7 @@ class ChatViewModelTest {
                     respond("{}", HttpStatusCode.OK, json)
                 }
                 request.url.encodedPath == "/api/sessions/s1" -> {
-                    pending?.await()
+                    pending()?.await()
                     respond(detail, HttpStatusCode.OK, json)
                 }
                 else -> null
@@ -767,7 +767,9 @@ class ChatViewModelTest {
         runCurrent()
         assertEquals(CaughtUp(gateway.gatewayUrl, "scribe", "s1"), seen.caughtUp.value)
 
+        // Something in the chat's place (a room) is enough, without the app leaving the screen.
         vm.onScreen(false)
+        assertNull(seen.caughtUp.value)
         vm.markLooked()
         runCurrent()
         assertNull(seen.caughtUp.value)
@@ -779,6 +781,34 @@ class ChatViewModelTest {
         vm.open(ChatTarget(gateway, "s2", "Other", profile = "scribe"))
         runCurrent()
         assertNull(seen.caughtUp.value)
+    }
+
+    @Test
+    fun theSameChatReopenedAfterSigningInWaitsForItsReadStateBeforeReading() = runTest(dispatcher) {
+        val seen = SeenStore(InMemoryKeyValueStore()) { 1000.0 }
+        val writes = mutableListOf<String>()
+        var pending: CompletableDeferred<Unit>? = null
+        val (vm, host) = readableChat(seen, """{"last_read_at":1200}""", writes) { pending }
+        connection.start(gateway.gatewayUrl)
+        connection.state.first { it is ConnectionState.Connected }
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        runCurrent()
+        val first = assertNotNull(host.session.value).state.value
+        vm.readLatest(target, first)
+        runCurrent()
+        assertEquals(1, writes.size)
+
+        // Signed in again on the same chat: until the gateway answers again, reaching the end records nothing.
+        host.close()
+        pending = CompletableDeferred()
+        vm.open(target)
+        runCurrent()
+        vm.readLatest(target, assertNotNull(host.session.value).state.value)
+        runCurrent()
+        assertEquals(1, writes.size)
+        assertNull(seen.caughtUp.value)
+        pending.complete(Unit)
     }
 
     @Test

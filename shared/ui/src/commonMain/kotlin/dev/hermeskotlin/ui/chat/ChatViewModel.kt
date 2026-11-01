@@ -268,12 +268,17 @@ class ChatViewModel(
     /** The open chat's gateway may keep a read watermark for it (`last_read_at` set, zero included), so reading it is sent there. */
     private var readTracked = false
 
+    /** The open chat's position has been read for this opening, so [readTracked] is known. */
+    private var readResolved = false
+
     private fun resolveReadPosition(owner: ChatTarget) {
         readPositionJob?.cancel()
         // The same chat reopened (a notification for it) keeps its transcript on screen while the new position is read.
         if (_readPosition.value?.target?.copy(readUpTo = null) != owner.copy(readUpTo = null)) _readPosition.value = null
         readTail = null
         readTracked = false
+        // The kept position may be for this very target (reopened after signing in again); reads wait for the new one.
+        readResolved = false
         releaseCaughtUp()
         readPositionJob = viewModelScope.launch {
             val id = owner.storedSessionId
@@ -288,6 +293,7 @@ class ChatViewModel(
             if (target != owner) return@launch
             // Only a clear answer without one (an older gateway, an untracked chat) is left alone; an unknown one is sent.
             readTracked = answer == null || shared != null
+            readResolved = true
             _readPosition.value = ChatReadPosition(owner, shared?.takeIf { it > 0 } ?: fallback)
         }
     }
@@ -295,7 +301,7 @@ class ChatViewModel(
     /** Called only once the initial placement has finished and the latest messages are visible. */
     fun readLatest(owner: ChatTarget, rendered: ChatState) {
         if (target != owner || !shown.value || connectionState.value !is ConnectionState.Connected) return
-        if (_readPosition.value?.target != owner) return
+        if (!readResolved || _readPosition.value?.target != owner) return
         val state = session.value?.state?.value ?: return
         val id = rendered.storedSessionId?.takeIf { it == state.storedSessionId } ?: return
         if (rendered.messages != state.messages) return
@@ -353,6 +359,8 @@ class ChatViewModel(
                 if (state == null || state.running || endOf(state) != readTail) releaseCaughtUp()
             }
         }
+        // Off the gateway the chat hears of no new turns, while the lists may read them on reconnecting first.
+        viewModelScope.launch { connectionState.collect { if (it !is ConnectionState.Connected) releaseCaughtUp() } }
         // A chat opened under the checkpoints sheet shows its own checkpoints, not the last chat's.
         viewModelScope.launch { session.collect { checkpoints.follow(it) } }
         viewModelScope.launch { session.collect { control.follow(it) } }
@@ -608,6 +616,8 @@ class ChatViewModel(
     /** The screen tells whether it's on screen (started) or gone to the background (stopped). */
     fun onScreen(shown: Boolean) {
         this.shown.value = shown
+        // Something else in the chat's place (a room, the background) isn't reading it.
+        if (!shown) releaseCaughtUp()
     }
 
     /**
