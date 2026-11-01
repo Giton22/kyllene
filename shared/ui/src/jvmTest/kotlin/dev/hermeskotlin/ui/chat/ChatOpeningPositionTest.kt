@@ -15,7 +15,9 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import com.composeunstyled.theme.ColorScheme
@@ -155,6 +157,20 @@ class ChatOpeningPositionTest {
         repeat(3) { onNode(hasScrollToIndexAction()).performTouchInput { swipeUp() } }
         waitForIdle()
         onNodeWithText("Reply 16").assertDoesNotExist()
+        runOnIdle { history.state = history.state.copy(messages = rows(1..45), savedCopyAt = null) }
+        waitForIdle()
+
+        onNodeWithText("Reply 16").assertDoesNotExist()
+    }
+
+    @Test
+    fun jumpingToTheLatestWhileLoadingIsNotUndoneByTheUnreadLine() = runComposeUiTest {
+        val history = History(1..40)
+        show(history, readUpTo = 150.0)
+        onNodeWithText("Reply 16").assertIsDisplayed()
+        onNodeWithContentDescription("Jump to latest").performClick()
+        waitForIdle()
+        onNodeWithText("Reply 40").assertIsDisplayed()
         runOnIdle { history.state = history.state.copy(messages = rows(1..45), savedCopyAt = null) }
         waitForIdle()
 

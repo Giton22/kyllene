@@ -1913,12 +1913,12 @@ private fun Messages(
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull() ?: continue
-                // The wheel, or a drag on the list or its scrollbar, seen before children consume it. A tap on a
-                // link or an icon doesn't move the list, so it leaves the jump to the unread line alone.
+                // The wheel, or a drag on the list, seen before children consume it. A tap on a link or an icon
+                // doesn't move the list, so it leaves the jump to the unread line alone.
                 when (event.type) {
                     PointerEventType.Scroll -> readerNavigated = true
                     PointerEventType.Press -> down = change.position
-                    PointerEventType.Release -> down = null
+                    PointerEventType.Release -> if (event.changes.none { it.pressed }) down = null
                     PointerEventType.Move -> if (change.pressed && down?.let { (change.position - it).getDistance() > viewConfiguration.touchSlop } == true) {
                         readerNavigated = true
                     }
@@ -2025,10 +2025,17 @@ private fun Messages(
                 }
             }
         }
-        // Clear of the composer floating over the chat's end.
+        // Clear of the composer floating over the chat's end. Any press on it moves the list, even a click on its track.
         VerticalScrollbar(
             listState,
-            Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = windowControlsHeight() + 4.dp, bottom = bottomInset + 4.dp, end = 2.dp),
+            Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = windowControlsHeight() + 4.dp, bottom = bottomInset + 4.dp, end = 2.dp)
+                .pointerInput(readUpTo) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            if (awaitPointerEvent(PointerEventPass.Initial).type == PointerEventType.Press) readerNavigated = true
+                        }
+                    }
+                },
         )
         AnimatedVisibility(
             visible = awayFromBottom,
@@ -2041,6 +2048,7 @@ private fun Messages(
             val size = if (isDesktop) 34.dp else 40.dp
             Tooltip(if (isDesktop && !newBelow) "Jump to latest" else "") { UnstyledButton(
                 onClick = {
+                    readerNavigated = true
                     scope.launch {
                         listState.animateToEnd()
                         pinned = true
