@@ -2,7 +2,6 @@ package dev.hermeskotlin.desktop
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
@@ -21,9 +20,12 @@ internal class PatientClipboard(private val system: Clipboard) : Clipboard {
         patiently { system.setClipEntry(clipEntry) }
     }
 
-    /** Forwards to the system clipboard so Compose's desktop right-click handling can access it. */
+    /**
+     * What a right-click on a text field asks whether there's text to paste. Not given, it threw Kotlin's "An
+     * operation is not implemented", and the window showed Java's error box for it. Asking doesn't open the
+     * clipboard, so another app holding it doesn't get in the way here.
+     */
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    @OptIn(ExperimentalComposeUiApi::class)
     override val nativeClipboard: Any
         get() = system.nativeClipboard
 
