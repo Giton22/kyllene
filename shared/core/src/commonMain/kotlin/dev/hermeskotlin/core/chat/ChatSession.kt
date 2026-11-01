@@ -915,6 +915,28 @@ class ChatSession(
     }
 
     /**
+     * Reads the profile's default level for a chat with no session yet (`config.get reasoning` without a
+     * `session_id`), so its pill shows that rather than Medium. Best effort, like [refreshReasoning].
+     */
+    private suspend fun refreshProfileReasoning(client: JsonRpcClient) {
+        val result = try {
+            client.request(
+                "config.get",
+                buildJsonObject {
+                    put("key", "reasoning")
+                    profile?.let { put("profile", it) }
+                },
+            ) as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        val value = result.string("value")
+        if (ReasoningEffort.fromWire(value) != null) _state.update { it.copy(profileReasoningEffort = value) }
+    }
+
+    /**
      * Runs one `session.control` action (pause a goal, add a sub-goal, ...) and applies the snapshot it
      * returns at once rather than waiting for the event. A `send` dispatch (a resumed goal's kickoff)
      * goes out as a prompt with its `display` on the bubble, queued behind a running turn. Returns null
@@ -1601,7 +1623,10 @@ class ChatSession(
                 _state.update { it.copy(attachment = Attachment.Detached) }
                 return@collectLatest
             }
-            if (!rowExists) return@collectLatest // a new chat attaches on first send
+            if (!rowExists) { // a new chat attaches on first send
+                refreshProfileReasoning(connectionState.client)
+                return@collectLatest
+            }
             // Load what couldn't be read before the link came up; after a drop, attaching catches up.
             // A load still running (showing the saved copy meanwhile) isn't one that failed: it brings the rows itself.
             if (!attachedBefore && !_state.value.historyRead && !historyMutex.isLocked) loadHistory()

@@ -789,7 +789,7 @@ class ChatSessionTest {
         assertTrue(chat.send("hi"))
 
         assertEquals("max", chat.state.first { it.reasoningEffort != null }.reasoningEffort)
-        val get = transport.awaitSent { it.isCall("config.get") }
+        val get = transport.awaitSent { it.isCall("config.get") && it.param("session_id") != null }
         assertEquals("reasoning", get.param("key"))
         assertEquals("rt9", get.param("session_id"))
     }
@@ -879,6 +879,24 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aNewChatShowsTheProfilesLevelBeforeItsFirstSend() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf("config.get" to """{"value":"max","display":"hide"}"""),
+        )
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope, profile = "work")
+        chat.start()
+
+        assertEquals("max", chat.state.first { it.profileReasoningEffort != null }.profileReasoningEffort)
+        // Not the chat's own pick: session.create leaves the level to the profile.
+        assertNull(chat.state.value.reasoningEffort)
+        val get = transport.awaitSent { it.isCall("config.get") }
+        assertEquals("reasoning", get.param("key"))
+        assertEquals("work", get.param("profile"))
+        assertNull(get.param("session_id"))
+    }
+
+    @Test
     fun aNewChatWithAPickedEffortDoesntReadIt() = runTest {
         val (connection, transport) = setup(
             backgroundScope,
@@ -898,7 +916,7 @@ class ChatSessionTest {
 
         assertEquals("low", transport.sent.value.first { it.isCall("session.create") }.param("reasoning_effort"))
         assertEquals("low", chat.state.value.reasoningEffort)
-        assertEquals(0, transport.sent.value.count { it.isCall("config.get") })
+        assertEquals(0, transport.sent.value.count { it.isCall("config.get") && it.param("session_id") != null })
     }
 
     @Test
