@@ -9,6 +9,9 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.ui.input.key.key
@@ -192,7 +195,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
@@ -3523,17 +3525,11 @@ private fun Banner(message: String, actionLabel: String?, onAction: () -> Unit, 
 }
 
 /**
- * The composer's editable field, drawn with the draft's own paragraph directions. Split out of
- * [Composer] unchanged so a rendered host test can measure the field the phone actually draws; [Composer]
- * supplies the focus, key handling, padding and placeholder it always did.
- *
- * Direction is resolved per paragraph, never once for the whole draft: Compose resolves
- * [TextDirection.Content] against each paragraph's first strong character (falling back to the ambient
- * direction only for a paragraph without one). A single direction taken from the whole draft made an
- * English paragraph typed after a newline read — and start — at the Hebrew side.
- *
- * Style only: nothing is inserted into the text, so what's sent, undone and copied is exactly what was
- * typed.
+ * The composer's editable field: UnstyledTextField and its TextInput, except that the text gets the field's
+ * full width. TextInput's Box measured the text at its own width and put it at the start, so a Hebrew line in
+ * an English UI sat on the left, and a Hebrew paragraph above an English one lined up with it. The body
+ * style already resolves direction per paragraph; at full width each paragraph also goes to its own side.
+ * Split out of [Composer] so a host test can measure it.
  */
 @Composable
 internal fun ComposerTextInput(
@@ -3543,34 +3539,24 @@ internal fun ComposerTextInput(
     onTextLayout: (Density.(getResult: () -> TextLayoutResult?) -> Unit)? = null,
     placeholder: @Composable () -> Unit,
 ) {
-    CompositionLocalProvider(LocalTextSelectionColors provides LocalTextSelectionColors.current) {
-        BasicTextField(
-            state = state,
-            textStyle = Theme[typography][body].copy(
-                color = Theme[colors][textColor],
-                textDirection = TextDirection.Content,
-            ),
-            cursorBrush = SolidColor(Theme[colors][accent]),
-            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-            onTextLayout = onTextLayout,
-            modifier = modifier.semantics(mergeDescendants = true) {},
-            decorator = { innerTextField ->
-                Box(Modifier.fillMaxWidth()) {
-                    if (state.text.isEmpty()) {
-                        Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopStart) { placeholder() }
-                    }
-                    // Per-paragraph alignment only works if the editor's text box is the width of the
-                    // field. AndroidX measures the text with the minimum width it is given; the library's
-                    // TextInput Box resets that minimum to zero, so every paragraph shared one
-                    // intrinsic-width box anchored on a single side. Propagating the field's width to the
-                    // editor gives each paragraph the whole line, and each paragraph's own direction then
-                    // puts it at its own side. A paragraph that wraps keeps that side on every line.
-                    Box(Modifier.fillMaxWidth(), propagateMinConstraints = true) { innerTextField() }
+    BasicTextField(
+        state = state,
+        textStyle = Theme[typography][body].copy(color = Theme[colors][textColor]),
+        cursorBrush = SolidColor(Theme[colors][accent]),
+        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+        onTextLayout = onTextLayout,
+        modifier = modifier.semantics(mergeDescendants = true) {},
+        decorator = { innerTextField ->
+            Box(Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Text, overrideDescendants = true).clipToBounds()) {
+                if (state.text.isEmpty()) {
+                    Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopStart) { placeholder() }
                 }
-            },
-        )
-    }
+                // The text measures at the width it's given as a minimum; without this it shrinks to its widest line.
+                Box(Modifier.fillMaxWidth(), propagateMinConstraints = true) { innerTextField() }
+            }
+        },
+    )
 }
 
 /**
