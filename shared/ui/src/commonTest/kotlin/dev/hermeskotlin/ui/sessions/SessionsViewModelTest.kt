@@ -14,6 +14,7 @@ import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.rpc.RpcTransport
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.media.MediaApi
 import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.cache.InMemoryOfflineDao
@@ -83,6 +84,8 @@ class SessionsViewModelTest {
         /** Whether [socket] connects at once; when not, the test starts it through [onConnection]. */
         connectNow: Boolean = true,
         onConnection: (GatewayConnection) -> Unit = {},
+        /** The body of each folder made on the gateway, in order. */
+        madeFolders: MutableList<String> = mutableListOf(),
     ): SessionsViewModel {
         // On the test dispatcher, so no request is still finishing on another thread when a test ends
         // (and resuming onto Dispatchers.Main while the next test sets it).
@@ -100,6 +103,10 @@ class SessionsViewModelTest {
                     else respond("""{"profiles":[{"name":"default","is_default":true}],"current":"default"}""", HttpStatusCode.OK, json)
                 // A gateway without snapshots, so writes go without an identity (SessionsApiTest covers that).
                 request.url.encodedPath.endsWith("/mutation-snapshot") -> respond("""{"detail":"Not Found"}""", HttpStatusCode.NotFound, json)
+                request.url.encodedPath == "/api/files/mkdir" -> {
+                    madeFolders += request.body.toByteArray().decodeToString()
+                    respond("""{"ok":true}""", HttpStatusCode.OK, json)
+                }
                 request.method == HttpMethod.Delete -> respond("""{"detail":"Store is busy"}""", deleteStatus, json)
                 request.method == HttpMethod.Patch -> {
                     patches += request.body.toByteArray().decodeToString()
@@ -121,6 +128,7 @@ class SessionsViewModelTest {
             attention, SeenStore(InMemoryKeyValueStore()) { 0.0 }, DraftStore(InMemoryKeyValueStore()), ProjectsApi(connection),
             ThreadsRepository(ThreadsApi(connection), SessionsApi(client), ProfilesApi(client)),
             cache,
+            MediaApi(client),
         )
     }
 
@@ -361,6 +369,17 @@ class SessionsViewModelTest {
 
         vm.selectProject(null)
         assertEquals(listOf("a", "b"), vm.state.value.listed.map { it.id })
+    }
+
+    @Test
+    fun aNewFolderIsMadeInTheFolderBeingBrowsed() = runTest(dispatcher) {
+        val made = mutableListOf<String>()
+        val vm = viewModel(madeFolders = made)
+        vm.bind(gateway)
+        vm.awaitLoaded()
+
+        assertEquals(null, vm.makeProjectFolder("~/projects/", "site"))
+        assertEquals(listOf("""{"path":"~/projects/site"}"""), made)
     }
 
     @Test
