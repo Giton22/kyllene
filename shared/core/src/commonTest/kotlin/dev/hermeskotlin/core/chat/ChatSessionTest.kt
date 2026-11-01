@@ -882,18 +882,25 @@ class ChatSessionTest {
     fun aNewChatShowsTheProfilesLevelBeforeItsFirstSend() = runTest {
         val (connection, transport) = setup(
             backgroundScope,
-            mapOf("config.get" to """{"value":"max","display":"hide"}"""),
+            mapOf(
+                "config.get" to """{"value":"max","display":"hide"}""",
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-9","info":{"model":"m1","provider":"p1"}}""",
+                "prompt.submit" to """{"status":"streaming"}""",
+            ),
         )
         val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope, profile = "work")
         chat.start()
 
         assertEquals("max", chat.state.first { it.profileReasoningEffort != null }.profileReasoningEffort)
-        // Not the chat's own pick: session.create leaves the level to the profile.
         assertNull(chat.state.value.reasoningEffort)
         val get = transport.awaitSent { it.isCall("config.get") }
         assertEquals("reasoning", get.param("key"))
         assertEquals("work", get.param("profile"))
         assertNull(get.param("session_id"))
+
+        // Not the chat's own pick: session.create leaves the level to the profile.
+        assertTrue(chat.send("hi"))
+        assertNull(transport.sent.value.first { it.isCall("session.create") }.param("reasoning_effort"))
     }
 
     @Test
