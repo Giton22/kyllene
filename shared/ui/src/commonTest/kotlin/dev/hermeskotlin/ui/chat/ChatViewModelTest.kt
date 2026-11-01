@@ -336,6 +336,30 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun aChatOpenedToTypeInAsksTheScreenForTheKeyboard() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+
+        vm.open(ChatTarget(gateway, null, null, nonce = 1, draft = ComposeDraft(start = DraftStart.Typing)))
+
+        assertEquals(ChatRequest.FocusComposer, vm.requests.first())
+    }
+
+    @Test
+    fun onlyAChatOpenedToTypeInAsksForTheKeyboard() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+
+        val starts = listOf(null) + DraftStart.entries.filter { it != DraftStart.Typing }
+        starts.forEachIndexed { i, start ->
+            vm.open(ChatTarget(gateway, null, null, nonce = i + 1L, draft = ComposeDraft(text = "hi", start = start)))
+        }
+        vm.open(ChatTarget(gateway, null, null, nonce = 100))
+
+        assertTrue(ChatRequest.FocusComposer !in requests, "asked for the keyboard: $requests")
+    }
+
+    @Test
     fun theCallShortcutStartsVoiceOnceInItsFreshChat() = runTest(dispatcher) {
         val (vm, host) = viewModel()
         connection.start(gateway.gatewayUrl)

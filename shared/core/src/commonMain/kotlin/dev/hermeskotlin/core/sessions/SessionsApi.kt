@@ -77,7 +77,12 @@ class SessionsApi(private val client: HttpClient) {
         }
     }.map { it.body<SessionPage>() }
 
-    /** `GET /api/sessions/search` — id prefix and full-text message matches, one row per conversation. */
+    /**
+     * `GET /api/sessions/search` — id prefix and full-text message matches. The gateway merges hits per compression
+     * lineage, but an older gateway (one row per matching message) or two lineages that resolve to the same newest
+     * segment can still repeat an id; the list keys rows by id, so a repeat would crash it. The first one is kept, as
+     * the gateway ranks it first.
+     */
     suspend fun search(url: GatewayUrl, query: String, limit: Int = 30, profile: String? = null): ApiResult<List<SessionSummary>> = apiCall {
         client.get(url.resolve("api/sessions/search")) {
             profile?.let { parameter("profile", it) }
@@ -85,7 +90,9 @@ class SessionsApi(private val client: HttpClient) {
             parameter("limit", limit)
         }
     }.map { response ->
-        response.body<SearchResponse>().results.map { it.copy(snippet = it.snippet?.stripMatchMarkers()) }
+        response.body<SearchResponse>().results
+            .distinctBy { it.id }
+            .map { it.copy(snippet = it.snippet?.stripMatchMarkers()) }
     }
 
     /**
