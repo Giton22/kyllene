@@ -180,8 +180,8 @@ class VoiceController(
     /** The microphone wouldn't listen over the voice in this chat; it isn't asked again. */
     private var cantListenOver = false
 
-    /** The chained chat runs: Mute holds its microphone shut. */
-    private var chained = false
+    /** The chained chat running, whose microphone Mute holds shut; null outside one. */
+    private var chained: Job? = null
 
     /**
      * [pauseMs] is how long a quiet spell after speech has to last before it's sent. [opener]: a call the agent placed,
@@ -199,7 +199,8 @@ class VoiceController(
         cancelDictation()
         // The voice chat has the speaker now.
         stopReading()
-        _chat.value = VoiceChatState(VoicePhase.Listening)
+        // Connecting while it checks for a live call: nothing listens yet, so Mute isn't offered until it does.
+        _chat.value = VoiceChatState(VoicePhase.Connecting)
         stoppedByUser = false
         roomFloor = 0f
         noSpeechStream = null
@@ -257,7 +258,10 @@ class VoiceController(
         val settings = async { audio.bargeIn(gateway, profile) }
         bargeIn = settings
         cantListenOver = false
-        chained = true
+        val running = coroutineContext.job
+        chained = running
+        // Not a live call after all: it's this chat, and Mute is offered from here.
+        _chat.update { if (it.phase == VoicePhase.Connecting) it.copy(phase = VoicePhase.Listening) else it }
         var failures = 0
         var cutIn: String? = null
         try {
@@ -287,7 +291,8 @@ class VoiceController(
             }
         } finally {
             bargeIn = null
-            chained = false
+            // A newer chat may have started while this one wound down; it keeps its own.
+            if (chained === running) chained = null
             appScope.launch { audio.ttsLease(gateway, active = false, profile) }
         }
         settings.cancel()
@@ -340,7 +345,7 @@ class VoiceController(
             val muted = !_chat.value.muted
             conversation.setMuted(muted)
             _chat.update { it.copy(muted = muted) }
-        } else if (chained) {
+        } else if (chained != null) {
             // Chained chat: every listen waits while it's set, and one in flight is cut off. Not while the chat still
             // checks for a live call, which would start unmuted.
             _chat.update { it.copy(muted = !it.muted) }
@@ -565,7 +570,8 @@ class VoiceController(
             // A voice that held stops its echo with it, so someone went on talking; one that couldn't hold is told by
             // its words.
             val someone = !stop && transcript.isNotBlank() && (held || !echo(transcript))
-            if (!stop && !someone) {
+            // Muted while it was written down: dropped, as in any other listen, and the voice goes on.
+            if (!stop && !someone || _chat.value.muted) {
                 _chat.update { it.copy(phase = phase, level = 0f, hearing = false) }
                 return null
             }
