@@ -70,7 +70,11 @@ consumers are created. A failed unlock offers Retry and Quit; no plaintext or
 empty-store fallback is used. Unlock the desktop keyring and check Secret portal
 availability before retrying. A corrupt file or lost key requires a known-good
 backup and its original application identity; a replacement key cannot recover it.
-Non-Flatpak Linux storage is unsupported. Windows and macOS stores are unchanged.
+Ordinary non-Flatpak Linux keeps its existing plaintext store; it needs a separate
+Secret Service integration before credentials there are encrypted. Windows and
+macOS stores are unchanged. Missing metadata with a Flatpak runtime hint, present
+invalid metadata or read errors fail closed; environment hints never supply a key
+identity. No portal failure can select the legacy store after Flatpak selection.
 
 The app derives an application-scoped AES-256 key with HKDF-SHA256. Its versioned
 AES-GCM envelope authenticates the application identity and optional portal token,

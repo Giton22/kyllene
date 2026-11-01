@@ -5,6 +5,8 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.NoSuchFileException
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import javax.crypto.SecretKey
 import kotlinx.coroutines.CancellationException
@@ -27,20 +29,36 @@ class SecureStorageException(val reason: Reason) : IOException(reason.guidance) 
         Uncertain("Kyllene couldn't confirm its settings commit. Check file access, then retry startup or quit and restart before making further changes."),
         Changed("Settings changed outside this window. Quit and restart Kyllene to reload them before saving."),
         Legacy("Conflicting or unfinished legacy settings were found. Existing files were preserved. Quit and resolve the older copy before retrying."),
-        Unsupported("Secure Linux storage requires the Flatpak build. No plaintext fallback is available."),
+        Unsupported("Kyllene couldn't verify its Flatpak application identity. Check the installation before retrying. No plaintext fallback is available."),
     }
 }
 
-/** The Flatpak's read-only metadata supplies the storage identity; no other profile is searched. */
-internal fun desktopKeyValueStore(file: File): KeyValueStore {
-    if (!System.getProperty("os.name").orEmpty().startsWith("Linux")) return FileKeyValueStore(file)
-    val identity = try {
-        File("/.flatpak-info").useLines { lines ->
-            lines.dropWhile { it.trim() != "[Application]" }.drop(1).takeWhile { !it.startsWith("[") }
-                .firstOrNull { it.startsWith("name=") }?.removePrefix("name=")?.takeIf { it.isNotBlank() }
-        }
-    } catch (_: IOException) { null }
+/** Present or uncertain Flatpak metadata never permits a plaintext fallback. */
+internal fun desktopKeyValueStore(
+    file: File,
+    osName: String = System.getProperty("os.name").orEmpty(),
+    flatpakInfo: File = File("/.flatpak-info"),
+    flatpakHint: String? = System.getenv("FLATPAK_ID"),
+    readMetadata: (File) -> String? = ::flatpakApplicationId,
+): KeyValueStore {
+    if (!osName.startsWith("Linux")) return FileKeyValueStore(file)
+    val identity = try { readMetadata(flatpakInfo) }
+        catch (_: NoSuchFileException) {
+            if (flatpakHint.isNullOrBlank()) return FileKeyValueStore(file)
+            null
+        } catch (_: IOException) { null }
+          catch (_: SecurityException) { null }
     return LinuxKeyValueStore(File(file.absoluteFile.parentFile, "settings.secure"), identity, legacy = file)
+}
+
+private fun flatpakApplicationId(info: File): String? {
+    // Only this attribute read establishes absence. A later open failure stays fail-closed.
+    val attributes = Files.readAttributes(info.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+    if (!attributes.isRegularFile) return null
+    return info.useLines { lines ->
+        lines.dropWhile { it.trim() != "[Application]" }.drop(1).takeWhile { !it.startsWith("[") }
+            .firstOrNull { it.startsWith("name=") }?.removePrefix("name=")?.takeIf { it.isNotBlank() }
+    }
 }
 
 /** Unlocks before desktop consumers start; other platform stores need no extra startup step. */
