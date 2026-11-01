@@ -41,10 +41,10 @@ import kotlin.test.fail
  * Rendered geometry of a prompt that has already been sent, on the production [UserBubble] the chat draws,
  * hosted by Robolectric with real Compose measurement.
  *
- * The defect: the bubble took one direction for the whole prompt. When a prompt is mostly Hebrew, its
- * English paragraph after a newline was laid out on the right with the Hebrew, not at the left where an
- * English paragraph belongs — and the same in reverse. Every assertion reads the line edges of the actual
- * rendered prompt text; the text itself is asserted byte-for-byte, so no fix may insert direction controls.
+ * Guards the body style's per-paragraph direction: one direction for the whole prompt would lay a mostly
+ * Hebrew prompt's English paragraph after a newline out on the right with the Hebrew, not at the left where
+ * an English paragraph belongs, and the same in reverse. Every assertion reads the line edges of the actual
+ * rendered prompt text; the text itself is asserted byte-for-byte, so no change may insert direction controls.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")

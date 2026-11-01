@@ -2334,12 +2334,6 @@ internal fun UserBubble(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         if (message.attachments.isNotEmpty()) SentAttachments(message.attachments)
-                        // Each paragraph of a prompt takes its own direction, exactly as the composer showed it while
-                        // typing: a Hebrew paragraph followed by an English one must not drag the English to the
-                        // right just because the prompt as a whole is mostly Hebrew (and the reverse). Content is
-                        // per-paragraph, never a single whole-message direction, and it inserts no characters, so
-                        // the sent text and what can be selected from it are exactly what was typed.
-                        val promptStyle = Theme[typography][body].copy(textDirection = TextDirection.Content)
                         when {
                             review != null -> SentReviewContent(review, onBubble)
                             // A mouse selects part of a prompt to copy, as it does a reply; a phone's long press is the menu's.
@@ -2355,12 +2349,12 @@ internal fun UserBubble(
                                 CommentableSelection(source.takeIf { !message.pending }, selection) {
                                     Text(
                                         AnnotatedString(message.text).withHighlights(LocalTextHighlights.current, onBubble.copy(alpha = 0.24f)),
-                                        style = promptStyle,
+                                        style = Theme[typography][body],
                                         color = onBubble,
                                     )
                                 }
                             }
-                            message.text.isNotEmpty() -> Text(message.text, style = promptStyle, color = onBubble)
+                            message.text.isNotEmpty() -> Text(message.text, style = Theme[typography][body], color = onBubble)
                         }
                     }
                 }
