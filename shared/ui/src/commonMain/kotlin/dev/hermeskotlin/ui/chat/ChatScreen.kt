@@ -2132,7 +2132,8 @@ internal fun OfflineBanner(place: String?, status: String, onRetry: () -> Unit) 
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .background(Theme[colors][dangerSoft].compositeOver(Theme[colors][surface]), RoundedCornerShape(Theme[radii][radiusMedium]))
+            // The tint laid on the chat's own page colour: the same red wash as before, but the messages under it don't show.
+            .background(Theme[colors][dangerSoft].compositeOver(Theme[colors][background]), RoundedCornerShape(Theme[radii][radiusMedium]))
             .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
             .semantics(mergeDescendants = true) {},
         horizontalArrangement = Arrangement.spacedBy(10.dp),
