@@ -58,12 +58,19 @@ object TranscriptRows {
         displayKind == "internal_notification" || row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
 
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
-    fun compaction(text: String): TranscriptEvent.Compaction? = text.trim()
-        .takeIf { it.startsWith("[CONTEXT COMPACTION — REFERENCE ONLY]") }
+    fun compaction(text: String): TranscriptEvent.Compaction? {
+        // The whole introduction every shipped prefix shares, as the gateway matches it (hermes_state_common.py),
+        // so a prompt that merely starts with the bracketed label stays a prompt.
+        val trimmed = text.trim()
+        val prefix = listOf(SUMMARY_INTRO, LEGACY_SUMMARY_PREFIX).firstOrNull(trimmed::startsWith) ?: return null
         // A legacy carrier can hold a real ask after the summary. Without a display projection,
         // leave that whole row visible rather than hide the ask and its prompt actions.
-        ?.takeUnless { it.substringAfter(SUMMARY_END, "").isNotBlank() }
-        ?.let(TranscriptEvent::Compaction)
+        if (trimmed.substringAfter(SUMMARY_END, "").isNotBlank()) return null
+        // What the summary says, without the instructions to the agent before it (they all end the same way).
+        val body = trimmed.substringBefore(SUMMARY_END)
+            .let { if (prefix == SUMMARY_INTRO && PREFIX_END in it) it.substringAfter(PREFIX_END) else it.removePrefix(prefix) }
+        return TranscriptEvent.Compaction(body.trim())
+    }
 
     /**
      * What a stored user row really is, or null when the person wrote it. [deliveries] maps the process ids
@@ -158,6 +165,10 @@ object TranscriptRows {
 
     private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
+    /** agent/context_compressor.py: the start of SUMMARY_PREFIX and its historical ones, the end they share, the oldest prefix. */
+    private const val SUMMARY_INTRO = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below."
+    private const val PREFIX_END = "may reflect work described here — avoid repeating it:"
+    private const val LEGACY_SUMMARY_PREFIX = "[CONTEXT SUMMARY]:"
     private const val SUMMARY_END = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
     private val HEARTBEAT = Regex("""^\[Background process \S+ heartbeat #\d+ """)
     private val PROCESS = Regex("""^\[IMPORTANT: (?:Background process|\d+ background processes) [\s\S]*]$""")

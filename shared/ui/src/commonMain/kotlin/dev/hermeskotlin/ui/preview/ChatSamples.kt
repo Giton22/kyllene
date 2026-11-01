@@ -138,7 +138,7 @@ internal object ChatSamples {
             ask,
             ChatMessage.Event("system-1", TranscriptEvent.SystemMessages(listOf(
                 TranscriptEvent.Routine("Backup monitor", "The nightly scan found one failed backup."),
-                TranscriptEvent.Compaction("[CONTEXT COMPACTION — REFERENCE ONLY] Earlier checks found the NAS full.\n\n```text\nbackup: no space left\n```"),
+                TranscriptEvent.Compaction("Earlier checks found the NAS full.\n\n```text\nbackup: no space left\n```"),
                 TranscriptEvent.Process("Background process finished: check backup", "1 failed backup", failed = false),
             ))),
             answer,
