@@ -7,6 +7,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -54,7 +55,11 @@ internal class FfmpegSpeechDecoder(private val start: (ProcessBuilder) -> Proces
                     launch {
                         val status = runInterruptible(Dispatchers.IO) { child.waitFor() }
                         check(status == 0) { "The spoken reply couldn't be decoded." }
-                        withTimeout(2_000) { writer.join() }
+                        try { withTimeout(2_000) { writer.join() } }
+                        catch (expired: TimeoutCancellationException) {
+                            currentCoroutineContext().ensureActive()
+                            throw IllegalStateException("The speech input didn't finish.", expired)
+                        }
                         reader.join()
                         completion.resume(Unit)
                     }

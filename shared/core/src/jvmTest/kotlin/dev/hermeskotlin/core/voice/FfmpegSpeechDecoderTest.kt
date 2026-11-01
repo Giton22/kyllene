@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CoroutineExceptionHandler
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -105,6 +106,18 @@ class FfmpegSpeechDecoderTest {
         assertEquals(original.message, result?.message)
         assertTrue(generateSequence(result) { it.cause }.any { it === original })
         assertTrue(process.outputClosed && process.errorClosed)
+    }
+
+    @Test fun exitedCodecWithUnfinishedInputFailsBeforeTheCallerDeadline() = runBlocking {
+        val process = FinishedProcess(byteArrayOf())
+        val chunks = Channel<ByteArray>()
+        try {
+            val failure = runCatching {
+                withTimeout(4_000) { FfmpegSpeechDecoder { process }.decode(chunks, null) { } }
+            }.exceptionOrNull()
+            assertTrue(failure is IllegalStateException && failure !is CancellationException)
+            assertTrue(process.destroyed && process.outputClosed && process.errorClosed)
+        } finally { chunks.cancel() }
     }
 
     private class FinishedProcess(pcm: ByteArray, private val status: Int = 0, private val closeFailure: Throwable? = null) : Process() {
