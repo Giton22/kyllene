@@ -3010,11 +3010,11 @@ private fun AccountSheet(
 }
 
 /**
- * Desktop's profile picker: the gateway's profiles, default first, the active one checked. Each is its
+ * The gateway's profiles, default first, the active one checked. Each is its
  * own agent, so switching changes the chats listed and starts from where that profile left off.
  */
 @Composable
-private fun ProfileSheet(
+internal fun ProfileSheet(
     visible: Boolean,
     profiles: List<Profile>,
     selected: String?,
@@ -3023,9 +3023,8 @@ private fun ProfileSheet(
 ) {
     BottomSheet(visible = visible, onDismiss = onDismiss) {
         SheetHeader("Profiles", "Each profile is its own agent, with its own chats, memory and model.")
-        // On the desktop a long list scrolls under the header rather than running past the window; a phone's
-        // sheet is as it was.
-        Column(if (isDesktop) Modifier.weight(1f, fill = false).verticalScrollWithBar() else Modifier) {
+        // A long list scrolls under the header; a short one keeps the sheet sized to its content.
+        Column(Modifier.weight(1f, fill = false).verticalScrollWithBar()) {
             profiles.forEach { profile ->
                 ProfileRow(profile, checked = profile.name == selected, onClick = { onSelect(profile) })
             }
