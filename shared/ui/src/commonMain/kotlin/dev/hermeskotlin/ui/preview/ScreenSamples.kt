@@ -1,11 +1,9 @@
 package dev.hermeskotlin.ui.preview
 
-import androidx.compose.runtime.Composable
 import dev.hermeskotlin.core.screen.DisplayLease
 import dev.hermeskotlin.core.screen.DisplayStatus
 import dev.hermeskotlin.core.screen.RfbFrame
 import dev.hermeskotlin.ui.screen.ScreenUiState
-import dev.hermeskotlin.ui.screen.ScreenView
 
 /** The bot's screen, drawn from a made-up desktop. */
 object ScreenSamples {
@@ -77,21 +75,4 @@ object ScreenSamples {
         }
         return RfbFrame(width, height, pixels, 1)
     }
-}
-
-/** The bot's screen, in the app's theme. */
-@Composable
-fun SampleScreen(state: ScreenUiState = ScreenSamples.watching, title: String = "Scribe") {
-    ScreenView(
-        state = state,
-        title = title,
-        onBack = {},
-        onStart = {},
-        onReopen = {},
-        onTakeOver = {},
-        onHandBack = {},
-        onPointer = { _, _, _ -> },
-        onKey = { },
-        onCharacter = { },
-    )
 }

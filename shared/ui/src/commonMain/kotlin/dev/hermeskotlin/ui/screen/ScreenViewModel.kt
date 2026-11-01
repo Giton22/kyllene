@@ -27,6 +27,8 @@ data class ScreenUiState(
     val lease: DisplayLease? = null,
     /** True while the stream to the screen is open. */
     val connected: Boolean = false,
+    /** Whether the stream has ever been open: a screen that was never reached isn't a dropped one. */
+    val everConnected: Boolean = false,
     /** False when the gateway is too old to have a screen at all. */
     val supported: Boolean = true,
     /** Why something didn't work, in the user's words. */
@@ -59,6 +61,9 @@ class ScreenViewModel(
      */
     private var myHash: String? = null
 
+    /** Whether the stream has ever been open, so a screen that was never reached isn't a dropped one. */
+    private var everConnected = false
+
     private val _state = MutableStateFlow(ScreenUiState())
     val state: StateFlow<ScreenUiState> = _state.asStateFlow()
 
@@ -81,6 +86,7 @@ class ScreenViewModel(
             sessions.value?.close()
             sessions.value = null
             myHash = null
+            everConnected = false
             core = ScreenState()
             boundGateway = gateway
             boundProfile = profile
@@ -107,6 +113,11 @@ class ScreenViewModel(
     /** Opens the stream to a screen that is already running. */
     fun reopen() {
         viewModelScope.launch { sessions.value?.open() }
+    }
+
+    /** Asks the gateway again about the screen, e.g. after the user installed it on the host. */
+    fun refresh() {
+        viewModelScope.launch { sessions.value?.refresh() }
     }
 
     /** Takes the screen over from the agent, so the user's taps and keys reach it. */
@@ -164,11 +175,13 @@ class ScreenViewModel(
     }
 
     private fun publish() {
+        if (core.connected) everConnected = true
         _state.value = ScreenUiState(
             status = core.status,
             frame = core.frame,
             lease = core.lease,
             connected = core.connected,
+            everConnected = everConnected,
             supported = core.supported,
             error = core.error,
             holding = holdsTheScreen(core.lease, myHash),

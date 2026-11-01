@@ -85,8 +85,14 @@ class ScreenPaneTest {
 
     @Test
     fun aStreamThatDroppedIsOfferedToOpenAgain() {
-        val state = ScreenUiState(status = status(installed = true, running = true), connected = false)
+        val state = ScreenUiState(status = status(installed = true, running = true), connected = false, everConnected = true)
         assertEquals(ScreenStage.Dropped, screenStage(state))
+    }
+
+    @Test
+    fun aStreamStillOnItsWayIsWaitedFor() {
+        val state = ScreenUiState(status = status(installed = true, running = true), connected = false)
+        assertEquals(ScreenStage.Looking, screenStage(state))
     }
 
     @Test

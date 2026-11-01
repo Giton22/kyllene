@@ -151,7 +151,6 @@ enum class PreviewScene(val label: String) {
     Renamed("The sidebar after updating from Herald, with the rename card"),
     Bots("The bots and rooms"),
     Room("A room of bots"),
-    Screen("A bot's screen, with the bot still in control"),
     NewRoom("A new room"),
     BotEditor("Editing a bot"),
     Settings("Settings"),
@@ -295,22 +294,6 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         rooms = BotSamples.rooms,
                     )
                 }
-                PreviewScene.Screen -> OpenSidebar {
-                    SidebarPage {
-                        ScreenView(
-                            state = ScreenSamples.watching,
-                            title = "Scribe",
-                            onBack = {},
-                            onStart = {},
-                            onReopen = {},
-                            onTakeOver = {},
-                            onHandBack = {},
-                            onPointer = { _, _, _ -> },
-                            onKey = {},
-                            onCharacter = {},
-                        )
-                    }
-                }
                 PreviewScene.Room -> {
                     val faces = remember { BotFaces(BotSamples.roster.all) }
                     CompositionLocalProvider(LocalBotFaces provides faces) {
@@ -367,7 +350,22 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         )
                     }
                 }
-                PreviewScene.BotScreen -> SampleScreen()
+                PreviewScene.BotScreen -> OpenSidebar {
+                    SidebarPage {
+                        ScreenView(
+                            state = ScreenSamples.watching,
+                            title = "Scribe",
+                            onBack = {},
+                            onStart = {},
+                            onReopen = {},
+                            onTakeOver = {},
+                            onHandBack = {},
+                            onPointer = { _, _, _ -> },
+                            onKey = {},
+                            onCharacter = {},
+                        )
+                    }
+                }
                 PreviewScene.Comments -> SampleChat(ChatSamples.reply, comments = remember { ChatSamples.comments() })
                 PreviewScene.LongChat -> SampleChat(ChatSamples.longChat)
                 PreviewScene.MidTask ->SampleChat(ChatSamples.working, composerText = "Also check the photos share")

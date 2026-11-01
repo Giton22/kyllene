@@ -22,7 +22,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -45,13 +44,14 @@ import com.composables.icons.lucide.MonitorOff
 import com.composables.icons.lucide.MonitorPlay
 import com.composables.icons.lucide.MonitorX
 import com.composables.icons.lucide.MousePointerClick
+import com.composables.icons.lucide.RefreshCw
 import com.composables.icons.lucide.RotateCcw
 import com.composables.icons.lucide.TriangleAlert
 import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.screen.DisplayLease
 import dev.hermeskotlin.core.screen.ScreenKey
 import dev.hermeskotlin.core.screen.keysymForKey
-import dev.hermeskotlin.designsystem.accentText
 import dev.hermeskotlin.designsystem.body
 import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
@@ -62,10 +62,8 @@ import dev.hermeskotlin.designsystem.components.ButtonVariant
 import dev.hermeskotlin.designsystem.components.TextField
 import dev.hermeskotlin.designsystem.components.plainTextClipEntry
 import dev.hermeskotlin.designsystem.danger
-import dev.hermeskotlin.designsystem.stroke
 import dev.hermeskotlin.designsystem.surface
 import dev.hermeskotlin.designsystem.text
-import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.designsystem.well
@@ -105,6 +103,7 @@ fun ScreenPane(
         onBack = onBack,
         onStart = viewModel::start,
         onReopen = viewModel::reopen,
+        onRefresh = viewModel::refresh,
         onTakeOver = viewModel::takeOver,
         onHandBack = viewModel::handBack,
         onPointer = viewModel::pointer,
@@ -127,6 +126,8 @@ internal fun ScreenView(
     onBack: () -> Unit,
     onStart: () -> Unit,
     onReopen: () -> Unit,
+    /** Asks the gateway again about the screen; only the pane's own button needs it. */
+    onRefresh: () -> Unit = {},
     onTakeOver: () -> Unit,
     onHandBack: () -> Unit,
     onPointer: (x: Int, y: Int, mask: Int) -> Unit,
@@ -160,7 +161,7 @@ internal fun ScreenView(
                     "The gateway is too old to have one. Update Hermes on the gateway host and it will show up here.",
                 )
                 ScreenStage.Looking -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { ListSpinner() }
-                ScreenStage.NotInstalled -> ScreenNotInstalled(state, onStart)
+                ScreenStage.NotInstalled -> ScreenNotInstalled(state, onRefresh)
                 ScreenStage.Blocked -> EmptyState(
                     Lucide.TriangleAlert,
                     "The screen can't start",
@@ -235,7 +236,7 @@ private fun ScreenError(message: String) {
 
 /** The screen isn't installed on the gateway host: the command to run there, and the way to copy it. */
 @Composable
-private fun ScreenNotInstalled(state: ScreenUiState, onStart: () -> Unit) {
+private fun ScreenNotInstalled(state: ScreenUiState, onRefresh: () -> Unit) {
     val status = state.status
     val command = status?.installCommand
     val missing = status?.missing.orEmpty()
@@ -246,7 +247,8 @@ private fun ScreenNotInstalled(state: ScreenUiState, onStart: () -> Unit) {
         action = {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (command != null) CopyCommand(command)
-                Button("Start the screen", onClick = onStart, leadingIcon = Lucide.MonitorPlay)
+                // The command is run on the gateway host, so the gateway is asked again afterwards.
+                Button("Check again", onClick = onRefresh, leadingIcon = Lucide.RefreshCw)
             }
         },
     )
@@ -390,12 +392,14 @@ internal fun screenStage(state: ScreenUiState): ScreenStage = when {
     !state.status.installed -> ScreenStage.NotInstalled
     state.status.blocker != null -> ScreenStage.Blocked
     !state.status.running -> ScreenStage.Stopped
-    !state.connected -> ScreenStage.Dropped
-    else -> ScreenStage.Watching
+    state.connected -> ScreenStage.Watching
+    // A stream that was never open is still on its way, not dropped.
+    state.everConnected -> ScreenStage.Dropped
+    else -> ScreenStage.Looking
 }
 
 /** Who holds the screen, in the user's words. */
-internal fun controlLabel(lease: dev.hermeskotlin.core.screen.DisplayLease?, holding: Boolean): String = when {
+internal fun controlLabel(lease: DisplayLease?, holding: Boolean): String = when {
     holding -> "You are in control"
     lease?.heldByHuman == true -> "Someone else is in control"
     else -> "The bot is in control"
