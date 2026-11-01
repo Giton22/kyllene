@@ -84,6 +84,7 @@ import dev.hermeskotlin.designsystem.text
 import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.title
 import dev.hermeskotlin.designsystem.typography
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -184,10 +185,15 @@ internal actual fun AgentScreenSurface(
 private class DrawnScreen(context: Context, private val screen: AgentScreen) {
     val error = MutableStateFlow<Pair<String, String>?>(null)
 
+    /** Its processing threw, so nothing more is drawn on it: the next look at the screen makes a new one. */
+    @Volatile var broken = false
+        private set
+
     // Whatever the screen's processing throws is this screen's error, never the app's.
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e ->
-            error.compareAndSet(null, screen.surfaceIds.first() to "The screen couldn't be drawn: ${e.message ?: e::class.simpleName}")
+            broken = true
+            error.value = screen.surfaceIds.first() to "The screen couldn't be drawn: ${e.message ?: e::class.simpleName}"
         },
     )
     val processor: A2uiMessageProcessor = A2uiMessageProcessor(catalogs = listOf(catalog(context)))
@@ -233,7 +239,7 @@ private object DrawnScreens {
         val (seen, kept) = drawn[key] ?: (null to null)
         // The same screen, or the same with more messages after (a later call updated it): only those are drawn,
         // over what's there.
-        if (seen != null && kept != null && screen.messages.size >= seen.messages.size &&
+        if (seen != null && kept != null && !kept.broken && screen.messages.size >= seen.messages.size &&
             screen.messages.subList(0, seen.messages.size) == seen.messages
         ) {
             kept.feed(screen.messages.drop(seen.messages.size))
@@ -268,7 +274,19 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
             ?.let { it["deleteSurface"] as? JsonObject }?.let { (it["surfaceId"] as? JsonPrimitive)?.contentOrNull }
     }
     val shown = screen.surfaceIds - closed
-    return coroutineScope {
+    // What the processing throws is a screen it can't draw, said to the agent, not a crash of the tool.
+    return try {
+        drawsWithoutError(context, screen, shown)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        "The screen couldn't be drawn: ${e.message ?: e::class.simpleName}"
+    }
+}
+
+private suspend fun drawsWithoutError(context: Context, screen: AgentScreen, shown: Set<String>): String? =
+    coroutineScope {
+        val parser = A2uiMessageParser()
         val processor = A2uiMessageProcessor(catalogs = listOf(catalog(context.applicationContext)))
         val errors = MutableStateFlow<String?>(null)
         val listen = launch(start = CoroutineStart.UNDISPATCHED) {
@@ -285,7 +303,6 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
         run.cancel()
         errors.value
     }
-}
 
 private const val CHECK_MS = 1_500L
 

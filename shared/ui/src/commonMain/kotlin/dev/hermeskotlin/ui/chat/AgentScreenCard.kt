@@ -54,13 +54,14 @@ import kotlinx.serialization.json.contentOrNull
 internal class AgentScreenContext(
     val live: List<AgentScreens.Live>,
     val onShown: (chat: String?, surfaceIds: Set<String>) -> Unit,
-    val onAnswer: (chat: String?, surfaceId: String, result: JsonElement) -> Unit,
+    /** True when a call waiting on the screen took the tap. */
+    val onAnswer: (chat: String?, surfaceId: String, result: JsonElement) -> Boolean,
     val onFail: (chat: String?, surfaceId: String, message: String) -> Unit,
     val onDrawn: (chat: String?, screen: AgentScreen) -> Unit = { _, _ -> },
     val took: (chat: String?, screen: AgentScreen) -> Boolean = { _, _ -> true },
 ) {
     companion object {
-        val None = AgentScreenContext(emptyList(), { _, _ -> }, { _, _, _ -> }, { _, _, _ -> })
+        val None = AgentScreenContext(emptyList(), { _, _ -> }, { _, _, _ -> false }, { _, _, _ -> })
     }
 }
 
@@ -173,8 +174,8 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
             takesTaps = live || replies,
             onAnswer = { surface, result ->
                 if (live) {
-                    tappedLive = true
-                    context.onAnswer(chat, surface, result)
+                    // Only a tap a call took: one just after the turn stopped went nowhere, and may be tapped again.
+                    if (context.onAnswer(chat, surface, result)) tappedLive = true
                 } else if (replies && send != null && !sent.value) {
                     sent.value = true
                     send(screenTapMessage(result))

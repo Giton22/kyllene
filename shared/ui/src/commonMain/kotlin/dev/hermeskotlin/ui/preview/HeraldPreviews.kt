@@ -240,7 +240,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                     LocalAgentScreens provides AgentScreenContext(
                         live = listOf(AgentScreens.Live(null, setOf(ChatSamples.SCREEN_SURFACE))),
                         onShown = { _, _ -> },
-                        onAnswer = { _, _, _ -> },
+                        onAnswer = { _, _, _ -> true },
                         onFail = { _, _, _ -> },
                     ),
                 ) { SampleChat(ChatSamples.agentScreen) }
