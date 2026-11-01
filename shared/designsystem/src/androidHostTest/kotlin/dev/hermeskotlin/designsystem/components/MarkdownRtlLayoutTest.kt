@@ -304,14 +304,16 @@ class MarkdownRtlLayoutTest {
         return Rect(left.toFloat(), top.toFloat(), right + 1f, bottom + 1f)
     }
 
+    // Geometry and pixels for debugging a failure, only when a run asks for them with -Drtl.geometry=<dir>.
+    private val geometryDir = System.getProperty("rtl.geometry")?.let { File(it).apply { mkdirs() } }
+
     private fun save(bitmap: Bitmap, label: String) {
-        val dir = File("build/rtl-geometry").apply { mkdirs() }
+        val dir = geometryDir ?: return
         File(dir, "markdown-$label.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
     private fun record(label: String, value: String) {
-        println("[rtl-geometry] markdown $label: $value")
-        val dir = File("build/rtl-geometry").apply { mkdirs() }
+        val dir = geometryDir ?: return
         File(dir, "markdown-$label.txt").writeText(value + "\n")
     }
 
