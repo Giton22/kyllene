@@ -12,13 +12,23 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 /**
+ * The app can't reach the gateway, so a call never got there.
+ *
+ * It is not the gateway's answer, so it must not be worded as one: the screen may be perfectly fine and the
+ * link may simply be down. [DisplayApi] raises this instead of a plain [RpcException] so that a caller can
+ * tell "the gateway said no" from "the gateway never heard me".
+ */
+class GatewayUnreachable(override val message: String) : Exception(message)
+
+/**
  * The gateway's Bot Screen calls. Every one of them answers for the profile it is given, so one connection
  * can serve several bots.
  *
  * A gateway older than the Bot Screen has no `display.*` method at all and answers "method not found". That
  * is not an error here: the calls return null, so the app can say the gateway has no screen instead of
  * failing. Any other error is the gateway's own answer about the screen (it refuses to stop a screen a
- * human holds, for one) and travels on as it is.
+ * human holds, for one) and travels on as it is. A call that never reached the gateway at all is neither of
+ * those: it raises [GatewayUnreachable].
  */
 class DisplayApi(private val connection: GatewayConnection) {
 
@@ -92,7 +102,7 @@ class DisplayApi(private val connection: GatewayConnection) {
     }
 
     private fun client(): JsonRpcClient = (connection.state.value as? ConnectionState.Connected)?.client
-        ?: throw RpcException(0, "Not connected to the gateway.")
+        ?: throw GatewayUnreachable("The gateway isn't there right now.")
 
     private fun profileParams(profile: String): JsonObject = buildJsonObject { put("profile", profile) }
 

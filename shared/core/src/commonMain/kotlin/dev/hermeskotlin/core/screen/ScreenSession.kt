@@ -2,6 +2,7 @@ package dev.hermeskotlin.core.screen
 
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayUrl
+import dev.hermeskotlin.core.rpc.RpcException
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -75,7 +76,7 @@ class ScreenSession(
 
     /** Reads the gateway's state of this bot's screen. */
     suspend fun refresh() {
-        val status = api.status(profile)
+        val status = ask { api.status(profile) }.getOrElse { return }
         if (status == null) {
             _state.update { it.copy(supported = false, status = null, lease = null) }
             return
@@ -85,7 +86,7 @@ class ScreenSession(
 
     /** Starts the screen and opens the stream to it. */
     suspend fun start() {
-        val status = api.start(profile)
+        val status = ask { api.start(profile) }.getOrElse { return }
         if (status == null) {
             _state.update { it.copy(supported = false, error = "This gateway has no Bot Screen.") }
             return
@@ -100,7 +101,7 @@ class ScreenSession(
      */
     suspend fun open() {
         if (pump?.isActive == true) return
-        val ticket = api.observe(profile, viewerId)
+        val ticket = ask { api.observe(profile, viewerId) }.getOrElse { return }
         if (ticket == null) {
             _state.update { it.copy(error = "The gateway has no Bot Screen.") }
             return
@@ -109,7 +110,7 @@ class ScreenSession(
         _state.update { it.copy(viewerId = ticket.viewerId, error = null) }
 
         val url = gateway.siblingSocketUrl(ticket.path) + "?display_ticket=" + ticket.ticket
-        val transport = httpClient.openDisplayStream(url)
+        val transport = ask { httpClient.openDisplayStream(url) }.getOrElse { return }
         val rfb = RfbClient(transport)
         stream = transport
         this.rfb = rfb
@@ -151,7 +152,7 @@ class ScreenSession(
             open()
             viewerId
         } ?: return
-        val lease = api.acquire(profile, id)
+        val lease = ask { api.acquire(profile, id) }.getOrElse { return }
         if (lease == null) {
             _state.update { it.copy(error = "The gateway refused the takeover.") }
             return
@@ -161,7 +162,7 @@ class ScreenSession(
 
     /** Hands the screen back to the agent. */
     suspend fun handBack() {
-        val lease = api.release(profile, viewerId)
+        val lease = ask { api.release(profile, viewerId) }.getOrElse { return }
         if (lease == null) {
             _state.update { it.copy(error = "The gateway refused to hand the screen back.") }
             return
@@ -171,21 +172,60 @@ class ScreenSession(
 
     /** A key press on the bot's screen. */
     suspend fun pressKey(keysym: Int, down: Boolean) {
-        rfb?.keyEvent(keysym, down)
+        val rfb = rfb ?: return
+        send { rfb.keyEvent(keysym, down) }
     }
 
     /** A pointer move or click on the bot's screen. */
     suspend fun movePointer(x: Int, y: Int, mask: Int) {
-        rfb?.pointerEvent(x, y, mask)
+        val rfb = rfb ?: return
+        send { rfb.pointerEvent(x, y, mask) }
     }
 
     /** Text into the bot's clipboard. */
     suspend fun copyToClipboard(text: String) {
-        rfb?.clientCutText(text)
+        val rfb = rfb ?: return
+        send { rfb.clientCutText(text) }
     }
 
     private suspend fun refreshLease() {
-        val status = api.status(profile) ?: return
+        val status = ask { api.status(profile) }.getOrElse { return } ?: return
         _state.update { it.copy(lease = status.lease, status = status) }
+    }
+
+    /**
+     * Asks the gateway something, and keeps the answer.
+     *
+     * The link to the gateway drops now and then — the phone is on Wi-Fi, and the gateway may restart — and a
+     * call that never got there says nothing about the screen. The pane keeps what it last knew and says why
+     * it stopped; the app does not fall over.
+     */
+    private suspend fun <T> ask(block: suspend () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        _state.update { it.copy(error = failureMessage(e)) }
+        Result.failure(e)
+    }
+
+    /** What the pane says when a call to the gateway didn't work. */
+    private fun failureMessage(e: Throwable): String = when (e) {
+        // The call never got there: the link is down, not the screen.
+        is GatewayUnreachable -> e.message
+        // The gateway's own words: it answered, and it said no.
+        is RpcException -> e.message
+        else -> e.message ?: "The gateway didn't answer."
+    }
+
+    /** Sends something to the screen, and lets it go if the stream has gone. */
+    private suspend fun send(block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The stream is gone; the pump that reads it is the one that says so.
+        }
     }
 }

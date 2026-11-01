@@ -142,7 +142,8 @@ class DisplayApiTest {
 
         val failure = runCatching { api.status("scribe") }.exceptionOrNull()
 
-        assertTrue(failure is dev.hermeskotlin.core.rpc.RpcException)
+        // Not the gateway's own answer: the call never got there, which is a different thing.
+        assertTrue(failure is GatewayUnreachable)
     }
 
     @Test
