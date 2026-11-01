@@ -12,6 +12,9 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
@@ -129,6 +132,33 @@ class ChatOpeningPositionTest {
         waitForIdle()
 
         onNodeWithText("Reply 1").assertIsDisplayed()
+    }
+
+    @Test
+    fun aTapThatDoesNotMoveTheListKeepsTheUnreadJump() = runComposeUiTest {
+        val history = History(11..30)
+        show(history)
+        onNode(hasScrollToIndexAction()).performTouchInput { click(center) }
+        waitForIdle()
+        runOnIdle { history.state = history.state.copy(messages = rows(1..40), savedCopyAt = null) }
+        waitForIdle()
+
+        onNodeWithText("New messages").assertIsDisplayed()
+        onNodeWithText("Reply 6").assertIsDisplayed()
+    }
+
+    @Test
+    fun aTouchDragWhileLoadingTakesPrecedenceOverTheUnreadJump() = runComposeUiTest {
+        val history = History(1..40)
+        show(history, readUpTo = 150.0)
+        onNodeWithText("Reply 16").assertIsDisplayed()
+        repeat(3) { onNode(hasScrollToIndexAction()).performTouchInput { swipeUp() } }
+        waitForIdle()
+        onNodeWithText("Reply 16").assertDoesNotExist()
+        runOnIdle { history.state = history.state.copy(messages = rows(1..45), savedCopyAt = null) }
+        waitForIdle()
+
+        onNodeWithText("Reply 16").assertDoesNotExist()
     }
 
     @Test

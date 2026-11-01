@@ -1908,10 +1908,20 @@ private fun Messages(
     val unreadLine = remember(messages, unreadFrom, readUpTo) { unreadLineKey(messages, unreadFrom, readUpTo) }
     BoxWithConstraints(Modifier.fillMaxSize().pointerInput(readUpTo) {
         awaitPointerEventScope {
+            var down: Offset? = null
             while (true) {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
-                // Includes the scrollbar, wheel and touch, before children consume the event.
-                if (event.type == PointerEventType.Press || event.type == PointerEventType.Scroll) readerNavigated = true
+                val change = event.changes.firstOrNull() ?: continue
+                // The wheel, or a drag on the list or its scrollbar, seen before children consume it. A tap on a
+                // link or an icon doesn't move the list, so it leaves the jump to the unread line alone.
+                when (event.type) {
+                    PointerEventType.Scroll -> readerNavigated = true
+                    PointerEventType.Press -> down = change.position
+                    PointerEventType.Release -> down = null
+                    PointerEventType.Move -> if (change.pressed && down?.let { (change.position - it).getDistance() > viewConfiguration.touchSlop } == true) {
+                        readerNavigated = true
+                    }
+                }
             }
         }
     }) {
