@@ -22,6 +22,7 @@ import dev.hermeskotlin.core.models.ModelsApi
 import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.pet.PetApi
 import dev.hermeskotlin.core.profiles.ProfilesApi
+import dev.hermeskotlin.core.sessions.CaughtUp
 import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.SettingsStore
@@ -698,6 +699,114 @@ class ChatViewModelTest {
             runCurrent()
             assertEquals(1, writes.size)
         }
+    }
+
+    /** A chat with a prompt at 1100 and a reply at 1300; the detail route answers [detail], PATCHes go to [writes]. */
+    private fun readableChat(seen: SeenStore, detail: String, writes: MutableList<String>, pending: CompletableDeferred<Unit>? = null) =
+        viewModel(seenStore = seen, readState = { request ->
+            when {
+                request.url.encodedPath.endsWith("/messages") -> respond(
+                    """{"session_id":"s1","messages":[{"id":1,"role":"user","content":"Hello","timestamp":1100},{"id":2,"role":"assistant","content":"Reply","timestamp":1300}]}""",
+                    HttpStatusCode.OK, json,
+                )
+                request.url.encodedPath.endsWith("/mutation-snapshot") -> respond("""{"detail":"No such API endpoint"}""", HttpStatusCode.NotFound, json)
+                request.method == HttpMethod.Patch -> {
+                    writes += request.url.encodedPath
+                    respond("{}", HttpStatusCode.OK, json)
+                }
+                request.url.encodedPath == "/api/sessions/s1" -> {
+                    pending?.await()
+                    respond(detail, HttpStatusCode.OK, json)
+                }
+                else -> null
+            }
+        })
+
+    @Test
+    fun aChatTheListFoundReadOpensAtItsEnd() = runTest(dispatcher) {
+        // Never opened here, from a messaging platform, on a gateway without read tracking: nothing marks it new.
+        val seen = SeenStore(InMemoryKeyValueStore()) { 1000.0 }
+        val (vm, _) = readableChat(seen, "{}", mutableListOf())
+        connection.start(gateway.gatewayUrl)
+        connection.state.first { it is ConnectionState.Connected }
+        vm.open(ChatTarget(gateway, "s1", "Chat"))
+        runCurrent()
+
+        assertNull(assertNotNull(vm.readPosition.value).readUpTo)
+    }
+
+    @Test
+    fun aGatewayWithoutReadTrackingIsNotWrittenTo() = runTest(dispatcher) {
+        val seen = SeenStore(InMemoryKeyValueStore()) { 1000.0 }
+        val writes = mutableListOf<String>()
+        val (vm, host) = readableChat(seen, """{"id":"s1"}""", writes)
+        connection.start(gateway.gatewayUrl)
+        connection.state.first { it is ConnectionState.Connected }
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        runCurrent()
+        vm.readLatest(target, assertNotNull(host.session.value).state.value)
+        runCurrent()
+
+        assertTrue(writes.isEmpty(), writes.toString())
+        // Read here all the same.
+        assertEquals(1300.0, seen.lastLook(gateway.gatewayUrl, "s1"))
+    }
+
+    @Test
+    fun aChatReadToItsEndIsCaughtUpUntilTheUserLeaves() = runTest(dispatcher) {
+        val seen = SeenStore(InMemoryKeyValueStore()) { 1000.0 }
+        val (vm, host) = readableChat(seen, """{"last_read_at":1200}""", mutableListOf())
+        connection.start(gateway.gatewayUrl)
+        connection.state.first { it is ConnectionState.Connected }
+        val target = ChatTarget(gateway, "s1", "Chat", profile = "scribe")
+        vm.open(target)
+        runCurrent()
+        assertNull(seen.caughtUp.value)
+        vm.readLatest(target, assertNotNull(host.session.value).state.value)
+        runCurrent()
+        assertEquals(CaughtUp(gateway.gatewayUrl, "scribe", "s1"), seen.caughtUp.value)
+
+        vm.onScreen(false)
+        vm.markLooked()
+        runCurrent()
+        assertNull(seen.caughtUp.value)
+        // Shown again on the same end: caught up again without another write.
+        vm.onScreen(true)
+        vm.readLatest(target, assertNotNull(host.session.value).state.value)
+        assertEquals(CaughtUp(gateway.gatewayUrl, "scribe", "s1"), seen.caughtUp.value)
+        // Another chat opened lets go of it.
+        vm.open(ChatTarget(gateway, "s2", "Other", profile = "scribe"))
+        runCurrent()
+        assertNull(seen.caughtUp.value)
+    }
+
+    @Test
+    fun theSameChatReopenedKeepsItsTranscriptWhileTheNewPositionIsRead() = runTest(dispatcher) {
+        val seen = SeenStore(InMemoryKeyValueStore()) { 1000.0 }
+        var pending: CompletableDeferred<Unit>? = null
+        val (vm, _) = viewModel(seenStore = seen, readState = { request ->
+            if (request.url.encodedPath == "/api/sessions/s1") {
+                pending?.await()
+                respond("""{"last_read_at":1200}""", HttpStatusCode.OK, json)
+            } else null
+        })
+        connection.start(gateway.gatewayUrl)
+        connection.state.first { it is ConnectionState.Connected }
+        val target = ChatTarget(gateway, "s1", "Chat", readUpTo = 1000.0)
+        vm.open(target)
+        runCurrent()
+        assertEquals(1200.0, vm.readPosition.value?.readUpTo)
+
+        // A notification for it: the old position stays (the screen keeps its list) until the new one comes.
+        pending = CompletableDeferred()
+        val again = target.copy(readUpTo = 1100.0)
+        vm.open(again)
+        runCurrent()
+        assertEquals(target, vm.readPosition.value?.target)
+        pending.complete(Unit)
+        runCurrent()
+        assertEquals(again, vm.readPosition.value?.target)
     }
 
 }

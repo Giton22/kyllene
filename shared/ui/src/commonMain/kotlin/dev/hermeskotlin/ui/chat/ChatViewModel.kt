@@ -45,6 +45,7 @@ import dev.hermeskotlin.core.chat.regenerateTarget
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.plugins.NextPromptApi
 import dev.hermeskotlin.core.profiles.ProfilesApi
+import dev.hermeskotlin.core.sessions.CaughtUp
 import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.SettingsStore
@@ -264,19 +265,30 @@ class ChatViewModel(
     private var readPositionJob: Job? = null
     private var readTail: Triple<String, String, Double>? = null
 
+    /** The open chat's gateway may keep a read watermark for it (`last_read_at` set, zero included), so reading it is sent there. */
+    private var readTracked = false
+
     private fun resolveReadPosition(owner: ChatTarget) {
         readPositionJob?.cancel()
-        _readPosition.value = null
+        // The same chat reopened (a notification for it) keeps its transcript on screen while the new position is read.
+        if (_readPosition.value?.target?.copy(readUpTo = null) != owner.copy(readUpTo = null)) _readPosition.value = null
         readTail = null
+        readTracked = false
+        releaseCaughtUp()
         readPositionJob = viewModelScope.launch {
             val id = owner.storedSessionId
-            val fallback = owner.readUpTo ?: id?.let { seen?.lastLook(owner.gateway.gatewayUrl, it, owner.profile) }
-            val shared = if (id != null) {
-                withTimeoutOrNull(5_000) {
-                    (sessions.totals(owner.gateway.gatewayUrl, id, owner.profile) as? ApiResult.Success)?.value?.lastReadAt
-                }
+            // No position from the list (or the notification) means it found nothing new: the chat opens at its end.
+            val fallback = owner.readUpTo
+            // Off the gateway the answer can't come; the saved copy shows at once rather than after the wait.
+            val reachable = connectionState.value.let { it !is ConnectionState.Reconnecting && it !is ConnectionState.SessionExpired && it !is ConnectionState.Failed }
+            val answer = if (id != null && reachable) {
+                withTimeoutOrNull(READ_POSITION_WAIT_MS) { sessions.totals(owner.gateway.gatewayUrl, id, owner.profile) as? ApiResult.Success }
             } else null
-            if (target == owner) _readPosition.value = ChatReadPosition(owner, shared?.takeIf { it.isFinite() && it > 0 } ?: fallback)
+            val shared = answer?.value?.lastReadAt?.takeIf { it.isFinite() && it >= 0 }
+            if (target != owner) return@launch
+            // Only a clear answer without one (an older gateway, an untracked chat) is left alone; an unknown one is sent.
+            readTracked = answer == null || shared != null
+            _readPosition.value = ChatReadPosition(owner, shared?.takeIf { it > 0 } ?: fallback)
         }
     }
 
@@ -288,20 +300,59 @@ class ChatViewModel(
         val id = rendered.storedSessionId?.takeIf { it == state.storedSessionId } ?: return
         if (rendered.messages != state.messages) return
         if (!state.historyLoaded || !state.historyRead || state.running) return
-        val newest = state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull() ?: return
-        val tail = Triple(id, state.messages.last().key, newest)
-        if (readTail == tail) return
+        val tail = endOf(state) ?: return
+        val caughtUp = CaughtUp(owner.gateway.gatewayUrl, owner.profile, id)
+        // Back on a chat already read to this end (the screen shown again): still caught up, nothing to send.
+        if (readTail == tail) return holdCaughtUp(caughtUp)
         readTail = tail
+        val tracked = readTracked
         viewModelScope.launch {
-            seen?.markLooked(owner.gateway.gatewayUrl, id, newest, owner.profile)
-            // The protocol only supports read-now, not an arbitrary timestamp or partial-read cursor.
-            if (target == owner && shown.value) sessions.setUnread(owner.gateway.gatewayUrl, id, unread = false, profile = owner.profile)
+            seen?.markLooked(owner.gateway.gatewayUrl, id, tail.third, owner.profile)
+            val stillAtIt = session.value?.state?.value?.takeIf { !it.running }?.let(::endOf) == tail
+            if (target == owner && readTail == tail && shown.value && stillAtIt) holdCaughtUp(caughtUp)
+            // The protocol only supports read-now, not an arbitrary timestamp or partial-read cursor. A gateway that
+            // keeps no watermark for the chat has nothing to clear.
+            if (tracked && target == owner && shown.value) sessions.setUnread(owner.gateway.gatewayUrl, id, unread = false, profile = owner.profile)
         }
     }
+
+    /** The chat's end: its stored id, last message and newest timestamp (the machinery's rows count too). */
+    private fun endOf(state: ChatState): Triple<String, String, Double>? {
+        val id = state.storedSessionId ?: return null
+        val newest = state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull() ?: return null
+        return Triple(id, state.messages.last().key, newest)
+    }
+
+    /** What this view model last told the [SeenStore] is caught up; another window's chat is left alone. */
+    private var heldCaughtUp: CaughtUp? = null
+
+    private fun holdCaughtUp(chat: CaughtUp) {
+        heldCaughtUp = chat
+        seen?.setCaughtUp(chat)
+    }
+
+    private fun releaseCaughtUp() {
+        val held = heldCaughtUp ?: return
+        heldCaughtUp = null
+        if (seen?.caughtUp?.value == held) seen.setCaughtUp(null)
+    }
+
+    /** A chat window closed is no longer being read. */
+    override fun onCleared() {
+        releaseCaughtUp()
+        super.onCleared()
+    }
+
     private val session = MutableStateFlow<ChatSession?>(null)
     private val widgetSession = MutableStateFlow<Pair<ChatSession, ChatTarget>?>(null)
 
     init {
+        // Caught up only while the end that was read is still the end: a turn starting or a message coming in lets go.
+        viewModelScope.launch {
+            session.flatMapLatest { it?.state ?: flowOf(null) }.collect { state ->
+                if (state == null || state.running || endOf(state) != readTail) releaseCaughtUp()
+            }
+        }
         // A chat opened under the checkpoints sheet shows its own checkpoints, not the last chat's.
         viewModelScope.launch { session.collect { checkpoints.follow(it) } }
         viewModelScope.launch { session.collect { control.follow(it) } }
@@ -490,6 +541,7 @@ class ChatViewModel(
     /** Leaving records a running turn without advancing past messages the viewport actually showed. */
     fun markLooked() {
         val target = target ?: return
+        releaseCaughtUp()
         val state = session.value?.state?.value ?: return
         val id = state.storedSessionId ?: return
         viewModelScope.launch {
@@ -1353,6 +1405,9 @@ class ChatViewModel(
 
         /** How long the Call Hermes shortcut waits for the gateway (a cold start connects in a few seconds). */
         const val VOICE_CONNECT_WAIT_MS = 30_000L
+
+        /** How long opening a chat waits for the gateway's read watermark before it uses the list's position. */
+        const val READ_POSITION_WAIT_MS = 5_000L
     }
 }
 

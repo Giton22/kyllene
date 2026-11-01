@@ -422,7 +422,9 @@ fun ChatScreen(
     LaunchedEffect(target) { viewModel.open(target) }
     val transcript = viewModel.transcript.collectAsStateWithLifecycle().value
     val state = transcript.state
-    val readPosition = viewModel.readPosition.collectAsStateWithLifecycle().value?.takeIf { it.target == target }
+    // The same chat reopened with a new position (a notification for it) keeps the last one until the new one is read.
+    val readPosition = viewModel.readPosition.collectAsStateWithLifecycle().value
+        ?.takeIf { it.target.copy(readUpTo = null) == target.copy(readUpTo = null) }
     val ownsTranscript = transcript.owner?.copy(readUpTo = null) == target.copy(readUpTo = null)
     // Keep this small lifecycle signal observable through stop/start, when transcript collection is paused.
     val screenShown = viewModel.screenShown.collectAsState().value
