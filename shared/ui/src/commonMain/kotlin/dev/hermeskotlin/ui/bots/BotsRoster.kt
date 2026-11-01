@@ -63,6 +63,7 @@ import com.composables.icons.lucide.EyeOff
 import com.composables.icons.lucide.History
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.MessageSquarePlus
+import com.composables.icons.lucide.Monitor
 import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.Pin
 import com.composables.icons.lucide.PinOff
@@ -159,6 +160,9 @@ interface BotActions {
 
     /** The bot's scheduled routines. */
     fun routines(bot: Bot)
+
+    /** The bot's screen: the live picture of what it is doing, and the user's hand on it. */
+    fun screen(bot: Bot)
 }
 
 /**
@@ -456,6 +460,7 @@ private fun BotCard(
             RowMenuItem("Open recent session", Lucide.History) { actions.openRecent(bot) }.takeIf { recent != null },
             RowMenuItem("New chat with ${bot.label}", Lucide.MessageSquarePlus) { actions.newChat(bot) },
             RowMenuItem("Routines", Lucide.CalendarClock) { actions.routines(bot) },
+            RowMenuItem("Screen", Lucide.Monitor) { actions.screen(bot) },
             RowMenuItem("Start fresh", Lucide.RotateCcw, run = onStartOver).takeIf { bot.canonicalSession != null },
             RowMenuItem("Edit", Lucide.Pencil) { actions.edit(bot) },
             RowMenuItem("Duplicate", Lucide.Copy) { actions.duplicate(bot) },
