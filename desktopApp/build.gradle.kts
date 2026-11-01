@@ -39,6 +39,16 @@ kotlin {
     }
 }
 
+// Compose copies common app resources into every native app image and installer.
+val desktopNoticeResources = layout.buildDirectory.dir("generated/desktopNoticeResources")
+val noticeFile = rootProject.file("THIRD_PARTY_NOTICES.md")
+check(noticeFile.isFile) { "Missing THIRD_PARTY_NOTICES.md" }
+val prepareDesktopNotice = tasks.register<Sync>("prepareDesktopNotice") {
+    from(noticeFile)
+    into(desktopNoticeResources.map { it.dir("common") })
+}
+tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(prepareDesktopNotice) }
+
 compose.desktop {
     application {
         mainClass = "dev.hermeskotlin.desktop.MainKt"
@@ -63,6 +73,7 @@ compose.desktop {
         }
 
         nativeDistributions {
+            appResourcesRootDir.set(desktopNoticeResources)
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "Kyllene"
             packageVersion = appVersion
@@ -124,7 +135,10 @@ afterEvaluate {
     }
     // jlink comes first and would fail on the missing jcef module with a less helpful message.
     tasks.withType<org.jetbrains.compose.desktop.application.tasks.AbstractJLinkTask>().configureEach(needsJbr)
-    tasks.withType<org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask>().configureEach(needsJbr)
+    tasks.withType<org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask>().configureEach {
+        dependsOn(prepareDesktopNotice)
+        needsJbr(this)
+    }
 }
 
 // Compose trims the runtime with jlink's --strip-native-commands, which drops each module's bin/ files. For jcef those

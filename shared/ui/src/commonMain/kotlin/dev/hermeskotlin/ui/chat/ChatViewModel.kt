@@ -223,6 +223,7 @@ class ChatViewModel(
         audioApi, recorder, player, viewModelScope, appScope, voiceKeepAlive, deviceDictation,
         speechStreams = speechStreams,
         deviceLock = deviceLock,
+        profiles = profiles,
         liveCalls = liveCalls,
         readAloudVoices = readAloudVoices ?: InMemoryReadAloudVoices(),
     )
@@ -554,8 +555,8 @@ class ChatViewModel(
     fun startVoiceChat(ringback: Boolean = false) {
         val chat = session.value ?: return
         val target = target ?: return
-        val pause = (settings.settings.value ?: AppSettings()).voicePause
-        voice.startChat(chat, target.gateway.gatewayUrl, target.profile, pause.millis, ringback = ringback)
+        val prefs = settings.settings.value ?: AppSettings()
+        voice.startChat(chat, target.gateway.gatewayUrl, target.profile, prefs.voicePause.millis, ringback = ringback, subscriptionPreview = prefs.subscriptionVoicePreview)
     }
 
     /** Starts dictating into the composer, or finishes the dictation in progress. */
