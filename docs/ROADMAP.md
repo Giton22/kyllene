@@ -112,7 +112,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Send a prompt (`prompt.submit`); prompts sent mid-turn are marked queued; unsent text returns to the composer
 - [x] A prompt that lost its reply offers Check delivery (reads the transcript again), Resend (warns first that Hermes may get it twice) and Edit; nothing resends on its own. The chat's title line tells no connection, connecting again and signed out apart
 - [x] Streaming assistant text (`message.start`, `message.delta`, `message.complete`), including outcome (complete / stopped / error)
-- [x] Interim commentary (`message.interim`), folded into the reply
+- [x] Interim commentary (`message.interim`), folded into the reply; a loaded chat shows stored Codex commentary (`display_commentary`) in Reasoning, and with reasoning hidden, a reply of nothing but reasoning isn't listed
 - [x] Markdown rendering (GFM: lists, tables, links, code blocks with language label and copy button; copy whole reply); only web and mail links open
 - [x] Tables in replies size each column by its cells (a column of emoji or numbers stays slim, wordy ones share the rest and wrap, and only a table whose longest words don't fit scrolls sideways), with faint grid lines and every second row tinted
 - [x] Pictures from the web load only on a tap, without gateway cookies

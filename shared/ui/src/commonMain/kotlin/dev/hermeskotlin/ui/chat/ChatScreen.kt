@@ -155,6 +155,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import dev.hermeskotlin.core.bots.botLook
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -878,17 +879,20 @@ internal fun ChatView(
             val findQuery = remember { TextFieldState() }
             val findFocus = remember { FocusRequester() }
             val findText = findQuery.text.toString()
+            // What the list shows; find and its scrolling count the same rows.
+            val showReasoning = LocalAppSettings.current.showReasoning
+            val listed = remember(state.messages, showReasoning) { state.messages.withoutBlankReplies(showReasoning) }
             // The matched messages by key, so older history loading above them keeps the one shown; worked out only
             // while the bar is open, not on every streamed word.
-            val matches = remember(state.messages.size, state.messages.lastOrNull()?.key, findText, findOpen) {
-                if (findOpen) findMatches(state.messages, findText).map { state.messages[it].key } else emptyList()
+            val matches = remember(listed.size, listed.lastOrNull()?.key, findText, findOpen) {
+                if (findOpen) findMatches(listed, findText).map { listed[it].key } else emptyList()
             }
             var foundKey by remember { mutableStateOf<String?>(null) }
             LaunchedEffect(findText, findOpen) { foundKey = matches.lastOrNull() }
             val match = matches.indexOf(foundKey)
             val found = foundKey.takeIf { findOpen && match >= 0 }
             LaunchedEffect(found) {
-                val index = state.messages.indexOfFirst { it.key == found }
+                val index = listed.indexOfFirst { it.key == found }
                 if (index >= 0) composerFold.list?.animateScrollToItem(index)
             }
             if (findOpen) {
@@ -1040,7 +1044,7 @@ internal fun ChatView(
                             LocalCommentHost provides commentHost,
                         ) {
                             Messages(
-                                state.messages,
+                                listed,
                                 olderMessages = state.olderMessages,
                                 loadingOlder = state.loadingOlder,
                                 bottomInset = listInset,
@@ -2152,12 +2156,13 @@ private const val UNREACHABLE = "Can't reach gateway"
 
 /** The banner over the chat while the gateway can't be reached: where, what's being done about it, and Retry now. */
 @Composable
-private fun OfflineBanner(place: String?, status: String, onRetry: () -> Unit) {
+internal fun OfflineBanner(place: String?, status: String, onRetry: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .background(Theme[colors][dangerSoft], RoundedCornerShape(Theme[radii][radiusMedium]))
+            // The tint laid on the chat's page colour: the red wash it had on a plain page, but nothing under it shows through.
+            .background(Theme[colors][dangerSoft].compositeOver(Theme[colors][background]), RoundedCornerShape(Theme[radii][radiusMedium]))
             .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
             .semantics(mergeDescendants = true) {},
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2813,6 +2818,16 @@ private fun UnreadDivider(modifier: Modifier = Modifier) {
         Box(Modifier.weight(1f).height(1.dp).background(line))
     }
 }
+
+/**
+ * With reasoning hidden, a finished reply of nothing but reasoning (a step that only thought, or only commented
+ * on its way) would be a bare header: it isn't listed.
+ */
+internal fun List<ChatMessage>.withoutBlankReplies(showReasoning: Boolean): List<ChatMessage> =
+    if (showReasoning) this else filterNot {
+        it is ChatMessage.Assistant && !it.streaming && it.text.isBlank() && it.tools.isEmpty() && it.error == null &&
+            it.warning == null && it.outcome != TurnOutcome.Error && it.outcome != TurnOutcome.Interrupted
+    }
 
 /**
  * The first message newer than [readUpTo] (epoch seconds) that the person would call new: a reply, a prompt
