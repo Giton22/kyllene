@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -155,7 +156,7 @@ internal fun VoicePanel(
             horizontalArrangement = Arrangement.spacedBy(40.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Mute in a call and a chained chat alike.
+            // Mute in a call and a chained chat alike; empty slots keep End in the middle.
             if (state.phase != VoicePhase.Connecting) {
                 RoundButton(
                     if (state.muted) Lucide.MicOff else Lucide.Mic,
@@ -164,6 +165,8 @@ internal fun VoicePanel(
                     tint = if (state.muted) Theme[colors][background] else Theme[colors][textColor],
                     onClick = onMute,
                 )
+            } else {
+                Spacer(Modifier.size(60.dp))
             }
             RoundButton(Lucide.PhoneOff, contentDescription = "End voice chat", fill = Theme[colors][danger], tint = Color.White, onClick = onEnd)
             when {
@@ -181,6 +184,7 @@ internal fun VoicePanel(
                     tint = Theme[colors][textColor],
                     onClick = onSendNow,
                 )
+                else -> Spacer(Modifier.size(60.dp))
             }
         }
     }
