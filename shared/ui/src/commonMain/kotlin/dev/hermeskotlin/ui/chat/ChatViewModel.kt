@@ -135,6 +135,9 @@ sealed interface ChatRequest {
     /** The voice shortcut: the screen asks for the microphone, then dictates into the composer. */
     data object StartDictation : ChatRequest
 
+    /** A chat opened to type in: the composer takes the keyboard. */
+    data object FocusComposer : ChatRequest
+
     /** [profile] null is the gateway's launch profile. */
     data class SwitchProfile(val profile: String?) : ChatRequest
 }
@@ -545,6 +548,7 @@ class ChatViewModel(
         // After the notice: when the files overfill a tray that already held some, the tray limit is what to tell.
         if (draft.attachments.isNotEmpty()) addAttachments(draft.attachments)
         if (draft.start == DraftStart.Dictation) viewModelScope.launch { _requests.send(ChatRequest.StartDictation) }
+        if (draft.start == DraftStart.Typing) viewModelScope.launch { _requests.send(ChatRequest.FocusComposer) }
     }
 
     fun startVoiceChat(ringback: Boolean = false) {
