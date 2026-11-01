@@ -196,19 +196,19 @@ internal fun VoiceScreen(
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Mute on the left in a call and a chained chat alike; an empty slot keeps End in the middle.
+                    if (state.phase != VoicePhase.Connecting) {
+                        SideButton(Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff, "Mute", onMute, on = state.muted, toggle = true)
+                    } else {
+                        Spacer(Modifier.size(52.dp))
+                    }
+                    EndButton(onEnd)
+                    // Skip and Send now are only there for a moment, so they stand in for Type instead meanwhile.
                     when {
-                        state.live && state.phase != VoicePhase.Connecting ->
-                            SideButton(Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff, "Mute", onMute, on = state.muted, toggle = true)
                         !state.live && state.phase == VoicePhase.Speaking -> SideButton(Lucide.SkipForward, "Skip the reply", onSkip)
                         canSendNow(state) -> SideButton(Lucide.ArrowUp, "Send now", onSendNow)
-                        // An empty slot keeps End in the middle.
-                        else -> Spacer(Modifier.size(52.dp))
+                        else -> SideButton(Lucide.Keyboard, "Type instead", onType)
                     }
-                    // Chained chat: mute beside End; the loop keeps the mic shut while it's on.
-                    if (!state.live && state.phase != VoicePhase.Connecting)
-                        SideButton(Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff, "Mute", onMute, on = state.muted, toggle = true)
-                    EndButton(onEnd)
-                    SideButton(Lucide.Keyboard, "Type instead", onType)
                 }
             }
         }
