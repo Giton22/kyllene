@@ -718,7 +718,7 @@ internal fun ChatView(
     titleFace: (@Composable () -> Unit)? = null,
     state: ChatState,
     /** Isolates the transcript's scroll state across gateways, profiles and chats. */
-    conversationKey: Any? = state.storedSessionId,
+    conversationKey: Any? = null,
     picker: ModelPickerState,
     connected: Boolean,
     /** Which way the link is down, shown under the title while not [connected]. */
@@ -1051,7 +1051,7 @@ internal fun ChatView(
                             LocalAgentScreenSend provides actions::sendPrompt,
                             LocalCommentHost provides commentHost,
                         ) {
-                            key(conversationKey, profile) {
+                            key(conversationKey) {
                             Messages(
                                 listed,
                                 olderMessages = state.olderMessages,
@@ -1845,7 +1845,8 @@ private fun Messages(
     }
     val readBackTravel = with(LocalDensity.current) { READ_BACK_TRAVEL.toPx() }
     val readBack = remember(readBackTravel, fold) { ReadBackDetector(readBackTravel) { fold.heldOpen = false } }
-    // A prompt just sent is always shown, wherever the reader was.
+    // A prompt just sent here is always shown, wherever the reader was. One sent elsewhere, or a stored one coming
+    // in with history, only pulls a reader who hasn't moved.
     LaunchedEffect(newest?.key) {
         // A fast submit can acknowledge the local prompt before the screen ever draws it pending.
         val sentHere = newest is ChatMessage.User && (newest.pending || newest.key.startsWith("local-"))
