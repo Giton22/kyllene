@@ -27,6 +27,8 @@ data class ToolActivity(
     val delegationIds: List<String> = emptyList(),
     /** For `image_generate`: the picture it made. */
     val generatedImage: GeneratedImage? = null,
+    /** For `phone_show_ui`: the screen the agent drew in the chat. */
+    val agentScreen: AgentScreen? = null,
 )
 
 /** Why a tool's output was flagged (`tool.output_risk`): the scanner's finding ids. Advisory; nothing was blocked. */

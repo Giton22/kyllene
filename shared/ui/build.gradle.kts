@@ -8,7 +8,11 @@ plugins {
 kotlin {
     android {
         namespace = "dev.hermeskotlin.ui"
-        compileSdk = libs.versions.android.compileSdk.get().toInt()
+        compileSdk {
+            version = release(libs.versions.android.compileSdk.get().toInt()) {
+                minorApiLevel = libs.versions.android.compileSdkMinor.get().toInt()
+            }
+        }
         minSdk = libs.versions.android.minSdk.get().toInt()
         withHostTest {}
     }
@@ -39,6 +43,16 @@ kotlin {
             implementation(libs.androidx.core.ktx)
             // The Health switch asks for Health Connect's permissions through its own screen.
             implementation(libs.androidx.health.connect)
+            // Screens the agent draws in the chat (experiment), themed through Material's roles.
+            implementation(libs.a2ui.compose.runtime)
+            implementation(libs.a2ui.compose.ui)
+            implementation(libs.a2ui.material3)
+            implementation(libs.androidx.material3)
+            implementation(libs.coil.compose)
+            implementation(libs.coil.network.okhttp)
+            implementation(libs.media3.exoplayer)
+            implementation(libs.media3.ui)
+            implementation(libs.media3.datasource.okhttp)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
