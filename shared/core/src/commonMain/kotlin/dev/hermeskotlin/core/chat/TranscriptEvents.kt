@@ -26,7 +26,7 @@ sealed interface TranscriptEvent {
     data class Compaction(val body: String) : TranscriptEvent
 
     /** Consecutive background entries, folded together without moving them past a reply or failure. */
-    data class SystemMessages(val entries: List<TranscriptEvent>) : TranscriptEvent
+    data class SystemMessages(val entries: List<TranscriptEvent>, val firstKey: String) : TranscriptEvent
 
     /** A turn that didn't complete, in the gateway's words. */
     data class FailedTurn(val text: String) : TranscriptEvent
@@ -213,8 +213,15 @@ private val REASON_LABELS = mapOf(
 internal fun groupSystemMessages(messages: List<ChatMessage>): List<ChatMessage> = buildList {
     val pending = mutableListOf<ChatMessage.Event>()
     fun flush() {
-        if (pending.isEmpty()) return
-        add(ChatMessage.Event(pending.first().key, TranscriptEvent.SystemMessages(pending.map { it.event }), pending.last().timestamp))
+        when (pending.size) {
+            0 -> return
+            // One alone says what it is, as before: "Model changed" shouldn't need a tap.
+            1 -> add(pending.single())
+            // Keyed by the newest entry, which an earlier page loaded on scroll-up can't change, so the list
+            // keeps its place; the first one is where the group starts in the stored rows.
+            else -> add(ChatMessage.Event(pending.last().key,
+                TranscriptEvent.SystemMessages(pending.map { it.event }, firstKey = pending.first().key), pending.last().timestamp))
+        }
         pending.clear()
     }
     messages.forEach { message ->

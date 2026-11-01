@@ -38,6 +38,16 @@ class HistoryToMessagesTest {
     }
 
     @Test
+    fun aLoneSystemEntryShowsAsItselfNotAGroupOfOne() {
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("one")),
+            SessionMessage(id = 2, role = "user", content = JsonPrimitive(""), displayKind = "model_switch"),
+            SessionMessage(id = 3, role = "user", content = JsonPrimitive("two")),
+        ))
+        assertEquals(TranscriptEvent.Label("Model changed"), assertIs<ChatMessage.Event>(messages[1]).event)
+    }
+
+    @Test
     fun consecutiveRoutineAndSuccessfulProcessEventsShareOneDisplayRow() {
         val messages = historyToMessages(listOf(
             SessionMessage(id = 1, role = "user", content = JsonPrimitive("[Cronjob \"Morning\" output — scheduled job, not the user.]\n\n3 new emails"), timestamp = 10.0),
@@ -46,8 +56,9 @@ class HistoryToMessagesTest {
         ))
         assertEquals(1, messages.size)
         val group = assertIs<ChatMessage.Event>(messages.single())
-        assertEquals("row-1", group.key)
+        assertEquals("row-3", group.key)
         assertEquals(30.0, group.timestamp)
+        assertEquals("row-1", assertIs<TranscriptEvent.SystemMessages>(group.event).firstKey)
         val entries = assertIs<TranscriptEvent.SystemMessages>(group.event).entries
         assertEquals(listOf("Morning", "Calendar"), entries.take(2).map { assertIs<TranscriptEvent.Routine>(it).name })
         assertEquals("notes", assertIs<TranscriptEvent.Process>(entries.last()).output)
@@ -97,6 +108,8 @@ class HistoryToMessagesTest {
         val reloaded = historyToMessages(listOf(older, newer))
         assertEquals(1, loaded.size)
         assertEquals(1, reloaded.size)
+        // Same key before and after the earlier page, so the list keeps its place and the group stays open.
+        assertEquals(loaded.single().key, reloaded.single().key)
         assertEquals(reloaded, historyToMessages(listOf(older, newer)))
         val entries = assertIs<TranscriptEvent.SystemMessages>(assertIs<ChatMessage.Event>(reloaded.single()).event).entries
         assertEquals(listOf("", text), entries.map { assertIs<TranscriptEvent.Routine>(it).body })
