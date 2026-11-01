@@ -22,13 +22,19 @@ internal fun unlockDesktopStorage(
     }
 }
 
-private fun askStorageRetry(guidance: String): Boolean {
+internal fun storageUnlockPane(guidance: String): JOptionPane {
     val text = guidance.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    var choice = JOptionPane.CLOSED_OPTION
+    return JOptionPane("<html><body style='width:200px'>$text</body></html>",
+        JOptionPane.ERROR_MESSAGE, JOptionPane.DEFAULT_OPTION, null, arrayOf("Retry", "Quit"), "Retry")
+}
+
+private fun askStorageRetry(guidance: String): Boolean {
+    var retry = false
     SwingUtilities.invokeAndWait {
-        choice = JOptionPane.showOptionDialog(null, "<html><body style='width:240px'>$text</body></html>",
-            "Kyllene storage", JOptionPane.DEFAULT_OPTION, JOptionPane.ERROR_MESSAGE,
-            null, arrayOf("Retry", "Quit"), "Retry")
+        val pane = storageUnlockPane(guidance)
+        val dialog = pane.createDialog(null, "Kyllene storage")
+        try { dialog.isVisible = true; retry = pane.value == "Retry" }
+        finally { dialog.dispose() }
     }
-    return choice == 0
+    return retry
 }

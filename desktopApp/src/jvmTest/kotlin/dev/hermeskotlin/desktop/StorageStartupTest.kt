@@ -11,6 +11,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class StorageStartupTest {
+    @Test fun everyFailurePromptFitsA360PixelDisplay() {
+        SwingUtilities.invokeAndWait {
+            for (reason in SecureStorageException.Reason.entries) {
+                val pane = storageUnlockPane(reason.guidance)
+                assertTrue(pane.preferredSize.width <= 360, "${reason.name}: ${pane.preferredSize.width}px")
+            }
+        }
+    }
+
     @Test fun successfulUnlockNeedsNoPrompt() {
         var calls = 0
         assertTrue(unlockDesktopStorage(prepare = { calls++ }, retry = { error("No prompt is needed") }))
