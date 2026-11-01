@@ -94,8 +94,10 @@ Key schemas: `PromptSubmitParams`, `MessageCompletePayload` (`text, usage, statu
 
 Stored history may include `display_reasoning` and `display_commentary` (Hermes
 `agent/history_commentary.py`). Show these together in the folded Reasoning panel;
-when the projection is absent, retain legacy `reasoning`. Live `message.interim`
-remains ordinary reply text.
+when the projection is absent, retain legacy `reasoning`. Live `message.interim` stays
+reply text: its payload is only `text` and `already_streamed`, and for every provider but
+Codex it is the step's own content, which history shows as reply text. So a Codex chat's
+commentary moves from the reply into Reasoning when the chat loads again.
 
 **Codegen:** `components.schemas` is JSON Schema → generate `@Serializable` Kotlin classes rather than
 hand-writing ~1 MB of contract. Regenerate when bumping supported Hermes version.
