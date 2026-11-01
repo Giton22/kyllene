@@ -818,15 +818,15 @@ class ChatSessionTest {
         val (connection, transport) = setup(
             backgroundScope,
             mapOf(
-                "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1","reasoning_effort":"high"}}""",
+                "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1"}}""",
                 "config.get" to SILENT,
             ),
         )
         val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
         chat.start()
-        chat.state.first { it.reasoningEffort == "high" }
         val read = transport.awaitSent { it.isCall("config.get") }
 
+        chat.setReasoningEffort("high")
         chat.setReasoningEffort("low")
         chat.setReasoningEffort("high")
         transport.push("""{"jsonrpc":"2.0","id":${read["id"]},"result":{"value":"max","display":"hide"}}""")
@@ -840,21 +840,65 @@ class ChatSessionTest {
         val (connection, transport) = setup(
             backgroundScope,
             mapOf(
-                "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1","reasoning_effort":"high"}}""",
+                "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1"}}""",
                 "config.get" to SILENT,
             ),
         )
         val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
         chat.start()
-        chat.state.first { it.reasoningEffort == "high" }
         val read = transport.awaitSent { it.isCall("config.get") }
 
+        // The agent's build reports the chat's own level while the profile's is still on its way.
         transport.push(event("session.info", "rt1", """{"model":"m1","reasoning_effort":"high"}"""))
-        testScheduler.runCurrent()
+        chat.state.first { it.reasoningEffort == "high" }
         transport.push("""{"jsonrpc":"2.0","id":${read["id"]},"result":{"value":"max","display":"hide"}}""")
         testScheduler.runCurrent()
 
         assertEquals("high", chat.state.value.reasoningEffort)
+    }
+
+    @Test
+    fun aResumeThatAlreadyNamesTheEffortDoesntReadItAgain() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                // A live or eager session reports its level; "" is the provider default and stays shown as such.
+                "session.resume" to """{"session_id":"rt1","running":false,"info":{"model":"m1","reasoning_effort":""}}""",
+                "session.control.read" to "{}",
+                "config.get" to """{"value":"medium","display":"hide"}""",
+            ),
+        )
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" }
+        transport.awaitSent { it.isCall("session.control.read") }
+        testScheduler.runCurrent()
+
+        assertNull(chat.state.value.reasoningEffort)
+        assertEquals(0, transport.sent.value.count { it.isCall("config.get") })
+    }
+
+    @Test
+    fun aNewChatWithAPickedEffortDoesntReadIt() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"rt9","stored_session_id":"stored-9","info":{"model":"m1","provider":"p1"}}""",
+                "config.get" to """{"value":"max","display":"hide"}""",
+                "prompt.submit" to """{"status":"streaming"}""",
+            ),
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        chat.setReasoningEffort("low")
+
+        assertTrue(chat.send("hi"))
+        testScheduler.runCurrent()
+
+        assertEquals("low", transport.sent.value.first { it.isCall("session.create") }.param("reasoning_effort"))
+        assertEquals("low", chat.state.value.reasoningEffort)
+        assertEquals(0, transport.sent.value.count { it.isCall("config.get") })
     }
 
     @Test

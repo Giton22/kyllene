@@ -884,6 +884,8 @@ class ChatSession(
      * Reads the session's reasoning effort once (`config.get reasoning`), since `session.create` and a
      * lazy `session.resume` leave `reasoning_effort` out of `info`; later changes arrive as `session.info`
      * events. Best effort: an older gateway or any failure leaves the state as it is.
+     * Before a cold resume's agent is built, the gateway answers with the profile's level even when the
+     * chat kept its own; the build's `session.info` corrects that a few seconds later.
      */
     suspend fun refreshReasoning() {
         val client = connectedClient() ?: return
@@ -2052,12 +2054,14 @@ class ChatSession(
                 }
             }
         }
-        // session.resume doesn't carry the goal/loop/heartbeat or reasoning effort; read them once, events take it from there.
+        // session.resume doesn't carry the goal/loop/heartbeat, nor the reasoning effort before the agent is built;
+        // read them once, events take it from there.
         // After the catch-up: a missed update it replays is older than the read, so it mustn't land after it.
+        val readReasoning = (result["info"] as? JsonObject)?.containsKey("reasoning_effort") != true
         scope.launch {
             if (catchingUp) catchUp(client, runtimeId)
             refreshControl()
-            refreshReasoning()
+            if (readReasoning) refreshReasoning()
         }
         runtimeId
     }
@@ -2114,7 +2118,10 @@ class ChatSession(
                 error = if (movedFrom != null) "The project's folder $movedFrom wasn't found, so this chat runs in $ranIn." else it.error,
             ).withInfo(result["info"] as? JsonObject)
         }
-        scope.launch { refreshReasoning() }
+        // A level picked before the first send went with the create; otherwise the profile's applies, so read it.
+        if (picks.reasoningEffort == null && (result["info"] as? JsonObject)?.containsKey("reasoning_effort") != true) {
+            scope.launch { refreshReasoning() }
+        }
         runtimeId
     }
 
