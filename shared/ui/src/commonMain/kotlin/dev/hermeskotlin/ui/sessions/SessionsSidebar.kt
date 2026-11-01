@@ -128,6 +128,7 @@ import com.composables.icons.lucide.Inbox
 import dev.hermeskotlin.core.inbox.InboxLink
 import dev.hermeskotlin.core.inbox.InboxStore
 import dev.hermeskotlin.ui.inbox.InboxPage
+import dev.hermeskotlin.ui.inbox.ReportChat
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
@@ -338,6 +339,8 @@ fun SessionsSidebar(
     /** A tapped Inbox notification the app passed on: the Inbox opens, at its run; [onInboxLinkTaken] once it has. */
     inboxLink: InboxLink? = null,
     onInboxLinkTaken: (InboxLink) -> Unit = {},
+    /** Opens a chat about an Inbox report: the run's own, or a new one in its profile with the report attached. */
+    onOpenReportChat: (ReportChat) -> Unit = {},
     /** Where the pages show beside the docked sidebar on a desktop; null keeps them in the sidebar. */
     mainPage: MainPageSlot? = null,
     viewModel: SessionsViewModel = koinViewModel(),
@@ -627,6 +630,7 @@ fun SessionsSidebar(
                 onOpenSettings = onOpenSettings,
                 openKey = inboxOpenKey,
                 onOpenedKey = { inboxOpenKey = null },
+                onOpenChat = onOpenReportChat,
             )
             scheduledOpen -> ScheduledPage(
                 gateway = gateway,
