@@ -25,6 +25,7 @@ import dev.hermeskotlin.core.chat.PathRefKind
 import dev.hermeskotlin.core.chat.PathRefQuery
 import dev.hermeskotlin.core.chat.completion
 import dev.hermeskotlin.core.chat.pathRefQuery
+import dev.hermeskotlin.core.chat.screenViews
 import dev.hermeskotlin.core.projects.PathEntry
 import dev.hermeskotlin.core.projects.ProjectsApi
 import kotlin.coroutines.cancellation.CancellationException
@@ -1011,6 +1012,16 @@ internal fun ChatView(
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
                             LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
+                            LocalAgentScreenChat provides state.storedSessionId,
+                            LocalScreenViews provides LocalAgentScreens.current.let { screens ->
+                                // Worked out again when a tool call changes, not on every token of a reply.
+                                val calls = ScreenViews.calls(state.messages)
+                                val newest = ScreenViews.newest(state.messages)
+                                remember(calls, newest, screens, state.storedSessionId) {
+                                    ScreenViews(screenViews(calls) { screens.took(state.storedSessionId, it) }, newest)
+                                }
+                            },
+                            LocalAgentScreenSend provides actions::sendPrompt,
                             LocalCommentHost provides commentHost,
                         ) {
                             Messages(
@@ -2643,6 +2654,11 @@ private fun AssistantReply(
             CommentableSelection(source.takeUnless { message.streaming }, selection) {
                 MarkdownText(remember(text) { linkFileUris(text) }, streaming = message.streaming)
             }
+        }
+        // Screens the agent drew, under what it said and whatever the tool-activity setting: they're for the user to answer.
+        val screens = LocalScreenViews.current
+        message.tools.forEach { call ->
+            screens.byCall[call.id]?.let { key(call.id) { AgentScreenCard(it, newest = it.latest.id in screens.newest) } }
         }
         if (settings.showLinkPreviews && !message.streaming) LinkPreviewCards(text)
         if (media.isNotEmpty()) ReplyMediaList(media)
