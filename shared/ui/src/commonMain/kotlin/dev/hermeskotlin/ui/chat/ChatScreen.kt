@@ -9,6 +9,9 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.ui.input.key.key
@@ -25,6 +28,7 @@ import dev.hermeskotlin.core.chat.PathRefKind
 import dev.hermeskotlin.core.chat.PathRefQuery
 import dev.hermeskotlin.core.chat.completion
 import dev.hermeskotlin.core.chat.pathRefQuery
+import dev.hermeskotlin.core.chat.screenViews
 import dev.hermeskotlin.core.projects.PathEntry
 import dev.hermeskotlin.core.projects.ProjectsApi
 import kotlin.coroutines.cancellation.CancellationException
@@ -155,6 +159,7 @@ import dev.hermeskotlin.core.bots.botLook
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
@@ -190,8 +195,10 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composables.icons.lucide.ArrowDown
@@ -255,10 +262,8 @@ import com.composables.icons.lucide.Wrench
 import com.composables.icons.lucide.X
 import com.composables.icons.lucide.Zap
 import com.composeunstyled.Text
-import com.composeunstyled.TextInput
 import com.composeunstyled.UnstyledButton
 import com.composeunstyled.UnstyledIcon
-import com.composeunstyled.UnstyledTextField
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.core.chat.Attachment
@@ -427,6 +432,7 @@ fun ChatScreen(
     var processesOpen by remember { mutableStateOf(false) }
     var checkpointsOpen by remember { mutableStateOf(false) }
     var controlOpen by remember { mutableStateOf(false) }
+    var focusComposer by remember { mutableIntStateOf(0) }
     // Cleared (here or on another client) while open, there is nothing left to show.
     val hasControl = state.control != null
     LaunchedEffect(hasControl) { if (!hasControl) controlOpen = false }
@@ -504,6 +510,7 @@ fun ChatScreen(
                 ChatRequest.StartVoice -> if (hasVoice) startVoiceChat(false) else notice = "Voice chat isn't on the desktop yet."
                 ChatRequest.StartCall -> if (hasVoice) startVoiceChat(true) else notice = "Voice chat isn't on the desktop yet."
                 ChatRequest.StartDictation -> if (hasVoice) toggleDictation() else notice = "Dictation isn't on the desktop yet."
+                ChatRequest.FocusComposer -> focusComposer++
             }
         }
     }
@@ -606,6 +613,7 @@ fun ChatScreen(
         onOpenOtherChat = onOpenOtherChat,
         onDismissOtherChat = onDismissOtherChat,
         onNextChat = onNextChat?.let { next -> { if (!next()) notice = "Nothing waiting" } },
+        focusComposer = focusComposer,
         keysEnabled = keysEnabled && !dialogOpen,
         attachmentPicker = attachmentPicker.takeIf { isDesktop },
         rail = railFile?.let { file ->
@@ -765,6 +773,8 @@ internal fun ChatView(
     onOpenOtherChat: (OtherChatEvent) -> Unit = {},
     onDismissOtherChat: (OtherChatEvent) -> Unit = {},
     onNextChat: (() -> Unit)? = null,
+    /** Goes up each time the composer should take the keyboard (a chat opened to type in). */
+    focusComposer: Int = 0,
     /** The desktop's keys reach the chat; off while something covers it. */
     keysEnabled: Boolean = true,
     /** Takes files dropped on the chat and pasted into it (the desktop's). */
@@ -913,6 +923,11 @@ internal fun ChatView(
                 typeAfterVoice = false
                 if (composerShown) composerFocus.requestFocus()
             }
+            // Asked for once: a question waiting in the composer's place doesn't take the keyboard when it's answered.
+            LaunchedEffect(focusComposer) {
+                // Not laid out yet (the chat still coming up), the field just isn't focused: nothing to type over.
+                if (focusComposer > 0 && composerShown) runCatching { composerFocus.requestFocus() }
+            }
             val shortcutScope = rememberCoroutineScope()
             // The desktop's keys for the chat; a voice chat over it has the screen.
             ShortcutHandler(enabled = keysEnabled && !voiceFull) { shortcut ->
@@ -1011,6 +1026,16 @@ internal fun ChatView(
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
                             LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
+                            LocalAgentScreenChat provides state.storedSessionId,
+                            LocalScreenViews provides LocalAgentScreens.current.let { screens ->
+                                // Worked out again when a tool call changes, not on every token of a reply.
+                                val calls = ScreenViews.calls(state.messages)
+                                val newest = ScreenViews.newest(state.messages)
+                                remember(calls, newest, screens, state.storedSessionId) {
+                                    ScreenViews(screenViews(calls) { screens.took(state.storedSessionId, it) }, newest)
+                                }
+                            },
+                            LocalAgentScreenSend provides actions::sendPrompt,
                             LocalCommentHost provides commentHost,
                         ) {
                             Messages(
@@ -2232,7 +2257,7 @@ private fun StatusPill(text: String) {
 
 /** Desktop's turn marker: the prompt in a full-width box with a tinted fill and outline; replies run bare beneath. */
 @Composable
-private fun UserBubble(
+internal fun UserBubble(
     message: ChatMessage.User,
     actions: ChatActions,
     connected: Boolean,
@@ -2643,6 +2668,11 @@ private fun AssistantReply(
             CommentableSelection(source.takeUnless { message.streaming }, selection) {
                 MarkdownText(remember(text) { linkFileUris(text) }, streaming = message.streaming)
             }
+        }
+        // Screens the agent drew, under what it said and whatever the tool-activity setting: they're for the user to answer.
+        val screens = LocalScreenViews.current
+        message.tools.forEach { call ->
+            screens.byCall[call.id]?.let { key(call.id) { AgentScreenCard(it, newest = it.latest.id in screens.newest) } }
         }
         if (settings.showLinkPreviews && !message.streaming) LinkPreviewCards(text)
         if (media.isNotEmpty()) ReplyMediaList(media)
@@ -3521,6 +3551,41 @@ private fun Banner(message: String, actionLabel: String?, onAction: () -> Unit, 
 }
 
 /**
+ * The composer's editable field: UnstyledTextField and its TextInput, except that the text gets the field's
+ * full width. TextInput's Box measured the text at its own width and put it at the start, so a Hebrew line in
+ * an English UI sat on the left, and a Hebrew paragraph above an English one lined up with it. The body
+ * style already resolves direction per paragraph; at full width each paragraph also goes to its own side.
+ * Split out of [Composer] so a host test can measure it.
+ */
+@Composable
+internal fun ComposerTextInput(
+    state: TextFieldState,
+    modifier: Modifier = Modifier,
+    maxHeightInLines: Int = 8,
+    onTextLayout: (Density.(getResult: () -> TextLayoutResult?) -> Unit)? = null,
+    placeholder: @Composable () -> Unit,
+) {
+    BasicTextField(
+        state = state,
+        textStyle = Theme[typography][body].copy(color = Theme[colors][textColor]),
+        cursorBrush = SolidColor(Theme[colors][accent]),
+        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+        onTextLayout = onTextLayout,
+        modifier = modifier.semantics(mergeDescendants = true) {},
+        decorator = { innerTextField ->
+            Box(Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Text, overrideDescendants = true).clipToBounds()) {
+                if (state.text.isEmpty()) {
+                    Box(Modifier.matchParentSize(), contentAlignment = Alignment.TopStart) { placeholder() }
+                }
+                // The text measures at the width it's given as a minimum; without this it shrinks to its widest line.
+                Box(Modifier.fillMaxWidth(), propagateMinConstraints = true) { innerTextField() }
+            }
+        },
+    )
+}
+
+/**
  * Desktop's composer stood up for a phone: a flat outlined box, the text on top; beneath it +, dictation
  * and voice chat, the model and thinking level as quiet text, and the round send button. While a task runs,
  * Stop is on the live task card above; a message typed mid-task gets a Send that steers, queues or stops and
@@ -3606,16 +3671,8 @@ private fun Composer(
                         CommentTray(comments, focusComment = focusComment, onFocused = onCommentFocused, onRemove = actions::removeComment)
                     }
                     if (attachments.isNotEmpty()) ComposerTray(attachments, onRemove = actions::removeAttachment)
-                    UnstyledTextField(
+                    ComposerTextInput(
                         state = actions.composer,
-                        textStyle = Theme[typography][body],
-                        textColor = Theme[colors][textColor],
-                        cursorBrush = SolidColor(Theme[colors][accent]),
-                        // UnstyledTextField defaults to unspecified colors, which hides the selection and its handles.
-                        selectionColors = LocalTextSelectionColors.current,
-                        // A desktop window is tall enough to see more of a long prompt before it scrolls.
-                        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = if (isDesktop) 14 else 8),
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
                             .onFocusChanged { fold.typing = it.hasFocus }
                             .then(
@@ -3628,23 +3685,21 @@ private fun Composer(
                                     }
                                 },
                             ),
-                    ) {
-                        TextInput(
-                            placeholder = {
-                                Text(
-                                    when {
-                                        !connected -> "Reconnecting to Hermes…"
-                                        comments.isNotEmpty() -> "Anything else? (optional)"
-                                        // Mid-task a message joins the running task, by Queue or Steer.
-                                        state.running -> "Add to this task…"
-                                        else -> placeholder
-                                    },
-                                    style = Theme[typography][body],
-                                    color = Theme[colors][textTertiary],
-                                )
-                            },
-                        )
-                    }
+                        maxHeightInLines = if (isDesktop) 14 else 8,
+                        placeholder = {
+                            Text(
+                                when {
+                                    !connected -> "Reconnecting to Hermes…"
+                                    comments.isNotEmpty() -> "Anything else? (optional)"
+                                    // Mid-task a message joins the running task, by Queue or Steer.
+                                    state.running -> "Add to this task…"
+                                    else -> placeholder
+                                },
+                                style = Theme[typography][body],
+                                color = Theme[colors][textTertiary],
+                            )
+                        },
+                    )
                     // The same test send() makes: with attachments, slash text goes out as a prompt, not a command.
                     val command = attachments.isEmpty() && SlashCommand.parse(actions.composer.text.toString().trim()) != null
                     // A steer can't carry files; send() queues those instead, so say that.
