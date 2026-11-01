@@ -12,6 +12,38 @@ import kotlin.test.assertTrue
 
 class SeenStoreTest {
 
+    private fun sharedRow(read: String, unread: Boolean = false) = dev.hermeskotlin.core.network.HermesJson.decodeFromString(
+        SessionSummary.serializer(), """{"id":"s1","last_active":1300.0,"last_read_at":$read,"unread":$unread}""",
+    )
+
+    @Test
+    fun readingElsewhereOutranksAnOlderLocalBookmark() {
+        val seen = SeenChats(since = 1000.0)
+        assertFalse(seen.isUnread(sharedRow("1500.0")))
+        assertNull(seen.readUpTo(sharedRow("1500.0")))
+    }
+
+    @Test
+    fun aSharedUnreadBoundaryOutranksALocalCatchUp() {
+        val seen = SeenChats(since = 1000.0, chats = mapOf("s1" to 1400.0))
+        assertTrue(seen.isUnread(sharedRow("1200.0", unread = true)))
+        assertEquals(1200.0, seen.readUpTo(sharedRow("1200.0", unread = true)))
+    }
+
+    @Test
+    fun anExplicitSharedUnreadDoesNotBecomeAnInventedEpochBoundary() {
+        val seen = SeenChats(since = 1000.0, chats = mapOf("s1" to 1400.0))
+        assertTrue(seen.isUnread(sharedRow("0", unread = true)))
+        assertEquals(1400.0, seen.readUpTo(sharedRow("0", unread = true)))
+    }
+
+    @Test
+    fun untrackedAndInvalidSharedTimesUseTheLocalFallback() {
+        val seen = SeenChats(since = 1000.0, chats = mapOf("s1" to 1200.0))
+        for (read in listOf("null", "-1")) assertEquals(1200.0, seen.readUpTo(sharedRow(read)))
+        assertEquals(1200.0, seen.readUpTo(SessionSummary("s1", lastActive = 1300.0)))
+    }
+
     private val home = GatewayUrl.parse("https://hermes.example.ts.net")
     private var clock = 1_000.0
 
@@ -130,7 +162,7 @@ class SeenStoreTest {
     }
 
     @Test
-    fun theGatewaysReadStateMarksAMessagingChatUntilItIsLookedAtHere() = runTest {
+    fun theGatewaysUnreadFlagRemainsUntilItConfirmsTheRead() = runTest {
         val store = SeenStore(InMemoryKeyValueStore()) { clock }
         val flagged = from("telegram", "tg", at = 1_100.0, unread = true)
 
@@ -139,8 +171,8 @@ class SeenStoreTest {
 
         store.markSeen(home, flagged)
 
-        // The list may still carry the flag until it is read again: the look here outranks it.
-        assertFalse(store.seen(home).first().isUnread(flagged))
+        // A local look must not override a shared unread flag; the next gateway refresh confirms a read.
+        assertTrue(store.seen(home).first().isUnread(flagged))
         assertTrue(store.seen(home).first().isUnread(from("telegram", "tg", at = 1_200.0, unread = true)))
     }
 
@@ -180,4 +212,15 @@ class SeenStoreTest {
         assertFalse(isExternalSource(""))
         assertFalse(isExternalSource(null))
     }
+    @Test
+    fun aCompressedBotChatAcknowledgesEitherItsStableOrResolvedId() {
+        val chat = SessionSummary("stable", source = "local", lastActive = 1300.0)
+        val seen = SeenChats(since = 1000.0, chats = mapOf("tip" to 1300.0))
+        assertFalse(seen.isUnread(chat, resolvedId = "tip"))
+        assertFalse(SeenChats(since = 1000.0, chats = mapOf("stable" to 1300.0)).isUnread(chat, resolvedId = "tip"))
+        val left = SeenChats(since = 1000.0, leftRunning = setOf("tip"))
+        assertTrue(left.isUnread(chat.copy(source = "telegram"), resolvedId = "tip"))
+        assertTrue(seen.isUnread(chat.copy(lastReadAt = 1200.0), resolvedId = "tip"))
+    }
+
 }

@@ -174,7 +174,9 @@ data class ChatTarget(
 data class BotIdentity(val name: String, val label: String, val chatsProfile: String? = null)
 
 /** A transcript and its file callbacks travel together while the selected route changes. */
-internal data class ChatTranscript(val state: ChatState = ChatState(), val widgetFiles: WidgetFiles? = null)
+internal data class ChatTranscript(val state: ChatState = ChatState(), val widgetFiles: WidgetFiles? = null, val owner: ChatTarget? = null)
+
+internal data class ChatReadPosition(val target: ChatTarget, val readUpTo: Double?)
 
 /**
  * Shows the [ChatSession] the app-wide [ChatHost] has open; opening another target replaces it.
@@ -256,6 +258,46 @@ class ChatViewModel(
         .stateIn(viewModelScope, SharingStarted.Eagerly, settings.settings.value?.runningSend ?: RunningSend.Steer)
 
     private var target: ChatTarget? = null
+    private val _readPosition = MutableStateFlow<ChatReadPosition?>(null)
+    internal val readPosition: StateFlow<ChatReadPosition?> = _readPosition.asStateFlow()
+
+    private var readPositionJob: Job? = null
+    private var readTail: Triple<String, String, Double>? = null
+
+    private fun resolveReadPosition(owner: ChatTarget) {
+        readPositionJob?.cancel()
+        _readPosition.value = null
+        readTail = null
+        readPositionJob = viewModelScope.launch {
+            val id = owner.storedSessionId
+            val fallback = owner.readUpTo ?: id?.let { seen?.lastLook(owner.gateway.gatewayUrl, it, owner.profile) }
+            val shared = if (id != null) {
+                withTimeoutOrNull(5_000) {
+                    (sessions.totals(owner.gateway.gatewayUrl, id, owner.profile) as? ApiResult.Success)?.value?.lastReadAt
+                }
+            } else null
+            if (target == owner) _readPosition.value = ChatReadPosition(owner, shared?.takeIf { it.isFinite() && it > 0 } ?: fallback)
+        }
+    }
+
+    /** Called only once the initial placement has finished and the latest messages are visible. */
+    fun readLatest(owner: ChatTarget, rendered: ChatState) {
+        if (target != owner || !shown.value || connectionState.value !is ConnectionState.Connected) return
+        if (_readPosition.value?.target != owner) return
+        val state = session.value?.state?.value ?: return
+        val id = rendered.storedSessionId?.takeIf { it == state.storedSessionId } ?: return
+        if (rendered.messages != state.messages) return
+        if (!state.historyLoaded || !state.historyRead || state.running) return
+        val newest = state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull() ?: return
+        val tail = Triple(id, state.messages.last().key, newest)
+        if (readTail == tail) return
+        readTail = tail
+        viewModelScope.launch {
+            seen?.markLooked(owner.gateway.gatewayUrl, id, newest, owner.profile)
+            // The protocol only supports read-now, not an arbitrary timestamp or partial-read cursor.
+            if (target == owner && shown.value) sessions.setUnread(owner.gateway.gatewayUrl, id, unread = false, profile = owner.profile)
+        }
+    }
     private val session = MutableStateFlow<ChatSession?>(null)
     private val widgetSession = MutableStateFlow<Pair<ChatSession, ChatTarget>?>(null)
 
@@ -278,7 +320,7 @@ class ChatViewModel(
                 val (chat, owner) = bound
                 // Keyed by whose files these are, so a new title or draft on the same chat doesn't reload its widgets.
                 val files = WidgetFiles(owner.gateway.gatewayUrl to owner.profile, { previewFile(it, owner) }, { downloadFile(it, owner) })
-                chat.state.map { ChatTranscript(it, files) }
+                chat.state.map { ChatTranscript(it, files, owner) }
             }
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ChatTranscript())
@@ -335,6 +377,7 @@ class ChatViewModel(
      * take the microphone from the background, and shouldn't start behind another screen.
      */
     private val shown = MutableStateFlow(true)
+    internal val screenShown: StateFlow<Boolean> = shown.asStateFlow()
 
     /** The commands and skills of the open chat's profile; fetched once per chat, on the first `/`. */
     private var catalog: SlashCatalog? = null
@@ -444,19 +487,15 @@ class ChatViewModel(
         }
     }
 
-    /**
-     * The user is leaving this chat, for another one or out of the app: everything in it up to now counts as
-     * read, so a reply that comes in meanwhile (and its notification) is new to them. The lists only record a
-     * look when a chat is tapped there, which misses what came in while it stayed open. A turn still running
-     * then makes its reply new even in a chat from a messaging platform, as Desktop's finished-turn dot does.
-     */
+    /** Leaving records a running turn without advancing past messages the viewport actually showed. */
     fun markLooked() {
         val target = target ?: return
-        val state = state.value
+        val state = session.value?.state?.value ?: return
         val id = state.storedSessionId ?: return
-        // The machinery's rows (deliveries, routines) count too: they move the chat's activity on as well.
-        val newest = state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull() ?: return
-        viewModelScope.launch { seen?.markLooked(target.gateway.gatewayUrl, id, newest, target.profile, running = state.running) }
+        viewModelScope.launch {
+            val at = seen?.lastLook(target.gateway.gatewayUrl, id, target.profile) ?: return@launch
+            seen.markLooked(target.gateway.gatewayUrl, id, at, target.profile, running = state.running)
+        }
     }
 
     /** Opens [target]'s chat in the host, with the transcript's file callbacks bound to that target. */
@@ -470,7 +509,9 @@ class ChatViewModel(
         // The same chat, perhaps with a new read position (reopened from a notification): the screen places the
         // "New messages" line from the target; the chat itself, its draft and any voice chat stay as they are.
         if (this.target?.copy(readUpTo = null) == target.copy(readUpTo = null)) {
+            val changed = this.target != target || session.value !== host.session.value
             this.target = target
+            if (changed) resolveReadPosition(target)
             // An expired session or sign-out closes the host's chat; the same chat reopened after signing
             // back in needs a fresh session, not the stopped one this view model still holds.
             if (session.value !== host.session.value) bind(target)
@@ -483,6 +524,7 @@ class ChatViewModel(
         val typed = composer.text.toString().takeIf { sameChat }
         stashDraft()
         this.target = target
+        resolveReadPosition(target)
         // A voice chat belongs to the chat it started in.
         voice.stopAll()
         composer.clearText()

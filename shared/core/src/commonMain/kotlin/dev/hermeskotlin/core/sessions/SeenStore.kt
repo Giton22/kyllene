@@ -27,24 +27,31 @@ data class SeenChats(
 ) {
 
     /**
-     * A chat with activity after the user last looked at it. `is_active` can't rule a reply out: the
-     * gateway keeps it set while the session stays loaded, well after the turn ends.
+     * The gateway's tracked read state takes precedence over a local look. With no shared watermark,
+     * activity after the local look counts as new. `is_active` stays set after a turn ends and cannot rule it out.
      *
+     * A compressed chat may also have a local look under [resolvedId], its current stored transcript.
      * A chat from outside the gateway's clients ([isExternalSource]: Telegram, Discord, a plugin's bridge) is read
      * where it came in, so as in Hermes Desktop its activity alone doesn't count: only the gateway's read state
      * ([SessionSummary.unread]) or a turn the user left running here does.
      */
-    fun isUnread(session: SessionSummary): Boolean {
+    fun isUnread(session: SessionSummary, resolvedId: String? = null): Boolean {
+        val shared = session.lastReadAt?.takeIf { it.isFinite() && it >= 0 }
+        if (shared != null) return session.unread || (session.activityAt ?: 0.0) > shared
+        if (session.unread) return true
         val activity = session.activityAt ?: return false
-        if (activity <= lastLook(session.id) + SEEN_SLACK_SECONDS) return false
-        return !isExternalSource(session.source) || session.unread || session.id in leftRunning
+        val looked = resolvedId?.let { maxOf(lastLook(session.id), lastLook(it)) } ?: lastLook(session.id)
+        if (activity <= looked + SEEN_SLACK_SECONDS) return false
+        return !isExternalSource(session.source) || session.unread || session.id in leftRunning || resolvedId in leftRunning
     }
 
     /**
-     * The activity time [session] had when the user last looked at it, for marking where the new messages
-     * start; null when nothing has happened in it since.
+     * The shared watermark, with a local fallback for untracked or explicitly marked-unread chats;
+     * null when nothing has happened since. Zero marks unread but is not an exact reading position.
      */
-    fun readUpTo(session: SessionSummary): Double? = if (isUnread(session)) lastLook(session.id) else null
+    fun readUpTo(session: SessionSummary): Double? = if (isUnread(session)) {
+        session.lastReadAt?.takeIf { it.isFinite() && it > 0 } ?: lastLook(session.id)
+    } else null
 
     /** When the user last looked at the chat [sessionId] on this phone, or when tracking began if never. */
     fun lastLook(sessionId: String): Double = chats[sessionId] ?: since
