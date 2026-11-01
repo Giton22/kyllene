@@ -5,6 +5,8 @@ import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.storage.KeyValueStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
@@ -64,6 +66,9 @@ data class SeenChats(
     fun lastLook(sessionId: String): Double = chats[sessionId] ?: since
 }
 
+/** A chat by its gateway, profile (null: the launch profile) and stored id. */
+data class CaughtUp(val gateway: GatewayUrl, val profile: String?, val sessionId: String)
+
 /** Timestamps from the gateway and this phone's clock round differently. */
 private const val SEEN_SLACK_SECONDS = 1.0
 
@@ -72,6 +77,19 @@ class SeenStore(private val store: KeyValueStore, private val now: () -> Double)
 
     private val loaded = MutableStateFlow<Map<String, SeenChats>>(emptyMap())
     private val mutex = Mutex()
+
+    private val _caughtUp = MutableStateFlow<CaughtUp?>(null)
+
+    /**
+     * The chat on screen that the user has read to its end, until something new comes in or they leave it. The
+     * lists then record its summary's activity as seen: the gateway's clock, which a reply stamped on this
+     * phone, or activity after the last message (tools, a title), can run ahead of.
+     */
+    val caughtUp: StateFlow<CaughtUp?> = _caughtUp.asStateFlow()
+
+    fun setCaughtUp(chat: CaughtUp?) {
+        _caughtUp.value = chat
+    }
 
     fun seen(gateway: GatewayUrl, profile: String? = null): Flow<SeenChats> {
         val key = key(gateway, profile)

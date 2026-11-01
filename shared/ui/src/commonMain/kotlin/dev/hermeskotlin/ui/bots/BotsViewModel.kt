@@ -54,6 +54,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
@@ -173,6 +174,18 @@ class BotsViewModel(
                 .filter { it.type == "sessions.changed" && (visible.value && _mode.value == SidebarMode.Bots || desktopRoomOpen.value) }
                 .debounce(EVENT_DEBOUNCE_MS)
                 .collect { refreshNow() }
+        }
+        // A bot's chat read to its end on screen: its row's activity counts as seen and its badge goes at once.
+        viewModelScope.launch {
+            combine(gateway, seenStore.caughtUp, _state.map { it.all }.distinctUntilChanged()) { url, caught, bots ->
+                if (url == null || caught == null || caught.gateway != url) return@combine null
+                val bot = bots.firstOrNull { it.name == caught.profile && it.canonicalSession?.isChat(caught.sessionId) == true }
+                bot?.chatSummary()?.let { Triple(url, bot.name, it) }
+            }.distinctUntilChanged().collect { found ->
+                val (url, name, chat) = found ?: return@collect
+                seenStore.markSeen(url, chat, name)
+                _state.update { it.copy(unread = it.unread - name) }
+            }
         }
         // A job changed (the launch store's jobs only; others are read on the minute): no waiting a minute.
         viewModelScope.launch {
