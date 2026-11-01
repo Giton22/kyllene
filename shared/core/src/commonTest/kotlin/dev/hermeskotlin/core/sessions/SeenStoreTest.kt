@@ -24,10 +24,22 @@ class SeenStoreTest {
     }
 
     @Test
-    fun aSharedUnreadBoundaryOutranksALocalCatchUp() {
-        val seen = SeenChats(since = 1000.0, chats = mapOf("s1" to 1400.0))
+    fun aSharedUnreadBoundaryOutranksAnOlderLocalLook() {
+        val seen = SeenChats(since = 1000.0, chats = mapOf("s1" to 1100.0))
         assertTrue(seen.isUnread(sharedRow("1200.0", unread = true)))
         assertEquals(1200.0, seen.readUpTo(sharedRow("1200.0", unread = true)))
+        // Never looked at here: tracking's start is no read.
+        assertTrue(SeenChats(since = 1400.0).isUnread(sharedRow("1200.0", unread = true)))
+    }
+
+    @Test
+    fun readingHereClearsAChatBeforeTheGatewaysWatermarkCatchesUp() {
+        // Read to the end here after its last activity, while the list still has the old watermark (or the write failed).
+        val seen = SeenChats(since = 1000.0, chats = mapOf("s1" to 1300.0))
+        assertFalse(seen.isUnread(sharedRow("1200.0", unread = true)))
+        assertNull(seen.readUpTo(sharedRow("1200.0", unread = true)))
+        // Something new since that look is new again.
+        assertTrue(seen.isUnread(sharedRow("1200.0", unread = true).copy(lastActive = 1350.0)))
     }
 
     @Test
@@ -220,7 +232,9 @@ class SeenStoreTest {
         assertFalse(SeenChats(since = 1000.0, chats = mapOf("stable" to 1300.0)).isUnread(chat, resolvedId = "tip"))
         val left = SeenChats(since = 1000.0, leftRunning = setOf("tip"))
         assertTrue(left.isUnread(chat.copy(source = "telegram"), resolvedId = "tip"))
-        assertTrue(seen.isUnread(chat.copy(lastReadAt = 1200.0), resolvedId = "tip"))
+        // The gateway's older watermark doesn't undo a read here under either id; activity after it does.
+        assertFalse(seen.isUnread(chat.copy(lastReadAt = 1200.0), resolvedId = "tip"))
+        assertTrue(seen.isUnread(chat.copy(lastReadAt = 1200.0, lastActive = 1400.0), resolvedId = "tip"))
     }
 
 }

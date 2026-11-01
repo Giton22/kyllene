@@ -37,7 +37,14 @@ data class SeenChats(
      */
     fun isUnread(session: SessionSummary, resolvedId: String? = null): Boolean {
         val shared = session.lastReadAt?.takeIf { it.isFinite() && it >= 0 }
-        if (shared != null) return session.unread || (session.activityAt ?: 0.0) > shared
+        if (shared != null) {
+            val activity = session.activityAt ?: 0.0
+            // A read here outranks the watermark until the gateway's catches up with it (or its write fails). Zero is
+            // an explicit mark-unread, which no earlier look outranks.
+            val lookedHere = listOfNotNull(chats[session.id], resolvedId?.let { chats[it] }).maxOrNull()
+            if (shared > 0 && lookedHere != null && activity <= lookedHere + SEEN_SLACK_SECONDS) return false
+            return session.unread || activity > shared
+        }
         if (session.unread) return true
         val activity = session.activityAt ?: return false
         val looked = resolvedId?.let { maxOf(lastLook(session.id), lastLook(it)) } ?: lastLook(session.id)
