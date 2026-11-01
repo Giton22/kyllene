@@ -428,6 +428,7 @@ fun ChatScreen(
     var processesOpen by remember { mutableStateOf(false) }
     var checkpointsOpen by remember { mutableStateOf(false) }
     var controlOpen by remember { mutableStateOf(false) }
+    var focusComposer by remember { mutableIntStateOf(0) }
     // Cleared (here or on another client) while open, there is nothing left to show.
     val hasControl = state.control != null
     LaunchedEffect(hasControl) { if (!hasControl) controlOpen = false }
@@ -505,6 +506,7 @@ fun ChatScreen(
                 ChatRequest.StartVoice -> if (hasVoice) startVoiceChat(false) else notice = "Voice chat isn't on the desktop yet."
                 ChatRequest.StartCall -> if (hasVoice) startVoiceChat(true) else notice = "Voice chat isn't on the desktop yet."
                 ChatRequest.StartDictation -> if (hasVoice) toggleDictation() else notice = "Dictation isn't on the desktop yet."
+                ChatRequest.FocusComposer -> focusComposer++
             }
         }
     }
@@ -607,6 +609,7 @@ fun ChatScreen(
         onOpenOtherChat = onOpenOtherChat,
         onDismissOtherChat = onDismissOtherChat,
         onNextChat = onNextChat?.let { next -> { if (!next()) notice = "Nothing waiting" } },
+        focusComposer = focusComposer,
         keysEnabled = keysEnabled && !dialogOpen,
         attachmentPicker = attachmentPicker.takeIf { isDesktop },
         rail = railFile?.let { file ->
@@ -766,6 +769,8 @@ internal fun ChatView(
     onOpenOtherChat: (OtherChatEvent) -> Unit = {},
     onDismissOtherChat: (OtherChatEvent) -> Unit = {},
     onNextChat: (() -> Unit)? = null,
+    /** Goes up each time the composer should take the keyboard (a chat opened to type in). */
+    focusComposer: Int = 0,
     /** The desktop's keys reach the chat; off while something covers it. */
     keysEnabled: Boolean = true,
     /** Takes files dropped on the chat and pasted into it (the desktop's). */
@@ -913,6 +918,11 @@ internal fun ChatView(
                 if (!typeAfterVoice || voiceOn) return@LaunchedEffect
                 typeAfterVoice = false
                 if (composerShown) composerFocus.requestFocus()
+            }
+            // Asked for once: a question waiting in the composer's place doesn't take the keyboard when it's answered.
+            LaunchedEffect(focusComposer) {
+                // Not laid out yet (the chat still coming up), the field just isn't focused: nothing to type over.
+                if (focusComposer > 0 && composerShown) runCatching { composerFocus.requestFocus() }
             }
             val shortcutScope = rememberCoroutineScope()
             // The desktop's keys for the chat; a voice chat over it has the screen.
