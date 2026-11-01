@@ -16,6 +16,7 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
@@ -168,6 +169,7 @@ class AndroidVoiceRecorderTest {
     // The blocking overload waits for data; the nonblocking overload returns what's available.
     @Implements(AudioRecord::class)
     class Microphone {
+        private val disposed = AtomicBoolean()
         @Implementation fun __constructor__(source: Int, rate: Int, channels: Int, format: Int, buffer: Int) { opened.incrementAndGet() }
         @Implementation fun getState() = AudioRecord.STATE_INITIALIZED
         @Implementation fun getAudioSessionId() = 1
@@ -188,7 +190,8 @@ class AndroidVoiceRecorderTest {
             return size
         }
         @Implementation fun stop() = Unit
-        @Implementation fun release() { released.incrementAndGet() }
+        // AudioRecord's finalizer also calls release; count disposed instances, not repeated calls.
+        @Implementation fun release() { if (disposed.compareAndSet(false, true)) released.incrementAndGet() }
         companion object {
             @JvmStatic @Implementation fun getMinBufferSize(rate: Int, channels: Int, format: Int) = 2_560
         }
