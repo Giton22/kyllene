@@ -14,18 +14,37 @@ class HistoryToMessagesTest {
 
     @Test
     fun compactionHandoffsNeverBecomePromptsOrMergeIntoReplies() {
-        val checkpoint = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted.\r\n```text\r\nbackground\r\n```"
+        val summary = "```text\r\nbackground\r\n```"
+        val checkpoint = "$COMPACTION_PREFIX\r\n$summary\n\n$SUMMARY_END"
         val messages = historyToMessages(listOf(
             SessionMessage(id = 1, role = "assistant", content = JsonPrimitive("Before")),
             SessionMessage(id = 2, role = "assistant", content = JsonPrimitive(checkpoint)),
-            SessionMessage(id = 3, role = "user", content = JsonPrimitive(checkpoint)),
+            SessionMessage(id = 3, role = "user", content = JsonPrimitive("[CONTEXT SUMMARY]: Older format")),
             SessionMessage(id = 4, role = "assistant", content = JsonPrimitive("After")),
         ))
         assertEquals(3, messages.size)
         assertEquals("Before", assertIs<ChatMessage.Assistant>(messages[0]).text)
         val handoffs = assertIs<TranscriptEvent.SystemMessages>(assertIs<ChatMessage.Event>(messages[1]).event)
-        assertEquals(listOf(checkpoint, checkpoint), handoffs.entries.map { assertIs<TranscriptEvent.Compaction>(it).body })
+        // What the summary says, not the instructions to the agent around it.
+        assertEquals(listOf(summary, "Older format"), handoffs.entries.map { assertIs<TranscriptEvent.Compaction>(it).body })
         assertEquals("After", assertIs<ChatMessage.Assistant>(messages[2]).text)
+    }
+
+    @Test
+    fun aPromptStartingWithTheCompactionLabelIsStillAPrompt() {
+        val text = "[CONTEXT COMPACTION — REFERENCE ONLY] what does this label mean?"
+        val message = historyToMessages(listOf(SessionMessage(id = 1, role = "user", content = JsonPrimitive(text)))).single()
+        assertEquals(text, assertIs<ChatMessage.User>(message).text)
+    }
+
+    @Test
+    fun aLoneSystemEntryShowsAsItselfNotAGroupOfOne() {
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("one")),
+            SessionMessage(id = 2, role = "user", content = JsonPrimitive(""), displayKind = "model_switch"),
+            SessionMessage(id = 3, role = "user", content = JsonPrimitive("two")),
+        ))
+        assertEquals(TranscriptEvent.Label("Model changed"), assertIs<ChatMessage.Event>(messages[1]).event)
     }
 
     @Test
@@ -37,8 +56,9 @@ class HistoryToMessagesTest {
         ))
         assertEquals(1, messages.size)
         val group = assertIs<ChatMessage.Event>(messages.single())
-        assertEquals("row-1", group.key)
+        assertEquals("row-3", group.key)
         assertEquals(30.0, group.timestamp)
+        assertEquals("row-1", assertIs<TranscriptEvent.SystemMessages>(group.event).firstKey)
         val entries = assertIs<TranscriptEvent.SystemMessages>(group.event).entries
         assertEquals(listOf("Morning", "Calendar"), entries.take(2).map { assertIs<TranscriptEvent.Routine>(it).name })
         assertEquals("notes", assertIs<TranscriptEvent.Process>(entries.last()).output)
@@ -88,6 +108,8 @@ class HistoryToMessagesTest {
         val reloaded = historyToMessages(listOf(older, newer))
         assertEquals(1, loaded.size)
         assertEquals(1, reloaded.size)
+        // Same key before and after the earlier page, so the list keeps its place.
+        assertEquals(loaded.single().key, reloaded.single().key)
         assertEquals(reloaded, historyToMessages(listOf(older, newer)))
         val entries = assertIs<TranscriptEvent.SystemMessages>(assertIs<ChatMessage.Event>(reloaded.single()).event).entries
         assertEquals(listOf("", text), entries.map { assertIs<TranscriptEvent.Routine>(it).body })
@@ -95,8 +117,7 @@ class HistoryToMessagesTest {
 
     @Test
     fun aLegacyCompactionCarrierWithALiveAskRemainsARealPrompt() {
-        val text = "[CONTEXT COMPACTION — REFERENCE ONLY] Old context\n\n" +
-            "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---\n\nPlease check the backup."
+        val text = "$COMPACTION_PREFIX Old context\n\n$SUMMARY_END\n\nPlease check the backup."
         val message = historyToMessages(listOf(SessionMessage(id = 9, role = "user", content = JsonPrimitive(text)))).single()
         assertEquals(text, assertIs<ChatMessage.User>(message).text)
         assertEquals(9L, message.rowId)
@@ -117,12 +138,20 @@ class HistoryToMessagesTest {
             ))
             assertEquals(3, messages.size)
             assertEquals("Previous reply", assertIs<ChatMessage.Assistant>(messages[0]).text)
-            val group = assertIs<TranscriptEvent.SystemMessages>(assertIs<ChatMessage.Event>(messages[1]).event)
-            val routine = assertIs<TranscriptEvent.Routine>(group.entries.single())
+            // A lone system entry shows as itself, not as a group of one.
+            val routine = assertIs<TranscriptEvent.Routine>(assertIs<ChatMessage.Event>(messages[1]).event)
             assertEquals("Backup Watch", routine.name)
             assertEquals("Scan complete.", routine.body)
             assertEquals("Cron response", assertIs<ChatMessage.Assistant>(messages[2]).text)
         }
+    }
+
+    private companion object {
+        /** The start and end of the handoff the gateway writes (agent/context_compressor.py SUMMARY_PREFIX), shortened. */
+        const val COMPACTION_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. " +
+            "This is a handoff from a previous context window. … The current session state (files, config, etc.) " +
+            "may reflect work described here — avoid repeating it:"
+        const val SUMMARY_END = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
     }
 
     private fun toolCall(name: String) = buildJsonArray {

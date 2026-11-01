@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,6 +37,7 @@ import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Settings
 import com.composables.icons.lucide.CircleAlert
 import com.composables.icons.lucide.CornerDownRight
+import com.composables.icons.lucide.History
 import com.composables.icons.lucide.Hourglass
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.MessageCircle
@@ -89,7 +91,11 @@ import dev.hermeskotlin.ui.bots.LocalBotFaces
 internal fun TranscriptEventRow(event: TranscriptEvent) {
     when (event) {
         is TranscriptEvent.SystemMessages -> SystemMessages(event.entries)
-        is TranscriptEvent.Compaction -> SystemMessages(listOf(event))
+        is TranscriptEvent.Compaction -> FoldedLine(
+            icon = Lucide.History,
+            title = "Earlier messages summarized",
+            body = event.body.takeIf { it.isNotBlank() }?.let { { MarkdownText(it) } },
+        )
         is TranscriptEvent.FromBot -> FromBotNote(event)
         is TranscriptEvent.Delivery -> DeliveryLine(event)
         is TranscriptEvent.Process -> FoldedLine(
@@ -115,7 +121,7 @@ internal fun TranscriptEventRow(event: TranscriptEvent) {
     }
 }
 
-/** The same disclosure as Reasoning, with all background entries readable in one expansion. */
+/** The same disclosure as Reasoning; open, each entry is its own line, its words a tap further. */
 @Composable
 private fun SystemMessages(entries: List<TranscriptEvent>) {
     var expanded by remember { mutableStateOf(false) }
@@ -125,26 +131,8 @@ private fun SystemMessages(entries: List<TranscriptEvent>) {
         expanded = expanded,
         onToggle = { expanded = !expanded },
     ) {
-        CopyableOnDesktop {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                entries.forEach { event ->
-                    val (title, body) = when (event) {
-                        is TranscriptEvent.Compaction -> "Compaction checkpoint" to event.body
-                        is TranscriptEvent.Routine -> "Routine “${event.name}” ran" to event.body
-                        is TranscriptEvent.Process -> event.title to event.output
-                        is TranscriptEvent.Label -> event.text to ""
-                        else -> return@forEach
-                    }
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(title, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary])
-                        if (body.isNotBlank()) {
-                            if (event is TranscriptEvent.Process) Monospace(body)
-                            else MarkdownText(body, textStyle = Theme[typography][bodySmall].copy(color = Theme[colors][textSecondary]))
-                        }
-                    }
-                }
-            }
-        }
+        // Counted from the newest, as the group is keyed: one opened stays open when an earlier page adds entries above.
+        Column { entries.forEachIndexed { i, entry -> key(entries.size - i) { TranscriptEventRow(entry) } } }
     }
 }
 
