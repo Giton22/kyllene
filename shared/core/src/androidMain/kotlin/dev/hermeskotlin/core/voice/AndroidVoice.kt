@@ -63,13 +63,22 @@ class AndroidVoiceRecorder : VoiceRecorder {
         val frame = ShortArray(FRAME_SAMPLES)
         val bytes = ByteBuffer.allocate(FRAME_SAMPLES * 2).order(ByteOrder.LITTLE_ENDIAN)
         val endOfSpeech = EndOfSpeech(activity)
-        var elapsed = 0L
+        var samples = 0L
+        var lastAudioAt = System.nanoTime()
         try {
             record.startRecording()
+            if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) error("The microphone isn't available.")
             while (!finishRequested) {
                 ensureActive()
-                val read = record.read(frame, 0, frame.size)
-                if (read <= 0) continue
+                // A blocking read can keep cancellation from reaching the microphone's cleanup.
+                val read = record.read(frame, 0, frame.size, AudioRecord.READ_NON_BLOCKING)
+                if (read < 0) error("Couldn't read from the microphone.")
+                if (read == 0) {
+                    if ((System.nanoTime() - lastAudioAt) / NANOS_PER_MS >= NO_AUDIO_MS) error("The microphone stopped sending audio.")
+                    delay(FRAME_MS)
+                    continue
+                }
+                lastAudioAt = System.nanoTime()
                 bytes.clear()
                 var sum = 0.0
                 for (i in 0 until read) {
@@ -77,7 +86,8 @@ class AndroidVoiceRecorder : VoiceRecorder {
                     sum += frame[i].toDouble() * frame[i]
                 }
                 pcm.write(bytes.array(), 0, read * 2)
-                elapsed += read * 1000L / SAMPLE_RATE
+                samples += read
+                val elapsed = samples * 1000L / SAMPLE_RATE
                 // Desktop measures 8-bit samples (±128) against 42; 16-bit samples are 256 times larger.
                 val level = min(1.0, sqrt(sum / read) / 256.0 / 42.0).toFloat()
                 onLevel(level)
@@ -211,6 +221,8 @@ class AndroidVoiceRecorder : VoiceRecorder {
 
     private companion object {
         const val SAMPLE_RATE = 16_000
+        const val NANOS_PER_MS = 1_000_000L
+        const val NO_AUDIO_MS = 5_000L
 
         /** 20 ms frames: fine-grained enough for the silence timer. */
         const val FRAME_SAMPLES = SAMPLE_RATE / 50
