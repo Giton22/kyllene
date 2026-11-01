@@ -682,6 +682,9 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     if (shownInboxLink == link) shownInboxLink = null
                     inboxLinks.consume(link)
                 },
+                onOpenReportChat = { chat ->
+                    if (app.openReportChat(chat, launch = profileRoster?.takeIf { it.launchKnown }?.launch)) closeDrawerToChat()
+                },
                 mainPage = mainPage,
             )
         },
