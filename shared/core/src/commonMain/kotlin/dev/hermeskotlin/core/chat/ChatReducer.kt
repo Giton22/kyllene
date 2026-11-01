@@ -26,7 +26,8 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
         "session.usage" -> copy(usage = SessionUsage.parse(payload?.get("usage") as? JsonObject) ?: usage)
         "message.delta" -> appendText(payload.string("text"))
         "message.interim" ->
-            // Commentary next to tool calls; when already streamed it is in the text already.
+            // Text next to tool calls; when already streamed it is in the text already. The event doesn't say whether
+            // it's Codex commentary (which a loaded chat shows in Reasoning) or a step's own text, so it stays text.
             if (payload.boolean("already_streamed") == true) this else appendText(payload.string("text")?.let { "$it\n\n" })
         "reasoning.delta", "reasoning.available" -> payload.string("text")?.let { chunk ->
             withOpenReply { it.copy(reasoning = it.reasoning + chunk) }
@@ -358,7 +359,8 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     return@forEachIndexed
                 }
                 // A bot that chose to say nothing shows nothing.
-                val text = row.text.trim().takeUnless(TranscriptRows::isSilence).orEmpty()
+                val silent = TranscriptRows.isSilence(row.text.trim())
+                val text = if (silent) "" else row.text.trim()
                 row.storedToolCalls.filter { it.name == MESSAGE_AGENT_TOOL }.forEach { call ->
                     messageTarget(call.arguments)?.let { messagedSinceUser += it.lowercase() }
                 }
@@ -393,7 +395,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         // The reply is dated by its last step, when it finished.
                         timestamp = row.timestamp ?: previous.timestamp,
                     )
-                } else if (text.isNotEmpty() || (reasoning.isNotEmpty() && !TranscriptRows.isSilence(row.text.trim())) || tools.isNotEmpty()) {
+                } else if (text.isNotEmpty() || (reasoning.isNotEmpty() && !silent) || tools.isNotEmpty()) {
                     messages += ChatMessage.Assistant(
                         key,
                         text = text,

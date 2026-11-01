@@ -31,6 +31,13 @@ class ChatReducerTest {
     }
 
     @Test
+    fun commentaryRepeatedWithOtherLineEndsOrEdgeSpacesShowsOnce() {
+        val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"Done.","display_reasoning":"",
+            "display_commentary":["Progress.\r\nDone with it.","Progress.\nDone with it. "]}""")
+        assertEquals("Progress.\r\nDone with it.", assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single()).reasoning)
+    }
+
+    @Test
     fun historyRetainsACommentaryOnlyAssistantRow() {
         val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"",
             "reasoning":"Old progress.","display_reasoning":"","display_commentary":["Public progress."]}""")
@@ -60,6 +67,7 @@ class ChatReducerTest {
 
     @Test
     fun liveInterimRemainsReplyTextAndAlreadyStreamedIsNotRepeated() {
+        // Most providers' interim is the step's own text, which a loaded chat shows as reply text too.
         val state = ChatState().reduce(event("message.interim", """{"text":"Public progress.","already_streamed":false}"""))
             .reduce(event("message.interim", """{"text":"Public progress.","already_streamed":true}"""))
         val reply = assertIs<ChatMessage.Assistant>(state.messages.single())

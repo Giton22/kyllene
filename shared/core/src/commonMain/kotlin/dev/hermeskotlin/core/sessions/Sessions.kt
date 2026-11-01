@@ -155,7 +155,7 @@ data class SessionMessage(
             // Some gateways still flatten public commentary into legacy reasoning. Match whole lines,
             // including multiline commentary, without changing the stored text's line endings.
             val lines = "\n${base.replace("\r\n", "\n")}\n"
-            val commentary = displayCommentary.orEmpty().filter { it.isNotBlank() }.distinct().filterNot {
+            val commentary = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.replace("\r\n", "\n") }.filterNot {
                 lines.contains("\n${it.replace("\r\n", "\n")}\n")
             }
             return (listOf(base) + commentary).filter { it.isNotBlank() }.joinToString("\n\n")
