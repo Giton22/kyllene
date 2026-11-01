@@ -728,7 +728,7 @@ internal fun ChatView(
     titleFace: (@Composable () -> Unit)? = null,
     state: ChatState,
     /** Isolates the transcript's scroll state across gateways, profiles and chats. */
-    conversationKey: Any? = state.storedSessionId,
+    conversationKey: Any? = null,
     picker: ModelPickerState,
     connected: Boolean,
     /** Which way the link is down, shown under the title while not [connected]. */
@@ -1929,7 +1929,9 @@ private fun Messages(
     }
     val readLatest by rememberUpdatedState(onReadLatest)
     val messageCount by rememberUpdatedState(messages.size)
-    LaunchedEffect(listState, positioned, onReadLatest != null, tail) {
+    // Asked again whenever the messages change, not just the tail: a page loaded above, or a row redrawn, can turn
+    // down an ask made while the rendered list and the chat's differed for a frame.
+    LaunchedEffect(listState, positioned, onReadLatest != null, messages) {
         if (!positioned || onReadLatest == null) return@LaunchedEffect
         snapshotFlow {
             listState.layoutInfo.visibleItemsInfo.isNotEmpty() &&
