@@ -329,7 +329,6 @@ import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.Button
-import dev.hermeskotlin.designsystem.components.clipboardText
 import dev.hermeskotlin.designsystem.components.Tooltip
 import dev.hermeskotlin.designsystem.components.handCursor
 import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
@@ -3658,9 +3657,6 @@ private fun Composer(
     // How open the composer stands, 1 open to 0 folded to a line. It tracks the scroll as it goes, and springs
     // across when a tap, the keyboard or a draft holds it open or lets go.
     val open = remember { Animatable(1f) }
-    var contextMenuOpen by remember { mutableStateOf(false) }
-    val clipboard = LocalClipboard.current
-    val composerScope = rememberCoroutineScope()
     // Something being written keeps it open: worked out here, where the text is read anyway, not in ChatView,
     // which would then recompose on every keystroke.
     val busyNow by rememberUpdatedState(hasText || dictation.active)
@@ -3693,7 +3689,6 @@ private fun Composer(
                     ComposerTextInput(
                         state = actions.composer,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
-                            .then(if (isDesktop) Modifier.onSecondaryPress { contextMenuOpen = true } else Modifier)
                             .onFocusChanged { fold.typing = it.hasFocus }
                             .then(
                                 if (!enterSends) {
@@ -3720,49 +3715,6 @@ private fun Composer(
                             )
                         },
                     )
-                    RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
-                        val selection = actions.composer.selection
-                        val first = selection.first
-                        val last = selection.last
-                        val hasSelection = first != last
-                        val selectedText = if (hasSelection) {
-                            actions.composer.text.subSequence(first, last).toString()
-                        } else ""
-                        listOfNotNull(
-                            RowMenuItem("Copy", Lucide.Copy, enabled = hasSelection) {
-                                composerScope.launch { clipboard.setClipEntry(plainTextClipEntry(selectedText)) }
-                            },
-                            RowMenuItem("Cut", Lucide.Pencil, enabled = hasSelection) {
-                                composerScope.launch {
-                                    try {
-                                        clipboard.setClipEntry(plainTextClipEntry(selectedText))
-                                    } catch (_: Exception) {
-                                        return@launch
-                                    }
-                                    actions.composer.edit {
-                                        replace(first, last, AnnotatedString(""))
-                                    }
-                                }
-                            },
-                            RowMenuItem("Paste", Lucide.Copy) {
-                                composerScope.launch {
-                                    val clipText = clipboardText()
-                                    if (clipText != null) {
-                                        actions.composer.edit {
-                                            replace(first, last, AnnotatedString(clipText))
-                                        }
-                                    }
-                                }
-                            },
-                            RowMenuItem("Select all", Lucide.Copy) {
-                                composerScope.launch {
-                                    actions.composer.edit {
-                                        this.selection = TextRange(0, actions.composer.text.length)
-                                    }
-                                }
-                            },
-                        )
-                    }
                     // The same test send() makes: with attachments, slash text goes out as a prompt, not a command.
                     val command = attachments.isEmpty() && SlashCommand.parse(actions.composer.text.toString().trim()) != null
                     // A steer can't carry files; send() queues those instead, so say that.
