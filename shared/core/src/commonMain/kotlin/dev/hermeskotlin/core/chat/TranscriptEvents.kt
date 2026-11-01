@@ -55,7 +55,7 @@ object TranscriptRows {
 
     /** User rows that are machinery the agent reads but nobody needs to see. */
     fun isNoise(row: String, displayKind: String?): Boolean =
-        displayKind == "internal_notification" || row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
+        (displayKind == "internal_notification" && routine(row) == null) || row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
 
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
     fun compaction(text: String): TranscriptEvent.Compaction? {
@@ -79,8 +79,7 @@ object TranscriptRows {
     fun classify(text: String, displayKind: String?, deliveries: Map<String, String> = emptyMap()): List<TranscriptEvent>? {
         val row = text.trim()
         AgentMessage.parse(row)?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body)) }
-        ROUTINE.matchEntire(row)?.let { return listOf(TranscriptEvent.Routine(it.groupValues[1], it.groupValues[2].trim())) }
-        CRON_MIRROR.matchEntire(row)?.let { return listOf(TranscriptEvent.Routine(it.groupValues[1], it.groupValues[2].trim())) }
+        routine(row)?.let { return listOf(it) }
         if (displayKind == "process_complete" || displayKind == "async_delegation_complete" || PROCESS.matches(row)) {
             val parts = row.split(BATCH_SPLIT).mapNotNull { processEvent(it, deliveries) }
             if (parts.isNotEmpty()) return parts
@@ -161,6 +160,13 @@ object TranscriptRows {
         if (exitFailed) return DeliveryOutcome.Failed(null, text.ifEmpty { null })
         if (text.isEmpty() || text == "(no reply)") return DeliveryOutcome.NoReply
         return DeliveryOutcome.Replied(text)
+    }
+
+    // Some gateways type cron deliveries as generic internal notifications. Only known envelopes
+    // escape that filter; this best-effort presentation match never grants permission to act.
+    private fun routine(row: String): TranscriptEvent.Routine? {
+        val match = ROUTINE.matchEntire(row) ?: CRON_MIRROR.matchEntire(row) ?: return null
+        return TranscriptEvent.Routine(match.groupValues[1], match.groupValues[2].trim())
     }
 
     private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull

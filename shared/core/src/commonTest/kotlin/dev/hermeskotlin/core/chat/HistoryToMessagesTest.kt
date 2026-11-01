@@ -123,6 +123,29 @@ class HistoryToMessagesTest {
         assertEquals(9L, message.rowId)
     }
 
+    @Test
+    fun internalCronInputsSeparateTheirRepliesWhileOtherInternalRowsStayHidden() {
+        listOf(
+            "[Cronjob \"Backup Watch\" output — scheduled job, not the user. Review it, act on anything that needs action, and summarize for the chat.]\n\nScan complete.",
+            "[Cron delivery: Backup Watch]\nScan complete.",
+        ).forEach { cron ->
+            val messages = historyToMessages(listOf(
+                SessionMessage(id = 1, role = "assistant", content = JsonPrimitive("Previous reply")),
+                SessionMessage(id = 2, role = "user", content = JsonPrimitive(cron), displayKind = "internal_notification"),
+                SessionMessage(id = 3, role = "assistant", content = JsonPrimitive("Cron response")),
+                SessionMessage(id = 4, role = "user", content = JsonPrimitive("Internal bookkeeping mentioning cron"), displayKind = "internal_notification"),
+                SessionMessage(id = 5, role = "user", content = JsonPrimitive(cron), displayKind = "hidden"),
+            ))
+            assertEquals(3, messages.size)
+            assertEquals("Previous reply", assertIs<ChatMessage.Assistant>(messages[0]).text)
+            // A lone system entry shows as itself, not as a group of one.
+            val routine = assertIs<TranscriptEvent.Routine>(assertIs<ChatMessage.Event>(messages[1]).event)
+            assertEquals("Backup Watch", routine.name)
+            assertEquals("Scan complete.", routine.body)
+            assertEquals("Cron response", assertIs<ChatMessage.Assistant>(messages[2]).text)
+        }
+    }
+
     private companion object {
         /** The start and end of the handoff the gateway writes (agent/context_compressor.py SUMMARY_PREFIX), shortened. */
         const val COMPACTION_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary below. " +
