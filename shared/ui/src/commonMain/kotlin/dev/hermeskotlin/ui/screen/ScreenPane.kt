@@ -153,6 +153,12 @@ internal fun ScreenView(
             ScreenControl(state, onTakeOver, onHandBack)
         }
         state.error?.let { ScreenError(it) }
+        // The keys are worth having only when there is a screen to type into. They sit above the picture, not
+        // below it: on a phone this page opens in the sidebar's drawer, whose floating bottom bar covers the
+        // foot of the page, and a field under it cannot be tapped.
+        if (stage == ScreenStage.Watching) {
+            ScreenKeys(onKey = onKey, onCharacter = onCharacter)
+        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (stage) {
                 ScreenStage.Unsupported -> EmptyState(
@@ -182,10 +188,6 @@ internal fun ScreenView(
                 )
                 ScreenStage.Watching -> ScreenPicture(state, onPointer)
             }
-        }
-        // The keys are worth having only when there is a screen to type into.
-        if (stage == ScreenStage.Watching) {
-            ScreenKeys(onKey = onKey, onCharacter = onCharacter)
         }
     }
 }
