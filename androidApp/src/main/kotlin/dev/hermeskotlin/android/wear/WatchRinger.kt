@@ -60,7 +60,6 @@ class WatchRinger(
     private val phoneCallShown: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     fun start() {
-        notifications.alsoRings = this
         capabilities.addListener({ info -> found(info.nodes.mapTo(HashSet()) { it.id }) }, WearCapabilities.WATCH)
         scope.launch {
             val nodes = try {
