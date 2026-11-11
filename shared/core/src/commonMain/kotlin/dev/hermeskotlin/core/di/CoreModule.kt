@@ -23,6 +23,8 @@ import dev.hermeskotlin.core.capabilities.SkillsHubApi
 import dev.hermeskotlin.core.plugins.NextPromptApi
 import dev.hermeskotlin.core.plugins.PluginsApi
 import dev.hermeskotlin.core.cron.CronApi
+import dev.hermeskotlin.core.kanban.GatewayKanbanEvents
+import dev.hermeskotlin.core.kanban.KanbanApi
 import dev.hermeskotlin.core.insights.InsightsApi
 import dev.hermeskotlin.core.config.ConfigApi
 import dev.hermeskotlin.core.connection.GatewayConnection
@@ -101,6 +103,8 @@ val coreModule = module {
     single { SkillsHubApi(get()) }
     single { PluginsApi(get()) }
     single { NextPromptApi(get(), get(), get()) }
+    single { KanbanApi(get()) }
+    single { GatewayKanbanEvents(get<HttpClient>(), get<AuthApi>()) }
     single { InsightsApi(get()) }
     single { ConfigApi(get()) }
     single { LastChatStore(get()) }
