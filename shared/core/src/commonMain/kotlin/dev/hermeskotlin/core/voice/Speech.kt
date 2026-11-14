@@ -271,7 +271,7 @@ fun readAloudText(reply: String): String =
  * neither delays the first words nor passes [maxChars]; only a single word longer than the limit stays whole.
  */
 fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, growth: Double = 3.0): List<String> {
-    val sentences = Regex("""[^.!?]+(?:[.!?]+["')\]]*|$)\s*""").findAll(text).map { it.value.trim() }.filter { it.isNotEmpty() }.toList()
+    val sentences = sentencePieces(text)
     val chunks = mutableListOf<String>()
     val current = StringBuilder()
     var limit = minOf(firstChars, maxChars)
@@ -305,6 +305,45 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
     }
     if (current.isNotEmpty()) chunks += current.toString()
     return chunks
+}
+
+/**
+ * Cuts [text] into the sentences [speechChunks] fills its pieces with: a run of `.`, `!` or `?` plus any closing
+ * quotes or brackets, followed by whitespace or the end of the text. A full stop between digits is not a sentence
+ * end — it's the point in `4.6` or a dot in a version like `2.0.1` — so it stays inside its sentence. Splitting
+ * there made read aloud pause in the middle of a number ("four. Six") and turned `1.0×` into a piece starting
+ * `0×`, which the voice backend can't say at all. Abbreviations (`e.g.`, `U.S.A.`) stay whole for the same reason.
+ *
+ * The pieces keep every character of the input; joining them with a single space reproduces the text with runs of
+ * whitespace collapsed, which is what the chunker has always promised.
+ */
+private fun sentencePieces(text: String): List<String> {
+    val pieces = mutableListOf<String>()
+    fun closesSentence(c: Char) = c == '"' || c == '\'' || c == ')' || c == ']'
+    fun endsSentence(c: Char) = c == '.' || c == '!' || c == '?'
+    var start = 0
+    var i = 0
+    while (i < text.length) {
+        if (!endsSentence(text[i])) {
+            i++
+            continue
+        }
+        var end = i + 1
+        while (end < text.length && (endsSentence(text[end]) || closesSentence(text[end]))) end++
+        val decimalPoint = text[i] == '.' && i > 0 && text[i - 1].isDigit() && end < text.length && text[end].isDigit()
+        if (decimalPoint || (end < text.length && !text[end].isWhitespace())) {
+            // Inside a number, or punctuation in the middle of a word: not a sentence end.
+            i++
+            continue
+        }
+        pieces += text.substring(start, end).trim()
+        while (end < text.length && text[end].isWhitespace()) end++
+        start = end
+        i = end
+    }
+    val tail = text.substring(start).trim()
+    if (tail.isNotEmpty()) pieces += tail
+    return pieces
 }
 
 private val STOP_PHRASES = setOf(

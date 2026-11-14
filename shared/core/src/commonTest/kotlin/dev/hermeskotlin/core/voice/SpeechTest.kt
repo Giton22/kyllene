@@ -110,6 +110,64 @@ class SpeechTest {
         assertEquals(listOf("Read", word), speechChunks("Read $word", maxChars = 2000, firstChars = 4))
     }
 
+    /**
+     * A full stop inside a number is not the end of a sentence: read aloud must say "four point six", not
+     * "four. Six".
+     */
+    @Test
+    fun aDecimalIsNotASentenceEnd() {
+        assertEquals(listOf("The speed is 4.6 now."), speechChunks("The speed is 4.6 now."))
+        assertEquals(listOf("Speed 1.0× and 1.2× are fine."), speechChunks("Speed 1.0× and 1.2× are fine."))
+    }
+
+    @Test
+    fun aDottedVersionIsNotThreeSentences() {
+        assertEquals(listOf("Version 2.0.1 released."), speechChunks("Version 2.0.1 released."))
+        assertEquals(
+            listOf("Model 2.0.1 stays loaded.", "Next sentence here."),
+            speechChunks("Model 2.0.1 stays loaded. Next sentence here.", maxChars = 30, firstChars = 30),
+        )
+    }
+
+    @Test
+    fun quotedAndExclaimedSentencesStillEndWhereTheyShould() {
+        val text = "He asked \"Why?\" She said \"Fine!\" Then left."
+        // A tiny piece size keeps one sentence per piece, so this checks the split itself.
+        assertEquals(
+            listOf("He asked \"Why?\"", "She said \"Fine!\"", "Then left."),
+            speechChunks(text, maxChars = 20, firstChars = 20),
+        )
+        assertEquals(text, speechChunks(text).joinToString(" "))
+    }
+
+    @Test
+    fun aNewlineInsideASentenceDoesNotCutIt() {
+        assertEquals(listOf("First line\nstill the same sentence."), speechChunks("First line\nstill the same sentence."))
+    }
+
+    @Test
+    fun paragraphsKeepTheirTextWithTheDecimalIntact() {
+        val text = "One paragraph line.\n\nSecond one at 4.6 speed."
+        assertEquals(
+            listOf("One paragraph line.", "Second one at 4.6 speed."),
+            speechChunks(text, maxChars = 200, firstChars = 20),
+        )
+        assertEquals("One paragraph line. Second one at 4.6 speed.", speechChunks(text).joinToString(" "))
+    }
+
+    /** Numbers stay whole without costing the growing pieces: the same caps and growth as before still hold. */
+    @Test
+    fun numbersStayWholeWhileLaterPiecesStillGrow() {
+        val text = "Build 2.0.1 runs at 4.6 and 1.2× the old rate. " +
+            "This sentence carries about seventy characters, and 4.6 stays whole in it. ".repeat(12)
+        val chunks = speechChunks(text)
+        assertTrue(chunks.first().length <= 160, "first piece ${chunks.first().length}")
+        chunks.zipWithNext { before, piece -> assertTrue(piece.length <= maxOf(160, before.length * 3), "${before.length} then ${piece.length}") }
+        assertTrue(chunks.all { it.length <= 1200 })
+        assertTrue(chunks.none { "4. 6" in it || "2. 0" in it || "1. 2" in it }, "a number was split: $chunks")
+        assertEquals(text.trim(), chunks.joinToString(" "))
+    }
+
     /** Feeds [levels] as 20 ms frames; the time the recording would end, or null if it wouldn't. */
     private fun endsAt(levels: List<Float>, activity: VoiceActivity = VoiceActivity()): Long? {
         val detector = EndOfSpeech(activity)
