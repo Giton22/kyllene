@@ -314,8 +314,9 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
  * there made read aloud pause in the middle of a number ("four. Six") and turned `1.0×` into a piece starting
  * `0×`, which the voice backend can't say at all. Abbreviations (`e.g.`, `U.S.A.`) stay whole for the same reason.
  *
- * The pieces keep every character of the input; joining them with a single space reproduces the text with runs of
- * whitespace collapsed, which is what the chunker has always promised.
+ * The pieces keep every character of the input: joining them with a single space gives the text back, with one
+ * space only where a piece boundary or a word cut fell — whitespace inside a sentence is kept as it is (a tab or
+ * an internal newline stays), and the text reaching this through [speakableText] has had its runs collapsed.
  */
 private fun sentencePieces(text: String): List<String> {
     val pieces = mutableListOf<String>()
@@ -332,8 +333,11 @@ private fun sentencePieces(text: String): List<String> {
         while (end < text.length && (endsSentence(text[end]) || closesSentence(text[end]))) end++
         val decimalPoint = text[i] == '.' && i > 0 && text[i - 1].isDigit() && end < text.length && text[end].isDigit()
         if (decimalPoint || (end < text.length && !text[end].isWhitespace())) {
-            // Inside a number, or punctuation in the middle of a word: not a sentence end.
-            i++
+            // Inside a number, or punctuation in the middle of a word: not a sentence end. The whole run was
+            // just scanned and every character in it is a full stop, ! or ? or a closer, so none of them can
+            // begin a sentence that ends elsewhere: carry on after the run. Rescanning the same suffix from
+            // each character would make a long run cost time quadratic in its length.
+            i = end
             continue
         }
         pieces += text.substring(start, end).trim()

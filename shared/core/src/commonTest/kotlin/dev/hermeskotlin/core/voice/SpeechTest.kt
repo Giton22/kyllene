@@ -4,6 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 class SpeechTest {
 
@@ -108,6 +110,39 @@ class SpeechTest {
         // Only a single word longer than the limit stays whole.
         val word = "x".repeat(2500)
         assertEquals(listOf("Read", word), speechChunks("Read $word", maxChars = 2000, firstChars = 4))
+    }
+
+    /**
+     * A long run of punctuation that is not a sentence end (`!!!` stuck to the next word) is examined once, not
+     * rescanned from each of its characters: the whole reply still comes back as one piece with every character
+     * kept, and the generous wall-clock bound below fails the quadratic scan (seconds at 64k) without being tight.
+     */
+    @Test
+    fun aLongRejectedPunctuationRunIsScannedOnceAndKeptWhole() {
+        val text = "a" + "!".repeat(64_000) + "b"
+        val started = TimeSource.Monotonic.markNow()
+        val chunks = speechChunks(text)
+        val elapsed = started.elapsedNow()
+        assertEquals(listOf(text), chunks)
+        assertTrue(elapsed < 3.seconds, "a 64,000-character punctuation run took $elapsed")
+    }
+
+    /** Runs of mixed terminators and closers next to digits keep their text, whether or not they end a sentence. */
+    @Test
+    fun longRejectedRunsBesideDigitsAndClosersKeepTheirText() {
+        val run = "?!\")]".repeat(4_000)
+        // Not a sentence end: the run stays inside the word it is stuck to, which the long-word exception keeps
+        // whole, and the surrounding words and numbers are untouched.
+        val attached = "Count 4${run}6 and 2.0.1 too."
+        assertEquals(listOf("Count", "4${run}6", "and 2.0.1 too."), speechChunks(attached))
+        assertEquals(attached, speechChunks(attached).joinToString(" "))
+        // A sentence end: the run closes a sentence, and the next one still splits normally at a matching cap.
+        val split = "Wait$run Next at 4.6."
+        assertEquals(listOf("Wait$run", "Next at 4.6."), speechChunks(split, maxChars = 16_005, firstChars = 16_005))
+        assertEquals(split, speechChunks(split).joinToString(" "))
+        // The decimal point itself inside a rejected run is not a sentence end either.
+        val decimalRun = "9.${"!".repeat(20_000)}5"
+        assertEquals(listOf(decimalRun), speechChunks(decimalRun))
     }
 
     /**
