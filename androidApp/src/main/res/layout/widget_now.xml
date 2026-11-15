@@ -142,7 +142,8 @@
             <TextView
                 android:id="@+id/needs_eyebrow"
                 android:layout_width="match_parent"
-                android:layout_height="@dimen/widget_eyebrow_height"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/widget_eyebrow_height"
                 android:gravity="center_vertical"
                 android:includeFontPadding="false"
                 android:letterSpacing="0.08"
@@ -208,7 +209,16 @@
                     android:textColor="@color/widget_danger"
                     android:textSize="@dimen/widget_text_metadata"
                     android:visibility="gone" />
-            </LinearLayout>
+            
+                <ImageView
+                    android:id="@+id/needs_lead_dismiss"
+                    android:layout_width="@dimen/widget_dismiss_touch"
+                    android:layout_height="@dimen/widget_dismiss_touch"
+                    android:contentDescription="@string/widget_dismiss_alert"
+                    android:padding="@dimen/widget_dismiss_padding"
+                    android:src="@drawable/widget_ic_dismiss"
+                    android:visibility="gone" />
+</LinearLayout>
 
             <LinearLayout
                 android:id="@+id/needs_second"
@@ -253,7 +263,16 @@
                         android:textColor="@color/widget_text_secondary"
                         android:textSize="@dimen/widget_text_metadata" />
                 </LinearLayout>
-            </LinearLayout>
+            
+                <ImageView
+                    android:id="@+id/needs_second_dismiss"
+                    android:layout_width="@dimen/widget_dismiss_touch"
+                    android:layout_height="@dimen/widget_dismiss_touch"
+                    android:contentDescription="@string/widget_dismiss_alert"
+                    android:padding="@dimen/widget_dismiss_padding"
+                    android:src="@drawable/widget_ic_dismiss"
+                    android:visibility="gone" />
+</LinearLayout>
 
             <!-- Combined variant (§6.4): the running target replaces the second Needs-you row. -->
             <LinearLayout
@@ -296,17 +315,19 @@
                     android:textColor="@color/widget_text_tertiary"
                     android:textSize="@dimen/widget_text_metadata" />
             </LinearLayout>
-        </LinearLayout>
+        
             <TextView
                 android:id="@+id/more"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/widget_gap_related"
                 android:ellipsize="end"
                 android:includeFontPadding="false"
                 android:maxLines="1"
                 android:textColor="@color/widget_text_tertiary"
                 android:textSize="@dimen/widget_text_metadata"
                 android:visibility="gone" />
+</LinearLayout>
 
         <LinearLayout
             android:id="@+id/state_running"
@@ -318,7 +339,8 @@
             <TextView
                 android:id="@+id/running_eyebrow"
                 android:layout_width="match_parent"
-                android:layout_height="@dimen/widget_eyebrow_height"
+                android:layout_height="wrap_content"
+                android:minHeight="@dimen/widget_eyebrow_height"
                 android:gravity="center_vertical"
                 android:includeFontPadding="false"
                 android:letterSpacing="0.08"
@@ -668,7 +690,7 @@
                 android:id="@+id/notice_info_text"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:layout_marginStart="@dimen/widget_gap_related"
+                android:layout_marginStart="@dimen/widget_notice_text_start"
                 android:ellipsize="end"
                 android:gravity="center_vertical"
                 android:includeFontPadding="false"
@@ -696,7 +718,7 @@
                 android:id="@+id/notice_warning_text"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:layout_marginStart="@dimen/widget_gap_related"
+                android:layout_marginStart="@dimen/widget_notice_text_start"
                 android:ellipsize="end"
                 android:gravity="center_vertical"
                 android:includeFontPadding="false"

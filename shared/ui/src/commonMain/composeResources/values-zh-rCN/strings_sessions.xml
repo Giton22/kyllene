@@ -456,4 +456,6 @@
     <string name="sessions_config_refresh_failed">无法刷新</string>
     <string name="sessions_config_save_failed">无法保存 %1$s</string>
     <string name="sessions_config_yaml_saved">已保存 config.yaml</string>
+    <string name="sessions_dismiss_alert">忽略提醒</string>
+    <string name="sessions_alert_dismissed">已忽略提醒</string>
 </resources>

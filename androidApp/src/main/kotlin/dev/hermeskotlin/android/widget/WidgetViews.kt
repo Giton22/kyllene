@@ -94,7 +94,7 @@ object WidgetViews {
         R.id.state_needs, R.id.state_running, R.id.state_quiet, R.id.state_fallback,
         R.id.notice_info, R.id.notice_warning, R.id.context, R.id.running_strip,
         R.id.needs_second, R.id.more, R.id.quiet_next, R.id.action_new_chat, R.id.action_dictate,
-        R.id.fallback_new_chat, R.id.fallback_dictate,
+        R.id.fallback_new_chat, R.id.fallback_dictate, R.id.needs_lead_dismiss, R.id.needs_second_dismiss,
     )
 
     /**
@@ -108,6 +108,7 @@ object WidgetViews {
         R.id.state_loading, R.id.state_locked,
         R.id.notice_info, R.id.notice_warning, R.id.context, R.id.running_strip,
         R.id.needs_second, R.id.running_second, R.id.more, R.id.quiet_next,
+        R.id.needs_lead_dismiss, R.id.needs_second_dismiss,
     )
 
     /** The Chats layout's content containers, hidden wholesale on the locked variant (D16). */
@@ -117,7 +118,7 @@ object WidgetViews {
 
     /** The Tasks layout's content containers, hidden wholesale on the locked variant (D16). */
     private val kanbanContentIds = listOf(
-        R.id.list, R.id.state_empty, R.id.count_strip, R.id.saved_notice, R.id.context,
+        R.id.list, R.id.state_empty, R.id.count_strip, R.id.saved_notice, R.id.context, R.id.action_switch_board,
     )
 
     /** The Scheduled layout's content containers, hidden wholesale on the locked variant (D16). */
@@ -188,7 +189,7 @@ object WidgetViews {
                     snapshot.needsYou.isNotEmpty() -> {
                         hide(R.id.state_loading)
                         show(R.id.state_needs)
-                        renderNeedsLead(context, this, snapshot.needsYou.first(), colors, bots)
+                        renderNeedsLead(context, this, snapshot.needsYou.first(), colors, bots, snapshot.gatewayUrl)
                         if (snapshot.running.isNotEmpty()) {
                             // Combined (§6.4): the running strip replaces the second Needs-you row.
                             show(R.id.running_strip)
@@ -207,7 +208,7 @@ object WidgetViews {
                             setOnClickPendingIntent(R.id.running_strip, pendingForTarget(context, first.target))
                         } else if (snapshot.needsYou.size > 1) {
                             show(R.id.needs_second)
-                            renderNeedsSecond(context, this, snapshot.needsYou[1], colors, bots)
+                            renderNeedsSecond(context, this, snapshot.needsYou[1], colors, bots, snapshot.gatewayUrl)
                         }
                         val moreCount = when {
                             snapshot.running.isNotEmpty() -> snapshot.needsYou.size - 1
@@ -316,6 +317,7 @@ object WidgetViews {
         item: NowNeedsYouItem,
         colors: WidgetColors,
         bots: BotNotifier?,
+        gateway: String,
     ) {
         val urgent = item.kind == NowNeedsYouKind.BotTrouble ||
             item.kind == NowNeedsYouKind.RoutineFailed || item.kind == NowNeedsYouKind.CronProblem
@@ -344,6 +346,7 @@ object WidgetViews {
             R.id.needs_lead,
             listOfNotNull(kindLabel(context, item.kind), item.title, item.detail).joinToString(". ") + ".",
         )
+        dismissButton(context, views, R.id.needs_lead_dismiss, item, colors, gateway)
     }
 
     private fun renderNeedsSecond(
@@ -352,6 +355,7 @@ object WidgetViews {
         item: NowNeedsYouItem,
         colors: WidgetColors,
         bots: BotNotifier?,
+        gateway: String,
     ) {
         views.setTextViewText(R.id.second_title, item.title)
         views.setTextColor(R.id.second_title, colors.text)
@@ -359,6 +363,30 @@ object WidgetViews {
         views.setTextColor(R.id.second_detail, colors.textSecondary)
         renderNeedsIcon(context, views, R.id.second_icon, item.kind, item.botProfile, colors, bots, lead = false)
         views.setOnClickPendingIntent(R.id.needs_second, pendingForTarget(context, item.target))
+        dismissButton(context, views, R.id.needs_second_dismiss, item, colors, gateway)
+    }
+
+    /**
+     * The row's dismiss button (D27): only the clearable alert kinds carry an [NowNeedsYouItem.alertKey];
+     * the live-conversation kinds clear themselves when answered, so their rows keep the whole aperture.
+     */
+    private fun dismissButton(
+        context: Context,
+        views: RemoteViews,
+        buttonId: Int,
+        item: NowNeedsYouItem,
+        colors: WidgetColors,
+        gateway: String,
+    ) {
+        val key = item.alertKey
+        if (key == null) {
+            views.hide(buttonId)
+            return
+        }
+        views.show(buttonId)
+        views.tint(buttonId, colors.textTertiary)
+        views.setOnClickPendingIntent(buttonId, WidgetIntents.dismissAlert(context, gateway, key))
+        views.describe(buttonId, context.getString(R.string.widget_dismiss_alert) + ". " + item.title + ".")
     }
 
     private fun renderNeedsIcon(
@@ -543,17 +571,23 @@ object WidgetViews {
             UiState.SignedOut -> {
                 hide(R.id.action_new_chat)
                 hide(R.id.action_dictate)
+                hide(R.id.saved_notice)
+                hide(R.id.state_locked)
                 emptyState(
                     context, this, colors, R.drawable.widget_ic_lock,
                     context.getString(R.string.widget_sign_in_chats),
                     context.getString(R.string.widget_chats_sign_in_detail),
                 )
             }
-            UiState.Error -> emptyState(
-                context, this, colors, R.drawable.widget_ic_cloud_off,
-                context.getString(R.string.widget_chats_couldnt_refresh),
-                context.getString(R.string.widget_chats_no_cache_detail),
-            )
+            UiState.Error -> {
+                hide(R.id.saved_notice)
+                hide(R.id.state_locked)
+                emptyState(
+                    context, this, colors, R.drawable.widget_ic_cloud_off,
+                    context.getString(R.string.widget_chats_couldnt_refresh),
+                    context.getString(R.string.widget_chats_no_cache_detail),
+                )
+            }
             is UiState.Content -> {
                 if (locked) {
                     show(R.id.state_locked)
@@ -565,13 +599,18 @@ object WidgetViews {
                     )
                     return@apply
                 }
+                // Unlocked content re-applied over a previous state: restore what SignedOut hid and
+                // hide what a previous empty/notice/locked render showed (RemoteViews re-apply semantics).
+                hide(R.id.state_locked)
+                show(R.id.action_new_chat)
+                show(R.id.action_dictate)
                 setTextViewText(R.id.title, context.getString(R.string.widget_chats_label))
                 val contextLine = listOfNotNull(profile, gatewayLabel).joinToString(" · ")
                 if (contextLine.isNotBlank()) {
                     show(R.id.context)
                     setTextViewText(R.id.context, contextLine)
                 }
-                state.savedNotice?.let { savedNotice(it, colors) }
+                if (state.savedNotice != null) savedNotice(state.savedNotice, colors) else hide(R.id.saved_notice)
                 val snapshot = state.snapshot
                 if (snapshot.rows.isEmpty()) {
                     emptyState(
@@ -581,6 +620,7 @@ object WidgetViews {
                     )
                 } else {
                     hide(R.id.state_loading)
+                    hide(R.id.state_empty)
                     show(R.id.list)
                     setPendingIntentTemplate(R.id.list, WidgetIntents.rowTemplate(context))
                     adapter(R.id.list, appWidgetId, serviceIntent(context, WidgetIntents.KIND_CHATS, snapshot.gatewayUrl, snapshot.profile, null))
@@ -649,22 +689,33 @@ object WidgetViews {
         setOnClickPendingIntent(R.id.refresh, WidgetIntents.refresh(context, KanbanWidgetProvider::class.java, WidgetIntents.ACTION_REFRESH_KANBAN))
         setCharSequence(R.id.refresh, "setContentDescription", context.getString(R.string.widget_refresh_kanban))
         setOnClickPendingIntent(R.id.header, WidgetIntents.openKanban(context))
+        tint(R.id.action_switch_board_icon, colors.accentText)
+        setOnClickPendingIntent(R.id.action_switch_board, WidgetIntents.switchBoard(context))
+        setCharSequence(R.id.action_switch_board, "setContentDescription", context.getString(R.string.widget_switch_board))
 
         when (state) {
             UiState.Loading -> Unit
             UiState.SignedOut -> {
                 hide(R.id.count_strip)
+                hide(R.id.action_switch_board)
+                hide(R.id.saved_notice)
+                hide(R.id.state_locked)
                 emptyState(
                     context, this, colors, R.drawable.widget_ic_lock,
                     context.getString(R.string.widget_sign_in_kanban),
                     context.getString(R.string.widget_kanban_sign_in_detail),
                 )
             }
-            UiState.Error -> emptyState(
-                context, this, colors, R.drawable.widget_ic_error,
-                context.getString(R.string.widget_kanban_couldnt_refresh),
-                context.getString(R.string.widget_retry_detail),
-            )
+            UiState.Error -> {
+                hide(R.id.action_switch_board)
+                hide(R.id.saved_notice)
+                hide(R.id.state_locked)
+                emptyState(
+                    context, this, colors, R.drawable.widget_ic_error,
+                    context.getString(R.string.widget_kanban_couldnt_refresh),
+                    context.getString(R.string.widget_retry_detail),
+                )
+            }
             is UiState.Content -> {
                 if (locked) {
                     show(R.id.state_locked)
@@ -677,16 +728,19 @@ object WidgetViews {
                     return@apply
                 }
                 val snapshot = state.snapshot
+                hide(R.id.state_locked)
                 setTextViewText(R.id.title, snapshot.boardName)
                 setTextColor(R.id.title, colors.text)
                 show(R.id.context)
                 setTextViewText(R.id.context, context.getString(R.string.widget_kanban_label))
                 setTextColor(R.id.context, colors.textTertiary)
+                // The switch button only earns its place when there is another board to switch to.
+                if (snapshot.boardCount > 1) show(R.id.action_switch_board) else hide(R.id.action_switch_board)
 
                 hide(R.id.state_loading)
                 show(R.id.count_strip)
                 counts(context, this, snapshot, colors)
-                state.savedNotice?.let { savedNotice(it, colors) }
+                if (state.savedNotice != null) savedNotice(state.savedNotice, colors) else hide(R.id.saved_notice)
 
                 if (snapshot.rows.isEmpty()) {
                     // An empty board keeps its 0-count strip (design §8.3); only "no board at all" drops it.
@@ -700,6 +754,7 @@ object WidgetViews {
                         ),
                     )
                 } else {
+                    hide(R.id.state_empty)
                     show(R.id.list)
                     setPendingIntentTemplate(R.id.list, WidgetIntents.rowTemplate(context))
                     adapter(R.id.list, appWidgetId, serviceIntent(context, WidgetIntents.KIND_KANBAN, snapshot.gatewayUrl, null, snapshot.boardSlug))
@@ -736,16 +791,24 @@ object WidgetViews {
 
         when (state) {
             UiState.Loading -> Unit
-            UiState.SignedOut -> emptyState(
-                context, this, colors, R.drawable.widget_ic_lock,
-                context.getString(R.string.widget_sign_in_scheduled),
-                context.getString(R.string.widget_scheduled_sign_in_detail),
-            )
-            UiState.Error -> emptyState(
-                context, this, colors, R.drawable.widget_ic_error,
-                context.getString(R.string.widget_scheduled_couldnt_refresh),
-                context.getString(R.string.widget_retry_detail),
-            )
+            UiState.SignedOut -> {
+                hide(R.id.saved_notice)
+                hide(R.id.state_locked)
+                emptyState(
+                    context, this, colors, R.drawable.widget_ic_lock,
+                    context.getString(R.string.widget_sign_in_scheduled),
+                    context.getString(R.string.widget_scheduled_sign_in_detail),
+                )
+            }
+            UiState.Error -> {
+                hide(R.id.saved_notice)
+                hide(R.id.state_locked)
+                emptyState(
+                    context, this, colors, R.drawable.widget_ic_error,
+                    context.getString(R.string.widget_scheduled_couldnt_refresh),
+                    context.getString(R.string.widget_retry_detail),
+                )
+            }
             is UiState.Content -> {
                 if (locked) {
                     show(R.id.state_locked)
@@ -757,6 +820,7 @@ object WidgetViews {
                     )
                     return@apply
                 }
+                hide(R.id.state_locked)
                 setTextColor(R.id.title, colors.text)
                 show(R.id.context)
                 setTextColor(R.id.context, colors.textTertiary)
@@ -776,7 +840,7 @@ object WidgetViews {
                         else -> context.getString(R.string.widget_scheduled_no_active)
                     },
                 )
-                state.savedNotice?.let { savedNotice(it, colors) }
+                if (state.savedNotice != null) savedNotice(state.savedNotice, colors) else hide(R.id.saved_notice)
 
                 if (snapshot.rows.isEmpty()) {
                     emptyState(
@@ -786,6 +850,7 @@ object WidgetViews {
                     )
                 } else {
                     hide(R.id.state_loading)
+                    hide(R.id.state_empty)
                     show(R.id.list)
                     setPendingIntentTemplate(R.id.list, WidgetIntents.rowTemplate(context))
                     adapter(R.id.list, appWidgetId, serviceIntent(context, WidgetIntents.KIND_SCHEDULED, snapshot.gatewayUrl, null, null))

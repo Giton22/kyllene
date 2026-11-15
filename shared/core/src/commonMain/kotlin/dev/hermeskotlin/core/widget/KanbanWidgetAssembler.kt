@@ -26,13 +26,24 @@ object KanbanWidgetAssembler {
     /**
      * Which board a refresh reads: the saved pin while the gateway still has it, then the gateway's
      * `current`, then the first board — the Kanban page's order without its "already shown" step. The
-     * widget never writes the pin back; the page owns it.
+     * widget never writes the pin back on refresh; the page and the header's switch button own it.
      */
     fun resolveBoard(boards: KanbanBoardsResponse, pin: String?): KanbanBoardMeta? {
         val all = boards.boards
         return pin?.let { wanted -> all.firstOrNull { it.slug == wanted } }
             ?: all.firstOrNull { it.slug == boards.current }
             ?: all.firstOrNull()
+    }
+
+    /**
+     * The board after [currentSlug] in the gateway's list order, wrapping to the first — the Tasks
+     * header's switch button cycles through them. Null when there is nothing to switch to (fewer
+     * than two boards); an unknown current slug starts the cycle at the first board.
+     */
+    fun nextBoard(boards: List<KanbanBoardMeta>, currentSlug: String): KanbanBoardMeta? {
+        if (boards.size < 2) return null
+        val index = boards.indexOfFirst { it.slug == currentSlug }
+        return boards[(index + 1) % boards.size]
     }
 
     /**
@@ -63,6 +74,7 @@ object KanbanWidgetAssembler {
             boardName = meta?.name?.takeIf { it.isNotBlank() } ?: boardSlug ?: "",
             counts = counts(meta, board),
             rows = rows,
+            boardCount = boards?.boards?.size ?: 0,
             savedAtEpochSeconds = deviceNowSeconds,
         )
     }

@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
 import com.composables.icons.lucide.AppWindow
+import com.composables.icons.lucide.BellOff
 import dev.hermeskotlin.designsystem.rememberHoverIndication
 
 import dev.hermeskotlin.designsystem.components.handCursor
@@ -265,6 +266,9 @@ interface ScheduledActions {
     fun askDelete()
     fun cancelDelete()
     fun deleteJob()
+
+    /** Clears the open job's Now alert (D27); previews have nothing to dismiss. */
+    fun dismissAlert() {}
 }
 
 /** The jobs list and a job's page, apart from the view model, so previews can draw them from sample data. */
@@ -519,7 +523,7 @@ private fun JobDetail(
                 val deliversTo = job.deliver?.takeIf { it.isNotBlank() }?.let { id ->
                     deliveryLabel(id, state.deliveryTargets, botChat = botChat, local = stringResource(Res.string.sessions_delivery_local))
                 }
-                JobSummary(job, deliversTo, busy = state.busy, onRunNow = actions::runNow, onTogglePaused = actions::togglePaused)
+                JobSummary(job, deliversTo, busy = state.busy, onRunNow = actions::runNow, onTogglePaused = actions::togglePaused, onDismissAlert = actions::dismissAlert)
             }
             item(key = "runs-header") {
                 val runs = stringResource(Res.string.sessions_runs)
@@ -643,7 +647,7 @@ internal fun deliveryLabel(id: String, targets: List<DeliveryTarget>, botChat: S
 
 /** What the job does, where it reports, and the two things you can do with it. */
 @Composable
-private fun JobSummary(job: CronJob, deliversTo: String?, busy: Boolean, onRunNow: () -> Unit, onTogglePaused: () -> Unit) {
+private fun JobSummary(job: CronJob, deliversTo: String?, busy: Boolean, onRunNow: () -> Unit, onTogglePaused: () -> Unit, onDismissAlert: (() -> Unit)? = null) {
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     Column(
         Modifier.fillMaxWidth().background(Theme[colors][surface], shape).border(1.dp, Theme[colors][stroke], shape).padding(14.dp),
@@ -670,6 +674,17 @@ private fun JobSummary(job: CronJob, deliversTo: String?, busy: Boolean, onRunNo
                 leadingIcon = if (job.paused) Lucide.Play else Lucide.Pause,
                 enabled = !busy,
             )
+            // A failed job the user has already dealt with can stop asking for attention (D27);
+            // a later failed run raises a fresh alert.
+            if (job.problem != null && onDismissAlert != null) {
+                Button(
+                    stringResource(Res.string.sessions_dismiss_alert),
+                    onClick = onDismissAlert,
+                    variant = ButtonVariant.Secondary,
+                    leadingIcon = Lucide.BellOff,
+                    enabled = !busy,
+                )
+            }
         }
     }
 }

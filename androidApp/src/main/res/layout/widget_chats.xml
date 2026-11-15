@@ -124,7 +124,7 @@
             android:id="@+id/saved_notice_text"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_marginStart="@dimen/widget_gap_related"
+            android:layout_marginStart="@dimen/widget_notice_text_start"
             android:ellipsize="end"
             android:gravity="center_vertical"
             android:includeFontPadding="false"

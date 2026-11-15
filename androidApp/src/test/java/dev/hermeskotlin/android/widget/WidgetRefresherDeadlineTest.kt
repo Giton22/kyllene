@@ -43,6 +43,7 @@ class WidgetRefresherDeadlineTest {
         var nowCalls = 0
         var nowColdCalls = 0
         var allColdCalls = 0
+        var allLiveCalls = 0
         var chatsCalls = 0
         var coldKnownBots: List<Bot>? = null
 
@@ -54,6 +55,21 @@ class WidgetRefresherDeadlineTest {
         ): WidgetDataAssembler.AllWidgets {
             allColdCalls++
             coldKnownBots = knownBots
+            return WidgetDataAssembler.AllWidgets(
+                now = now,
+                chats = ChatsWidgetSnapshot(url.value, profile, rows = emptyList(), savedAtEpochSeconds = 1),
+                kanban = null,
+                scheduled = ScheduledWidgetSnapshot(url.value, rows = emptyList(), savedAtEpochSeconds = 1),
+            )
+        }
+
+        override suspend fun refreshAllLive(
+            url: GatewayUrl,
+            profile: String?,
+            threadIds: Set<String>,
+        ): WidgetDataAssembler.AllWidgets {
+            allLiveCalls++
+            if (hang) awaitCancellation()
             return WidgetDataAssembler.AllWidgets(
                 now = now,
                 chats = ChatsWidgetSnapshot(url.value, profile, rows = emptyList(), savedAtEpochSeconds = 1),
@@ -123,7 +139,7 @@ class WidgetRefresherDeadlineTest {
 
         // The deadline expired: the pass cancelled mid-flight rather than swallowing the
         // CancellationException and continuing into the other pipelines (D26/M4).
-        assertEquals(1, fake.nowCalls)
+        assertEquals(1, fake.allLiveCalls)
         assertEquals(0, fake.chatsCalls)
         // Nothing was written over the stored snapshot; Now shows it with its saved-notice.
         assertEquals(storedNow(), store.readNow(url.value, null))
@@ -143,6 +159,7 @@ class WidgetRefresherDeadlineTest {
         val outcome = refresher.refresh(profile = null, connected = true) { "unused" }
 
         assertEquals(WidgetViews.UiState.Content(fresh), outcome.now)
+        assertEquals(1, fake.allLiveCalls)
         assertEquals(0, fake.nowColdCalls)
         assertEquals(0, fake.allColdCalls)
     }

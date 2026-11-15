@@ -18,6 +18,7 @@ import dev.hermeskotlin.core.widget.NowTarget
 import dev.hermeskotlin.core.widget.NowWidgetSnapshot
 import dev.hermeskotlin.core.widget.ScheduledProblemKind
 import dev.hermeskotlin.core.widget.ScheduledWidgetRow
+import dev.hermeskotlin.core.widget.ScheduledWidgetSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -392,5 +393,189 @@ class WidgetViewsRenderTest {
         assertNotEquals("", view.findViewById<android.widget.TextView>(R.id.time_primary).text.toString())
         assertTrue(view.findViewById<android.widget.TextView>(R.id.row_subtitle).text.toString().contains("@Reviewer"))
         assertEquals(View.GONE, view.findViewById<View>(R.id.row_badge).visibility)
+    }
+
+    @Test
+    fun chatsContentReapplyClearsSignedOutEmptyAndNoticeStates() {
+        // RemoteViews re-apply onto the host view: content after signed-out must restore the quick
+        // actions and drop the sign-in empty state; fresh content after a failed refresh must drop
+        // the notice strip.
+        val host = FrameLayout(context)
+        val view = WidgetViews.renderChats(
+            context, WidgetViews.UiState.SignedOut, locked = false, colors,
+            gatewayLabel = "gw", profile = null, appWidgetId = 0,
+        ).apply(context, host)
+        assertEquals(View.VISIBLE, view.findViewById<View>(R.id.state_empty).visibility)
+        assertEquals(View.GONE, view.findViewById<View>(R.id.action_new_chat).visibility)
+
+        val snapshot = ChatsWidgetSnapshot(
+            gatewayUrl = "https://gw",
+            profile = null,
+            rows = listOf(ChatWidgetRow(storedSessionId = "s-1", title = "Chat")),
+            savedAtEpochSeconds = 1_700_000_000L,
+        )
+        WidgetViews.renderChats(
+            context, WidgetViews.UiState.Content(snapshot, savedNotice = "Couldn't refresh · Saved 10:00"),
+            locked = false, colors, gatewayLabel = "gw", profile = null, appWidgetId = 0,
+        ).reapply(context, view)
+        assertEquals(View.GONE, view.findViewById<View>(R.id.state_empty).visibility)
+        assertEquals(View.VISIBLE, view.findViewById<View>(R.id.action_new_chat).visibility)
+        assertEquals(View.VISIBLE, view.findViewById<View>(R.id.action_dictate).visibility)
+        assertEquals(View.VISIBLE, view.findViewById<View>(R.id.saved_notice).visibility)
+
+        WidgetViews.renderChats(
+            context, WidgetViews.UiState.Content(snapshot),
+            locked = false, colors, gatewayLabel = "gw", profile = null, appWidgetId = 0,
+        ).reapply(context, view)
+        assertEquals(View.GONE, view.findViewById<View>(R.id.saved_notice).visibility)
+        assertEquals(View.GONE, view.findViewById<View>(R.id.state_empty).visibility)
+    }
+
+    @Test
+    fun kanbanAndScheduledContentReapplyClearsTheEmptyState() {
+        val kanbanHost = FrameLayout(context)
+        val kanbanView = WidgetViews.renderKanban(context, WidgetViews.UiState.SignedOut, locked = false, colors, 0).apply(context, kanbanHost)
+        assertEquals(View.VISIBLE, kanbanView.findViewById<View>(R.id.state_empty).visibility)
+        val board = KanbanWidgetSnapshot(
+            gatewayUrl = "https://gw",
+            boardSlug = "work",
+            boardName = "Work board",
+            counts = mapOf("running" to 1, "blocked" to 0, "review" to 0, "ready" to 0),
+            rows = listOf(KanbanWidgetRow(taskId = "t-1", title = "Ship it", status = "running")),
+            boardCount = 2,
+            savedAtEpochSeconds = 1_700_000_000L,
+        )
+        WidgetViews.renderKanban(context, WidgetViews.UiState.Content(board), locked = false, colors, 0).reapply(context, kanbanView)
+        assertEquals(View.GONE, kanbanView.findViewById<View>(R.id.state_empty).visibility)
+        assertEquals(View.VISIBLE, kanbanView.findViewById<View>(R.id.list).visibility)
+
+        val scheduledHost = FrameLayout(context)
+        val scheduledView = WidgetViews.renderScheduled(context, WidgetViews.UiState.SignedOut, locked = false, colors, 0).apply(context, scheduledHost)
+        assertEquals(View.VISIBLE, scheduledView.findViewById<View>(R.id.state_empty).visibility)
+        val jobs = ScheduledWidgetSnapshot(
+            gatewayUrl = "https://gw",
+            rows = listOf(ScheduledWidgetRow(jobId = "j-1", displayName = "Nightly", state = "scheduled")),
+            savedAtEpochSeconds = 1_700_000_000L,
+        )
+        WidgetViews.renderScheduled(context, WidgetViews.UiState.Content(jobs), locked = false, colors, 0).reapply(context, scheduledView)
+        assertEquals(View.GONE, scheduledView.findViewById<View>(R.id.state_empty).visibility)
+        assertEquals(View.VISIBLE, scheduledView.findViewById<View>(R.id.list).visibility)
+    }
+
+    /** Measures and lays out an applied widget at a fixed size so position assertions mean something. */
+    private fun View.measured(widthDp: Int = 320, heightDp: Int = 240): View {
+        val density = context.resources.displayMetrics.density
+        val w = (widthDp * density).toInt()
+        val h = (heightDp * density).toInt()
+        measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(h, View.MeasureSpec.EXACTLY))
+        layout(0, 0, w, h)
+        return this
+    }
+
+    @Test
+    fun chatsNoticeTextStartsAfterTheMarkerIcon() {
+        // The icon is 16dp wide; the text's old 4dp margin drew "Couldn't refresh" under it.
+        val snapshot = ChatsWidgetSnapshot(
+            gatewayUrl = "https://gw",
+            profile = null,
+            rows = listOf(ChatWidgetRow(storedSessionId = "s-1", title = "Chat")),
+            savedAtEpochSeconds = 1_700_000_000L,
+        )
+        val view = WidgetViews.renderChats(
+            context, WidgetViews.UiState.Content(snapshot, savedNotice = "Couldn't refresh · Saved 10:00"),
+            locked = false, colors, gatewayLabel = "gw", profile = null, appWidgetId = 0,
+        ).applied().measured()
+        val icon = view.findViewById<View>(R.id.saved_notice_icon)
+        val text = view.findViewById<View>(R.id.saved_notice_text)
+        assertTrue("notice text must clear the marker icon", text.left >= icon.right)
+    }
+
+    @Test
+    fun nowNoticeTextStartsAfterTheMarkerIcon() {
+        val view = WidgetViews.renderNow(
+            context,
+            WidgetViews.UiState.Content(quietNow(), savedNotice = "Couldn't refresh · Saved 10:00"),
+            locked = false, cold = false, colors, bots = null, 0,
+        ).applied().measured()
+        val icon = view.findViewById<View>(R.id.notice_warning_icon)
+        val text = view.findViewById<View>(R.id.notice_warning_text)
+        assertTrue("notice text must clear the marker icon", text.left >= icon.right)
+    }
+
+    @Test
+    fun moreNeedYouLineSitsInsideTheNeedsStateBelowTheLead() {
+        // The line used to be a bare child of the body FrameLayout with no gravity, so it drew
+        // over the NEEDS YOU eyebrow. It belongs to the needs state, under the rows.
+        fun item(n: Int) = NowNeedsYouItem(
+            kind = NowNeedsYouKind.CronProblem,
+            title = "Job $n",
+            detail = "The last run failed",
+            target = NowTarget(scheduledJobId = "job-$n"),
+            alertKey = "cron:job-$n:100.0",
+        )
+        val snapshot = quietNow().copy(needsYou = listOf(item(1), item(2), item(3)), quiet = null)
+        val view = WidgetViews.renderNow(
+            context, WidgetViews.UiState.Content(snapshot), locked = false, cold = false, colors, bots = null, 0,
+        ).applied().measured()
+        val more = view.findViewById<View>(R.id.more)
+        assertEquals(View.VISIBLE, more.visibility)
+        assertEquals("more belongs to the needs state", view.findViewById<View>(R.id.state_needs), more.parent)
+        assertTrue("more must sit below the lead aperture", more.top >= view.findViewById<View>(R.id.needs_lead).bottom)
+    }
+
+    @Test
+    fun kanbanSwitchButtonShowsOnlyWithMoreThanOneBoard() {
+        fun board(count: Int) = KanbanWidgetSnapshot(
+            gatewayUrl = "https://gw",
+            boardSlug = "work",
+            boardName = "Work board",
+            counts = mapOf("running" to 0, "blocked" to 0, "review" to 0, "ready" to 0),
+            rows = emptyList(),
+            boardCount = count,
+            savedAtEpochSeconds = 1_700_000_000L,
+        )
+        val one = WidgetViews.renderKanban(context, WidgetViews.UiState.Content(board(1)), locked = false, colors, 0).applied()
+        assertEquals(View.GONE, one.findViewById<View>(R.id.action_switch_board).visibility)
+
+        val host = FrameLayout(context)
+        val two = WidgetViews.renderKanban(context, WidgetViews.UiState.Content(board(2)), locked = false, colors, 0).apply(context, host)
+        assertEquals(View.VISIBLE, two.findViewById<View>(R.id.action_switch_board).visibility)
+
+        // Re-applied renders must hide it again when the gateway drops to one board, and when locked.
+        WidgetViews.renderKanban(context, WidgetViews.UiState.Content(board(1)), locked = false, colors, 0).reapply(context, two)
+        assertEquals(View.GONE, two.findViewById<View>(R.id.action_switch_board).visibility)
+        WidgetViews.renderKanban(context, WidgetViews.UiState.Content(board(3)), locked = false, colors, 0).reapply(context, two)
+        assertEquals(View.VISIBLE, two.findViewById<View>(R.id.action_switch_board).visibility)
+        WidgetViews.renderKanban(context, WidgetViews.UiState.Content(board(3)), locked = true, colors, 0).reapply(context, two)
+        assertEquals(View.GONE, two.findViewById<View>(R.id.action_switch_board).visibility)
+    }
+
+    @Test
+    fun dismissButtonShowsOnlyForClearableAlerts() {
+        fun snapshot(item: NowNeedsYouItem) = quietNow().copy(needsYou = listOf(item), quiet = null)
+        val clearable = NowNeedsYouItem(
+            kind = NowNeedsYouKind.CronProblem,
+            title = "Weekly Discovery Radio",
+            detail = "The last run failed",
+            target = NowTarget(scheduledJobId = "job-1"),
+            alertKey = "cron:job-1:100.0",
+        )
+        val host = FrameLayout(context)
+        val view = WidgetViews.renderNow(
+            context, WidgetViews.UiState.Content(snapshot(clearable)), locked = false, cold = false, colors, bots = null, 0,
+        ).apply(context, host)
+        assertEquals(View.VISIBLE, view.findViewById<View>(R.id.needs_lead_dismiss).visibility)
+
+        // A waiting chat clears itself when answered: no dismiss button, and the re-apply hides the old one.
+        val conversation = NowNeedsYouItem(
+            kind = NowNeedsYouKind.ChatWaiting,
+            title = "Design review",
+            detail = "Needs approval",
+            target = NowTarget(storedSessionId = "s-1"),
+        )
+        WidgetViews.renderNow(
+            context, WidgetViews.UiState.Content(snapshot(conversation)), locked = false, cold = false, colors, bots = null, 0,
+        ).reapply(context, view)
+        assertEquals(View.GONE, view.findViewById<View>(R.id.needs_lead_dismiss).visibility)
     }
 }

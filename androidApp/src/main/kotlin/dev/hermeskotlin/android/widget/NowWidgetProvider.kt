@@ -18,6 +18,13 @@ class NowWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action == WidgetIntents.ACTION_REFRESH_NOW) goAsyncRefresh(context)
+        when (intent.action) {
+            WidgetIntents.ACTION_REFRESH_NOW -> goAsyncRefresh(context)
+            WidgetIntents.ACTION_DISMISS_NOW_ALERT -> goAsyncDismissAlert(
+                context,
+                intent.getStringExtra(WidgetIntents.EXTRA_DISMISS_GATEWAY),
+                intent.getStringExtra(WidgetIntents.EXTRA_DISMISS_KEY),
+            )
+        }
     }
 }

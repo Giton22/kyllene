@@ -223,6 +223,8 @@
     <string name="widget_refresh_now">Refresh Now</string>
     <string name="widget_refresh_chats">Refresh chats</string>
     <string name="widget_refresh_kanban">Refresh tasks</string>
+    <string name="widget_switch_board">Switch board</string>
+    <string name="widget_dismiss_alert">Dismiss alert</string>
     <string name="widget_refresh_scheduled">Refresh scheduled jobs</string>
     <string name="widget_refreshing">Refreshing…</string>
     <string name="widget_action_new_chat">New chat</string>

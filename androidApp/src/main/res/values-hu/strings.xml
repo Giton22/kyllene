@@ -186,6 +186,8 @@
     <string name="widget_refresh_now">Most frissítése</string>
     <string name="widget_refresh_chats">Chatek frissítése</string>
     <string name="widget_refresh_kanban">Feladatok frissítése</string>
+    <string name="widget_switch_board">Tábla váltása</string>
+    <string name="widget_dismiss_alert">Riasztás elrejtése</string>
     <string name="widget_refresh_scheduled">Ütemezett feladatok frissítése</string>
     <string name="widget_refreshing">Frissítés…</string>
     <string name="widget_action_new_chat">Új chat</string>

@@ -53,6 +53,22 @@
         </LinearLayout>
 
         <FrameLayout
+            android:id="@+id/action_switch_board"
+            android:layout_width="@dimen/widget_action_size"
+            android:layout_height="@dimen/widget_action_size"
+            android:background="@android:color/transparent"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/action_switch_board_icon"
+                android:layout_width="@dimen/widget_action_glyph"
+                android:layout_height="@dimen/widget_action_glyph"
+                android:layout_gravity="center"
+                android:contentDescription="@string/widget_switch_board"
+                android:src="@drawable/widget_ic_switch" />
+        </FrameLayout>
+
+        <FrameLayout
             android:id="@+id/refresh"
             android:layout_width="@dimen/widget_action_size"
             android:layout_height="@dimen/widget_action_size"
@@ -234,7 +250,7 @@
             android:id="@+id/saved_notice_text"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:layout_marginStart="@dimen/widget_gap_related"
+            android:layout_marginStart="@dimen/widget_notice_text_start"
             android:ellipsize="end"
             android:gravity="center_vertical"
             android:includeFontPadding="false"

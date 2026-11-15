@@ -66,56 +66,34 @@ class WidgetRefresher(
             )
         val url = gateway.gatewayUrl
 
-        // A provider refresh is REST-only even if a stale socket still says Connected. The combined
-        // cold pipeline never asks BotsApi for a live roster, and it shares the saved roster between
-        // Now's carried-row merge and Chats' bot-chat filtering.
-        val cold = if (connected) null else runCatchingCancellable {
-            assembler.refreshAllCold(url, profile, knownBots = knownBots())
-        }.getOrNull()
-        val nowSnapshot = if (connected) {
-            runCatchingCancellable { assembler.refreshNow(url, profile) }.getOrNull()
+        // One combined pass per refresh (D26): the four widgets share one set of REST reads, fetched
+        // concurrently, so the whole pass fits the deadline. A provider refresh is REST-only even if a
+        // stale socket still says Connected; the cold pipeline never asks BotsApi for a live roster and
+        // shares the saved roster between Now's carried-row merge and Chats' bot-chat filtering. Each
+        // widget's snapshot is still independent: a null field falls back to its own stored snapshot.
+        val all = if (connected) {
+            runCatchingCancellable { assembler.refreshAllLive(url, profile) }.getOrNull()
         } else {
-            cold?.now
+            runCatchingCancellable { assembler.refreshAllCold(url, profile, knownBots = knownBots()) }.getOrNull()
         }
-        val now = if (nowSnapshot != null) {
-            WidgetViews.UiState.Content(nowSnapshot)
-        } else {
-            store.readNow(url.value, profile)
+        val now = all?.now
+            ?.let { WidgetViews.UiState.Content(it) }
+            ?: store.readNow(url.value, profile)
                 ?.let { WidgetViews.UiState.Content(it, savedNotice(it.savedAtEpochSeconds)) }
-                ?: WidgetViews.UiState.Error
-        }
-        val chatsSnapshot = if (connected) {
-            runCatchingCancellable { assembler.refreshChats(url, profile) }.getOrNull()
-        } else {
-            cold?.chats
-        }
-        val chats = if (chatsSnapshot != null) {
-            WidgetViews.UiState.Content(chatsSnapshot)
-        } else {
-            store.readChats(url.value, profile)
+            ?: WidgetViews.UiState.Error
+        val chats = all?.chats
+            ?.let { WidgetViews.UiState.Content(it) }
+            ?: store.readChats(url.value, profile)
                 ?.let { WidgetViews.UiState.Content(it, savedNotice(it.savedAtEpochSeconds)) }
-                ?: WidgetViews.UiState.Error
-        }
-        val kanbanSnapshot = if (connected) {
-            runCatchingCancellable { assembler.refreshKanban(url) }.getOrNull()
-        } else {
-            cold?.kanban
-        }
-        val kanban = kanbanSnapshot
+            ?: WidgetViews.UiState.Error
+        val kanban = all?.kanban
             ?.let { WidgetViews.UiState.Content(it) }
             ?: WidgetViews.UiState.Error
-        val scheduledSnapshot = if (connected) {
-            runCatchingCancellable { assembler.refreshScheduled(url, live = true) }.getOrNull()
-        } else {
-            cold?.scheduled
-        }
-        val scheduled = if (scheduledSnapshot != null) {
-            WidgetViews.UiState.Content(scheduledSnapshot)
-        } else {
-            store.readScheduled(url.value)
+        val scheduled = all?.scheduled
+            ?.let { WidgetViews.UiState.Content(it) }
+            ?: store.readScheduled(url.value)
                 ?.let { WidgetViews.UiState.Content(it, savedNotice(it.savedAtEpochSeconds)) }
-                ?: WidgetViews.UiState.Error
-        }
+            ?: WidgetViews.UiState.Error
 
         return Outcome(
             gatewayUrl = url.value,

@@ -41,6 +41,7 @@ val uiModule = module {
             inbox = getOrNull(),
             certs = get(),
             widgetStore = get(),
+            dismissals = get(),
         )
     }
     viewModelOf(::ConnectViewModel)

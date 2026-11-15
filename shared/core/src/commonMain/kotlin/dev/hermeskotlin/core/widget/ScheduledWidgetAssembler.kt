@@ -66,5 +66,5 @@ object ScheduledWidgetAssembler {
     )
 
     /** The newest stamp a problem carries; problems without one sort below stamped ones. */
-    private val CronJob.failureStamp: Double get() = missedFireEpochSeconds ?: lastRunEpochSeconds ?: 0.0
+    internal val CronJob.failureStamp: Double get() = missedFireEpochSeconds ?: lastRunEpochSeconds ?: 0.0
 }

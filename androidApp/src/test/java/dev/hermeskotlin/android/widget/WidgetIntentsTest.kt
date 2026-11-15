@@ -79,4 +79,25 @@ class WidgetIntentsTest {
         assertEquals(ComponentName(context, KanbanWidgetProvider::class.java), intent.component)
         assertEquals(WidgetIntents.ACTION_REFRESH_KANBAN, intent.action)
     }
+
+    @Test
+    fun switchBoardBroadcastTargetsTheKanbanProvider() {
+        val intent = onlyIntent(WidgetIntents.switchBoard(context))
+        assertEquals(ComponentName(context, KanbanWidgetProvider::class.java), intent.component)
+        assertEquals(WidgetIntents.ACTION_SWITCH_KANBAN_BOARD, intent.action)
+    }
+
+    @Test
+    fun dismissAlertBroadcastCarriesItsScopeToTheNowProvider() {
+        val pending = WidgetIntents.dismissAlert(context, "https://gw", "cron:job-1:100.0")
+        val intent = onlyIntent(pending)
+        assertEquals(ComponentName(context, NowWidgetProvider::class.java), intent.component)
+        assertEquals(WidgetIntents.ACTION_DISMISS_NOW_ALERT, intent.action)
+        assertEquals("https://gw", intent.getStringExtra(WidgetIntents.EXTRA_DISMISS_GATEWAY))
+        assertEquals("cron:job-1:100.0", intent.getStringExtra(WidgetIntents.EXTRA_DISMISS_KEY))
+        // Two alerts on the same gateway must not share one PendingIntent: filterEquals ignores
+        // extras, so the request code is what keeps the destinations apart.
+        val other = WidgetIntents.dismissAlert(context, "https://gw", "cron:job-2:200.0")
+        assertTrue(shadowOf(pending).requestCode != shadowOf(other).requestCode)
+    }
 }

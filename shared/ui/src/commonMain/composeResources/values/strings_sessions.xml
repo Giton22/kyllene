@@ -491,4 +491,6 @@
     <string name="sessions_config_refresh_failed">Couldn’t refresh</string>
     <string name="sessions_config_save_failed">Couldn’t save %1$s</string>
     <string name="sessions_config_yaml_saved">Saved config.yaml</string>
+    <string name="sessions_dismiss_alert">Dismiss alert</string>
+    <string name="sessions_alert_dismissed">Alert dismissed</string>
 </resources>

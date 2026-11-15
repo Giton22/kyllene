@@ -184,6 +184,8 @@
     <string name="widget_refresh_now">刷新"现在"</string>
     <string name="widget_refresh_chats">刷新聊天</string>
     <string name="widget_refresh_kanban">刷新任务</string>
+    <string name="widget_switch_board">切换看板</string>
+    <string name="widget_dismiss_alert">忽略提醒</string>
     <string name="widget_refresh_scheduled">刷新定时任务</string>
     <string name="widget_refreshing">正在刷新…</string>
     <string name="widget_action_new_chat">新建聊天</string>

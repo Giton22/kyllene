@@ -186,6 +186,8 @@
     <string name="widget_refresh_now">Jetzt aktualisieren</string>
     <string name="widget_refresh_chats">Chats aktualisieren</string>
     <string name="widget_refresh_kanban">Aufgaben aktualisieren</string>
+    <string name="widget_switch_board">Board wechseln</string>
+    <string name="widget_dismiss_alert">Alarm ausblenden</string>
     <string name="widget_refresh_scheduled">Geplante Jobs aktualisieren</string>
     <string name="widget_refreshing">Aktualisieren…</string>
     <string name="widget_action_new_chat">Neuer Chat</string>

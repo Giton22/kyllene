@@ -7,6 +7,7 @@ import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.bots.BotChats
 import dev.hermeskotlin.core.bots.BotSession
 import dev.hermeskotlin.core.cache.OfflineCache
+import dev.hermeskotlin.core.widget.WidgetAlertDismissals
 import dev.hermeskotlin.core.widget.WidgetSnapshotStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
@@ -121,6 +122,8 @@ class AppViewModel(
     private val inbox: InboxStore? = null,
     /** The widgets' snapshots, which go with the gateway. */
     private val widgetStore: WidgetSnapshotStore? = null,
+    /** The Now alerts the user dismissed, which go with the gateway too. */
+    private val dismissals: WidgetAlertDismissals? = null,
     /** Aliases picked on the Connect screen before their gateway is saved; saved gateways carry their own. */
     private val certs: ClientCertAliases,
 ) : ViewModel() {
@@ -356,6 +359,7 @@ class AppViewModel(
             // First, so the chats go even if what follows waits on an unreachable gateway and the app is closed.
             cache?.forgetGateway(gateway.gatewayUrl)
             widgetStore?.forgetGateway(gateway.gatewayUrl.value)
+            dismissals?.forgetGateway(gateway.gatewayUrl.value)
             val wasCurrent = currentGateway()?.url == gateway.url || gateways.current()?.url == gateway.url
             if (wasCurrent) {
                 // While the socket is still up: the gateway forgets this phone's push identity.
@@ -367,6 +371,7 @@ class AppViewModel(
             // Again: a list read that was under way may have saved itself since.
             cache?.forgetGateway(gateway.gatewayUrl)
             widgetStore?.forgetGateway(gateway.gatewayUrl.value)
+            dismissals?.forgetGateway(gateway.gatewayUrl.value)
             gateways.remove(gateway.url)
             // The saved alias goes with the gateway: no connection made with it is reused.
             if (gateway.clientCertAlias != null) certs.changed(gateway.gatewayUrl.host)
@@ -587,6 +592,7 @@ class AppViewModel(
             // First, so the chats go even if what follows waits on an unreachable gateway and the app is closed.
             cache?.forgetGateway(gateway.gatewayUrl)
             widgetStore?.forgetGateway(gateway.gatewayUrl.value)
+            dismissals?.forgetGateway(gateway.gatewayUrl.value)
             // While the socket is still up: the gateway forgets this phone's push identity.
             push.forget()
             connection.stop()
@@ -595,6 +601,7 @@ class AppViewModel(
             // Again: a list read that was under way may have saved itself since.
             cache?.forgetGateway(gateway.gatewayUrl)
             widgetStore?.forgetGateway(gateway.gatewayUrl.value)
+            dismissals?.forgetGateway(gateway.gatewayUrl.value)
             sessionsChanged.update { it + 1 }
             _route.value = Route.SignIn(gateway)
         }

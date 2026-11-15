@@ -188,6 +188,8 @@
     <string name="widget_refresh_now">Atualizar Agora</string>
     <string name="widget_refresh_chats">Atualizar conversas</string>
     <string name="widget_refresh_kanban">Atualizar tarefas</string>
+    <string name="widget_switch_board">Trocar quadro</string>
+    <string name="widget_dismiss_alert">Dispensar alerta</string>
     <string name="widget_refresh_scheduled">Atualizar trabalhos agendados</string>
     <string name="widget_refreshing">Atualizando…</string>
     <string name="widget_action_new_chat">Nova conversa</string>
