@@ -1,7 +1,11 @@
 package dev.hermeskotlin.ui.assistant
 
 import android.content.ComponentName
+import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
@@ -9,11 +13,13 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.auth.AuthApi
 import dev.hermeskotlin.core.auth.PersistentCookiesStorage
+import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.profiles.ProfileStore
+import dev.hermeskotlin.core.rpc.RpcTransport
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.AssistantTarget
 import dev.hermeskotlin.core.settings.SettingsStore
@@ -23,6 +29,9 @@ import dev.hermeskotlin.designsystem.HermesTheme
 import io.ktor.client.engine.mock.*
 import io.ktor.http.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.serialization.json.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -65,11 +74,13 @@ class AssistantInvocationTest {
         var validation = CompletableDeferred<Unit>()
         var reads = 0
         var missing = false
+        val reading = CompletableDeferred<Unit>()
         val client = createHttpClient(MockEngine(MockEngineConfig().apply {
             dispatcher = Dispatchers.Unconfined
             addHandler { request ->
                 val body = when {
-                    request.url.encodedPath.endsWith("ws-ticket") -> awaitCancellation()
+                    request.url.encodedPath.endsWith("ws-ticket") -> """{"ticket":"synthetic"}"""
+                    request.url.encodedPath.endsWith("/audio/speak") -> { reading.await(); "{}" }
                     request.url.encodedPath.endsWith("/auth/me") -> """{"user_id":"user"}"""
                     request.url.encodedPath.endsWith("/picked") -> {
                         reads++
@@ -83,7 +94,8 @@ class AssistantInvocationTest {
             }
         }), cookies)
         val auth = AuthApi(client, cookies)
-        val connection = GatewayConnection(auth, { _, _ -> error("no socket") }, scope)
+        val transport = ReplyTransport()
+        val connection = GatewayConnection(auth, { _, _ -> transport }, scope)
         val recognizer = WaitingRecognizer()
         val silent = object : VoiceRecorder, SpeechPlayer {
             override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording = error("use device recognizer")
@@ -93,10 +105,17 @@ class AssistantInvocationTest {
         val model = AssistantPanelModel(gateways, auth, ProfileStore(disk), connection, SessionsApi(client), AudioApi(client), silent, silent, scope,
             settings = settings, deviceDictation = recognizer)
         val allowed = mutableStateOf(false)
+        val mounted = mutableStateOf(true)
+        lateinit var panelView: View
         try {
             compose.setContent {
                 HermesTheme(ColorScheme.Light) {
-                    AssistantPanelCard(model, allowed.value, {}, {}, {}, {})
+                    if (mounted.value) {
+                        val view = LocalView.current
+                        SideEffect { panelView = view }
+                        AssistantScreenOn(model)
+                        AssistantPanelCard(model, allowed.value, {}, {}, {}, {})
+                    }
                 }
             }
             compose.runOnIdle { model.begin(false, false) }
@@ -119,6 +138,7 @@ class AssistantInvocationTest {
             val firstSession = model.session.value
             assertEquals(if (fixed) "picked" else null, firstSession?.state?.value?.storedSessionId)
             assertTrue(model.voice.dictation.value.recording)
+            compose.runOnIdle { assertTrue(panelView.keepScreenOn, "Visible listening keeps the display on") }
 
             // A real recognizer can need a main-thread hop to release its old microphone. Let target
             // validation finish before that release: the invocation must wait, then start without a tap.
@@ -139,6 +159,41 @@ class AssistantInvocationTest {
             compose.waitUntil(10_000) { compose.waitForIdle(); !model.voice.dictation.value.active }
             compose.waitForIdle()
             assertEquals(2, recognizer.starts)
+            compose.runOnIdle { assertFalse(panelView.keepScreenOn, "Idle releases the display") }
+            // A real ChatSession submit stays running until its gateway completion event arrives.
+            compose.runOnIdle { model.composer.setTextAndPlaceCursorAtEnd("Synthetic delayed question"); model.send() }
+            compose.waitUntil(10_000) { model.session.value?.state?.value?.messages?.any { it is ChatMessage.User && it.pending } == true }
+            compose.runOnIdle {
+                assertFalse(model.session.value!!.state.value.running, "Submission is still pending")
+                assertTrue(panelView.keepScreenOn, "Sending before prompt acknowledgement keeps the display on")
+                model.hide()
+            }
+            compose.runOnIdle {
+                assertFalse(panelView.keepScreenOn, "Hidden submission releases the display")
+                allowed.value = false
+                model.resume()
+            }
+            compose.runOnIdle { assertTrue(panelView.keepScreenOn); transport.submitting.complete(Unit) }
+            compose.waitUntil(10_000) { model.session.value?.state?.value?.running == true }
+            compose.runOnIdle { assertTrue(panelView.keepScreenOn, "Waiting for a reply keeps the display on"); model.hide() }
+            compose.runOnIdle {
+                assertFalse(panelView.keepScreenOn, "Hidden waiting work releases the display")
+                assertTrue(model.session.value!!.state.value.running, "Dismissal does not cancel gateway work")
+                allowed.value = false
+                model.resume()
+            }
+            compose.runOnIdle { assertTrue(panelView.keepScreenOn, "Reshowing a pending reply keeps the display on") }
+            compose.runOnIdle { transport.complete() }
+            compose.waitUntil(10_000) { model.session.value?.state?.value?.running == false }
+            compose.runOnIdle { assertFalse(panelView.keepScreenOn, "Completed reply releases the display") }
+            compose.runOnIdle { model.voice.readAloud("reply", "Synthetic reply", gateway.gatewayUrl, null) }
+            compose.waitUntil(10_000) { model.voice.reading.value.key != null }
+            compose.runOnIdle { assertTrue(panelView.keepScreenOn, "Read aloud keeps the display on"); model.voice.stopReading() }
+            compose.runOnIdle { assertFalse(panelView.keepScreenOn, "Stopped reading releases the display") }
+            compose.runOnIdle { model.voice.readAloud("hidden", "Synthetic reply", gateway.gatewayUrl, null) }
+            compose.waitUntil(10_000) { model.voice.reading.value.key != null }
+            compose.runOnIdle { model.hide() }
+            compose.runOnIdle { assertFalse(panelView.keepScreenOn, "Hidden reading releases the display"); model.voice.stopReading() }
             // Session.onHide cancels dictation, but doesn't stop work or start a hidden microphone.
             compose.runOnIdle { model.hide() }
             compose.waitForIdle()
@@ -152,7 +207,12 @@ class AssistantInvocationTest {
                 assertEquals(null, model.session.value)
                 assertEquals(2, recognizer.starts, "No recording for an unavailable target")
             }
+            compose.runOnIdle { model.resume(); model.voice.readAloud("dispose", "Synthetic reply", gateway.gatewayUrl, null) }
+            compose.waitUntil(10_000) { model.voice.reading.value.key != null }
+            compose.runOnIdle { assertTrue(panelView.keepScreenOn); mounted.value = false }
+            compose.runOnIdle { assertFalse(panelView.keepScreenOn, "Disposal releases the display") }
         } finally {
+            reading.complete(Unit)
             validation.complete(Unit)
             recognizer.release.complete(Unit)
             model.close()
@@ -160,6 +220,30 @@ class AssistantInvocationTest {
             scope.cancel()
             client.close()
         }
+    }
+
+    /** The same JSON-RPC frames as the gateway; completion is held until the test asks for it. */
+    private class ReplyTransport : RpcTransport {
+        val submitting = CompletableDeferred<Unit>()
+        private val frames = Channel<String>(Channel.UNLIMITED).apply {
+            trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
+        }
+        override val incoming = frames.receiveAsFlow()
+        override suspend fun send(text: String) {
+            val request = Json.parseToJsonElement(text).jsonObject
+            val id = request["id"] ?: return
+            val result = when (request["method"]?.jsonPrimitive?.content) {
+                "session.resume" -> """{"session_id":"runtime","stored_session_id":"picked","running":false}"""
+                "session.create" -> """{"session_id":"runtime","stored_session_id":"created"}"""
+                "prompt.submit" -> { submitting.await(); """{"status":"streaming"}""" }
+                else -> "{}"
+            }
+            frames.send("""{"jsonrpc":"2.0","id":$id,"result":$result}""")
+        }
+        fun complete() {
+            frames.trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"runtime","payload":{"text":"Synthetic reply","status":"complete"}}}""")
+        }
+        override suspend fun close(code: Short, reason: String) { frames.close() }
     }
 
     private class WaitingRecognizer : DeviceDictation {

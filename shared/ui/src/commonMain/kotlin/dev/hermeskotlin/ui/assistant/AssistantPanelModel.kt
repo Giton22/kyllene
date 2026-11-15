@@ -147,6 +147,9 @@ class AssistantPanelModel(
     private val _circledPart = MutableStateFlow<ScreenContext?>(null)
     val circledPart: StateFlow<ScreenContext?> = _circledPart.asStateFlow()
 
+    private val _shown = MutableStateFlow(false)
+    internal val shown: StateFlow<Boolean> = _shown.asStateFlow()
+
     /** Counts call-ups, so what happens on each one (listening) happens again on the next. */
     private val _shows = MutableStateFlow(0)
     val shows: StateFlow<Int> = _shows.asStateFlow()
@@ -286,7 +289,7 @@ class AssistantPanelModel(
      * [expectScreenshot] say which parts the platform will send, so a quick question waits for them.
      */
     fun begin(expectText: Boolean, expectScreenshot: Boolean) {
-        shown = true
+        _shown.value = true
         voice.cancelDictation()
         composer.clearText()
         _includeScreen.value = false
@@ -310,17 +313,16 @@ class AssistantPanelModel(
 
     /** Back after stepping aside (for Android's microphone prompt): the same chat and screen, listening again. */
     fun resume() {
-        shown = true
+        _shown.value = true
         _shows.update { it + 1 }
     }
 
     /** Dismissal gives up the microphone, including a start waiting on target validation. */
     fun hide() {
-        shown = false
+        _shown.value = false
         voice.cancelDictation()
     }
 
-    private var shown = false
     private var listenedOn = -1
 
     /**
@@ -328,7 +330,7 @@ class AssistantPanelModel(
      * (circling replaces it), and coming back from circling must not start listening, which sends.
      */
     fun claimListening(show: Int): Boolean {
-        if (!shown || show != _shows.value || _phase.value != AssistantPhase.Ready || _targetUnavailable.value || show == listenedOn) return false
+        if (!_shown.value || show != _shows.value || _phase.value != AssistantPhase.Ready || _targetUnavailable.value || show == listenedOn) return false
         listenedOn = show
         return true
     }
@@ -380,9 +382,9 @@ class AssistantPanelModel(
             if (invocation != callUp || _session.value !== session) return@launch
             if (gateways.current() != saved || profiles.get(saved.gatewayUrl) != profile) {
                 // Refreshing a stale send must not reopen a dismissed microphone.
-                val visible = shown
+                val visible = _shown.value
                 begin(false, false)
-                shown = visible
+                _shown.value = visible
                 return@launch
             }
             val sent = session.send(prompt, attachments)

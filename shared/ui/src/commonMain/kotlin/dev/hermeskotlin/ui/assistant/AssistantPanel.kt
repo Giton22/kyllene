@@ -122,6 +122,7 @@ import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.stringResource
 import dev.hermeskotlin.ui.chat.AppMark
 import dev.hermeskotlin.ui.chat.BarButton
+import dev.hermeskotlin.ui.KeepScreenOn
 import dev.hermeskotlin.ui.chat.BarStatus
 import dev.hermeskotlin.ui.chat.ComposerButton
 import dev.hermeskotlin.ui.chat.DictationButton
@@ -199,6 +200,7 @@ private fun Panel(
     onOpenScreenSettings: () -> Unit,
     onClose: () -> Unit,
 ) {
+    AssistantScreenOn(model)
     AssistantBackdrop(onClose) {
         val circling by model.circling.collectAsState()
         if (circling) {
@@ -210,6 +212,21 @@ private fun Panel(
             AssistantPanelCard(model, microphoneAllowed, onOpenHerald, onAllowMicrophone, onOpenScreenSettings, onClose)
         }
     }
+}
+
+/** The overlay outlives onHide; hidden gateway work must not hold the display awake. */
+@Composable
+internal fun AssistantScreenOn(model: AssistantPanelModel) {
+    val shown by model.shown.collectAsState()
+    val phase by model.phase.collectAsState()
+    val session by model.session.collectAsState()
+    val chat by key(session) {
+        (session?.state ?: remember { emptyFlow() }).collectAsState(ChatState())
+    }
+    val dictation by model.voice.dictation.collectAsState()
+    val reading by model.voice.reading.collectAsState()
+    val sending = chat.messages.any { it is ChatMessage.User && it.pending }
+    KeepScreenOn(shown && (phase == AssistantPhase.Loading || dictation.active || sending || chat.running || reading.key != null))
 }
 
 /** The dimmed screen behind the card, which closes the panel when tapped. */
