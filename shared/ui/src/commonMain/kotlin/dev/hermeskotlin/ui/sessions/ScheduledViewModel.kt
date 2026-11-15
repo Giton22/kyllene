@@ -11,12 +11,15 @@ import dev.hermeskotlin.core.cron.CronJobDraft
 import dev.hermeskotlin.core.cron.DeliveryTarget
 import dev.hermeskotlin.core.cron.Routines
 import dev.hermeskotlin.core.cron.isRoutineOf
+import dev.hermeskotlin.core.cron.problem
 import dev.hermeskotlin.core.cron.routineTitle
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.sessions.SessionSummary
+import dev.hermeskotlin.core.widget.NowAlertKeys
+import dev.hermeskotlin.core.widget.WidgetAlertDismissals
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -81,6 +84,8 @@ internal val LOCAL_DELIVERY = DeliveryTarget(id = "local", name = "Local (save o
 class ScheduledViewModel(
     private val api: CronApi,
     private val connection: GatewayConnection,
+    /** The Now widget's dismissed alerts (D27); null in previews and tests that don't dismiss. */
+    private val dismissals: WidgetAlertDismissals? = null,
 ) : ViewModel(), ScheduledActions {
 
     val name = TextFieldState()
@@ -176,6 +181,22 @@ class ScheduledViewModel(
     }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
+
+    /**
+     * Clears the open job's Now alert (D27): the dismissal is keyed by the job's newest failure
+     * stamp, so a later run that fails again raises a fresh alert. The job's own status is the
+     * gateway's and stays as it is; only the attention item goes away.
+     */
+    override fun dismissAlert() {
+        val url = gateway?.gatewayUrl ?: return
+        val job = _state.value.openJob ?: return
+        if (job.problem == null) return
+        val store = dismissals ?: return
+        viewModelScope.launch {
+            store.dismiss(url.value, NowAlertKeys.cron(job))
+            _state.update { it.copy(message = said(Res.string.sessions_alert_dismissed)) }
+        }
+    }
 
     /** Clears the expiry flag once a screen has acted on it; the view model outlives the screen, so
      *  leaving it set would bounce the next mount after a fresh sign-in. */

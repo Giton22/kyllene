@@ -476,4 +476,6 @@
     <string name="sessions_config_refresh_failed">Nem sikerült frissíteni</string>
     <string name="sessions_config_save_failed">Nem sikerült menteni: %1$s</string>
     <string name="sessions_config_yaml_saved">config.yaml mentve</string>
+    <string name="sessions_dismiss_alert">Riasztás elrejtése</string>
+    <string name="sessions_alert_dismissed">Riasztás elrejtve</string>
 </resources>

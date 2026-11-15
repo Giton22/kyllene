@@ -20,6 +20,12 @@
     <dimen name="widget_glyph_size">20dp</dimen>
     <dimen name="widget_status_dot">8dp</dimen>
     <dimen name="widget_marker_size">16dp</dimen>
+    <!-- Notice text starts after the marker icon (16dp) plus the related gap (4dp). -->
+    <dimen name="widget_notice_text_start">20dp</dimen>
+    <!-- Dismiss button touch target on the Now rows (the glyph inside is marker-sized). -->
+    <dimen name="widget_dismiss_touch">28dp</dimen>
+    <!-- Centers the 16dp dismiss glyph inside the 28dp touch target. -->
+    <dimen name="widget_dismiss_padding">6dp</dimen>
     <dimen name="widget_empty_icon">32dp</dimen>
 
     <dimen name="widget_lead_height">80dp</dimen>

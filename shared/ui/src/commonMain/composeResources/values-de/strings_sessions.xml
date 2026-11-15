@@ -476,4 +476,6 @@
     <string name="sessions_config_refresh_failed">Konnte nicht aktualisiert werden</string>
     <string name="sessions_config_save_failed">%1$s konnte nicht gespeichert werden</string>
     <string name="sessions_config_yaml_saved">config.yaml gespeichert</string>
+    <string name="sessions_dismiss_alert">Alarm ausblenden</string>
+    <string name="sessions_alert_dismissed">Alarm ausgeblendet</string>
 </resources>

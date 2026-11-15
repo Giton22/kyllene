@@ -40,6 +40,12 @@ object WidgetIntents {
     const val ACTION_REFRESH_KANBAN = "dev.herald.android.widget.action.REFRESH_KANBAN"
     const val ACTION_REFRESH_SCHEDULED = "dev.herald.android.widget.action.REFRESH_SCHEDULED"
 
+    // The Tasks header's board switch and the Now rows' alert dismissal (D27/D28):
+    const val ACTION_SWITCH_KANBAN_BOARD = "dev.herald.android.widget.action.SWITCH_KANBAN_BOARD"
+    const val ACTION_DISMISS_NOW_ALERT = "dev.herald.android.widget.action.DISMISS_NOW_ALERT"
+    const val EXTRA_DISMISS_GATEWAY = "dismiss_gateway" // String: the gateway the alert belongs to
+    const val EXTRA_DISMISS_KEY = "dismiss_key"         // String: the NowAlertKeys fingerprint
+
     /** Deep links (D17); the Now body's quiet-state quick actions reuse the chat ones. */
     private const val LINK_NOW = "hermes://now"
     private const val LINK_CHATS = "hermes://chats"
@@ -107,6 +113,27 @@ object WidgetIntents {
     /** The manual-refresh broadcast to one provider (D26 trigger 2). */
     fun refresh(context: Context, receiver: Class<*>, action: String): PendingIntent =
         PendingIntent.getBroadcast(context, action.hashCode(), Intent(context, receiver).setAction(action), FLAGS)
+
+    /** The Tasks header's switch button: cycle to the next board (D28). */
+    fun switchBoard(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            ACTION_SWITCH_KANBAN_BOARD.hashCode(),
+            Intent(context, KanbanWidgetProvider::class.java).setAction(ACTION_SWITCH_KANBAN_BOARD),
+            FLAGS,
+        )
+
+    /** A Now row's dismiss button: hide the alert [key] names on [gateway] until it changes (D27). */
+    fun dismissAlert(context: Context, gateway: String, key: String): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            "dismiss:$gateway:$key".hashCode(),
+            Intent(context, NowWidgetProvider::class.java)
+                .setAction(ACTION_DISMISS_NOW_ALERT)
+                .putExtra(EXTRA_DISMISS_GATEWAY, gateway)
+                .putExtra(EXTRA_DISMISS_KEY, key),
+            FLAGS,
+        )
 
     /**
      * The collection rows' tap template (D19): one mutable PendingIntent on the `ListView`, filled in

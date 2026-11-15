@@ -42,6 +42,8 @@ data class NowInputs(
     val kanbanBoardSlug: String?,
     /** The device clock, epoch seconds. */
     val nowSeconds: Long,
+    /** [NowAlertKeys] the user dismissed (D27); items carrying one are hidden until it changes. */
+    val dismissedAlerts: Set<String> = emptySet(),
 )
 
 /**
@@ -121,6 +123,7 @@ object NowReducer {
                             ),
                             botProfile = bot.name,
                             activityEpochSeconds = inputs.failingRoutines.getValue(bot.name).lastRunEpochSeconds,
+                            alertKey = NowAlertKeys.cron(inputs.failingRoutines.getValue(bot.name)),
                         ),
                     )
                     else -> null
@@ -145,6 +148,7 @@ object NowReducer {
                             detail = task.status,
                             target = NowTarget(kanbanBoard = inputs.kanbanBoardSlug, kanbanTaskId = task.id),
                             activityEpochSeconds = task.createdAt?.toDouble(),
+                            alertKey = NowAlertKeys.kanban(inputs.kanbanBoardSlug, task),
                         )
                     )
                 }
@@ -160,10 +164,11 @@ object NowReducer {
                             detail = job.problem,
                             target = NowTarget(scheduledJobId = job.id),
                             activityEpochSeconds = job.lastRunEpochSeconds,
+                            alertKey = NowAlertKeys.cron(job),
                         )
                     )
                 }
-        }.take(NEEDS_YOU_CAP)
+        }.filter { it.alertKey == null || it.alertKey !in inputs.dismissedAlerts }.take(NEEDS_YOU_CAP)
 
         val running = buildList {
             // Chat turns from the live maps only — never `isActive`.
@@ -266,6 +271,7 @@ object NowReducer {
         val carriedNeedsYou = stored.needsYou
             .filter { it.kind == NowNeedsYouKind.ChatWaiting || it.kind == NowNeedsYouKind.BotAnswer || it.kind == NowNeedsYouKind.BotTrouble || it.kind == NowNeedsYouKind.RoutineFailed }
             .filter { it.target.exists() }
+            .filter { it.alertKey == null || it.alertKey !in freshInputs.dismissedAlerts }
             .map { it.copy(carried = true) }
         val carriedRunning = stored.running
             .filter { it.kind == NowRunningKind.ChatTurn || it.kind == NowRunningKind.BotWorking }

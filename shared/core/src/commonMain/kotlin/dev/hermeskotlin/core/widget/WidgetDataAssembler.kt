@@ -5,6 +5,7 @@ import dev.hermeskotlin.core.bots.BotHealth
 import dev.hermeskotlin.core.bots.BotTrouble
 import dev.hermeskotlin.core.bots.BotsApi
 import dev.hermeskotlin.core.cache.OfflineCache
+import dev.hermeskotlin.core.cache.SavedList
 import dev.hermeskotlin.core.chat.AttentionTracker
 import dev.hermeskotlin.core.chat.Waiting
 import dev.hermeskotlin.core.common.runCatchingCancellable
@@ -13,13 +14,20 @@ import dev.hermeskotlin.core.cron.CronJob
 import dev.hermeskotlin.core.cron.isRoutineOf
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.kanban.KanbanApi
+import dev.hermeskotlin.core.kanban.KanbanBoardMeta
+import dev.hermeskotlin.core.kanban.KanbanBoardResponse
+import dev.hermeskotlin.core.kanban.KanbanBoardsResponse
 import dev.hermeskotlin.core.sessions.SessionListFilter
 import dev.hermeskotlin.core.sessions.SessionPage
 import dev.hermeskotlin.core.sessions.SessionsApi
+import dev.hermeskotlin.core.sessions.SeenChats
 import dev.hermeskotlin.core.sessions.SeenStore
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.kanbanBoard
+import dev.hermeskotlin.core.settings.withKanbanBoard
 import io.ktor.util.date.getTimeMillis
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 
@@ -34,10 +42,11 @@ import kotlinx.coroutines.flow.first
  * - [refreshAllCold] (D14) never opens a socket: it re-derives the REST-derivable tiers from REST alone
  *   and carries the socket-only rows of the stored Now snapshot across via [NowReducer.mergeCold].
  *
- * The per-widget [refreshNow] / [refreshChats] / [refreshKanban] / [refreshScheduled] methods hold the
- * same pipelines one widget at a time (D23's refresh pipelines, D26's "a `cron.changed` never re-fetches
- * the Kanban board"): every method performs only the reads its widget needs and writes only its own
- * snapshot. [refreshAll] composes them unchanged.
+ * Both combined entry points share one set of REST reads across the four widgets (D26): the sessions
+ * page, the cron jobs, the boards list and the roster are each fetched once per pass, the independent
+ * reads run concurrently, and only the chosen board's detail waits on the boards list. The per-widget
+ * [refreshNow] / [refreshChats] / [refreshKanban] / [refreshScheduled] methods keep the same pipelines
+ * one widget at a time, each performing only the reads its widget needs.
  *
  * Failure semantics (D26): a failed Kanban or Scheduled read writes nothing — the renderer re-renders the
  * stored snapshot. Chats falls back (D9): `OfflineCache`, then the stored snapshot's rows with
@@ -53,6 +62,13 @@ interface WidgetRefreshPipelines {
         url: GatewayUrl,
         profile: String?,
         knownBots: List<Bot>,
+        threadIds: Set<String> = emptySet(),
+    ): WidgetDataAssembler.AllWidgets
+
+    /** Every widget with the app process alive (D13), sharing one set of REST reads (D26). */
+    suspend fun refreshAllLive(
+        url: GatewayUrl,
+        profile: String?,
         threadIds: Set<String> = emptySet(),
     ): WidgetDataAssembler.AllWidgets
 
@@ -83,6 +99,8 @@ class WidgetDataAssembler(
     private val offline: OfflineCache,
     private val settings: SettingsStore,
     private val snapshotStore: WidgetSnapshotStore,
+    /** The user's dismissed Now alerts (D27); null in tests that don't exercise dismissal. */
+    private val dismissals: WidgetAlertDismissals? = null,
     private val nowSeconds: () -> Long = { getTimeMillis() / 1000 },
 ) : WidgetRefreshPipelines {
 
@@ -102,10 +120,8 @@ class WidgetDataAssembler(
     )
 
     /** D13: refresh every widget from inside the app process, with live socket state. */
-    suspend fun refreshAllLive(url: GatewayUrl, profile: String?, threadIds: Set<String> = emptySet()): AllWidgets {
-        val live = liveMaps()
-        return refreshAll(url, profile, live = live, cold = false, threadIds = threadIds)
-    }
+    override suspend fun refreshAllLive(url: GatewayUrl, profile: String?, threadIds: Set<String>): AllWidgets =
+        refreshAllShared(url, profile, live = null, cold = false, threadIds = threadIds)
 
     /** D14: refresh every widget REST-only, using the saved roster without opening a socket. */
     override suspend fun refreshAllCold(
@@ -113,7 +129,7 @@ class WidgetDataAssembler(
         profile: String?,
         knownBots: List<Bot>,
         threadIds: Set<String>,
-    ): AllWidgets = refreshAll(url, profile, live = LiveMaps(bots = knownBots), cold = true, threadIds = threadIds)
+    ): AllWidgets = refreshAllShared(url, profile, live = LiveMaps(bots = knownBots), cold = true, threadIds = threadIds)
 
     /** One widget's pipeline with the app process alive; only the reads that widget needs run (D26). */
     override suspend fun refreshNow(url: GatewayUrl, profile: String?, threadIds: Set<String>): NowWidgetSnapshot =
@@ -140,18 +156,75 @@ class WidgetDataAssembler(
         scheduledPipeline(url, if (live) liveMaps() else LiveMaps())
 
     /**
-     * The combined pipeline. [refreshAllLive]/[refreshAllCold] keep the freshness mode explicit; the
-     * per-widget public methods above hold the same pipelines one widget at a time. Every REST read is
-     * independent and best-effort, as D26's deadline demands, and `threadIds` is the app's best-effort
-     * thread knowledge (empty cold).
+     * The combined pipeline with caller-supplied socket maps. [refreshAllLive]/[refreshAllCold] keep the
+     * freshness mode explicit; this overload serves tests that hold the maps themselves. Every REST read
+     * is shared across the four widgets and best-effort, as D26's deadline demands, and `threadIds` is
+     * the app's best-effort thread knowledge (empty cold).
      */
     suspend fun refreshAll(url: GatewayUrl, profile: String?, live: LiveMaps, cold: Boolean, threadIds: Set<String>): AllWidgets =
-        AllWidgets(
-            now = nowPipeline(url, profile, live, cold, threadIds),
-            chats = chatsPipeline(url, profile, live, threadIds),
-            kanban = kanbanPipeline(url),
-            scheduled = scheduledPipeline(url, live),
+        refreshAllShared(url, profile, live, cold, threadIds)
+
+    /**
+     * The Tasks header's switch button: pin the board after the resolved one in the gateway's list
+     * order (wrapping), the same pin the Kanban page writes, so the app and the widgets agree on the
+     * board. Returns the new slug, or null when the boards can't be read or there is nothing to switch
+     * to; the caller refreshes afterwards either way.
+     */
+    suspend fun switchToNextBoard(url: GatewayUrl): String? {
+        val boards = runCatchingCancellable { kanbanApi.boards(url).orNull() }.getOrNull() ?: return null
+        val pin = settings.settings.filterNotNull().first().kanbanBoard(url)
+        val current = KanbanWidgetAssembler.resolveBoard(boards, pin) ?: return null
+        val next = KanbanWidgetAssembler.nextBoard(boards.boards, current.slug) ?: return null
+        settings.update { it.withKanbanBoard(url, next.slug) }
+        return next.slug
+    }
+
+    /**
+     * One pass, one set of reads (D26): the four pipelines used to re-fetch the sessions page, the cron
+     * jobs and the boards list each, which spent the whole refresh deadline on duplicate requests and
+     * left the tail widgets on their stored snapshots ("Couldn't refresh" after every refresh). The
+     * independent reads now run concurrently and every widget computes from the same answers.
+     */
+    private suspend fun refreshAllShared(url: GatewayUrl, profile: String?, live: LiveMaps?, cold: Boolean, threadIds: Set<String>): AllWidgets {
+        val reads = fetchShared(url, profile, live)
+        return AllWidgets(
+            now = computeNow(url, profile, reads, cold),
+            chats = computeChats(url, profile, reads, threadIds),
+            kanban = computeKanban(url, reads),
+            scheduled = computeScheduled(url, reads),
         )
+    }
+
+    /** What one pass read; a null field is a read that failed or that the pass didn't need. */
+    private class SharedReads(
+        val sessionsPage: SessionPage?,
+        val offlineSaved: SavedList?,
+        val seen: SeenChats?,
+        val jobs: List<CronJob>?,
+        val boards: KanbanBoardsResponse?,
+        val pin: String?,
+        val chosen: KanbanBoardMeta?,
+        val board: KanbanBoardResponse?,
+        val live: LiveMaps,
+    )
+
+    /** The shared reads: sessions, jobs, boards and (when live) the roster concurrently; the board detail after. */
+    private suspend fun fetchShared(url: GatewayUrl, profile: String?, live: LiveMaps?): SharedReads = coroutineScope {
+        val sessionsDeferred = async { readSessionsPage(url, profile) }
+        val jobsDeferred = async { runCatchingCancellable { cronApi.jobs(url).orNull() }.getOrNull() }
+        val boardsDeferred = async { runCatchingCancellable { kanbanApi.boards(url).orNull() }.getOrNull() }
+        val liveDeferred = async { live ?: liveMaps() }
+        val sessionsPage = sessionsDeferred.await()
+        val offlineSaved = readOfflineSaved(url, profile, sessionsPage)
+        val seen = readSeen(url, profile)
+        val jobs = jobsDeferred.await()
+        val boards = boardsDeferred.await()
+        val liveMaps = liveDeferred.await()
+        val pin = settings.settings.filterNotNull().first().kanbanBoard(url)
+        val chosen = boards?.let { KanbanWidgetAssembler.resolveBoard(it, pin) }
+        val board = chosen?.let { runCatchingCancellable { kanbanApi.board(url, board = it.slug).orNull() }.getOrNull() }
+        SharedReads(sessionsPage, offlineSaved, seen, jobs, boards, pin, chosen, board, liveMaps)
+    }
 
     /** The socket-side maps as the app's Koin singletons currently hold them (D13). */
     private suspend fun liveMaps(): LiveMaps {
@@ -166,34 +239,39 @@ class WidgetDataAssembler(
 
     // Now (D12-D14).
     private suspend fun nowPipeline(url: GatewayUrl, profile: String?, live: LiveMaps, cold: Boolean, threadIds: Set<String>): NowWidgetSnapshot {
-        val scope = url.value
-        val clock = nowSeconds()
         val sessionsPage = readSessionsPage(url, profile)
         val offlineSaved = readOfflineSaved(url, profile, sessionsPage)
-        val jobsResult = runCatchingCancellable { cronApi.jobs(url).orNull() }.getOrNull()
-        val boardsResult = runCatchingCancellable { kanbanApi.boards(url).orNull() }.getOrNull()
+        val jobs = runCatchingCancellable { cronApi.jobs(url).orNull() }.getOrNull()
+        val boards = runCatchingCancellable { kanbanApi.boards(url).orNull() }.getOrNull()
         val pin = settings.settings.filterNotNull().first().kanbanBoard(url)
-        val chosen = boardsResult?.let { KanbanWidgetAssembler.resolveBoard(it, pin) }
+        val chosen = boards?.let { KanbanWidgetAssembler.resolveBoard(it, pin) }
         val board = chosen?.let { runCatchingCancellable { kanbanApi.board(url, board = it.slug).orNull() }.getOrNull() }
         val seen = readSeen(url, profile)
-        val sessions = sessionsPage?.sessions ?: offlineSaved?.sessions.orEmpty()
+        val reads = SharedReads(sessionsPage, offlineSaved, seen, jobs, boards, pin, chosen, board, live)
+        return computeNow(url, profile, reads, cold)
+    }
 
+    private suspend fun computeNow(url: GatewayUrl, profile: String?, reads: SharedReads, cold: Boolean): NowWidgetSnapshot {
+        val scope = url.value
+        val clock = nowSeconds()
+        val sessions = reads.sessionsPage?.sessions ?: reads.offlineSaved?.sessions.orEmpty()
         val nowInputs = NowInputs(
             sessions = sessions,
-            sessionsKnown = sessionsPage != null || offlineSaved != null,
-            seen = seen,
-            waiting = live.waiting,
-            runningChats = live.runningChats,
-            bots = live.bots,
-            troubles = live.troubles,
-            failingRoutines = failingRoutines(live.bots, jobsResult.orEmpty()),
-            cronJobs = jobsResult.orEmpty(),
-            kanbanRows = board?.columns.orEmpty().flatMap { it.tasks },
-            kanbanBoardSlug = chosen?.slug ?: pin,
+            sessionsKnown = reads.sessionsPage != null || reads.offlineSaved != null,
+            seen = reads.seen,
+            waiting = reads.live.waiting,
+            runningChats = reads.live.runningChats,
+            bots = reads.live.bots,
+            troubles = reads.live.troubles,
+            failingRoutines = failingRoutines(reads.live.bots, reads.jobs.orEmpty()),
+            cronJobs = reads.jobs.orEmpty(),
+            kanbanRows = reads.board?.columns.orEmpty().flatMap { it.tasks },
+            kanbanBoardSlug = reads.chosen?.slug ?: reads.pin,
             nowSeconds = clock,
+            dismissedAlerts = dismissals?.keys(scope).orEmpty(),
         )
         val now = if (cold) {
-            NowReducer.mergeCold(scope, profile, snapshotStore.readNow(scope, profile), nowInputs, live.bots)
+            NowReducer.mergeCold(scope, profile, snapshotStore.readNow(scope, profile), nowInputs, reads.live.bots)
         } else {
             NowReducer.derive(scope, profile, nowInputs)
         }
@@ -203,18 +281,23 @@ class WidgetDataAssembler(
 
     // Chats (D9): the REST page; else the offline saved list; else the stored snapshot's rows.
     private suspend fun chatsPipeline(url: GatewayUrl, profile: String?, live: LiveMaps, threadIds: Set<String>): ChatsWidgetSnapshot {
-        val scope = url.value
-        val clock = nowSeconds()
         val sessionsPage = readSessionsPage(url, profile)
         val offlineSaved = readOfflineSaved(url, profile, sessionsPage)
         val seen = readSeen(url, profile)
+        val reads = SharedReads(sessionsPage, offlineSaved, seen, jobs = null, boards = null, pin = null, chosen = null, board = null, live = live)
+        return computeChats(url, profile, reads, threadIds)
+    }
+
+    private suspend fun computeChats(url: GatewayUrl, profile: String?, reads: SharedReads, threadIds: Set<String>): ChatsWidgetSnapshot {
+        val scope = url.value
+        val clock = nowSeconds()
         // Both lineage ids: a compressed bot chat answers to either its canonical id or its open id.
-        val botChatIds = live.bots.flatMap { listOfNotNull(it.canonicalSession?.id, it.canonicalSession?.openId) }.toSet()
-        val sessions = sessionsPage?.sessions ?: offlineSaved?.sessions.orEmpty()
+        val botChatIds = reads.live.bots.flatMap { listOfNotNull(it.canonicalSession?.id, it.canonicalSession?.openId) }.toSet()
+        val sessions = reads.sessionsPage?.sessions ?: reads.offlineSaved?.sessions.orEmpty()
 
         val chats = when {
-            sessionsPage != null -> ChatsWidgetAssembler.assemble(scope, profile, sessions, seen, live.waiting, live.runningChats, botChatIds, threadIds, savedCopy = false, nowSeconds = clock)
-            offlineSaved != null -> ChatsWidgetAssembler.assemble(scope, profile, sessions, seen, live.waiting, live.runningChats, botChatIds, threadIds, savedCopy = true, nowSeconds = clock)
+            reads.sessionsPage != null -> ChatsWidgetAssembler.assemble(scope, profile, sessions, reads.seen, reads.live.waiting, reads.live.runningChats, botChatIds, threadIds, savedCopy = false, nowSeconds = clock)
+            reads.offlineSaved != null -> ChatsWidgetAssembler.assemble(scope, profile, sessions, reads.seen, reads.live.waiting, reads.live.runningChats, botChatIds, threadIds, savedCopy = true, nowSeconds = clock)
             else -> snapshotStore.readChats(scope, profile)?.let { stored ->
                 stored.copy(rows = stored.rows.map { it.copy(savedCopy = true) }, savedAtEpochSeconds = clock)
             } ?: ChatsWidgetSnapshot(gatewayUrl = scope, profile = profile, rows = emptyList(), savedAtEpochSeconds = clock)
@@ -225,12 +308,20 @@ class WidgetDataAssembler(
 
     // Kanban (D10): the resolved slug — never the pin's alone — is what REST passed and what stores.
     private suspend fun kanbanPipeline(url: GatewayUrl): KanbanWidgetSnapshot? {
+        val boards = runCatchingCancellable { kanbanApi.boards(url).orNull() }.getOrNull()
+        val pin = settings.settings.filterNotNull().first().kanbanBoard(url)
+        val chosen = boards?.let { KanbanWidgetAssembler.resolveBoard(it, pin) }
+        val board = chosen?.let { runCatchingCancellable { kanbanApi.board(url, board = it.slug).orNull() }.getOrNull() }
+        val reads = SharedReads(sessionsPage = null, offlineSaved = null, seen = null, jobs = null, boards = boards, pin = pin, chosen = chosen, board = board, live = LiveMaps())
+        return computeKanban(url, reads)
+    }
+
+    private suspend fun computeKanban(url: GatewayUrl, reads: SharedReads): KanbanWidgetSnapshot? {
         val scope = url.value
         val clock = nowSeconds()
-        val boardsResult = runCatchingCancellable { kanbanApi.boards(url).orNull() }.getOrNull()
-        val pin = settings.settings.filterNotNull().first().kanbanBoard(url)
-        val chosen = boardsResult?.let { KanbanWidgetAssembler.resolveBoard(it, pin) }
-        val board = chosen?.let { runCatchingCancellable { kanbanApi.board(url, board = it.slug).orNull() }.getOrNull() }
+        val boardsResult = reads.boards
+        val chosen = reads.chosen
+        val board = reads.board
         val kanban = if (boardsResult != null && chosen != null) {
             KanbanWidgetAssembler.assemble(
                 gatewayUrl = scope,
@@ -252,7 +343,7 @@ class WidgetDataAssembler(
                 deviceNowSeconds = clock,
             ).also { snapshotStore.saveKanban(it) }
         } else {
-            val fallbackSlug = chosen?.slug ?: pin
+            val fallbackSlug = chosen?.slug ?: reads.pin
             if (fallbackSlug != null) snapshotStore.readKanban(scope, fallbackSlug) else null
         }
         return kanban
@@ -261,11 +352,16 @@ class WidgetDataAssembler(
     // Scheduled (D11): an empty success overwrites (a cleared gateway has no jobs); a failed read
     // leaves the stored snapshot standing.
     private suspend fun scheduledPipeline(url: GatewayUrl, live: LiveMaps): ScheduledWidgetSnapshot? {
+        val jobs = runCatchingCancellable { cronApi.jobs(url).orNull() }.getOrNull()
+        val reads = SharedReads(sessionsPage = null, offlineSaved = null, seen = null, jobs = jobs, boards = null, pin = null, chosen = null, board = null, live = live)
+        return computeScheduled(url, reads)
+    }
+
+    private suspend fun computeScheduled(url: GatewayUrl, reads: SharedReads): ScheduledWidgetSnapshot? {
         val scope = url.value
         val clock = nowSeconds()
-        val jobsResult = runCatchingCancellable { cronApi.jobs(url).orNull() }.getOrNull()
-        val scheduled = if (jobsResult != null) {
-            ScheduledWidgetAssembler.assemble(scope, jobsResult, live.bots, clock)
+        val scheduled = if (reads.jobs != null) {
+            ScheduledWidgetAssembler.assemble(scope, reads.jobs, reads.live.bots, clock)
                 .also { snapshotStore.saveScheduled(it) }
         } else {
             snapshotStore.readScheduled(scope)

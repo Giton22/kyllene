@@ -18,6 +18,9 @@ class KanbanWidgetProvider : AppWidgetProvider() {
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
-        if (intent.action == WidgetIntents.ACTION_REFRESH_KANBAN) goAsyncRefresh(context)
+        when (intent.action) {
+            WidgetIntents.ACTION_REFRESH_KANBAN -> goAsyncRefresh(context)
+            WidgetIntents.ACTION_SWITCH_KANBAN_BOARD -> goAsyncSwitchBoard(context)
+        }
     }
 }

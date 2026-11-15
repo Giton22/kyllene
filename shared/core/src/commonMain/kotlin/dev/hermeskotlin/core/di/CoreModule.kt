@@ -62,6 +62,7 @@ import dev.hermeskotlin.core.projects.ProjectsApi
 import dev.hermeskotlin.core.threads.ThreadsApi
 import dev.hermeskotlin.core.threads.ThreadsRepository
 import dev.hermeskotlin.core.bots.SidebarModeStore
+import dev.hermeskotlin.core.widget.WidgetAlertDismissals
 import dev.hermeskotlin.core.widget.WidgetDataAssembler
 import dev.hermeskotlin.core.widget.WidgetRefreshPipelines
 import dev.hermeskotlin.core.widget.WidgetSnapshotStore
@@ -173,6 +174,7 @@ val coreModule = module {
     // Home-screen widget snapshots and the two non-chat link buses (D7, D20): consumed by screens and,
     // on Android, the widget providers (W-C2) — never the other way round.
     single { WidgetSnapshotStore(get()) }
+    single { WidgetAlertDismissals(get()) }
     single { KanbanLinks() }
     single { ScheduledLinks() }
     single {
@@ -187,6 +189,7 @@ val coreModule = module {
             offline = get(),
             settings = get(),
             snapshotStore = get(),
+            dismissals = get(),
         )
     } bind WidgetRefreshPipelines::class
 }

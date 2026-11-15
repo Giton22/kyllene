@@ -51,6 +51,8 @@ data class KanbanWidgetSnapshot(
     /** Always carries the four header keys, 0 when absent from the gateway's counts. */
     val counts: Map<String, Int> = emptyMap(),
     val rows: List<KanbanWidgetRow> = emptyList(),
+    /** How many boards the gateway listed; the header's switch button shows only above one. */
+    val boardCount: Int = 0,
     val savedAtEpochSeconds: Long,
 )
 
@@ -151,6 +153,13 @@ data class NowNeedsYouItem(
     val activityEpochSeconds: Double? = null,
     /** True when this row was carried over from the stored snapshot on a cold refresh. */
     val carried: Boolean = false,
+    /**
+     * The dismissal key ([NowAlertKeys]) for the alert kinds a user can clear (a cron problem, a
+     * failing routine, a blocked/review task); null for the live-conversation kinds, which clear
+     * themselves when answered. A dismissed key hides the item until the underlying failure
+     * fingerprint changes — a new failed run or a new task status raises a fresh key.
+     */
+    val alertKey: String? = null,
 )
 
 @Serializable
