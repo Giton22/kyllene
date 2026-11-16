@@ -29,6 +29,10 @@ kotlin {
             compileOnly(libs.jcef)
             // Windows' global hotkey for the quick entry.
             implementation(libs.jna.platform)
+            // The tray's, quick entry's and system prompts' words (src/jvmMain/composeResources).
+            implementation(compose.components.resources)
+            // FileKit uses the same D-Bus runtime; the Linux shortcut portal uses no file descriptors.
+            implementation(libs.dbus.core)
         }
         jvmTest.dependencies {
             implementation(libs.kotlin.test)
@@ -38,6 +42,14 @@ kotlin {
             implementation(libs.jcef)
         }
     }
+}
+
+// The desktop app's own words: the tray, the quick entry, notifications and the storage prompt. values/ is English,
+// one folder per language beside it, as in shared/ui (docs/i18n.md). They follow the system's language.
+compose.resources {
+    packageOfResClass = "dev.hermeskotlin.desktop.resources"
+    // "auto" looks for the library in commonMain, which a desktop-only module doesn't use.
+    generateResClass = always
 }
 
 compose.desktop {
@@ -57,9 +69,11 @@ compose.desktop {
 
         // The installers (packageRelease…) leave out the library code the app never reaches. Names are kept:
         // renaming would save little more, and code that looks classes up by name (Warmup, Compose's text menu)
-        // would need a rule for each.
+        // would need a rule for each. No optimisation either: it took over half of a Linux CI run (13 of 25 min)
+        // and saved only about 3.4 MB on top of the shrinking.
         buildTypes.release.proguard {
             obfuscate = false
+            optimize = false
             configurationFiles.from(project.file("proguard-rules.pro"))
         }
 
@@ -137,6 +151,14 @@ afterEvaluate {
     val jdk = File(compose.desktop.application.javaHome)
     tasks.withType<org.jetbrains.compose.desktop.application.tasks.AbstractJLinkTask>().configureEach {
         val runtime = destinationDir
+        // The PDF viewer parses each document in a child JVM started from the runtime's own launcher
+        // (DesktopPdf.kt), which --strip-native-commands removes too. It's the same JDK build, so it goes back as is.
+        doLast {
+            val name = if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java"
+            val java = runtime.get().asFile.resolve("bin/$name")
+            File(jdk, "bin/$name").copyTo(java, overwrite = true)
+            check(java.setExecutable(true, false) && java.canExecute()) { "Couldn't make $java executable" }
+        }
         doLast {
             val jmod = File(jdk, "jmods/jcef.jmod")
             if (!jmod.isFile) return@doLast
@@ -170,8 +192,8 @@ if (System.getProperty("os.name").startsWith("Windows")) {
             launcherJvmArgs.add("-XX:SharedArchiveFile=\$APPDIR/herald.jsa")
         }
         // Herald's archive sits on top of the JDK's own (classes.jsa), which jlink leaves out of the trimmed runtime
-        // unless asked, and Compose doesn't ask. The runtime has no java.exe to make one with, so the packaging JDK's
-        // launcher is borrowed for it: it starts the runtime's own JVM, which archives the runtime's own modules.
+        // unless asked, and Compose doesn't ask. The runtime's java.exe (put back above for the PDF viewer) makes it:
+        // it starts the runtime's own JVM, which archives the runtime's own modules.
         // On the runtime image itself, which both the app folder and the installers copy.
         val launcher = File(compose.desktop.application.javaHome, "bin/java.exe")
         tasks.withType<org.jetbrains.compose.desktop.application.tasks.AbstractJLinkTask>().configureEach {
@@ -179,14 +201,10 @@ if (System.getProperty("os.name").startsWith("Windows")) {
             doLast {
                 val bin = runtime.get().asFile.resolve("bin")
                 val java = File(bin, "java.exe")
-                launcher.copyTo(java, overwrite = true)
-                try {
-                    val dump = ProcessBuilder(java.path, "-Xshare:dump").redirectErrorStream(true).start()
-                    val output = dump.inputStream.bufferedReader().readText()
-                    check(dump.waitFor() == 0 && File(bin, "server/classes.jsa").isFile) { "No CDS archive for the runtime:\n$output" }
-                } finally {
-                    java.delete()
-                }
+                if (!java.isFile) launcher.copyTo(java)
+                val dump = ProcessBuilder(java.path, "-Xshare:dump").redirectErrorStream(true).start()
+                val output = dump.inputStream.bufferedReader().readText()
+                check(dump.waitFor() == 0 && File(bin, "server/classes.jsa").isFile) { "No CDS archive for the runtime:\n$output" }
             }
         }
     }
@@ -229,4 +247,9 @@ if (System.getProperty("os.name").startsWith("Linux")) {
             nativeJars.forEach { it.copyTo(output.get().asFile.resolve(it.name), overwrite = true) }
         }
     }
+}
+
+// A failed check's message (which language, how wide) shows in the CI log, not only in the HTML report.
+tasks.withType<Test>().configureEach {
+    testLogging { exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }

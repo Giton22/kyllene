@@ -1,8 +1,9 @@
-# ProGuard for the desktop installers (release build type): shrinking and optimising only, names kept (see
+# ProGuard for the desktop installers (release build type): shrinking only, no optimisation, names kept (see
 # build.gradle.kts). These keep what's reached only by name, by native code or through the runtime.
 
-# Narrowing a method's declared types can pick a type it doesn't always return: okio's buffer() came out
-# declared as RealBufferedSource, and the JVM refused it (VerifyError), so the app never reached the gateway.
+# For when optimisation is turned back on. Narrowing a method's declared types can pick a type it doesn't always
+# return: okio's buffer() came out declared as RealBufferedSource, and the JVM refused it (VerifyError), so the app
+# never reached the gateway.
 -optimizations !method/specialization/returntype,!method/specialization/parametertype
 
 # The app's own code, whole: Warmup links every class under dev/hermeskotlin/ by name, and Koin builds view models
@@ -83,3 +84,16 @@
 
 # The Linux audio backend's native library resolves WebRTC classes and members by name.
 -keep class dev.onvoid.webrtc.** { *; }
+
+# The PDF child explicitly selects these logging classes by name; its protocol must contain no logs.
+-keep class org.apache.commons.logging.impl.LogFactoryImpl { *; }
+-keep class org.apache.commons.logging.impl.NoOpLog { *; }
+# Other Commons Logging adapters are optional and are not selected by the PDF child.
+-dontwarn org.apache.commons.logging.impl.AvalonLogger
+-dontwarn org.apache.commons.logging.impl.Log4JLogger
+-dontwarn org.apache.commons.logging.impl.Log4jApiLogFactory**
+-dontwarn org.apache.commons.logging.impl.LogKitLogger
+-dontwarn org.apache.commons.logging.impl.ServletContextCleaner
+-dontwarn org.apache.commons.logging.jakarta.ServletContextCleaner
+# PDFBox's typed MethodHandle.invokeExact(ByteBuffer) is a valid signature-polymorphic JVM call.
+-dontwarn org.apache.pdfbox.io.IOUtils

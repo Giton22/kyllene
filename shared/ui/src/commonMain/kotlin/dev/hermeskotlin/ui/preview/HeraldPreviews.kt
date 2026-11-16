@@ -102,6 +102,10 @@ import dev.hermeskotlin.ui.assistant.AssistantBackdrop
 import dev.hermeskotlin.ui.assistant.AssistantCard
 import dev.hermeskotlin.ui.sessions.ProjectDraft
 import dev.hermeskotlin.core.projects.FolderListing
+import dev.hermeskotlin.core.projects.Project
+import dev.hermeskotlin.core.projects.ProjectsApi
+import dev.hermeskotlin.core.profiles.Profile
+import dev.hermeskotlin.ui.chat.GreetingPlaces
 import dev.hermeskotlin.ui.sessions.ProjectActionsSheet
 import dev.hermeskotlin.ui.sessions.NewProjectDialog
 import androidx.compose.foundation.background
@@ -115,10 +119,13 @@ import dev.hermeskotlin.ui.settings.GitInstallSheet
 import dev.hermeskotlin.ui.settings.GitInstallUi
 import dev.hermeskotlin.ui.settings.ScreenPluginStatus
 import dev.hermeskotlin.ui.settings.AppIconScreen
+import dev.hermeskotlin.ui.settings.ConnectedDevicesView
 import dev.hermeskotlin.ui.settings.ConnectionCheckSheet
 import dev.hermeskotlin.ui.settings.GatewayInfo
 import dev.hermeskotlin.ui.settings.SettingsView
 import dev.hermeskotlin.ui.settings.StartInstructionView
+import dev.hermeskotlin.ui.settings.SidebarPagesView
+import dev.hermeskotlin.ui.SidebarPage
 import dev.hermeskotlin.ui.update.LocalRenameOffer
 import dev.hermeskotlin.ui.update.RenameOffer
 import androidx.compose.ui.tooling.preview.Preview
@@ -157,6 +164,7 @@ enum class PreviewScene(val label: String) {
     ReadAloudFailed("A reply the gateway couldn't voice"),
     NewChat("A new chat"),
     Sidebar("The sessions sidebar"),
+    SidebarProfiles("The sidebar's profile menu"),
     Renamed("The sidebar after updating from Herald, with the rename card"),
     Bots("The bots and rooms"),
     Room("A room of bots"),
@@ -168,6 +176,8 @@ enum class PreviewScene(val label: String) {
     AgentScreenUnreleased("Agent Screen setup unavailable (synthetic unconfigured release)"),
     AppIcons("The app icons"),
     StartInstruction("The starting instruction for new chats"),
+    ConnectedDevices("Connected devices: the Pebble and its prompts"),
+    SidebarPages("The sidebar's page buttons, a few hidden"),
     Gateways("Saved gateways"),
     Journey("What the agent has learned"),
     Insights("Insights"),
@@ -261,7 +271,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                 PreviewScene.VoiceCutIn -> SampleChat(ChatSamples.voice, voiceChat = ChatSamples.speakingCutIn)
                 PreviewScene.ReadAloud -> SampleChat(ChatSamples.reply, readAloud = ReadAloudState(key = "a1"))
                 PreviewScene.ReadAloudFailed -> SampleChat(ChatSamples.reply, readAloud = ReadAloudState(error = "Speech synthesis failed"))
-                PreviewScene.NewChat -> SampleChat(ChatSamples.empty, placeholder = "What are we building?")
+                PreviewScene.NewChat -> SampleChat(ChatSamples.empty, placeholder = "What are we building?", places = samplePlaces, cwd = "/srv/site")
                 PreviewScene.Sidebar -> OpenSidebar {
                     SessionsSidebarSample(
                         ChatSamples.sessions(),
@@ -270,6 +280,17 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         statuses = ChatSamples.sessionStatuses,
                         drafts = ChatSamples.sessionDrafts,
                         projects = ChatSamples.projects,
+                    )
+                }
+                PreviewScene.SidebarProfiles -> OpenSidebar {
+                    SessionsSidebarSample(
+                        ChatSamples.sessions(),
+                        selectedId = "s1",
+                        userLabel = ChatSamples.USER,
+                        statuses = ChatSamples.sessionStatuses,
+                        projects = ChatSamples.projects,
+                        profiles = ChatSamples.profiles,
+                        profileMenuOpen = true,
                     )
                 }
                 PreviewScene.Renamed -> OpenSidebar {
@@ -650,6 +671,16 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                     onChange = {},
                     onBack = {},
                 )
+                PreviewScene.ConnectedDevices -> ConnectedDevicesView(
+                    settings = AppSettings(theme = if (dark) ThemeMode.Dark else ThemeMode.Light, glow = glow, pebbleAnswers = true),
+                    onUpdate = {},
+                    onBack = {},
+                )
+                PreviewScene.SidebarPages -> SidebarPagesView(
+                    settings = AppSettings(sidebarNavHidden = listOf(SidebarPage.Insights.name, SidebarPage.Config.name)),
+                    onUpdate = {},
+                    onBack = {},
+                )
                 PreviewScene.ConnectionCheck -> Box(Modifier.fillMaxSize()) {
                     SettingsView(
                         settings = AppSettings(theme = if (dark) ThemeMode.Dark else ThemeMode.Light, glow = glow),
@@ -757,6 +788,9 @@ private fun SampleChat(
     composerText: String = "",
     /** The gateway can't be reached and the link is being made again. */
     offline: Boolean = false,
+    /** An empty new chat's projects and profiles to pick from on its greeting. */
+    places: GreetingPlaces? = null,
+    cwd: String? = null,
 ) {
     ChatView(
         title = state.title ?: "New chat",
@@ -787,8 +821,21 @@ private fun SampleChat(
         onViewImage = {},
         onNotice = {},
         place = "homelab",
+        places = places,
+        cwd = cwd,
     )
 }
+
+/** Made-up projects and profiles for the new chat's greeting. */
+private val samplePlaces = GreetingPlaces(
+    projects = listOf(
+        Project("p1", "website", "/srv/site", sessionCount = 12),
+        Project("p2", "backups", "/srv/backup", sessionCount = 5),
+        Project(ProjectsApi.NO_PROJECT_ID, "Home", null, sessionCount = 30, isNoProject = true),
+    ),
+    profiles = listOf(Profile("default", isDefault = true), Profile("work")),
+    profile = "default",
+)
 
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
@@ -826,9 +873,21 @@ private fun VoicePreview() = HeraldPreview(PreviewScene.Voice)
 @Composable
 private fun NewChatPreview() = HeraldPreview(PreviewScene.NewChat)
 
+@Preview(widthDp = 360, heightDp = 800)
+@Composable
+private fun NewChatNarrowLightPreview() = HeraldPreview(PreviewScene.NewChat, dark = false)
+
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
 private fun SidebarPreview() = HeraldPreview(PreviewScene.Sidebar)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun SidebarProfilesPreview() = HeraldPreview(PreviewScene.SidebarProfiles)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun SidebarProfilesLightPreview() = HeraldPreview(PreviewScene.SidebarProfiles, dark = false)
 
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
@@ -865,6 +924,14 @@ private fun SettingsPreview() = HeraldPreview(PreviewScene.Settings)
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
 private fun StartInstructionPreview() = HeraldPreview(PreviewScene.StartInstruction)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun ConnectedDevicesPreview() = HeraldPreview(PreviewScene.ConnectedDevices)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun SidebarPagesPreview() = HeraldPreview(PreviewScene.SidebarPages)
 
 @Preview(widthDp = 412, heightDp = 892)
 @Composable

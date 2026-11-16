@@ -18,6 +18,7 @@ import com.composables.icons.lucide.SquareTerminal
 import com.composeunstyled.UnstyledButton
 import com.composeunstyled.UnstyledIcon
 import dev.hermeskotlin.designsystem.rememberHoverIndication
+import dev.hermeskotlin.designsystem.LocalDesignWords
 import com.mikepenz.markdown.compose.elements.listDepth
 import com.mikepenz.markdown.compose.elements.MarkdownListItems
 import com.mikepenz.markdown.compose.elements.MarkdownOrderedList
@@ -128,6 +129,13 @@ import com.mikepenz.markdown.model.ImageTransformer
 /** Code blocks wrap long lines instead of scrolling sideways (the "Wrap code lines" setting). */
 val LocalCodeWrap = compositionLocalOf { false }
 
+/**
+ * How much of the text color the background of an inline code span takes, so a selection shows through it. A dark
+ * ground needs more of it for the span to stand out as much as it does on a light one.
+ */
+private const val INLINE_CODE_WASH = 0.05f
+private const val INLINE_CODE_WASH_DARK = 0.08f
+
 /** The Markdown being drawn is still streaming in. */
 private val LocalStreaming = compositionLocalOf { false }
 
@@ -182,7 +190,11 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
     val markdownColors = DefaultMarkdownColors(
         text = bodyStyle.color,
         codeBackground = Theme[colors][well],
-        inlineCodeBackground = Theme[colors][surface2],
+        // Translucent: Compose paints a span's background over a text selection's highlight, so an opaque one
+        // hides the selection on the code. A faint wash of the text color reads as the same chip in either theme.
+        inlineCodeBackground = Theme[colors][textColor].copy(
+            alpha = if (Theme[colors][background].luminance() < 0.5f) INLINE_CODE_WASH_DARK else INLINE_CODE_WASH,
+        ),
         dividerColor = Theme[colors][stroke],
         tableBackground = Theme[colors][surface],
     )
@@ -362,12 +374,12 @@ private object PictureTransformer : ImageTransformer {
             null, MarkdownPicture.Loading -> null
             is MarkdownPicture.Ready -> ImageData(
                 BitmapPainter(picture.bitmap),
-                modifier = picture.onOpen?.let { Modifier.handCursor().clickable(onClickLabel = "Open the picture", onClick = it) } ?: Modifier,
+                modifier = picture.onOpen?.let { Modifier.handCursor().clickable(onClickLabel = LocalDesignWords.current.openPicture, onClick = it) } ?: Modifier,
                 contentDescription = null,
             )
             MarkdownPicture.Failed -> ImageData(
                 rememberVectorPainter(Lucide.ImageOff),
-                contentDescription = "Picture couldn't load",
+                contentDescription = LocalDesignWords.current.pictureFailed,
                 colorFilter = ColorFilter.tint(Theme[colors][textTertiary]),
             )
         }
@@ -591,7 +603,8 @@ private fun CopyPill(text: String) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             UnstyledIcon(if (copied) Lucide.Check else Lucide.Copy, contentDescription = null, tint = tint, modifier = Modifier.size(11.dp))
-            Text(if (copied) "Copied" else "Copy", style = Theme[typography][caption], color = tint)
+            val words = LocalDesignWords.current
+            Text(if (copied) words.copied else words.copy, style = Theme[typography][caption], color = tint)
         }
     }
 }
@@ -601,11 +614,12 @@ private fun CopyPill(text: String) {
  * them can say whose text each one copies.
  */
 @Composable
-fun CopyButton(text: String, modifier: Modifier = Modifier, label: String = "Copy") {
+fun CopyButton(text: String, modifier: Modifier = Modifier, label: String? = null) {
     val (copied, copy) = rememberCopy(text)
+    val words = LocalDesignWords.current
     IconButton(
         icon = if (copied) Lucide.Check else Lucide.Copy,
-        contentDescription = if (copied) "Copied" else label,
+        contentDescription = if (copied) words.copied else label ?: words.copy,
         onClick = copy,
         // Smaller than MinTouchTarget so it sits close to the text; it stands alone, so Compose still stretches its taps to 48dp.
         modifier = modifier.size(32.dp),
