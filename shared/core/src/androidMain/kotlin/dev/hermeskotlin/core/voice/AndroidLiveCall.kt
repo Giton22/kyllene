@@ -79,7 +79,6 @@ class AndroidLiveCall(context: Context) : LiveCall {
         val gathered = CompletableDeferred<Unit>()
         val config = PeerConnection.RTCConfiguration(emptyList()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            iceTransportPolicy = PeerConnection.IceTransportPolicy.ALL
         }
         val peer = factory.createPeerConnection(
             config,
