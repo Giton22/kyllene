@@ -48,6 +48,9 @@ import dev.hermeskotlin.core.chat.DraftStart
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.storage.appDataDir
+import dev.hermeskotlin.ui.update.LocalManagedUpdateOffer
+import dev.hermeskotlin.ui.update.ManagedUpdateOffer
+import dev.hermeskotlin.ui.update.ManagedUpdateState
 import dev.hermeskotlin.core.storage.desktopStorageFolder
 import dev.hermeskotlin.core.storage.prepareDesktopStorage
 import dev.hermeskotlin.core.storage.startDesktopStorageFresh
@@ -57,6 +60,7 @@ import dev.hermeskotlin.ui.DesktopBack
 import dev.hermeskotlin.ui.LocalDesktopBack
 import dev.hermeskotlin.ui.LocalFocusHeld
 import dev.hermeskotlin.ui.QuickEntryHotkey
+import dev.hermeskotlin.ui.SystemColorScheme
 import dev.hermeskotlin.ui.keepFocusHeld
 import dev.hermeskotlin.ui.LocalShortcuts
 import dev.hermeskotlin.ui.Shortcut
@@ -114,7 +118,12 @@ fun main(args: Array<String>) {
     // A `herald://` link Windows started this launch with: a notification's, or one from a browser.
     val launchLink = args.firstOrNull { it.startsWith("${AppLink.DESKTOP_SCHEME}:", ignoreCase = true) }
     // A second launch brings the running Herald forward, with its link, instead of opening another.
-    val instance = SingleInstance.claim(appDataDir, launchLink) ?: exitProcess(0)
+    val flatpak = inFlatpak
+    val restartWait = if (flatpak && args.contentEquals(arrayOf("--restart"))) 30_000L else 0L
+    val instance = SingleInstance.claim(appDataDir, launchLink, restartWait) ?: exitProcess(if (restartWait > 0) 1 else 0)
+    // Linux's light or dark preference, which Compose reads only once there: this follows it as it changes. Asked
+    // for now, so the answer comes in while the storage and the settings are read.
+    val colorScheme = if (System.getProperty("os.name") == "Linux") LinuxColorScheme({ SystemColorScheme.dark = it }) else null
     val koin = startKoin {
         modules(sharedModules + desktopModule)
         if (!unlockDesktopStorage(
@@ -128,6 +137,8 @@ fun main(args: Array<String>) {
     // The read is a file's; were it ever stuck, the window opens in the system's language and switches once it's in.
     applyAppLanguage(runBlocking { withTimeoutOrNull(2_000) { settingsStore.settings.filterNotNull().first() } }?.language)
     useAppTextContextMenu()
+    // Waited for briefly, so the first frame is in the right theme; a desktop that can't say leaves it to Compose.
+    colorScheme?.awaitFirst(1_000)
     val links = koin.get<ChatLinks>()
     val saved = WindowMemory.read(koin.get())
     // The same mark as docs/logo.svg, for the title bar, the taskbar and the tray.
@@ -145,12 +156,16 @@ fun main(args: Array<String>) {
         var frame by remember { mutableStateOf<Frame?>(null) }
         val focused = remember { MutableStateFlow(false) }
         var quickOpen by remember { mutableStateOf(false) }
+        var quickRaise by remember { mutableStateOf(0) }
+        // Bumped by every show(): once the window is visible, Linux asks the window manager to activate it.
+        var windowRaise by remember { mutableStateOf(0) }
         val tray = rememberTrayState()
         // The chat the last notification was about, which a click on it opens.
         var lastNotice by remember { mutableStateOf<DesktopNotice?>(null) }
 
         fun show() {
             windowShown = true
+            windowRaise++
             frame?.let {
                 if (it.extendedState and Frame.ICONIFIED != 0) it.extendedState = it.extendedState and Frame.ICONIFIED.inv()
                 // Raised once Compose has made it visible again, after this pass: a hidden window can't come forward.
@@ -162,6 +177,17 @@ fun main(args: Array<String>) {
         }
 
         val scope = rememberCoroutineScope()
+        val updates = remember {
+            if (flatpak) FlatpakUpdateController(scope, open = { FlatpakUpdatePortal.open(onEvent = it) },
+                onRestartAccepted = { exitApplication() }) else null
+        }
+        val updateState = updates?.state?.collectAsState()?.value
+        LaunchedEffect(updates, settings.checkForUpdates) { updates?.setEnabled(settings.checkForUpdates) }
+        DisposableEffect(updates) { onDispose { updates?.close() } }
+        val managedUpdate = updates?.let { controller ->
+            ManagedUpdateOffer(updateState ?: ManagedUpdateState(), onUpdate = { controller.update() },
+                onCancel = controller::cancel, onRestart = controller::restart, onDismiss = controller::dismiss)
+        }
         val host = remember { koin.get<ChatHost>() }
 
         /**
@@ -182,6 +208,7 @@ fun main(args: Array<String>) {
                 answer.sessionId?.let { links.open(it, title = null) }
                 return
             }
+            if (handleQuickEntryLink(link) { quickOpen = true; quickRaise++ }) return
             show()
             AppLink.parse(link)?.let(links::follow)
         }
@@ -271,7 +298,7 @@ fun main(args: Array<String>) {
                     show()
                     links.newChat()
                 }
-                Item(stringResource(Res.string.tray_quick_entry), onClick = { quickOpen = true })
+                Item(stringResource(Res.string.tray_quick_entry), onClick = { quickOpen = true; quickRaise++ })
                 Separator()
                 Item(stringResource(Res.string.tray_quit), onClick = ::exitApplication)
             },
@@ -302,6 +329,9 @@ fun main(args: Array<String>) {
         ) {
             dialogOwner = window
             frame = window
+            LaunchedEffect(windowRaise) {
+                if (windowRaise != 0) SwingUtilities.invokeLater { LinuxWindowActivation.request(window) }
+            }
             // Narrow enough for Windows' snap layouts (a third of a screen), where the sidebar folds into a drawer;
             // past that, things would only be cut off.
             LaunchedEffect(Unit) { window.minimumSize = java.awt.Dimension(500, 520) }
@@ -338,11 +368,12 @@ fun main(args: Array<String>) {
                     }
                 }
                 Box(Modifier.fillMaxSize().keepFocusHeld(focusHeld)) {
-                    CompositionLocalProvider(LocalUpdateInstaller provides DesktopUpdater) {
+                    CompositionLocalProvider(LocalUpdateInstaller provides DesktopUpdater, LocalManagedUpdateOffer provides managedUpdate) {
                         App(
                             appVersion = System.getProperty("herald.version"),
                             releasesRepo = System.getProperty("herald.releasesRepo"),
                             onDarkTheme = { titleBar?.dark(it) },
+                            onBackground = { paintWindowBackground(window, it) },
                             titleBar = titleBar?.forScreens(),
                             // Signed out of a gateway, or left for another: its chats' windows close, calls and all.
                             onSessionEnded = { url -> chatWindows.removeAll { it.target.gateway.url == url } },
@@ -378,9 +409,11 @@ fun main(args: Array<String>) {
 
         QuickEntryWindow(
             visible = quickOpen,
-            onDismiss = { quickOpen = false },
+            raise = quickRaise,
+            onDismiss = { quickOpen = false; quickRaise = 0 },
             onSend = { text, target ->
                 quickOpen = false
+                quickRaise = 0
                 // The open chat takes it if it can; one it can't reach (Settings over it, still connecting) gets a new chat.
                 if (target == QuickTarget.NewChat || !shortcuts.fire(Shortcut.Prompt(text))) {
                     links.newChat(ComposeDraft(text = text, start = DraftStart.Send))
@@ -389,6 +422,6 @@ fun main(args: Array<String>) {
         )
     }
     // The windows are gone; Chromium's helper processes go with the app, not after it.
-    Jcef.shutdown()
+    try { Jcef.shutdown() } finally { instance.close(); colorScheme?.close() }
     exitProcess(0)
 }

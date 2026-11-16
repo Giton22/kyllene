@@ -37,8 +37,10 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.ReceiveChannel
@@ -123,7 +125,8 @@ class LiveConversationTest {
         }
     }
 
-    private class FakeCall : LiveCall {
+    /** [calls]: shared by several, each connect and close, in order, by [name]. */
+    private class FakeCall(private val calls: MutableList<String>? = null, private val name: String = "") : LiveCall {
         private val incoming = Channel<String>(Channel.UNLIMITED)
         override val events: ReceiveChannel<String> = incoming
         val sent = MutableStateFlow<List<JsonObject>>(emptyList())
@@ -132,6 +135,7 @@ class LiveConversationTest {
         var closed = false
 
         override suspend fun connect(answer: suspend (offerSdp: String) -> String) {
+            calls?.add("$name connect")
             this.answer = answer("v=0 offer\r\n")
         }
 
@@ -159,6 +163,7 @@ class LiveConversationTest {
         override fun setMuted(muted: Boolean) { muteChanges += muted }
 
         override fun close() {
+            if (!closed) calls?.add("$name close")
             closed = true
             incoming.cancel()
         }
@@ -277,6 +282,89 @@ class LiveConversationTest {
     }
 
     @Test
+    fun subscriptionCallHandsOffToAnotherScreenWithoutApiFallback() = runTest {
+        val paths = mutableListOf<String>()
+        val client = createHttpClient(MockEngine { request ->
+            paths += request.url.encodedPath
+            when (request.url.encodedPath) {
+                "/api/auth/ws-ticket" -> respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
+                "/api/plugins/kyllene_voice/gpt-live/session" ->
+                    respond("""{"ok":true,"auth":"subscription","source":"plugin","transport":{"sdp":"v=0 answer"}}""", HttpStatusCode.OK, json)
+                else -> error("Unexpected request: ${request.url}")
+            }
+        }, PersistentCookiesStorage(InMemoryKeyValueStore()))
+        val socket = Socket()
+        val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> socket }, backgroundScope)
+        connection.start(gateway)
+        connection.state.first { it is ConnectionState.Connected }
+        val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope, profile = "work")
+        session.start()
+        val first = FakeCall()
+        val second = FakeCall()
+        val one = VoiceController(AudioApi(client), NoRecorder, Silent, backgroundScope, backgroundScope) { first }
+        val two = VoiceController(AudioApi(client), NoRecorder, Silent, backgroundScope, backgroundScope) { second }
+
+        one.startChat(session, gateway, "work", subscriptionPreview = true)
+        one.chat.first { it.live && it.phase == VoicePhase.Listening }
+        two.startChat(session, gateway, "work", subscriptionPreview = true)
+        two.chat.first { it.live && it.phase == VoicePhase.Listening }
+
+        assertTrue(first.closed)
+        assertFalse(second.closed)
+        assertEquals(2, paths.count { it == "/api/plugins/kyllene_voice/gpt-live/session" })
+        assertTrue(paths.none { it.startsWith("/api/audio/") })
+        two.stopChat()
+    }
+
+    @Test
+    fun slowSubscriptionCleanupDoesNotClearTheNextCall() = runTest {
+        val client = createHttpClient(MockEngine { request ->
+            when (request.url.encodedPath) {
+                "/api/auth/ws-ticket" -> respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
+                "/api/plugins/kyllene_voice/gpt-live/session" ->
+                    respond("""{"ok":true,"auth":"subscription","source":"plugin","transport":{"sdp":"v=0 answer"}}""", HttpStatusCode.OK, json)
+                else -> error("Unexpected request: ${request.url}")
+            }
+        }, PersistentCookiesStorage(InMemoryKeyValueStore()))
+        val socket = Socket()
+        val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> socket }, backgroundScope)
+        connection.start(gateway)
+        connection.state.first { it is ConnectionState.Connected }
+        val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope, profile = "work")
+        session.start()
+        val connecting = CompletableDeferred<Unit>()
+        val first = object : LiveCall by FakeCall() {
+            override suspend fun connect(answer: suspend (offerSdp: String) -> String) {
+                connecting.complete(Unit)
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) { delay(10_000) }
+                }
+            }
+        }
+        val second = FakeCall()
+        var calls = 0
+        val voice = VoiceController(AudioApi(client), NoRecorder, Silent, backgroundScope, backgroundScope) {
+            if (calls++ == 0) first else second
+        }
+
+        voice.startChat(session, gateway, "work", subscriptionPreview = true)
+        connecting.await()
+        voice.stopChat()
+        voice.startChat(session, gateway, "work", subscriptionPreview = true)
+        advanceTimeBy(3_000); runCurrent()
+        voice.chat.first { it.live && it.phase == VoicePhase.Listening }
+        advanceTimeBy(8_000); runCurrent()
+
+        assertTrue(voice.chat.value.live)
+        assertEquals(VoicePhase.Listening, voice.chat.value.phase)
+        voice.toggleMute()
+        assertEquals(listOf(true), second.muteChanges)
+        voice.stopChat()
+    }
+
+    @Test
     fun gptLiveDoesNotOpenChainedAudio() = runTest {
         val client = http("gpt-live", mutableListOf())
         val socket = Socket()
@@ -293,6 +381,32 @@ class LiveConversationTest {
         voice.startChat(session, gateway, "work")
         voice.chat.first { it.live && it.phase == VoicePhase.Listening }
         voice.stopChat()
+    }
+
+    /** One call at a time, app-wide: a live call started on another screen ends this one, and connects after it closed. */
+    @Test
+    fun aLiveCallOnAnotherScreenEndsThisOneAndConnectsAfterIt() = runTest {
+        val client = http("gpt-live", mutableListOf())
+        val calls = mutableListOf<String>()
+        suspend fun screen(name: String): Pair<ChatSession, VoiceController> {
+            val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> Socket() }, backgroundScope)
+            connection.start(gateway)
+            connection.state.first { it is ConnectionState.Connected }
+            val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
+            session.start()
+            return session to VoiceController(AudioApi(client), NoRecorder, Silent, backgroundScope, backgroundScope) { FakeCall(calls, name) }
+        }
+        val (oneSession, one) = screen("first")
+        val (twoSession, two) = screen("second")
+
+        one.startChat(oneSession, gateway, "work")
+        one.chat.first { it.live && it.phase == VoicePhase.Listening }
+        two.startChat(twoSession, gateway, "work")
+        two.chat.first { it.live && it.phase == VoicePhase.Listening }
+
+        assertEquals(VoicePhase.Off, one.chat.value.phase)
+        assertEquals(listOf("first connect", "first close", "second connect"), calls)
+        two.stopChat()
     }
 
     @Test
@@ -744,6 +858,7 @@ class LiveConversationTest {
         }
     }
 
+    @JvmOnly // The localized unlock message needs Compose resources, unavailable in Android host tests.
     @Test
     fun subscriptionApprovalHonorsLockBeforeAndDuringVerification() = runTest {
         var locked = true
@@ -962,6 +1077,7 @@ class LiveConversationTest {
     }
 
     @Test
+    @JvmOnly // The unlock line comes from the catalogue, which the Android host tests don't have.
     fun anApprovalIsntTakenFromALockedPhone() = runTest {
         var locked = true
         val (socket, session, call, voice) = callWithATurn { locked }
