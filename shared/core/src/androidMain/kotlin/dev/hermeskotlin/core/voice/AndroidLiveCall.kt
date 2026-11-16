@@ -62,11 +62,25 @@ class AndroidLiveCall(context: Context) : LiveCall {
             .setSamplesReadyCallback { samples -> micLevel = level(samples.data) }
             .createAudioDeviceModule()
         this.adm = adm
-        val factory = PeerConnectionFactory.builder().setAudioDeviceModule(adm).createPeerConnectionFactory()
+        // Android reports a VpnService (Tailscale, OpenVPN, WireGuard, …) as the active network and
+        // the NetworkMonitor then hands WebRTC no usable interface: the offer goes out with zero ICE
+        // candidates and the call never connects. Ignore no adapter type and enumerate interfaces
+        // directly instead of trusting the monitor.
+        val factoryOptions = PeerConnectionFactory.Options().apply {
+            networkIgnoreMask = 0
+            disableNetworkMonitor = true
+        }
+        val factory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(adm)
+            .setOptions(factoryOptions)
+            .createPeerConnectionFactory()
         this.factory = factory
 
         val gathered = CompletableDeferred<Unit>()
-        val config = PeerConnection.RTCConfiguration(emptyList()).apply { sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN }
+        val config = PeerConnection.RTCConfiguration(emptyList()).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            iceTransportPolicy = PeerConnection.IceTransportPolicy.ALL
+        }
         val peer = factory.createPeerConnection(
             config,
             object : PeerConnection.Observer {
