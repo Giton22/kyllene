@@ -43,6 +43,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.hermeskotlin.ui.chat.AttachSheet
+import dev.hermeskotlin.ui.chat.rememberAttachmentPicker
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import dev.hermeskotlin.designsystem.components.Toast
@@ -194,6 +199,7 @@ enum class PreviewScene(val label: String) {
     GoalStrip("A chat with a goal, loop and heartbeat above the composer"),
     Comments("Comments on a reply"),
     MidTask("Typing while a task runs"),
+    Attachments("Opening attachments with the keyboard up"),
     ConnectionCheck("The connection check"),
     LongChat("A chat to scroll back through"),
     Tables("Tables in an answer"),
@@ -372,6 +378,12 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                 PreviewScene.Comments -> SampleChat(ChatSamples.reply, comments = remember { ChatSamples.comments() })
                 PreviewScene.LongChat -> SampleChat(ChatSamples.longChat)
                 PreviewScene.MidTask ->SampleChat(ChatSamples.working, composerText = "Also check the photos share")
+                PreviewScene.Attachments -> {
+                    var open by remember { mutableStateOf(false) }
+                    val picker = rememberAttachmentPicker(onPicked = {}, onError = {})
+                    SampleChat(ChatSamples.reply, composerText = "Here is the file", onAttach = { open = true })
+                    AttachSheet(visible = open, onDismiss = { open = false }, picker = picker)
+                }
                 PreviewScene.Offline -> SampleChat(ChatSamples.reply, offline = true)
                 PreviewScene.EmptyPage -> OpenSidebar {
                     SidebarPage {
@@ -750,6 +762,7 @@ private fun SampleChat(
     /** An empty new chat's projects and profiles to pick from on its greeting. */
     places: GreetingPlaces? = null,
     cwd: String? = null,
+    onAttach: () -> Unit = {},
 ) {
     ChatView(
         title = state.title ?: "New chat",
@@ -773,7 +786,7 @@ private fun SampleChat(
         onNewChat = {},
         onOpenMenu = {},
         onOpenModels = {},
-        onAttach = {},
+        onAttach = onAttach,
         onDictate = {},
         onVoiceChat = {},
         onOpenPets = {},
