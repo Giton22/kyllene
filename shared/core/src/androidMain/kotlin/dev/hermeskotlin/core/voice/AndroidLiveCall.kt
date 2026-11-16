@@ -3,6 +3,8 @@ package dev.hermeskotlin.core.voice
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
@@ -62,13 +64,14 @@ class AndroidLiveCall(context: Context) : LiveCall {
             .setSamplesReadyCallback { samples -> micLevel = level(samples.data) }
             .createAudioDeviceModule()
         this.adm = adm
-        // Android reports a VpnService (Tailscale, OpenVPN, WireGuard, …) as the active network and
-        // the NetworkMonitor then hands WebRTC no usable interface: the offer goes out with zero ICE
-        // candidates and the call never connects. Ignore no adapter type and enumerate interfaces
-        // directly instead of trusting the monitor.
+        // Android's NetworkMonitor hides the interfaces WebRTC needs while a VpnService (Tailscale,
+        // OpenVPN, WireGuard, …) is up: the offer then goes out with zero ICE candidates and the
+        // call never connects. Ignore no adapter type, and bypass the monitor only in that case.
         val factoryOptions = PeerConnectionFactory.Options().apply {
             networkIgnoreMask = 0
-            disableNetworkMonitor = true
+            // Only with a VPN up does Android's NetworkMonitor hide the interfaces WebRTC needs;
+            // everywhere else it keeps working and keeps picking up network changes.
+            disableNetworkMonitor = hasVpn(appContext)
         }
         val factory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(adm)
@@ -187,6 +190,14 @@ class AndroidLiveCall(context: Context) : LiveCall {
         channel = null
         peer = null
         unrouteAudio()
+    }
+
+    /** True when a VpnService (Tailscale, OpenVPN, WireGuard, …) is up. */
+    private fun hasVpn(context: Context): Boolean {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
+        return manager.allNetworks.any { network ->
+            manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
     }
 
     /** A call goes to the speaker (or the headset when one is in), with the phone's call processing. */
