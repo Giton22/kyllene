@@ -2,6 +2,7 @@ package dev.hermeskotlin.ui.voice
 
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatSession
+import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.InputAnswers
 import dev.hermeskotlin.core.chat.InputRequest
@@ -143,6 +144,8 @@ class VoiceController(
     private val speechStreams: SpeechStreams? = null,
     /** An approval is only taken by voice while the phone is unlocked. */
     private val deviceLock: DeviceLock = DeviceLock.None,
+    /** Resolves an unnamed launch profile for subscription calls, without guessing. */
+    private val profiles: ProfilesApi? = null,
     private val liveCalls: LiveCalls? = null,
 ) {
     private val _chat = MutableStateFlow(VoiceChatState())
@@ -221,6 +224,8 @@ class VoiceController(
         pauseMs: Long = VoiceActivity().silenceMs,
         opener: CallReason? = null,
         ringback: Boolean = false,
+        subscriptionPreview: Boolean = false,
+        incoming: IncomingVoiceRequest? = null,
     ) {
         if (chatJob?.isActive == true) return
         cancelDictation()
@@ -254,6 +259,10 @@ class VoiceController(
                         // A connection cue must never prevent the call.
                     }
                 } else null
+                if (subscriptionPreview) {
+                    startSubscriptionLive(session, gateway, profile, opener, incoming) { ringing?.cancelAndJoin() }
+                    return@launch
+                }
                 // Asked while the live check goes on: a chained chat needs it before its first listen.
                 val talkOver = async { audio.bargeIn(gateway, profile) }
                 if (startLive(session, gateway, profile, opener) { ringing?.cancelAndJoin() }) {
@@ -262,6 +271,12 @@ class VoiceController(
                 }
                 ringing?.cancelAndJoin()
                 converseChained(session, gateway, profile, pauseMs, opener, talkOver)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (chatJob == null || chatJob === coroutineContext.job) {
+                    _chat.update { it.copy(error = e.message ?: "Couldn't start voice chat.") }
+                }
             } finally {
                 ringing?.cancel()
 
@@ -404,6 +419,62 @@ class VoiceController(
             if (chatJob == null || chatJob === mine) _chat.value = VoiceChatState(error = error.takeUnless { stoppedByUser })
         }
         return true
+    }
+
+    private suspend fun startSubscriptionLive(session: ChatSession, gateway: GatewayUrl, profile: String?, opener: CallReason?, incoming: IncomingVoiceRequest?, onConnectionResult: suspend () -> Unit) {
+        if (session.profile != profile || session.gateway != gateway || profile != null && profile.isBlank()) {
+            _chat.value = VoiceChatState(error = "Subscription preview requires the selected chat's gateway and explicit profile.")
+            return
+        }
+        // Null means the gateway's launch profile, not necessarily default. Only bind it to default
+        // when the gateway explicitly reports that identity and includes it in its roster.
+        val resolvedProfile = profile ?: (profiles?.roster(gateway) as? ApiResult.Success)?.value
+            ?.takeIf { it.launchKnown && it.launch == ProfilesApi.DEFAULT && it.profiles.any { p -> p.name == ProfilesApi.DEFAULT && p.isDefault } }
+            ?.launch
+        if (resolvedProfile == null) {
+            _chat.value = VoiceChatState(error = "Subscription preview could not verify the launch profile. Select an explicit profile or check the gateway.")
+            return
+        }
+        _chat.value = VoiceChatState(VoicePhase.Connecting, live = true)
+        if (subscriptionHistory(session.state) == null) {
+            _chat.value = VoiceChatState(error = "Subscription voice could not read the chat history from the gateway. Try again when history is available.")
+            return
+        }
+        val call = liveCalls?.create()
+        if (call == null) {
+            _chat.value = VoiceChatState(error = "WebRTC is unavailable on this device.")
+            return
+        }
+        _chat.value = VoiceChatState(VoicePhase.Connecting, live = true)
+        val conversation = LiveConversation(
+            call, session, _chat, deviceLock, opener?.liveOpener(),
+            onConnectionResult = onConnectionResult,
+            subscriptionProtocol = dev.hermeskotlin.core.voice.SubscriptionLiveProtocol(),
+            incoming = incoming,
+        )
+        live = conversation
+        var failure: String? = null
+        try {
+            failure = conversation.run {
+                call.connect { offer ->
+                    val chat = subscriptionHistory(session.state)
+                        ?: error("Subscription voice could not read the chat history from the gateway. Try again when history is available.")
+                    val history = conversation.history(chat)
+                    when (val answer = audio.startSubscriptionLive(gateway, offer, history, resolvedProfile)) {
+                        is ApiResult.Success -> answer.value
+                        is ApiResult.Unavailable -> error(answer.message)
+                        else -> error(answer.errorMessage ?: "Subscription voice failed; no API fallback.")
+                    }
+                }
+            }
+        } finally {
+            // A newer chat can start after the bounded wind-down; don't clear its call or panel.
+            if (live === conversation) live = null
+            val mine = currentCoroutineContext().job
+            if (chatJob == null || chatJob === mine) {
+                _chat.value = VoiceChatState(error = (failure ?: _chat.value.error).takeUnless { stoppedByUser })
+            }
+        }
     }
 
     /** Turns the microphone off or on in a live call, or in a chained voice chat. */
