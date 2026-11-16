@@ -842,6 +842,8 @@ class AppViewModelTest {
         signedIn(home)
         val app = viewModel()
         assertNull(app.awaitChat(home).target.cwd)
+        // This test exercises new chats after settings load; launch-time loading is covered separately below.
+        callSettings.settings.filterNotNull().first()
 
         // Started from a project in the list: that's the one the next new chat starts in.
         app.newChat(cwd = "/srv/site")

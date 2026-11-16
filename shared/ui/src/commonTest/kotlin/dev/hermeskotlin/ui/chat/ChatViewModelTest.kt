@@ -38,6 +38,7 @@ import dev.hermeskotlin.core.voice.SpokenAudio
 import dev.hermeskotlin.core.voice.VoiceActivity
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.core.voice.VoiceRecorder
+import dev.hermeskotlin.ui.JvmOnly
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -171,6 +172,31 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun skinWhileSettingsLoadDoesNotQueueAnUpdate() = runTest(dispatcher) {
+        val memory = InMemoryKeyValueStore()
+        memory.put("settings.v1", """{"theme":"Dark","pureBlack":true,"uncertainGitInstalls":["marker"]}""")
+        val release = CompletableDeferred<Unit>()
+        val backing = object : KeyValueStore by memory {
+            override suspend fun get(key: String): String? {
+                release.await()
+                return memory.get(key)
+            }
+        }
+        val settings = SettingsStore(backing, scope)
+        val (vm, host) = viewModel(settings = settings)
+        vm.open(ChatTarget(gateway, "skin", "Chat"))
+        vm.composer.setTextAndPlaceCursorAtEnd("/skin")
+        vm.send(null)
+        runCurrent()
+        assertTrue(assertNotNull(host.session.value).state.value.messages.filterIsInstance<ChatMessage.Command>().last().failed)
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(ThemeMode.Dark, settings.settings.value!!.theme)
+        assertEquals(setOf("marker"), settings.settings.value!!.uncertainGitInstalls)
+    }
+
+    @Test
+    @JvmOnly // Localized command output needs Compose resources absent in Android host tests.
     fun skinBeforeSettingsLoadDoesNotOverwriteStoredInstallerMarker() = runTest(dispatcher) {
         val memory = InMemoryKeyValueStore()
         memory.put("settings.v1", """{"theme":"Dark","pureBlack":true,"uncertainGitInstalls":["marker"]}""")
@@ -207,6 +233,7 @@ class ChatViewModelTest {
     }
 
     @Test
+    @JvmOnly // Localized command output needs Compose resources absent in Android host tests.
     fun skinCommandsPreserveOtherSettingsAndReportTheAppliedTheme() = runTest(dispatcher) {
         val settings = SettingsStore(InMemoryKeyValueStore(), scope)
         runCurrent()

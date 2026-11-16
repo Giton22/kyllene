@@ -234,14 +234,19 @@ class AgentScreenInstallTest {
         f.socket.holdInstall = true
         f.vm.prepareScreenInstall(); runCurrent()
         assertNotNull(f.socket.heldInstall)
-        val oldClient = (f.connection.state.value as ConnectionState.Connected).client
+        val oldClient = assertIs<ConnectionState.Connected>(f.connection.state.value).client
         val oldKey = f.store.settings.value!!.uncertainGitInstalls.single()
+        val newGateway = GatewayUrl.parse("https://b.example")
         f.vm.bind(SavedGateway("https://b.example"))
-        f.connection.start(GatewayUrl.parse("https://b.example"))
+        f.connection.start(newGateway)
         f.vm.closeScreenInstall()
-        runCurrent()
-        val newClient = (f.connection.state.value as ConnectionState.Connected).client
+        // runCurrent alone cannot await the asynchronous ticket request and ready handshake.
+        val connected = f.connection.state.first {
+            it is ConnectionState.Connected && it.client !== oldClient && f.connection.gateway == newGateway
+        }
+        val newClient = assertIs<ConnectionState.Connected>(connected).client
         assertNotSame(oldClient, newClient)
+        runCurrent()
         f.vm.openScreenInstall(); runCurrent()
         val newSheet = f.vm.gitInstall.value
         assertFalse(newSheet.busy)
@@ -254,6 +259,14 @@ class AgentScreenInstallTest {
         assertTrue(oldKey in reloaded.settings.value!!.uncertainGitInstalls)
         assertEquals(1, f.socket.writes().size)
         assertTrue(f.other.writes().isEmpty())
+
+        // The replacement client is not just connected: it can install and enable independently.
+        f.vm.confirmScreenInstall(); runCurrent()
+        assertIs<GitInstallResult.Reported>(f.vm.gitInstall.value.result)
+        assertEquals(1, f.other.writes().size)
+        assertEquals("enabled", f.other.screenState)
+        assertTrue(oldKey in f.store.settings.value!!.uncertainGitInstalls)
+        assertEquals(1, f.socket.writes().size)
     }
 
     @Test fun refreshRequestsFreshStatusAndRejectsOlderResponse() = test {
