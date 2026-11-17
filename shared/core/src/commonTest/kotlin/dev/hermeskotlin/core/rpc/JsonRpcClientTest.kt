@@ -233,6 +233,52 @@ class JsonRpcClientTest {
     }
 
     @Test
+    fun anIdleHeartbeatPingsOncePerMinuteAndComingBackPingsAtOnce() = runTest {
+        val transport = FakeTransport()
+        val client = JsonRpcClient(transport, clock = { testScheduler.currentTime })
+        val pump = launch { runCatching { client.run() } }
+        fun pings() = transport.sent.value.count { it["method"]?.jsonPrimitive?.str() == "gateway.ping" }
+        fun pong() = transport.push("""{"jsonrpc":"2.0","id":"ping${pings()}","result":{}}""")
+        transport.push(FakeTransport.READY)
+        client.ready.await()
+
+        client.setIdle(true)
+        // Ten minutes out of sight, the gateway answering every ping: ten pings, not forty, and the link holds.
+        repeat(10) {
+            testScheduler.advanceTimeBy(60_000)
+            testScheduler.runCurrent()
+            pong()
+        }
+        assertEquals(10, pings())
+
+        // Back in sight: a ping goes out now, not up to a minute later, then every 15 s again.
+        client.setIdle(false)
+        testScheduler.runCurrent()
+        assertEquals(11, pings())
+        pong()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(12, pings())
+        pump.cancel()
+    }
+
+    @Test
+    fun anIdleHeartbeatStillFindsADeadLink() = runTest {
+        val transport = FakeTransport(dead = true)
+        val client = JsonRpcClient(transport, clock = { testScheduler.currentTime })
+        val pump = async { runCatching { client.run() }.exceptionOrNull() }
+        transport.push(FakeTransport.READY)
+        client.ready.await()
+        client.setIdle(true)
+
+        // Silent past the idle deadline (150 s), checked on the next minute's ping.
+        testScheduler.advanceTimeBy(180_001)
+        testScheduler.runCurrent()
+        assertTrue(pump.isCompleted, "the idle heartbeat never gave up")
+        assertTrue(pump.await() !is CancellationException)
+    }
+
+    @Test
     fun serverRequestIsEmittedAndAnsweredById() = runTest {
         val transport = FakeTransport()
         val client = JsonRpcClient(transport)

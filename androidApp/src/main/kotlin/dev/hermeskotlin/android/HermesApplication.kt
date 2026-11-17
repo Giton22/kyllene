@@ -19,6 +19,7 @@ import dev.hermeskotlin.android.wear.WatchAccentSync
 import dev.hermeskotlin.android.wear.WatchRinger
 import dev.hermeskotlin.android.wear.WearRequests
 import dev.hermeskotlin.android.wear.wearModule
+import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.push.PushSetup
 import dev.hermeskotlin.core.settings.AppLockTimer
@@ -56,6 +57,8 @@ class HermesApplication : Application() {
             androidContext(this@HermesApplication)
             modules(sharedModules + notifyModule + wearModule)
         }.koin
+        // Out of sight until the activity starts: a process woken after a reboot or by a push keeps its socket quiet.
+        koin.get<GatewayConnection>().setIdle(true)
         // Before anything the Pebble app hands over is read: only the picked Pebble app is heard.
         PebbleApps.choose(this, koin.get())
         koin.get<WearRequests>().start()

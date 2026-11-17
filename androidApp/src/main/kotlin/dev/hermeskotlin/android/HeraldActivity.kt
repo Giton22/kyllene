@@ -223,6 +223,7 @@ class HeraldActivity : FragmentActivity() {
         // Android cuts a background app's network once no turn keeps it in the foreground; coming back
         // shouldn't sit out the rest of a reconnect backoff.
         if (connection.state.value is ConnectionState.Reconnecting) connection.retry()
+        connection.setIdle(false)
     }
 
     override fun onResume() {
@@ -252,7 +253,12 @@ class HeraldActivity : FragmentActivity() {
     override fun onStop() {
         super.onStop()
         // A rotation isn't leaving the app.
-        if (!isChangingConfigurations) appLock.onBackground(SystemClock.elapsedRealtime())
+        if (!isChangingConfigurations) {
+            appLock.onBackground(SystemClock.elapsedRealtime())
+            // Out of sight (or the screen off), Notifications anywhere keeps the socket up: a ping every 15 s
+            // would wake the phone four times a minute all night.
+            connection.setIdle(true)
+        }
     }
 
     /** The app theme can differ from the system's, so the window and bar icons follow the app. */
