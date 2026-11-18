@@ -47,6 +47,13 @@ class InlineWidgetTest {
     }
 
     @Test
+    fun wrapperDeclaresUtf8BeforeTheWidgetContent() {
+        val result = widgetDocument("<p>70°F – →</p>", theme, "")
+        assertTrue(result.startsWith("<!doctype html><html><head><meta charset=\"utf-8\">"))
+        assertTrue(result.contains("70°F – →"))
+    }
+
+    @Test
     fun wrapperKeepsHostileMarkupInsideTheSandboxedDocument() {
         val html = "\" onload=\"alert(1)\"><script>parent.document.body.remove()</script></iframe><p>&quoted</p>"
         val result = widgetDocument(html, theme, "Zm9udA==")

@@ -122,7 +122,7 @@ internal fun widgetDocument(html: String, theme: WidgetTheme, font: String): Str
         "html,body{margin:0;padding:0;background:transparent;color:var(--foreground);" +
         "font-family:Herald,sans-serif;font-size:${theme.fontSize}px}</style>"
     val content = ("<!doctype html>" + prelude + html).replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
-    return "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
         "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; " +
         "script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; " +
         "frame-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'\">" +
