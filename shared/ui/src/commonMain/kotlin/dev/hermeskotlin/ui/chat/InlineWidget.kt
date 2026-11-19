@@ -1,10 +1,12 @@
 package dev.hermeskotlin.ui.chat
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -92,8 +94,12 @@ internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFile
         Theme[typography][bodySmall].fontSize.value * LocalDensity.current.fontScale,
     )
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
-    Column(Modifier.widthIn(max = READING_WIDTH).fillMaxWidth()) {
-        ReplyFile(item, download = { downloadWidget(files, file) })
+    Column(
+        Modifier.widthIn(max = READING_WIDTH).fillMaxWidth()
+            .clip(shape).border(1.dp, Theme[colors][stroke], shape).background(Theme[colors][surface]),
+    ) {
+        ReplyFile(item, download = { downloadWidget(files, file) }, insidePreview = true)
+        Spacer(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
         when (val current = loaded) {
             is FileLoad.Ready -> if (failed == null) {
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -103,7 +109,7 @@ internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFile
                         ?: (maxWidth * 0.625f).coerceIn(280.dp, 640.dp)
                     WidgetWebView(
                         current.text.text, theme, item.name,
-                        Modifier.fillMaxWidth().height(height).clip(shape).border(1.dp, Theme[colors][stroke], shape),
+                        Modifier.fillMaxWidth().height(height),
                         onReport = { report -> sizing.measuredHeight(report)?.let { measured = it } },
                         onFailure = { failed = it },
                     )

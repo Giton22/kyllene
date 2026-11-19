@@ -69,6 +69,7 @@ import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.IconButton
+import dev.hermeskotlin.designsystem.components.MinTouchTarget
 import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.designsystem.components.handCursor
 import dev.hermeskotlin.designsystem.label
@@ -212,7 +213,11 @@ internal fun webHost(source: String): String? {
 
 /** A delivered file: its name, with Save and Share. */
 @Composable
-internal fun ReplyFile(item: ReplyMedia, download: (suspend () -> FileDownload)? = null) {
+internal fun ReplyFile(
+    item: ReplyMedia,
+    download: (suspend () -> FileDownload)? = null,
+    insidePreview: Boolean = false,
+) {
     val load = LocalMediaLoader.current
     val actions = rememberMediaActions()
     val notify = LocalNotice.current
@@ -240,24 +245,30 @@ internal fun ReplyFile(item: ReplyMedia, download: (suspend () -> FileDownload)?
         }
     }
 
+    val container = if (insidePreview) Modifier.fillMaxWidth() else Modifier
+        .widthIn(max = 420.dp)
+        .fillMaxWidth()
+        .clip(shape)
+        .border(1.dp, Theme[colors][stroke], shape)
+        .background(Theme[colors][surface])
+    val verticalPadding = if (insidePreview) 0.dp else 6.dp
     Row(
-        Modifier
-            .widthIn(max = 420.dp)
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, Theme[colors][stroke], shape)
-            .background(Theme[colors][surface])
-            .padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        container.padding(start = 14.dp, end = 4.dp, top = verticalPadding, bottom = verticalPadding),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (insidePreview) 0.dp else 10.dp),
     ) {
-        UnstyledIcon(Lucide.File, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(22.dp))
+        if (!insidePreview) {
+            UnstyledIcon(Lucide.File, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(22.dp))
+        }
         Column(Modifier.weight(1f)) {
             Text(item.name, style = Theme[typography][label], color = Theme[colors][textColor], maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item.name.substringAfterLast('.', stringResource(Res.string.chat_kind_file)).uppercase(), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+            if (!insidePreview) {
+                Text(item.name.substringAfterLast('.', stringResource(Res.string.chat_kind_file)).uppercase(), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+            }
         }
         if (busy) {
-            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Spinner(Modifier.size(18.dp)) }
+            val slot = if (insidePreview) Modifier.size(MinTouchTarget * 2, MinTouchTarget) else Modifier.size(40.dp)
+            Box(slot, contentAlignment = Alignment.Center) { Spinner(Modifier.size(18.dp)) }
         } else {
             IconButton(Lucide.Download, contentDescription = stringResource(Res.string.chat_save_named, item.name), onClick = { withBytes { notify(actions.save(it, item.name)) } })
             IconButton(shareIcon, contentDescription = shareNamed(item.name), onClick = { withBytes { actions.share(it, item.name) } })
