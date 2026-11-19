@@ -28,6 +28,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import kotlin.math.abs
 import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
@@ -44,9 +45,32 @@ class BottomSheetImeTest {
     @Test
     fun aShortSheetFollowsTheKeyboardDownWithoutJumpingUp() = checkKeyboardTransition(200)
 
-    private fun checkKeyboardTransition(contentHeight: Int) {
-        lateinit var view: View
-        var bounds = Rect.Zero
+    @Test
+    fun theNavigationBarIsNotPaddedTwiceUnderTheKeyboard() {
+        showSheet(200)
+        val height = view.height
+        val navigationBar = height / 20
+        val keyboard = height / 2
+        inset(0, navigationBar)
+        composeRule.mainClock.advanceTimeBy(2_000)
+        composeRule.waitForIdle()
+        val gapOverBar = height - bounds.bottom
+        // As on a device, the keyboard's inset takes in the navigation bar it covers.
+        inset(keyboard, navigationBar)
+        composeRule.mainClock.advanceTimeBy(2_000)
+        composeRule.waitForIdle()
+        val gapOverKeyboard = height - bounds.bottom
+        assertTrue(
+            abs(gapOverKeyboard - gapOverBar - (keyboard - navigationBar)) <= 1,
+            "The sheet must sit on the keyboard, the bar under it not padded again: $gapOverBar -> $gapOverKeyboard " +
+                "(bar $navigationBar, keyboard $keyboard)",
+        )
+    }
+
+    private lateinit var view: View
+    private var bounds = Rect.Zero
+
+    private fun showSheet(contentHeight: Int) {
         composeRule.setContent {
             HermesTheme(ColorScheme.Dark) {
                 BottomSheet(visible = true, onDismiss = {}) {
@@ -59,19 +83,30 @@ class BottomSheetImeTest {
         composeRule.waitForIdle()
         composeRule.mainClock.advanceTimeBy(2_000)
         composeRule.waitForIdle()
+    }
+
+    private fun inset(bottom: Int, navigationBar: Int = 0) {
+        composeRule.runOnIdle {
+            view.dispatchApplyWindowInsets(
+                WindowInsets.Builder()
+                    .apply {
+                        if (navigationBar > 0) {
+                            setInsets(WindowInsets.Type.navigationBars(), android.graphics.Insets.of(0, 0, 0, navigationBar))
+                            setVisible(WindowInsets.Type.navigationBars(), true)
+                        }
+                    }
+                    .setInsets(WindowInsets.Type.ime(), android.graphics.Insets.of(0, 0, 0, bottom))
+                    .setVisible(WindowInsets.Type.ime(), bottom > 0)
+                    .build(),
+            )
+        }
+        composeRule.waitForIdle()
+    }
+
+    private fun checkKeyboardTransition(contentHeight: Int) {
+        showSheet(contentHeight)
         val height = view.height
         val keyboard = height / 2
-        fun inset(bottom: Int) {
-            composeRule.runOnIdle {
-                view.dispatchApplyWindowInsets(
-                    WindowInsets.Builder()
-                        .setInsets(WindowInsets.Type.ime(), android.graphics.Insets.of(0, 0, 0, bottom))
-                        .setVisible(WindowInsets.Type.ime(), bottom > 0)
-                        .build(),
-                )
-            }
-            composeRule.waitForIdle()
-        }
         inset(keyboard)
         composeRule.mainClock.advanceTimeBy(2_000)
         composeRule.waitForIdle()
