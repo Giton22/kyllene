@@ -32,7 +32,9 @@ class StringCatalogueTest {
             val arrays = doc.getElementsByTagName("string-array")
             for (i in 0 until arrays.length) {
                 val e = arrays.item(i) as Element
-                out["array:" + e.getAttribute("name")] = e.textContent
+                // The count is part of the key: a screen reading a month or weekday array falls back to English
+                // when a translation has an item more or fewer.
+                out["array:" + e.getAttribute("name") + "[" + e.getElementsByTagName("item").length + "]"] = e.textContent
             }
         }
         return out
