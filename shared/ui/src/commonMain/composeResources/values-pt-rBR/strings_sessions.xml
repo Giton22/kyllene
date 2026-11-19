@@ -476,4 +476,6 @@
     <string name="sessions_config_refresh_failed">Não foi possível atualizar</string>
     <string name="sessions_config_save_failed">Não foi possível salvar %1$s</string>
     <string name="sessions_config_yaml_saved">config.yaml salvo</string>
+    <string name="sessions_dismiss_alert">Dispensar alerta</string>
+    <string name="sessions_alert_dismissed">Alerta dispensado</string>
 </resources>

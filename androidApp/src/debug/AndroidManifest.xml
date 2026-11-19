@@ -6,5 +6,9 @@
             android:name=".PreviewGalleryActivity"
             android:exported="true"
             android:theme="@style/Theme.HermesKotlin" />
+        <activity
+            android:name=".WidgetHostActivity"
+            android:exported="true"
+            android:theme="@style/Theme.HermesKotlin" />
     </application>
 </manifest>
