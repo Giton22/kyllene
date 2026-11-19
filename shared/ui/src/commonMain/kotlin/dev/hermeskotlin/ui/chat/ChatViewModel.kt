@@ -181,12 +181,20 @@ internal data class ChatTranscript(val state: ChatState = ChatState(), val widge
 
 internal data class ChatReadPosition(val target: ChatTarget, val readUpTo: Double?)
 
-/** Where the reader stood in the open chat's list across composition teardowns (sleep/wake or spinner transitions). */
+/**
+ * Where the reader was in the open chat's list when it last left the screen: the screen rebuilt (on waking the phone
+ * or turning it), or the list was swapped for a spinner for a moment. The list comes back there, not to its end or
+ * the "New messages" line as on opening the chat.
+ */
 internal data class TranscriptViewport(
-    val conversationKey: Any,
-    val firstVisibleItemIndex: Int,
-    val firstVisibleItemScrollOffset: Int,
+    val conversationKey: Any?,
+    /** The message at the top of the list, by key, and how far it's scrolled past. */
+    val firstKey: String?,
+    val firstOffset: Int,
     val pinned: Boolean,
+    /** The read position and saved copy the opening below was worked out for; it holds for those only. */
+    val readUpTo: Double?,
+    val savedCopy: Boolean,
     val readerNavigated: Boolean,
     val unreadSettled: Boolean,
     val positioned: Boolean,
@@ -276,9 +284,10 @@ class ChatViewModel(
     private var target: ChatTarget? = null
     private val _readPosition = MutableStateFlow<ChatReadPosition?>(null)
     internal val readPosition: StateFlow<ChatReadPosition?> = _readPosition.asStateFlow()
+    /** Where the reader was in the open chat's list when it last left the screen; outlives the screen being rebuilt. */
     private var viewport: TranscriptViewport? = null
 
-    internal fun viewportFor(key: Any): TranscriptViewport? = viewport?.takeIf { it.conversationKey == key }
+    internal fun viewportFor(key: Any?): TranscriptViewport? = viewport?.takeIf { it.conversationKey == key }
 
     internal fun saveViewport(value: TranscriptViewport) {
         viewport = value

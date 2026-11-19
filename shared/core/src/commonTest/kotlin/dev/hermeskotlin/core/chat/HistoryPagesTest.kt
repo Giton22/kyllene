@@ -68,4 +68,14 @@ class HistoryPagesTest {
         assertEquals((1L..9L).toList(), ids(loaded.afterNewestPage(page, limit = 4)))
         assertEquals(listOf(8L, 9L), ids(emptyList<SessionMessage>().afterNewestPage(page, limit = 4)))
     }
+
+    @Test
+    fun aFullNewestPageJoinsFromItsFirstPromptWhenTheLoadedRowsWereTrimmed() {
+        // The loaded rows are a page trimmed to its first prompt (5), so the turn's tail before it isn't loaded.
+        // One row came since: the newest page now starts in that tail (3), and still meets the rows at 5.
+        val loaded = listOf(row(5), row(6), row(7), row(8))
+        val page = listOf(row(3, "assistant"), row(4, "tool"), row(5), row(6), row(7), row(8), row(9, "assistant"))
+
+        assertEquals((5L..9L).toList(), ids(loaded.afterNewestPage(page, limit = 7)))
+    }
 }

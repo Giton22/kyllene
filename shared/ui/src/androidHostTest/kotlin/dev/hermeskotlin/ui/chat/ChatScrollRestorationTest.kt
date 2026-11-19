@@ -39,9 +39,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Sleeping and waking Android without process death can recreate the Compose hierarchy via saved instance state
- * while the chat stays open. The transcript must stay where the reader scrolled rather than re-pinning to the end
- * or re-running the opening jump to the unread line near index 0 (#424).
+ * Waking the phone can rebuild the screen while the chat stays open, as turning it does. The transcript stays where
+ * the reader scrolled rather than following the end again or jumping back to the "New messages" line (#424). The
+ * view model, which outlives the rebuild, keeps where that was; [saved] stands in for it here.
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -66,6 +66,8 @@ class ChatScrollRestorationTest {
         }
     }
 
+    private var saved: TranscriptViewport? = null
+
     private fun showRestorableChat(restoration: StateRestorationTester, readUpTo: Double?) {
         val state = ChatState(messages = longMessages(), historyLoaded = true)
         restoration.setContent {
@@ -75,6 +77,8 @@ class ChatScrollRestorationTest {
                         title = "Chat",
                         state = state,
                         conversationKey = "test-chat",
+                        savedViewport = { saved },
+                        onSaveViewport = { saved = it },
                         picker = ModelPickerState(),
                         connected = true,
                         attachments = emptyList(),

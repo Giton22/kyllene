@@ -2,6 +2,7 @@ package dev.hermeskotlin.ui.chat
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -31,13 +32,13 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Verifies [resolveInitialScroll] and composition teardown/remount recovery through [TranscriptViewport]
- * (matching what happens when `AppLockGate` or transient `historyLoaded = false` unmounts `Messages` on wake, #424).
+ * The transcript taken down and put back (a spinner in its place a moment, or the screen rebuilt on waking the
+ * phone) comes back where the reader was, through the [TranscriptViewport] the view model keeps (#424).
  */
 @OptIn(ExperimentalTestApi::class)
 class ChatScrollPreservationTest {
 
-    private fun longMessages(): List<ChatMessage> = (1..60).map { i ->
+    private val messages = (1..60).map { i ->
         if (i % 2 == 1) {
             ChatMessage.User("m$i", "Message $i: prompt line to fill vertical space cleanly", timestamp = i * 10.0)
         } else {
@@ -49,26 +50,73 @@ class ChatScrollPreservationTest {
         }
     }
 
-    @Test
-    fun resolveInitialScrollUsesUnpinnedViewportWithinBounds() {
-        assertEquals(0 to 0, resolveInitialScroll(0, null))
-        val unpinned = TranscriptViewport(
-            conversationKey = "chat-1",
-            firstVisibleItemIndex = 12,
-            firstVisibleItemScrollOffset = 48,
-            pinned = false,
-            readerNavigated = true,
-            unreadSettled = false,
-            positioned = true,
-            unreadFrom = "m2",
-            unreadPagesLoaded = 1,
-        )
-        assertEquals(12 to 48, resolveInitialScroll(60, unpinned))
-        assertEquals(9 to 0, resolveInitialScroll(10, unpinned.copy(firstVisibleItemIndex = 50, firstVisibleItemScrollOffset = -5)))
+    private fun viewport(firstKey: String?, pinned: Boolean = false) = TranscriptViewport(
+        conversationKey = "chat-1",
+        firstKey = firstKey,
+        firstOffset = 48,
+        pinned = pinned,
+        readUpTo = null,
+        savedCopy = false,
+        readerNavigated = true,
+        unreadSettled = false,
+        positioned = true,
+        unreadFrom = null,
+        unreadPagesLoaded = 0,
+    )
 
-        val pinned = unpinned.copy(pinned = true)
-        assertEquals(resolveInitialScroll(60, null), resolveInitialScroll(60, pinned))
-        assertEquals(59, resolveInitialScroll(60, null).first)
+    @Test
+    fun theListOpensWhereTheReaderWasByMessage() {
+        assertEquals(ListPlace(12, 48, pinned = false), openingPlace(messages, viewport("m13")))
+        // A page loaded above since keeps the same message on top.
+        val older = listOf(ChatMessage.User("m0", "Message 0"))
+        assertEquals(ListPlace(13, 48, pinned = false), openingPlace(older + messages, viewport("m13")))
+    }
+
+    @Test
+    fun theListOpensAtTheEndWithNothingToComeBackTo() {
+        val end = ListPlace(59, 1_000_000, pinned = true)
+        assertEquals(end, openingPlace(messages, null))
+        // Following the end, or the message gone (the chat started over from its newest page).
+        assertEquals(end, openingPlace(messages, viewport("m13", pinned = true)))
+        assertEquals(end, openingPlace(messages, viewport("gone")))
+        assertEquals(ListPlace(0, 1_000_000, pinned = true), openingPlace(emptyList(), null))
+    }
+
+    @Composable
+    private fun Chat(state: ChatState, readUpTo: Double?, saved: () -> TranscriptViewport?, onSave: (TranscriptViewport) -> Unit) {
+        HermesTheme(ColorScheme.Light) {
+            Box(Modifier.size(411.dp, 700.dp)) {
+                ChatView(
+                    title = "Chat",
+                    state = state,
+                    conversationKey = "test-chat",
+                    savedViewport = saved,
+                    onSaveViewport = onSave,
+                    picker = ModelPickerState(),
+                    connected = true,
+                    attachments = emptyList(),
+                    attachmentError = null,
+                    voiceChat = VoiceChatState(),
+                    dictation = DictationState(),
+                    suggestions = emptyList(),
+                    sprite = null,
+                    placeholder = "Message",
+                    notice = null,
+                    actions = PreviewChatActions(),
+                    readUpTo = readUpTo,
+                    onOpenSidebar = {},
+                    onNewChat = {},
+                    onOpenMenu = {},
+                    onOpenModels = {},
+                    onAttach = {},
+                    onDictate = {},
+                    onVoiceChat = {},
+                    onOpenPets = {},
+                    onViewImage = {},
+                    onNotice = {},
+                )
+            }
+        }
     }
 
     private fun ComposeUiTest.isDisplayed(index: Int): Boolean =
@@ -79,143 +127,74 @@ class ChatScrollPreservationTest {
             false
         }
 
-    private fun ComposeUiTest.findVisibleMiddleMessage(range: IntRange): Int? {
-        val visible = range.filter { isDisplayed(it) }
-        return visible.getOrNull(visible.size / 2)
-    }
+    private fun ComposeUiTest.shown() = (1..60).filter { isDisplayed(it) }
+
+    private fun ComposeUiTest.middleOfScreen(): Int? = (10..50).filter { isDisplayed(it) }.let { it.getOrNull(it.size / 2) }
 
     @Test
-    fun compositionTeardownMidChatRestoresSavedViewportWithoutReadUpTo() = runComposeUiTest {
+    fun aListTakenDownMidChatComesBackThere() = runComposeUiTest {
         var mounted by mutableStateOf(true)
-        var viewport: TranscriptViewport? = null
-        val state = ChatState(messages = longMessages(), historyLoaded = true)
-
-        setContent {
-            HermesTheme(ColorScheme.Light) {
-                Box(Modifier.size(411.dp, 700.dp)) {
-                    if (mounted) {
-                        ChatView(
-                            title = "Chat",
-                            state = state,
-                            conversationKey = "test-chat",
-                            savedViewport = viewport,
-                            onSaveViewport = { viewport = it },
-                            picker = ModelPickerState(),
-                            connected = true,
-                            attachments = emptyList(),
-                            attachmentError = null,
-                            voiceChat = VoiceChatState(),
-                            dictation = DictationState(),
-                            suggestions = emptyList(),
-                            sprite = null,
-                            placeholder = "Message",
-                            notice = null,
-                            actions = PreviewChatActions(),
-                            readUpTo = null,
-                            onOpenSidebar = {},
-                            onNewChat = {},
-                            onOpenMenu = {},
-                            onOpenModels = {},
-                            onAttach = {},
-                            onDictate = {},
-                            onVoiceChat = {},
-                            onOpenPets = {},
-                            onViewImage = {},
-                            onNotice = {},
-                        )
-                    }
-                }
-            }
-        }
-        waitForIdle()
+        var saved: TranscriptViewport? = null
+        val state = ChatState(messages = messages, historyLoaded = true)
+        setContent { if (mounted) Chat(state, readUpTo = null, saved = { saved }, onSave = { saved = it }) }
 
         onNode(hasText("Message 60:", substring = true)).assertIsDisplayed()
         onNode(hasScrollToIndexAction()).performTouchInput { repeat(2) { swipeDown() } }
         waitForIdle()
-
-        val anchor = findVisibleMiddleMessage(10..50)
-        assertNotNull(anchor, "expected a mid-chat message to be displayed after scrolling up")
-        onNode(hasText("Message $anchor:", substring = true)).assertIsDisplayed()
-        assertFalse(isDisplayed(60))
-        assertFalse(isDisplayed(1))
+        val anchor = assertNotNull(middleOfScreen(), "a mid-chat message should show after scrolling up")
 
         mounted = false
         waitForIdle()
         mounted = true
         waitForIdle()
 
-        val afterRestore = (1..60).filter { isDisplayed(it) }
-        assertTrue(anchor in afterRestore, "expected anchor=$anchor after remount, got displayed=$afterRestore")
-        onNode(hasText("Message $anchor:", substring = true)).assertIsDisplayed()
+        assertTrue(isDisplayed(anchor), "message $anchor should still show; shown: ${shown()}")
         assertFalse(isDisplayed(60))
         assertFalse(isDisplayed(1))
     }
 
     @Test
-    fun compositionTeardownPostUnreadRestoresSavedViewportWithReadUpTo() = runComposeUiTest {
+    fun aListTakenDownPastTheUnreadLineDoesntJumpBackToIt() = runComposeUiTest {
         var mounted by mutableStateOf(true)
-        var viewport: TranscriptViewport? = null
-        val state = ChatState(messages = longMessages(), historyLoaded = true)
-
-        setContent {
-            HermesTheme(ColorScheme.Light) {
-                Box(Modifier.size(411.dp, 700.dp)) {
-                    if (mounted) {
-                        ChatView(
-                            title = "Chat",
-                            state = state,
-                            conversationKey = "test-chat",
-                            savedViewport = viewport,
-                            onSaveViewport = { viewport = it },
-                            picker = ModelPickerState(),
-                            connected = true,
-                            attachments = emptyList(),
-                            attachmentError = null,
-                            voiceChat = VoiceChatState(),
-                            dictation = DictationState(),
-                            suggestions = emptyList(),
-                            sprite = null,
-                            placeholder = "Message",
-                            notice = null,
-                            actions = PreviewChatActions(),
-                            readUpTo = 10.0,
-                            onOpenSidebar = {},
-                            onNewChat = {},
-                            onOpenMenu = {},
-                            onOpenModels = {},
-                            onAttach = {},
-                            onDictate = {},
-                            onVoiceChat = {},
-                            onOpenPets = {},
-                            onViewImage = {},
-                            onNotice = {},
-                        )
-                    }
-                }
-            }
-        }
-        waitForIdle()
+        var saved: TranscriptViewport? = null
+        val state = ChatState(messages = messages, historyLoaded = true)
+        setContent { if (mounted) Chat(state, readUpTo = 10.0, saved = { saved }, onSave = { saved = it }) }
 
         onNodeWithText("New messages").assertIsDisplayed()
         onNode(hasText("Message 2:", substring = true)).assertIsDisplayed()
         onNode(hasScrollToIndexAction()).performTouchInput { repeat(2) { swipeUp() } }
         waitForIdle()
-
-        val anchor = findVisibleMiddleMessage(10..50)
-        assertNotNull(anchor, "expected a mid-chat message to be displayed after scrolling down from unread start")
-        onNode(hasText("Message $anchor:", substring = true)).assertIsDisplayed()
-        assertFalse(isDisplayed(2))
-        assertFalse(isDisplayed(60))
+        val anchor = assertNotNull(middleOfScreen(), "a mid-chat message should show after reading on")
 
         mounted = false
         waitForIdle()
         mounted = true
         waitForIdle()
 
-        val afterRestore = (1..60).filter { isDisplayed(it) }
-        assertTrue(anchor in afterRestore, "expected anchor=$anchor after remount, got displayed=$afterRestore")
-        onNode(hasText("Message $anchor:", substring = true)).assertIsDisplayed()
+        assertTrue(isDisplayed(anchor), "message $anchor should still show; shown: ${shown()}")
         assertFalse(isDisplayed(2))
         assertFalse(isDisplayed(60))
+    }
+
+    @Test
+    fun whatIsKeptIsTheOpeningForTheCurrentSavedCopy() = runComposeUiTest {
+        var mounted by mutableStateOf(true)
+        var saved: TranscriptViewport? = null
+        var state by mutableStateOf(ChatState(messages = messages, historyLoaded = true, savedCopyAt = 1L))
+        setContent { if (mounted) Chat(state, readUpTo = 10.0, saved = { saved }, onSave = { saved = it }) }
+        onNodeWithText("New messages").assertIsDisplayed()
+
+        // The saved copy gives way to current history (here without the rows it had up to 30), which works the
+        // opening out again: that one is kept, not the saved copy's.
+        state = state.copy(messages = messages.drop(30), savedCopyAt = null)
+        waitForIdle()
+        mounted = false
+        waitForIdle()
+
+        val kept = assertNotNull(saved)
+        assertFalse(kept.savedCopy)
+        assertEquals(10.0, kept.readUpTo)
+        assertEquals("m31", kept.unreadFrom)
+        assertTrue(kept.positioned)
     }
 }

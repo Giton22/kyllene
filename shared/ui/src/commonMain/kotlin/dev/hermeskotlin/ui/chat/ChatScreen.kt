@@ -593,7 +593,7 @@ fun ChatScreen(
         },
         state = if (readPosition == null || !ownsTranscript) state.copy(historyLoaded = false) else state,
         conversationKey = conversationKey,
-        savedViewport = viewModel.viewportFor(conversationKey),
+        savedViewport = { viewModel.viewportFor(conversationKey) },
         onSaveViewport = viewModel::saveViewport,
         picker = picker,
         connected = connected,
@@ -761,8 +761,8 @@ internal fun ChatView(
     state: ChatState,
     /** Isolates the transcript's scroll state across gateways, profiles and chats. */
     conversationKey: Any? = null,
-    /** Saved scroll & placement state for restoring this conversation across composition teardowns. */
-    savedViewport: TranscriptViewport? = null,
+    /** Where the reader was in this chat's list when it last left the screen, read as the list comes back. */
+    savedViewport: () -> TranscriptViewport? = { null },
     onSaveViewport: ((TranscriptViewport) -> Unit)? = null,
     picker: ModelPickerState,
     connected: Boolean,
@@ -1868,21 +1868,22 @@ private val FOLLOW_UP_PROMPTS = listOf(
     Res.string.chat_prompt_follow_7,
 )
 
-internal fun resolveInitialScroll(messageCount: Int, saved: TranscriptViewport?): Pair<Int, Int> {
-    if (messageCount <= 0) return 0 to 0
-    if (saved != null && !saved.pinned) {
-        return saved.firstVisibleItemIndex.coerceIn(0, messageCount - 1) to
-            saved.firstVisibleItemScrollOffset.coerceAtLeast(0)
-    }
-    return (messageCount - 1) to LIST_END
+/** Where the list opens: the end, following, or where a reader scrolled away from it last stood, by message. */
+internal data class ListPlace(val index: Int, val offset: Int, val pinned: Boolean)
+
+internal fun openingPlace(messages: List<ChatMessage>, saved: TranscriptViewport?): ListPlace {
+    val at = saved?.takeIf { !it.pinned }?.firstKey?.let { key -> messages.indexOfFirst { it.key == key } } ?: -1
+    // A message no longer loaded (the chat started over from its newest page) leaves nothing to come back to.
+    return if (at >= 0) ListPlace(at, saved!!.firstOffset.coerceAtLeast(0), pinned = false)
+    else ListPlace(messages.lastIndex.coerceAtLeast(0), LIST_END, pinned = true)
 }
 
 @Composable
 private fun Messages(
     messages: List<ChatMessage>,
-    conversationKey: Any? = null,
-    savedViewport: TranscriptViewport? = null,
-    onSaveViewport: ((TranscriptViewport) -> Unit)? = null,
+    conversationKey: Any?,
+    savedViewport: () -> TranscriptViewport?,
+    onSaveViewport: ((TranscriptViewport) -> Unit)?,
     /** The conversation goes back further than [messages]; nearing the top loads the page before. */
     olderMessages: Boolean,
     loadingOlder: Boolean,
@@ -1925,32 +1926,25 @@ private fun Messages(
     }
     // Laid out top-down and opened at the end. A list holds its place by the top of what's on screen, so a reply
     // growing below the lines being read leaves them where they are; following the bottom is done here instead.
-    val initialScroll = remember { resolveInitialScroll(messages.size, savedViewport) }
-    val listState = rememberLazyListState(initialScroll.first, initialScroll.second)
-    val initialReadUpTo = remember { readUpTo }
-    val initialSavedCopy = remember { savedCopy }
+    // Back on screen after the list was taken down (the screen rebuilt on waking, or a spinner in its place), it
+    // comes back to where the reader was, and doesn't open again at the end or the "New messages" line.
+    val saved = remember { savedViewport() }
+    val opening = remember { openingPlace(messages, saved) }
+    val listState = rememberLazyListState(opening.index, opening.offset)
+    // What the opening had worked out holds for the same read position (and the same saved copy or not) only.
+    fun restored(sameCopy: Boolean) = saved?.takeIf { it.readUpTo == readUpTo && (!sameCopy || it.savedCopy == savedCopy) }
     val scope = rememberCoroutineScope()
     val newest = messages.lastOrNull()
     val awayFromBottom by remember { derivedStateOf { listState.layoutInfo.hiddenBelow() > 600 } }
     // Following while the reader sits right at the end; where they drag to decides whether it carries on.
-    var pinned by rememberSaveable { mutableStateOf(savedViewport?.pinned ?: true) }
-    var readerNavigated by rememberSaveable(readUpTo) {
-        mutableStateOf(if (readUpTo == initialReadUpTo) savedViewport?.readerNavigated ?: false else false)
-    }
+    var pinned by remember { mutableStateOf(opening.pinned) }
+    var readerNavigated by remember(readUpTo) { mutableStateOf(restored(sameCopy = false)?.readerNavigated ?: false) }
     // Once the user sends from here, what follows is their own conversation, not news to mark or jump to.
-    var unreadSettled by rememberSaveable(readUpTo) {
-        mutableStateOf(if (readUpTo == initialReadUpTo) savedViewport?.unreadSettled ?: false else false)
-    }
+    var unreadSettled by remember(readUpTo) { mutableStateOf(restored(sameCopy = false)?.unreadSettled ?: false) }
     // The opening jump is done; only then may reaching the end mark the chat read. A saved copy giving way to
     // current history looks for the unread line again, so it waits for that too.
-    var positioned by rememberSaveable(readUpTo, savedCopy) {
-        mutableStateOf(
-            if (readUpTo == initialReadUpTo && savedCopy == initialSavedCopy && savedViewport != null) {
-                savedViewport.positioned
-            } else {
-                readUpTo == null || unreadSettled
-            },
-        )
+    var positioned by remember(readUpTo, savedCopy) {
+        mutableStateOf(restored(sameCopy = true)?.positioned ?: (readUpTo == null || unreadSettled))
     }
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo }.collect { info ->
@@ -1982,9 +1976,8 @@ private fun Messages(
     val readBack = remember(readBackTravel, fold) { ReadBackDetector(readBackTravel) { fold.heldOpen = false } }
     // A prompt just sent here is always shown, wherever the reader was. One sent elsewhere, or a stored one coming
     // in with history, only pulls a reader who hasn't moved.
-    var skipPullForKey by rememberSaveable {
-        mutableStateOf(if (savedViewport != null && !savedViewport.pinned) newest?.key else null)
-    }
+    // The newest message when the list came back where the reader was: it isn't news, so it pulls no one.
+    val newestWhenRestored = remember { newest?.key.takeIf { !opening.pinned } }
     LaunchedEffect(newest?.key) {
         // A fast submit can acknowledge the local prompt before the screen ever draws it pending.
         val sentHere = newest is ChatMessage.User && (newest.pending || newest.key.startsWith("local-"))
@@ -1992,9 +1985,7 @@ private fun Messages(
             unreadSettled = true
             positioned = true
         }
-        val key = newest?.key
-        if (key != skipPullForKey) skipPullForKey = null
-        if (newest is ChatMessage.User && (sentHere || (!readerNavigated && key != skipPullForKey))) {
+        if (newest is ChatMessage.User && (sentHere || (!readerNavigated && newest.key != newestWhenRestored))) {
             pinned = true
             listState.scrollToItem(messages.lastIndex, LIST_END)
         }
@@ -2009,36 +2000,29 @@ private fun Messages(
     // Older pages load first while every loaded message is still new.
     // A saved copy may omit older unread messages or contain rows the gateway no longer serves.
     // Discover the boundary again against current history, without pulling a reader who has taken over.
-    var unreadFrom by rememberSaveable(readUpTo, savedCopy) {
-        mutableStateOf(if (readUpTo == initialReadUpTo && savedCopy == initialSavedCopy) savedViewport?.unreadFrom else null)
-    }
-    var unreadPagesLoaded by rememberSaveable(readUpTo, savedCopy) {
-        mutableStateOf(
-            if (readUpTo == initialReadUpTo && savedCopy == initialSavedCopy) savedViewport?.unreadPagesLoaded ?: 0 else 0,
-        )
-    }
+    var unreadFrom by remember(readUpTo, savedCopy) { mutableStateOf(restored(sameCopy = true)?.unreadFrom) }
+    var unreadPagesLoaded by remember(readUpTo, savedCopy) { mutableStateOf(restored(sameCopy = true)?.unreadPagesLoaded ?: 0) }
     // The oldest message when a page was last asked for: a reply streaming in reruns this before the page loads.
     var unreadPageAskedAt by remember(readUpTo, savedCopy) { mutableStateOf<String?>(null) }
-    val saveViewportCallback by rememberUpdatedState(onSaveViewport)
-    if (conversationKey != null && onSaveViewport != null) {
-        fun snapshotViewport() = TranscriptViewport(
+    // Kept as the list leaves the screen. Read through the latest composition: the values above are replaced, not
+    // changed, when the read position or the saved copy changes.
+    val viewport by rememberUpdatedState {
+        TranscriptViewport(
             conversationKey = conversationKey,
-            firstVisibleItemIndex = listState.firstVisibleItemIndex,
-            firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+            firstKey = messages.getOrNull(listState.firstVisibleItemIndex)?.key,
+            firstOffset = listState.firstVisibleItemScrollOffset,
             pinned = pinned,
+            readUpTo = readUpTo,
+            savedCopy = savedCopy,
             readerNavigated = readerNavigated,
             unreadSettled = unreadSettled,
             positioned = positioned,
             unreadFrom = unreadFrom,
             unreadPagesLoaded = unreadPagesLoaded,
         )
-        LaunchedEffect(listState, conversationKey) {
-            snapshotFlow { snapshotViewport() }.collect { saveViewportCallback?.invoke(it) }
-        }
-        DisposableEffect(listState, conversationKey) {
-            onDispose { saveViewportCallback?.invoke(snapshotViewport()) }
-        }
     }
+    val saveViewport by rememberUpdatedState(onSaveViewport)
+    DisposableEffect(listState) { onDispose { saveViewport?.invoke(viewport()) } }
     LaunchedEffect(readUpTo, messages, olderMessages, loadingOlder, savedCopy) {
         if (readUpTo == null || unreadFrom != null || unreadSettled) return@LaunchedEffect
         if (messages.any { it is ChatMessage.User && it.pending }) {
