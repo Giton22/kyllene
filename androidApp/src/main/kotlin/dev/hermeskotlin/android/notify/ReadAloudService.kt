@@ -13,6 +13,7 @@ import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.ServiceCompat
@@ -81,6 +82,10 @@ class ReadAloudService : Service() {
                 override fun onPause() = keeper.pause()
 
                 override fun onStop() = keeper.stop()
+
+                override fun onCustomAction(action: String, extras: Bundle?) {
+                    if (action == CUSTOM_STOP) keeper.stop()
+                }
             })
             it.setMetadata(
                 MediaMetadata.Builder()
@@ -170,8 +175,15 @@ class ReadAloudService : Service() {
         this, 0, Intent(this, ReadAloudService::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE,
     )
 
+    /**
+     * From Android 13 the lock screen and the shade draw the session's buttons from this, not the notification's: Play
+     * or Pause from the actions, and Stop only as a custom action (the standard stop has no button there).
+     */
     private fun state(paused: Boolean) = PlaybackState.Builder()
         .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_STOP)
+        .addCustomAction(
+            PlaybackState.CustomAction.Builder(CUSTOM_STOP, getString(R.string.notification_read_aloud_stop), R.drawable.ic_read_aloud_stop).build(),
+        )
         .setState(if (paused) PlaybackState.STATE_PAUSED else PlaybackState.STATE_PLAYING, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
         .build()
 
@@ -189,6 +201,7 @@ class ReadAloudService : Service() {
     private companion object {
         const val ACTION_STOP = "dev.hermeskotlin.readaloud.STOP"
         const val ACTION_TOGGLE = "dev.hermeskotlin.readaloud.TOGGLE"
+        const val CUSTOM_STOP = "dev.hermeskotlin.readaloud.CUSTOM_STOP"
     }
 }
 
