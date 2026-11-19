@@ -25,7 +25,7 @@
     <string name="wear_update_for_bots">请在手机上更新 Kyllene，以便与机器人对话。</string>
     <string name="wear_update_for_bot_calls">请在手机上更新 Kyllene，以便呼叫机器人。</string>
     <string name="wear_call_target_changed">通话对象已更改。请再次点按“呼叫”。</string>
-    <string name="wear_default_call_target_changed">默认通话对象已更改。请再次点按“呼叫”。</string>
+    <string name="wear_default_call_target_changed">默认通话目标已更改。请再次点按“呼叫”。</string>
 
     <string name="wear_new_chat">新对话</string>
     <string name="wear_chat">对话</string>
