@@ -302,8 +302,10 @@ class JsonRpcClientTest {
         assertFalse(pump.isCompleted, "dropped for the silence while idle")
         // A ping goes out at once to test the link, and its pong keeps it.
         assertEquals(3, pings())
+        testScheduler.advanceTimeBy(20_000)
         transport.push("""{"jsonrpc":"2.0","id":"ping3","result":{}}""")
-        testScheduler.advanceTimeBy(30_000)
+        // 60 s after coming back but 40 s after the pong: only the pong keeps the link inside the 45 s deadline.
+        testScheduler.advanceTimeBy(40_000)
         testScheduler.runCurrent()
         assertFalse(pump.isCompleted, "dropped after the pong")
         pump.cancel()
