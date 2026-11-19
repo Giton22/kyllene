@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -91,7 +92,7 @@ internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFile
         Theme[typography][bodySmall].fontSize.value * LocalDensity.current.fontScale,
     )
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
-    Column(Modifier.fillMaxWidth()) {
+    Column(Modifier.widthIn(max = READING_WIDTH).fillMaxWidth()) {
         ReplyFile(item, download = { downloadWidget(files, file) })
         when (val current = loaded) {
             is FileLoad.Ready -> if (failed == null) {

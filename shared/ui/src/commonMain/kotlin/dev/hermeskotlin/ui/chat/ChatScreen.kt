@@ -1879,7 +1879,7 @@ private const val ACCENT_MARK = "\u0000"
 private const val CENTRED_DOCK_BIAS = 0.2f
 
 /** How wide the conversation and the composer are at most: lines longer than this get hard to read. */
-private val READING_WIDTH = 760.dp
+internal val READING_WIDTH = 760.dp
 
 /** The pointer moving onto a list's row [index] marks it, so the keys and the pointer share one highlight. */
 private fun Modifier.marksOnHover(index: Int, onMark: ((Int) -> Unit)?): Modifier =
