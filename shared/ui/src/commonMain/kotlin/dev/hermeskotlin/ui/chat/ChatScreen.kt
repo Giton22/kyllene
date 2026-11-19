@@ -860,8 +860,9 @@ internal fun ChatView(
         val voiceFull = voiceOn && !voiceFolded
         LaunchedEffect(voiceOn) { if (!voiceOn) voiceFolded = false }
         // A reply read aloud plays to its end with the phone put down, and stops if it leaves the chat
-        // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays.
-        KeepScreenOn(readAloud.key != null)
+        // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays. Paused, it may wait
+        // for good, so the screen goes dark as usual.
+        KeepScreenOn(readAloud.key != null && !readAloud.paused)
         // A chat whose transcript hasn't loaded yet hasn't lost it.
         LaunchedEffect(readAloud.key, state.messages, state.historyLoaded) {
             val key = readAloud.key ?: return@LaunchedEffect
