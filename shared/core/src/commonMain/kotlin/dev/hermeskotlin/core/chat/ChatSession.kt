@@ -2272,7 +2272,10 @@ class ChatSession(
                 profile?.let { put("profile", it) }
                 put("source", CLIENT_SOURCE)
                 put("cols", TERMINAL_COLUMNS)
-                cwd?.let { put("cwd", it) }
+                cwd?.let {
+                    put("cwd", it)
+                    put("cwd_explicit", true)
+                }
                 // Picked before the first send; without them the profile defaults apply.
                 if (picks.model != null && picks.provider != null) {
                     put("model", picks.model)
