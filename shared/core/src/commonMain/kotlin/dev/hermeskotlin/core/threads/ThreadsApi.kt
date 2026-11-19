@@ -50,7 +50,10 @@ class ThreadsApi(private val connection: GatewayConnection) {
      */
     suspend fun startChat(profile: String?, title: String, cwd: String?, instruction: String? = null): Pair<String, String> =
         client().createTitledChat(profile, title, taken = { ThreadTitleTakenException(title) }) {
-            cwd?.let { put("cwd", it) }
+            cwd?.let {
+                put("cwd", it)
+                put("cwd_explicit", true)
+            }
             putStartInstruction(instruction)
         }
 

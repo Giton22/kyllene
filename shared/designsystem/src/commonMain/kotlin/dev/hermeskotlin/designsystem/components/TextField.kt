@@ -172,6 +172,7 @@ fun TextField(
             modifier = Modifier
                 .then(requester?.let { Modifier.focusRequester(it) } ?: Modifier)
                 .then(contentType?.let { type -> Modifier.semantics { this.contentType = type } } ?: Modifier)
+                .then(if (singleLine) Modifier else Modifier.commitComposingOnEnter(state))
                 .fillMaxWidth()
                 // Under a mouse a desktop field keeps to a desktop's 40dp, as a phone's does to a finger's 52dp.
                 .defaultMinSize(minHeight = if (desktop) 40.dp else 52.dp)
