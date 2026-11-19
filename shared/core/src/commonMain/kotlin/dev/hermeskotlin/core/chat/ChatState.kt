@@ -74,11 +74,15 @@ enum class SendOutcome {
  * A prompt whose delivery isn't known yet, as it went out. [files] are the `@file:` references it carried, each
  * with its card: they stay in the session's workspace, so a resend refers to them again.
  */
+/** An image staged on the gateway by `image.attach_bytes`, passed in `prompt.submit` `attachments` on session authority. */
+internal data class StagedImage(val path: String, val mime: String)
+
 internal class UnsettledPrompt(
     val text: String,
     val display: String?,
     val startsTurn: Boolean,
     val files: List<Pair<String, ShownAttachment>> = emptyList(),
+    val images: List<Pair<StagedImage, ShownAttachment>> = emptyList(),
 )
 
 sealed interface ChatMessage {
