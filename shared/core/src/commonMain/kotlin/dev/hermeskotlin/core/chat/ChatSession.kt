@@ -109,6 +109,13 @@ class ChatSession(
     private var attachedClient: JsonRpcClient? = null
 
     /**
+     * The gateway's `execution_generation` for the attached runtime session (captured from `session.resume`,
+     * `session.create`, `prompt.submit`, and turn events). Required by canonical session-authority controls.
+     */
+    @kotlin.concurrent.Volatile
+    private var executionGeneration: Long? = null
+
+    /**
      * Prompts this client submitted whose turn hasn't started yet. A `message.start` beyond them is a
      * turn another client (Desktop, CLI, a messaging platform) started: the gateway sends no event with
      * that prompt, so the transcript is refetched to show it.
@@ -294,6 +301,7 @@ class ChatSession(
                     }
                 },
             ) as? JsonObject
+            result.long("execution_generation")?.let { executionGeneration = it }
             rowExists = true
             val status = result.string("status")
             // Steering or redirecting folds the text into the running turn instead of starting one.
@@ -1074,7 +1082,7 @@ class ChatSession(
     suspend fun stopEverything() = runOnGateway("/stop") { client, runtimeId ->
         val lines = mutableListOf<String>()
         if (_state.value.running) {
-            client.request("session.interrupt", buildJsonObject { put("session_id", runtimeId) })
+            interruptOnGateway(client, runtimeId)
             lines += "Stopped the reply."
         }
         val killed = (client.request("process.stop", JsonObject(emptyMap())) as? JsonObject).int("killed") ?: 0
@@ -1535,7 +1543,7 @@ class ChatSession(
         if (liveRuntimeId(client) == null && !rowExists) return null
         try {
             val runtimeId = ensureAttached(client)
-            client.request("session.interrupt", buildJsonObject { put("session_id", runtimeId) })
+            interruptOnGateway(client, runtimeId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1552,6 +1560,26 @@ class ChatSession(
             state.copy(messages = kept)
         }
         return dropped
+    }
+
+    /**
+     * Sends `session.interrupt` with `execution_generation` when known (required by canonical session authority).
+     * If a session-authority socket lacks the generation, re-attaches first to fetch it.
+     */
+    private suspend fun interruptOnGateway(client: JsonRpcClient, runtimeId: String) {
+        val targetId = if (executionGeneration == null && client.sessionAuthority && rowExists) {
+            attach(client, reconnected = true)
+        } else {
+            runtimeId
+        }
+        val gen = executionGeneration
+        client.request(
+            "session.interrupt",
+            buildJsonObject {
+                put("session_id", targetId)
+                gen?.let { put("execution_generation", it) }
+            },
+        )
     }
 
     /** Stops one running subagent (`subagent.interrupt`); its `subagent.complete` follows. */
@@ -1855,6 +1883,7 @@ class ChatSession(
 
     private fun apply(event: GatewayEvent) {
         event.seq?.let { lastSeq = it }
+        (event.payload as? JsonObject).long("execution_generation")?.let { executionGeneration = it }
         val now = nowSeconds()
         val noticesBefore = _state.value.notices
         // Cleared before the turn's end lands, so no rows laid out meanwhile still take it as running.
@@ -2170,6 +2199,7 @@ class ChatSession(
             },
         ) as? JsonObject ?: error("Empty session.resume reply")
         val runtimeId = result.string("session_id") ?: error("session.resume returned no session_id")
+        executionGeneration = result.long("execution_generation")
         val running = result.boolean("running") == true
         // A turn already running when we attach is someone else's; reconcile with the stored rows when it ends.
         if (running && ownTurnsPending == 0) foreignTurn = true
@@ -2284,6 +2314,7 @@ class ChatSession(
             },
         ) as? JsonObject ?: error("Empty session.create reply")
         val runtimeId = result.string("session_id") ?: error("session.create returned no session_id")
+        executionGeneration = result.long("execution_generation")
         // The session authority stores every new chat's row on create, so a send after a lost link resumes it.
         if (client.sessionAuthority || !instruction.isNullOrBlank()) rowExists = true
         streamMutex.withLock {
