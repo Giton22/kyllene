@@ -232,6 +232,14 @@ class SpeechTest {
         assertEquals(listOf("Fine then! !"), speechChunks("Fine then! !", maxChars = 10, firstChars = 10))
     }
 
+    /** Letters past U+FFFF are two surrogates in a String, neither a letter alone: they still have words to say. */
+    @Test
+    fun lettersPastTheBasicPlaneAreWordsToSay() {
+        assertEquals(listOf("𝐃𝐨𝐧𝐞."), speechChunks("𝐃𝐨𝐧𝐞."))
+        assertEquals(listOf("𠀀𠀁。"), speechChunks("𠀀𠀁。"))
+        assertEquals("𝐃𝐨𝐧𝐞.", readAloudText("𝐃𝐨𝐧𝐞."))
+    }
+
     @Test
     fun aNewlineInsideASentenceDoesNotCutIt() {
         assertEquals(listOf("First line\nstill the same sentence."), speechChunks("First line\nstill the same sentence."))

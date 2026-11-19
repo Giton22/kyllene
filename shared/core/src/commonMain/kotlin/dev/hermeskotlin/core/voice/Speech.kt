@@ -256,7 +256,13 @@ fun speakableText(markdown: String): String = markdown
  * or only punctuation, which the gateway would have no words for.
  */
 fun readAloudText(reply: String): String =
-    speakableText(extractReplyMedia(reply).first).takeIf { text -> text.any { it.isLetterOrDigit() } }.orEmpty()
+    speakableText(extractReplyMedia(reply).first).takeIf(::hasWordsToSay).orEmpty()
+
+/**
+ * Whether [text] has anything for a voice to say: a letter or a digit. A character past U+FFFF (`𝐃`, `𠀀`) is a pair
+ * of surrogates, neither of which is a letter on its own, so they count too.
+ */
+fun hasWordsToSay(text: String): Boolean = text.any { it.isLetterOrDigit() || it.isSurrogate() }
 
 /**
  * Cuts [text] into pieces at sentence ends where possible, so the first piece can be spoken while the rest
@@ -311,7 +317,7 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
     val before = StringBuilder()
     for (chunk in chunks) {
         val into = when {
-            chunk.any { it.isLetterOrDigit() } -> StringBuilder(before).also { spoken += it; before.clear() }
+            hasWordsToSay(chunk) -> StringBuilder(before).also { spoken += it; before.clear() }
             spoken.isNotEmpty() -> spoken.last()
             else -> before
         }
