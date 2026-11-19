@@ -175,15 +175,19 @@ class SpeechTest {
         assertEquals(text, speechChunks(text).joinToString(" "))
     }
 
-    /** Curly quotes and guillemets close a sentence like straight ones, so the sentences after them still split. */
+    /**
+     * Curly quotes, guillemets and corner brackets close a sentence like straight ones, so the sentences after them
+     * still split. Each case is one the cut at spaces would get wrong: without the closer, the next short word joins
+     * the first piece.
+     */
     @Test
     fun typographicClosersStillEndTheSentence() {
-        val text = "He said “Stop.” Then he left. She asked «Why?» Nobody knew."
-        assertEquals(
-            listOf("He said “Stop.”", "Then he left.", "She asked «Why?»", "Nobody knew."),
-            speechChunks(text, maxChars = 20, firstChars = 20),
-        )
+        val text = "He said “Stop.” Then he left."
+        assertEquals(listOf("He said “Stop.”", "Then he left."), speechChunks(text, maxChars = 20, firstChars = 20))
         assertEquals(text, speechChunks(text).joinToString(" "))
+        assertEquals(listOf("She asked «Why?»", "No one knew."), speechChunks("She asked «Why?» No one knew.", maxChars = 20, firstChars = 20))
+        assertEquals(listOf("He said ‘Go.’", "So we did go."), speechChunks("He said ‘Go.’ So we did go.", maxChars = 20, firstChars = 20))
+        assertEquals(listOf("他说「好。」", "我们走吧。"), speechChunks("他说「好。」我们走吧。", maxChars = 6, firstChars = 6))
     }
 
     /**
