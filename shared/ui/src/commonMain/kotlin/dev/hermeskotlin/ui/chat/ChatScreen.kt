@@ -3824,7 +3824,7 @@ internal fun ComposerTextInput(
         lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         onTextLayout = onTextLayout,
-        modifier = modifier.semantics(mergeDescendants = true) {},
+        modifier = modifier.then(if (!isDesktop) Modifier.commitComposingOnEnter(state) else Modifier).semantics(mergeDescendants = true) {},
         decorator = { innerTextField ->
             Box(Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Text, overrideDescendants = true).clipToBounds()) {
                 if (state.text.isEmpty()) {
