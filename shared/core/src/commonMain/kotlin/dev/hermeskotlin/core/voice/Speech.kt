@@ -312,7 +312,8 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
  * quotes or brackets, followed by whitespace or the end of the text. A full stop between digits is not a sentence
  * end — it's the point in `4.6` or a dot in a version like `2.0.1` — so it stays inside its sentence. Splitting
  * there made read aloud pause in the middle of a number ("four. Six") and turned `1.0×` into a piece starting
- * `0×`, which the voice backend can't say at all. Abbreviations (`e.g.`, `U.S.A.`) stay whole for the same reason.
+ * `0×`, which the voice backend can't say at all. Dotted names (`notes.md`) and the inner dots of `e.g.` or `U.S.A.`
+ * stay put for the same reason; an abbreviation's last dot before a space still ends a sentence, as it always did.
  *
  * The pieces keep every character of the input: joining them with a single space gives the text back, with one
  * space only where a piece boundary or a word cut fell — whitespace inside a sentence is kept as it is (a tab or
@@ -331,12 +332,11 @@ private fun sentencePieces(text: String): List<String> {
         }
         var end = i + 1
         while (end < text.length && (endsSentence(text[end]) || closesSentence(text[end]))) end++
-        val decimalPoint = text[i] == '.' && i > 0 && text[i - 1].isDigit() && end < text.length && text[end].isDigit()
-        if (decimalPoint || (end < text.length && !text[end].isWhitespace())) {
-            // Inside a number, or punctuation in the middle of a word: not a sentence end. The whole run was
-            // just scanned and every character in it is a full stop, ! or ? or a closer, so none of them can
-            // begin a sentence that ends elsewhere: carry on after the run. Rescanning the same suffix from
-            // each character would make a long run cost time quadratic in its length.
+        if (end < text.length && !text[end].isWhitespace()) {
+            // Inside a number (a digit follows), or punctuation in the middle of a word: not a sentence end. The
+            // whole run was just scanned and every character in it is a full stop, ! or ? or a closer, so none of
+            // them can begin a sentence that ends elsewhere: carry on after the run. Rescanning the same suffix
+            // from each character would make a long run cost time quadratic in its length.
             i = end
             continue
         }
