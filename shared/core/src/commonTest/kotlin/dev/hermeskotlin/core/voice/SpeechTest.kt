@@ -257,6 +257,15 @@ class SpeechTest {
     }
 
     @Test
+    fun symbolsPastTheBasicPlaneAreNotWordsToSay() {
+        // England's flag: the black flag is stripped as an emoji, its invisible tag characters are left.
+        assertEquals("", readAloudText("🏴󠁧󠁢󠁥󠁮󠁧󠁿!"))
+        // A musical symbol (U+1D11E).
+        assertEquals(emptyList(), speechChunks("𝄞"))
+        assertTrue(hasWordsToSay("Hi 𝄞"))
+    }
+
+    @Test
     fun aNewlineInsideASentenceDoesNotCutIt() {
         assertEquals(listOf("First line\nstill the same sentence."), speechChunks("First line\nstill the same sentence."))
     }

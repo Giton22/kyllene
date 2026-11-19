@@ -260,9 +260,27 @@ fun readAloudText(reply: String): String =
 
 /**
  * Whether [text] has anything for a voice to say: a letter or a digit. A character past U+FFFF (`𝐃`, `𠀀`) is a pair
- * of surrogates, neither of which is a letter on its own, so they count too.
+ * of surrogates, neither of which is a letter on its own, so it counts when it sits in a block of letters: the
+ * scripts of the first supplementary plane, the mathematical letters and digits, and the CJK planes. Symbols out
+ * there (music, emoji the strip missed, the invisible tags of a flag like England's) don't.
  */
-fun hasWordsToSay(text: String): Boolean = text.any { it.isLetterOrDigit() || it.isSurrogate() }
+fun hasWordsToSay(text: String): Boolean {
+    var i = 0
+    while (i < text.length) {
+        val c = text[i]
+        if (c.isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) {
+            val codePoint = 0x10000 + ((c.code - 0xD800) shl 10) + (text[i + 1].code - 0xDC00)
+            if (codePoint in 0x10000..0x1CFFF || codePoint in 0x1D400..0x1D7FF || codePoint in 0x1E000..0x1EFFF ||
+                codePoint in 0x20000..0x3FFFF
+            ) return true
+            i += 2
+            continue
+        }
+        if (c.isLetterOrDigit()) return true
+        i++
+    }
+    return false
+}
 
 /**
  * Cuts [text] into pieces at sentence ends where possible, so the first piece can be spoken while the rest
