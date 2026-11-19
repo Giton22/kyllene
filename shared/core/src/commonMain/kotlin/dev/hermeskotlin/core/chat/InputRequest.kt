@@ -43,12 +43,26 @@ data class ClarifyQuestion(
 )
 
 /**
+ * How an answer to an [InputRequest] goes back to the gateway:
+ * - [ServerRequest]: classic JSON-RPC response frame (`client.respond(id, result)`).
+ * - [PendingControl]: canonical RPC (`clarify.respond` / `approval.respond`) with `prompt_id` and `execution_generation`.
+ */
+sealed interface InputRequestDelivery {
+    data object ServerRequest : InputRequestDelivery
+    data class PendingControl(val executionGeneration: Long?) : InputRequestDelivery
+}
+
+/**
  * Something the agent is blocked on until a person answers: a server→client request
- * (tui_gateway/server_requests.py) that this client knows how to show.
+ * (tui_gateway/server_requests.py) or a pending-controls prompt event (`clarify.request` /
+ * `approval.request`) that this client knows how to show.
  */
 sealed interface InputRequest {
-    /** The `srq-…` request id the answer is sent back under. */
+    /** The `srq-…` request id or pending-controls `prompt_id` the answer is sent back under. */
     val id: String
+
+    /** How the answer is delivered back to the gateway. */
+    val delivery: InputRequestDelivery get() = InputRequestDelivery.ServerRequest
 
     /** A dangerous command waits for a decision. The gateway already redacted [command]. */
     data class Approval(
@@ -58,12 +72,14 @@ sealed interface InputRequest {
         val toolName: String?,
         /** What the gateway will accept, in its order; always holds [ApprovalChoice.Once] and [ApprovalChoice.Deny]. */
         val choices: List<ApprovalChoice>,
+        override val delivery: InputRequestDelivery = InputRequestDelivery.ServerRequest,
     ) : InputRequest
 
     /** The clarify tool: one question, or a batch answered together. */
     data class Clarify(
         override val id: String,
         val questions: List<ClarifyQuestion>,
+        override val delivery: InputRequestDelivery = InputRequestDelivery.ServerRequest,
     ) : InputRequest {
         val batch: Boolean get() = questions.any { it.qid != null }
     }
@@ -104,15 +120,21 @@ sealed interface InputRequest {
         /** The methods this client answers; anything else is left for another client. */
         val METHODS = setOf("approval", "clarify", "sudo", "secret", "vault.unlock_prompt", "vault.code", "vault.save_login")
 
-        fun parse(id: String, method: String, params: JsonObject): InputRequest? = when (method) {
+        fun parse(
+            id: String,
+            method: String,
+            params: JsonObject,
+            delivery: InputRequestDelivery = InputRequestDelivery.ServerRequest,
+        ): InputRequest? = when (method) {
             "approval" -> Approval(
                 id = id,
                 command = params.string("command").orEmpty(),
                 description = params.string("description").orEmpty(),
                 toolName = params.string("tool_name"),
                 choices = approvalChoices(params),
+                delivery = delivery,
             )
-            "clarify" -> clarifyQuestions(params).takeIf { it.isNotEmpty() }?.let { Clarify(id, it) }
+            "clarify" -> clarifyQuestions(params).takeIf { it.isNotEmpty() }?.let { Clarify(id, it, delivery) }
             "sudo" -> Secret(id, Secret.Kind.Sudo, "Password for sudo", envVar = null, command = params.string("command"))
             "secret" -> Secret(
                 id = id,
@@ -137,6 +159,85 @@ sealed interface InputRequest {
                 val origin = params.string("origin").orEmpty()
                 VaultSaveLogin(id, site = params.string("site")?.takeIf { it.isNotBlank() } ?: origin, origin = origin)
             }
+            else -> null
+        }
+
+        /** Parses a live pending-controls event (`clarify.request` or `approval.request`). */
+        fun parseEvent(type: String, payload: JsonObject?): InputRequest? {
+            if (payload == null) return null
+            val method = when (type) {
+                "clarify.request" -> "clarify"
+                "approval.request" -> "approval"
+                else -> return null
+            }
+            val id = payload.string("prompt_id") ?: payload.string("id") ?: return null
+            val generation = payload.long("execution_generation")
+            return parse(id, method, payload, InputRequestDelivery.PendingControl(generation))
+        }
+
+        /** The id of a prompt retired by a cancel/settled event, or null if [type] isn't one. */
+        fun settledId(type: String, payload: JsonObject?): String? = when (type) {
+            "request.cancel", "approval.cancelled", "clarify.settled", "approval.settled", "approval.responded" ->
+                payload.string("prompt_id") ?: payload.string("id") ?: payload.string("request_id")
+            else -> null
+        }
+
+        /**
+         * All open prompts returned by `session.resume`: classic `open_requests` plus canonical
+         * `pending_controls` (or `pending_clarify` / `pending_approval`) backfills, deduplicated by id.
+         */
+        fun parseResume(result: JsonObject): List<InputRequest> {
+            val found = mutableListOf<InputRequest>()
+            val seen = HashSet<String>()
+            fun add(request: InputRequest?) {
+                if (request != null && seen.add(request.id)) found += request
+            }
+            result["open_requests"].asObjectList().forEach { snapshot ->
+                val promptId = snapshot.string("prompt_id")
+                if (promptId != null) {
+                    add(parsePendingControl(snapshot, defaultKind = null))
+                } else {
+                    val id = snapshot.string("id") ?: return@forEach
+                    val method = snapshot.string("method") ?: return@forEach
+                    val params = snapshot["params"] as? JsonObject ?: JsonObject(emptyMap())
+                    add(parse(id, method, params))
+                }
+            }
+            when (val pending = result["pending_controls"]) {
+                is JsonArray -> pending.asObjectList().forEach { add(parsePendingControl(it, defaultKind = null)) }
+                is JsonObject -> {
+                    pending["items"].asObjectList().forEach { add(parsePendingControl(it, defaultKind = null)) }
+                    (pending["clarify"] as? JsonObject)?.let { add(parsePendingControl(it, defaultKind = "clarify")) }
+                    (pending["approval"] as? JsonObject)?.let { add(parsePendingControl(it, defaultKind = "approval")) }
+                }
+                else -> Unit
+            }
+            (result["pending_clarify"] as? JsonObject)?.let { add(parsePendingControl(it, defaultKind = "clarify")) }
+            (result["pending_approval"] as? JsonObject)?.let { add(parsePendingControl(it, defaultKind = "approval")) }
+            return found
+        }
+
+        private fun parsePendingControl(snapshot: JsonObject, defaultKind: String?): InputRequest? {
+            val payload = (snapshot["payload"] as? JsonObject) ?: (snapshot["params"] as? JsonObject) ?: snapshot
+            val rawKind = snapshot.string("kind") ?: snapshot.string("type") ?: snapshot.string("method") ?: defaultKind
+            val method = when (rawKind) {
+                "clarify", "clarify.request" -> "clarify"
+                "approval", "approval.request" -> "approval"
+                else -> when {
+                    payload.string("command") != null -> "approval"
+                    payload.string("question") != null || payload["questions"] is JsonArray -> "clarify"
+                    else -> return null
+                }
+            }
+            val id = snapshot.string("prompt_id") ?: payload.string("prompt_id") ?: snapshot.string("id") ?: payload.string("id") ?: return null
+            val generation = snapshot.long("execution_generation") ?: payload.long("execution_generation")
+            return parse(id, method, payload, InputRequestDelivery.PendingControl(generation))
+        }
+
+        /** The canonical respond RPC method for a [InputRequestDelivery.PendingControl] request. */
+        fun respondMethod(request: InputRequest): String? = when (request) {
+            is Clarify -> "clarify.respond"
+            is Approval -> "approval.respond"
             else -> null
         }
 
