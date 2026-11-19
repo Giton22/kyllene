@@ -3,11 +3,11 @@ package dev.hermeskotlin.ui.chat
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -91,11 +91,22 @@ internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFile
         Theme[typography][bodySmall].fontSize.value * LocalDensity.current.fontScale,
     )
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
-    Column(Modifier.widthIn(max = 420.dp).fillMaxWidth()) {
+    Column(Modifier.fillMaxWidth()) {
         ReplyFile(item, download = { downloadWidget(files, file) })
         when (val current = loaded) {
             is FileLoad.Ready -> if (failed == null) {
-                WidgetWebView(current.text.text, theme, item.name, Modifier.fillMaxWidth().height(280.dp).clip(shape).border(1.dp, Theme[colors][stroke], shape), onFailure = { failed = it })
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val sizing = remember(current.text, theme, maxWidth) { WidgetHeightTracker() }
+                    var measured by remember(sizing) { mutableStateOf<Int?>(null) }
+                    val height = measured?.dp?.coerceIn(160.dp, 640.dp)
+                        ?: (maxWidth * 0.625f).coerceIn(280.dp, 640.dp)
+                    WidgetWebView(
+                        current.text.text, theme, item.name,
+                        Modifier.fillMaxWidth().height(height).clip(shape).border(1.dp, Theme[colors][stroke], shape),
+                        onReport = { report -> sizing.measuredHeight(report)?.let { measured = it } },
+                        onFailure = { failed = it },
+                    )
+                }
             }
             FileLoad.Loading -> Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) { Spinner() }
             else -> Unit
@@ -109,4 +120,4 @@ internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFile
 }
 
 @Composable
-internal expect fun WidgetWebView(html: String, theme: WidgetTheme, name: String, modifier: Modifier, onFailure: (String) -> Unit)
+internal expect fun WidgetWebView(html: String, theme: WidgetTheme, name: String, modifier: Modifier, onReport: (WidgetReport) -> Unit, onFailure: (String) -> Unit)

@@ -22,7 +22,7 @@ internal actual fun rememberPdfOpener(): suspend (ByteArray) -> PdfOpen = { byte
 
 /** A widget in the app's own browser, where the runtime has one; elsewhere it says it can't show. */
 @Composable
-internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String, modifier: Modifier, onFailure: (String) -> Unit) {
+internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String, modifier: Modifier, onReport: (WidgetReport) -> Unit, onFailure: (String) -> Unit) {
     val web = rememberDesktopWeb()
     if (web == null) {
         val failure = rememberUpdatedState(onFailure)
@@ -30,7 +30,7 @@ internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String
         return
     }
     val document = remember(html, theme) { widgetDocument(html, theme, widgetFont) }
-    web.Widget(document, name, modifier, keepsWheel = ::widgetKeepsWheel, onFailure = onFailure)
+    web.Widget(document, name, modifier, keepsWheel = ::widgetKeepsWheel, onTitle = { widgetReport(it)?.let(onReport) }, onFailure = onFailure)
 }
 
 /** A wheel turned over a widget scrolls it while it has page left that way; at its end, the chat scrolls on. */

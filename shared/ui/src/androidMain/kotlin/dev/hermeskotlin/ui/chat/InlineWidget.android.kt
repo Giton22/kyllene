@@ -32,9 +32,10 @@ import org.jetbrains.compose.resources.stringResource
 
 /** Untrusted widget HTML gets no gateway origin, cookies, storage, native bridge or network. */
 @Composable
-internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String, modifier: Modifier, onFailure: (String) -> Unit) {
+internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String, modifier: Modifier, onReport: (WidgetReport) -> Unit, onFailure: (String) -> Unit) {
     val context = LocalContext.current
     val failure = rememberUpdatedState(onFailure)
+    val report = rememberUpdatedState(onReport)
     val supported = remember { supportsWidgetIsolation(WebView.getCurrentWebViewPackage()?.versionName) }
     if (!supported) {
         val update = stringResource(Res.string.android_widget_update_webview)
@@ -45,7 +46,7 @@ internal actual fun WidgetWebView(html: String, theme: WidgetTheme, name: String
     val font = remember { widgetFont(context) }
     val document = remember(html, theme, font) { widgetDocument(html, theme, font) }
     val currentDocument = rememberUpdatedState(document)
-    val view = remember { createWidgetWebView(context, name, { currentDocument.value }) { failure.value(failed.value) } }
+    val view = remember { createWidgetWebView(context, name, { currentDocument.value }, { report.value(it) }) { failure.value(failed.value) } }
     DisposableEffect(view) {
         onDispose { view.stopLoading(); view.destroy() }
     }
@@ -68,7 +69,7 @@ private fun widgetFont(context: Context): String = cachedFont
 
 /** The same restricted host for each widget; its document always arrives as app-supplied text. */
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
-internal fun createWidgetWebView(context: Context, name: String, document: () -> String, onFailure: () -> Unit): WebView =
+internal fun createWidgetWebView(context: Context, name: String, document: () -> String, onReport: (WidgetReport) -> Unit, onFailure: () -> Unit): WebView =
     WebView(context).apply {
         // A wrap-content WebView gives percentage-height frames a zero-height document.
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -123,7 +124,7 @@ internal fun createWidgetWebView(context: Context, name: String, document: () ->
             override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
 
             override fun onReceivedTitle(view: WebView, title: String?) {
-                widgetReport(title)?.let { report = it }
+                widgetReport(title)?.let { report = it; onReport(it) }
             }
         }
         webViewClient = object : WebViewClient() {

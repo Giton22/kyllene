@@ -95,7 +95,8 @@ class InlineWidgetTest {
         assertTrue(result.indexOf("parent.postMessage({heraldReport:v},'*')") in 0 until result.indexOf("&lt;p&gt;tall"))
         // The wrapper takes only a well-formed report from its own frame, and only as its title.
         assertTrue(result.contains("e.source===f.contentWindow"))
-        assertTrue(result.contains("/^t?b?\\|[0-9,;-]{0,500}\\|[0-9a-z]{1,8}$/.test(v))document.title='$WIDGET_REPORT'+v"))
+        assertTrue(result.contains("iframe{display:block;width:100%;height:100%;border:0}"))
+        assertTrue(result.contains("/^t?b?\\|[0-9,;-]{0,500}\\|[0-9a-z]{1,8}\\|[0-9]{1,5},[0-9]{1,5}$/.test(v))document.title='$WIDGET_REPORT'+v"))
     }
 
     @Test
@@ -107,6 +108,23 @@ class InlineWidgetTest {
         assertEquals(WidgetReport(), widgetReport("${WIDGET_REPORT}tb||k3x9a"))
         assertNull(widgetReport("HTML widget"))
         assertNull(widgetReport(null))
+    }
+
+    @Test
+    fun responsiveReportsCarryMeasuredContentAndViewportHeights() {
+        val widget = widgetReport("${WIDGET_REPORT}tb||k3x9a|520,280")
+        assertEquals(520, widget?.contentHeight)
+        assertEquals(280, widget?.viewportHeight)
+        assertEquals(null, widgetReport("${WIDGET_REPORT}tb||k3x9a|999999,280"))
+    }
+
+    @Test
+    fun aViewportHeightCanvasCannotKeepGrowingItsOwnViewport() {
+        val sizing = WidgetHeightTracker()
+        assertEquals(310, sizing.measuredHeight(WidgetReport(contentHeight = 310, viewportHeight = 280)))
+        assertNull(sizing.measuredHeight(WidgetReport(contentHeight = 340, viewportHeight = 310)))
+        assertNull(sizing.measuredHeight(WidgetReport(contentHeight = 340, viewportHeight = 310)))
+        assertEquals(490, sizing.measuredHeight(WidgetReport(contentHeight = 490, viewportHeight = 310)))
     }
 
     @Test
