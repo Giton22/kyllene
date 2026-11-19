@@ -275,6 +275,8 @@ fun hasWordsToSay(text: String): Boolean = text.any { it.isLetterOrDigit() || it
  *
  * A sentence longer than the piece it would go in (a list without full stops, say) is cut at its spaces, so it
  * neither delays the first words nor passes [maxChars]; only a single word longer than the limit stays whole.
+ * Punctuation with no words is never a piece of its own, which the gateway couldn't voice: it goes with the piece
+ * beside it while that stays inside its cap, and is left out where it wouldn't.
  */
 fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, growth: Double = 3.0): List<String> {
     val sentences = sentencePieces(text)
@@ -311,18 +313,27 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
     }
     if (current.isNotEmpty()) chunks += current.toString()
     // A piece of only punctuation (a leading `...`, the `!` left where an emoji was) gives the gateway no words to
-    // say, and a piece it can't voice ends the reading: it goes with the piece before it, or the first one after.
-    // Text of only punctuation gives no pieces at all.
+    // say, and a piece it can't voice ends the reading: it goes with the piece before it, or the first one after,
+    // while that piece stays inside its cap ([firstChars] for the first, [maxChars] after). Past the cap it's left
+    // out, as there's nothing in it to hear. Text of only punctuation gives no pieces at all.
+    val firstLimit = minOf(firstChars, maxChars)
     val spoken = mutableListOf<StringBuilder>()
     val before = StringBuilder()
+    fun StringBuilder.join(part: String, cap: Int) {
+        if (length + (if (isEmpty()) 0 else 1) + part.length > cap) return
+        if (isNotEmpty()) append(' ')
+        append(part)
+    }
     for (chunk in chunks) {
-        val into = when {
-            hasWordsToSay(chunk) -> StringBuilder(before).also { spoken += it; before.clear() }
-            spoken.isNotEmpty() -> spoken.last()
-            else -> before
+        when {
+            hasWordsToSay(chunk) -> spoken += StringBuilder().apply {
+                if (before.isNotEmpty() && before.length + 1 + chunk.length <= firstLimit) append(before).append(' ')
+                before.clear()
+                append(chunk)
+            }
+            spoken.isEmpty() -> before.join(chunk, firstLimit)
+            else -> spoken.last().join(chunk, if (spoken.size == 1) firstLimit else maxChars)
         }
-        if (into.isNotEmpty()) into.append(' ')
-        into.append(chunk)
     }
     return spoken.map { it.toString() }
 }

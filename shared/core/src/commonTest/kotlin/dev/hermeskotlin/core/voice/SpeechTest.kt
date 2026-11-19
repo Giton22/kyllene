@@ -223,13 +223,25 @@ class SpeechTest {
         assertEquals(emptyList<String>(), speechChunks(""))
         assertEquals(emptyList<String>(), speechChunks("..."))
         assertEquals(emptyList<String>(), speechChunks("?! !"))
-        // A leading `...` before a 157-character sentence would otherwise be a first piece of its own.
-        val leading = "... " + "x".repeat(152) + " end."
-        val opened = speechChunks(leading)
-        assertTrue(opened.all { piece -> piece.any { it.isLetterOrDigit() } }, opened.toString())
-        assertEquals(leading, opened.joinToString(" "))
-        // A `!` after a full last piece goes with it.
-        assertEquals(listOf("Fine then! !"), speechChunks("Fine then! !", maxChars = 10, firstChars = 10))
+        // A leading `...` before a 157-character sentence would otherwise be a first piece of its own. It doesn't fit
+        // in front of the sentence without making the first piece longer than 160, so it's left out.
+        val sentence = "x".repeat(152) + " end."
+        assertEquals(listOf(sentence), speechChunks("... $sentence"))
+        // A `!` that would take the full first piece past its cap is left out too.
+        assertEquals(listOf("Fine then!"), speechChunks("Fine then! !", maxChars = 10, firstChars = 10))
+        // One that fits goes with the piece before it.
+        assertEquals(
+            listOf("Fine then!", "Good stuff is coming here now! !"),
+            speechChunks("Fine then! Good stuff is coming here now! !", maxChars = 100, firstChars = 10),
+        )
+    }
+
+    /** Joining punctuation to a piece never takes it past its cap, however much of it there is. */
+    @Test
+    fun punctuationNeverTakesAPiecePastItsCap() {
+        val chunks = speechChunks("Hi. " + ". ".repeat(5000), maxChars = 400)
+        assertEquals(1, chunks.size, chunks.map { it.length }.toString())
+        assertTrue(chunks.single().startsWith("Hi.") && chunks.single().length <= 160, "piece ${chunks.single().length}")
     }
 
     /** Letters past U+FFFF are two surrogates in a String, neither a letter alone: they still have words to say. */
