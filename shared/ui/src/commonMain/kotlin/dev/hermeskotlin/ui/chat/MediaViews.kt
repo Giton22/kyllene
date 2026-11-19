@@ -104,14 +104,14 @@ internal class ViewerImage(
 
 /** The pictures and files a reply delivered, under its text. */
 @Composable
-internal fun ReplyMediaList(media: List<ReplyMedia>) {
+internal fun ReplyMediaList(media: List<ReplyMedia>, messageKey: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Keyed, so a picture's loaded bytes never show under another one when the list changes.
         media.forEach { item -> key(item.source) {
             val file = widgetFile(item)
             val files = LocalWidgetFiles.current
             when {
-                file != null && files != null -> InlineWidget(item, file, files)
+                file != null && files != null -> InlineWidget(item, file, files, messageKey)
                 item.isImage -> ReplyImage(item)
                 else -> ReplyFile(item)
             }

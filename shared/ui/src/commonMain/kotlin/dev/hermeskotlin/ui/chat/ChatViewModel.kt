@@ -397,6 +397,7 @@ class ChatViewModel(
 
     private val session = MutableStateFlow<ChatSession?>(null)
     private val widgetSession = MutableStateFlow<Pair<ChatSession, ChatTarget>?>(null)
+    private var widgetCache: Pair<ChatSession, WidgetPreviewCache>? = null
 
     /** An external return uses the target actually bound to this source, including its draft and bot identity. */
     fun targetFor(source: ChatSession): ChatTarget? = target.takeIf { session.value === source }
@@ -424,10 +425,15 @@ class ChatViewModel(
 
     internal val transcript: StateFlow<ChatTranscript> = widgetSession
         .flatMapLatest { bound ->
-            if (bound == null) flowOf(ChatTranscript()) else {
+            if (bound == null) {
+                widgetCache = null
+                flowOf(ChatTranscript())
+            } else {
                 val (chat, owner) = bound
-                // Keyed by whose files these are, so a new title or draft on the same chat doesn't reload its widgets.
-                val files = WidgetFiles(owner.gateway.gatewayUrl to owner.profile, { previewFile(it, owner) }, { downloadFile(it, owner) })
+                // The same open session can be rebound under a new title. A different session starts an empty cache.
+                val cache = widgetCache?.takeIf { it.first === chat }?.second
+                    ?: WidgetPreviewCache().also { widgetCache = chat to it }
+                val files = WidgetFiles(owner.gateway.gatewayUrl to owner.profile, { previewFile(it, owner) }, { downloadFile(it, owner) }, cache)
                 chat.state.map { ChatTranscript(it, files, owner) }
             }
         }

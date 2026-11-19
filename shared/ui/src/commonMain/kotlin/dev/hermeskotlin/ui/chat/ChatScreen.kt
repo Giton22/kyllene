@@ -3102,7 +3102,7 @@ internal fun AssistantReply(
         }
         // While the turn runs its finished steps are listed as they land; once it ends they fold into the pill.
         if (showTools) if (message.streaming) LiveSteps(listedTools, message.key) else Tools(listedTools, message.key)
-        if (generated.isNotEmpty()) ReplyMediaList(remember(generated) { generated.map { it.asMedia() } })
+        if (generated.isNotEmpty()) ReplyMediaList(remember(generated) { generated.map { it.asMedia() } }, message.key)
         // Shown whatever the tool-activity setting: the work happens out of sight, in other agents.
         message.tools.filter { it.name == "delegate_task" }.forEach { DelegationCard(it) }
         // Messages to other bots, said whatever the tool-activity setting: they're part of the conversation.
@@ -3127,7 +3127,7 @@ internal fun AssistantReply(
             screens.byCall[call.id]?.let { key(call.id) { AgentScreenCard(it, newest = it.latest.id in screens.newest) } }
         }
         if (settings.showLinkPreviews && !message.streaming) LinkPreviewCards(text)
-        if (media.isNotEmpty()) ReplyMediaList(media)
+        if (media.isNotEmpty()) ReplyMediaList(media, message.key)
         when (message.outcome) {
             TurnOutcome.Error -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 UnstyledIcon(Lucide.CircleAlert, contentDescription = null, tint = Theme[colors][danger], modifier = Modifier.size(16.dp))

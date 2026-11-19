@@ -149,6 +149,25 @@ class InlineWidgetTest {
     }
 
     @Test
+    fun widgetCacheEvictsTheLeastRecentlyViewedMessage() {
+        val cache = WidgetPreviewCache(capacity = 2)
+        val file = GatewayFile("/tmp/chart.html")
+        val first = WidgetPreviewKey("first", file)
+        val second = WidgetPreviewKey("second", file)
+        val third = WidgetPreviewKey("third", file)
+        val document = FileText("<p>hello</p>", 12, false, false)
+        val view = cache.store(first, document)
+        cache.store(second, document.copy(text = "<p>two</p>"))
+
+        assertEquals(view, cache[first])
+        cache.store(third, document)
+        assertNull(cache[second])
+        assertEquals(view, cache[first])
+        cache.remove(first)
+        assertNull(cache[first])
+    }
+
+    @Test
     fun loaderPreservesTheFileAndGatewayFailure() = runTest {
         val file = GatewayFile("/tmp/chart.html")
         val expected = FileLoad.Ready(FileText("<p>profile B</p>", 16, false, false))

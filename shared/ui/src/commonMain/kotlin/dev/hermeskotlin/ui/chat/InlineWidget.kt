@@ -28,10 +28,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.ReplyMedia
+import dev.hermeskotlin.core.media.FileText
 import dev.hermeskotlin.core.media.GatewayFile
 import dev.hermeskotlin.designsystem.accent
 import dev.hermeskotlin.designsystem.components.handCursor
@@ -52,15 +54,40 @@ import org.jetbrains.compose.resources.stringResource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
-/**
- * File callbacks and whose files they read (gateway and profile, all the callbacks use); never share documents across
- * owners. A loaded widget keeps the callbacks it started with, so the identity must grow if they ever use more.
- */
+/** The file callbacks and preview cache for one bound gateway, profile and conversation. */
 internal data class WidgetFiles(
     val identity: Any,
     val load: suspend (GatewayFile) -> FileLoad,
     val download: suspend (GatewayFile) -> FileDownload,
+    val cache: WidgetPreviewCache = WidgetPreviewCache(),
 )
+
+internal data class WidgetPreviewKey(val messageKey: String, val file: GatewayFile)
+
+internal class WidgetPreviewCache(private val capacity: Int = 12) {
+    class Preview(val document: FileText) {
+        var measurement: Measurement? = null
+    }
+
+    data class Measurement(val width: Dp, val theme: WidgetTheme, val height: Int)
+
+    private val recent = LinkedHashMap<WidgetPreviewKey, Preview>()
+
+    operator fun get(key: WidgetPreviewKey): Preview? =
+        recent.remove(key)?.also { recent[key] = it }
+
+    fun store(key: WidgetPreviewKey, document: FileText): Preview {
+        recent.remove(key)
+        val preview = Preview(document)
+        recent[key] = preview
+        if (recent.size > capacity) recent.remove(recent.keys.first())
+        return preview
+    }
+
+    fun remove(key: WidgetPreviewKey) {
+        recent.remove(key)
+    }
+}
 
 internal val LocalWidgetFiles = staticCompositionLocalOf<WidgetFiles?> { null }
 
@@ -83,10 +110,27 @@ internal suspend fun loadWidget(files: WidgetFiles, file: GatewayFile): FileLoad
 }
 
 @Composable
-internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFiles) = key(files.identity, item.source) {
+internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFiles, messageKey: String) {
+    val previewKey = WidgetPreviewKey(messageKey, file)
+    key(files.identity, files.cache, previewKey) { WidgetFrame(item, file, files, previewKey) }
+}
+
+@Composable
+private fun WidgetFrame(item: ReplyMedia, file: GatewayFile, files: WidgetFiles, previewKey: WidgetPreviewKey) {
     var attempt by remember { mutableIntStateOf(0) }
     var failed by remember(attempt) { mutableStateOf<String?>(null) }
-    val loaded by key(attempt) { produceState<FileLoad>(FileLoad.Loading) { value = loadWidget(files, file) } }
+    var preview by remember(attempt) { mutableStateOf(files.cache[previewKey]) }
+    val loadProblem by key(attempt) {
+        produceState<FileProblem?>(null) {
+            if (preview == null) {
+                when (val loaded = loadWidget(files, file)) {
+                    is FileLoad.Ready -> preview = files.cache.store(previewKey, loaded.text)
+                    is FileLoad.Failed -> value = loaded.problem
+                    else -> value = FileProblem.WidgetUnreadable
+                }
+            }
+        }
+    }
     fun css(color: Color) = cssColor(color.toArgb())
     val theme = WidgetTheme(
         css(Theme[colors][text]), css(Theme[colors][textTertiary]), css(Theme[colors][accent]),
@@ -100,28 +144,38 @@ internal fun InlineWidget(item: ReplyMedia, file: GatewayFile, files: WidgetFile
     ) {
         ReplyFile(item, download = { downloadWidget(files, file) }, insidePreview = true)
         Spacer(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
-        when (val current = loaded) {
-            is FileLoad.Ready -> if (failed == null) {
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    val sizing = remember(current.text, theme, maxWidth) { WidgetHeightTracker() }
-                    var measured by remember(sizing) { mutableStateOf<Int?>(null) }
-                    val height = measured?.dp?.coerceIn(160.dp, 640.dp)
-                        ?: (maxWidth * 0.625f).coerceIn(280.dp, 640.dp)
-                    WidgetWebView(
-                        current.text.text, theme, item.name,
-                        Modifier.fillMaxWidth().height(height),
-                        onReport = { report -> sizing.measuredHeight(report)?.let { measured = it } },
-                        onFailure = { failed = it },
-                    )
+        val current = preview
+        when {
+            current != null && failed == null -> BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val width = maxWidth
+                val sizing = remember(current, theme, width) { WidgetHeightTracker() }
+                var measured by remember(sizing) {
+                    mutableStateOf(current.measurement?.takeIf { it.width == width && it.theme == theme }?.height)
                 }
+                val height = measured?.dp?.coerceIn(160.dp, 640.dp)
+                    ?: (width * 0.625f).coerceIn(280.dp, 640.dp)
+                WidgetWebView(
+                    current.document.text, theme, item.name,
+                    Modifier.fillMaxWidth().height(height),
+                    onReport = { report ->
+                        sizing.measuredHeight(report)?.let {
+                            measured = it
+                            current.measurement = WidgetPreviewCache.Measurement(width, theme, it)
+                        }
+                    },
+                    onFailure = { failed = it },
+                )
             }
-            FileLoad.Loading -> Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) { Spinner() }
-            else -> Unit
+            current == null && loadProblem == null ->
+                Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) { Spinner() }
         }
-        val problem = (loaded as? FileLoad.Failed)?.let { fileProblemText(it.problem) } ?: failed
+        val problem = loadProblem?.let { fileProblemText(it) } ?: failed
         if (problem != null) {
             Text(stringResource(if (isDesktop) Res.string.chat_widget_retry_click else Res.string.chat_widget_retry_tap, problem), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary],
-                modifier = Modifier.fillMaxWidth().handCursor().clickable { attempt++ }.padding(12.dp))
+                modifier = Modifier.fillMaxWidth().handCursor().clickable {
+                    files.cache.remove(previewKey)
+                    attempt++
+                }.padding(12.dp))
         }
     }
 }

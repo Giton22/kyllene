@@ -36,6 +36,7 @@ class InlineWidgetToolbarTest {
                                 FileDownload.Failed(FileProblem.WidgetNotFetched)
                             },
                         ),
+                        messageKey = "reply",
                     )
                 }
             }

@@ -189,7 +189,9 @@ class ChatViewModelTest {
             runCurrent()
             val newTranscript = vm.transcript.value
             assertEquals("same-id", newTranscript.state.storedSessionId)
-            assertEquals(next.gateway.gatewayUrl to next.profile, assertNotNull(newTranscript.widgetFiles).identity)
+            val newFiles = assertNotNull(newTranscript.widgetFiles)
+            assertEquals(next.gateway.gatewayUrl to next.profile, newFiles.identity)
+            assertTrue(newFiles.cache !== assertNotNull(previous.widgetFiles).cache)
             // The screen may still hold this prior emission while the selected route has changed.
             assertTrue(loadWidget(oldFiles, file) is FileLoad.Ready)
             assertTrue(downloadWidget(oldFiles, file) is FileDownload.Ready)
@@ -202,7 +204,9 @@ class ChatViewModelTest {
         val current = vm.transcript.value.widgetFiles
         vm.open(first.copy(gateway = SavedGateway("https://other.example"), title = "Renamed"))
         runCurrent()
-        assertEquals(assertNotNull(current).identity, assertNotNull(vm.transcript.value.widgetFiles).identity)
+        val renamed = assertNotNull(vm.transcript.value.widgetFiles)
+        assertEquals(assertNotNull(current).identity, renamed.identity)
+        assertSame(current.cache, renamed.cache)
     }
 
     @Test
