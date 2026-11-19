@@ -23,6 +23,7 @@ import dev.hermeskotlin.core.settings.CallTarget
 import dev.hermeskotlin.wearlink.DefaultCallTarget
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.voice.AudioApi
+import dev.hermeskotlin.core.voice.hasWordsToSay
 import dev.hermeskotlin.core.voice.speakableText
 import dev.hermeskotlin.core.voice.speechChunks
 import dev.hermeskotlin.wearlink.ChatList
@@ -623,7 +624,8 @@ class WatchRelay(
             return tell(done.copy(phase = ReplyPhase.Failed, text = clipForWatch(reply.text), error = reply.error ?: "The turn failed."))
         }
         val replyText = reply?.text.orEmpty()
-        val spoken = if (ask.speak && reply?.outcome != TurnOutcome.Interrupted) speakableText(replyText) else ""
+        // Only punctuation left ("?!", say) has no words to voice and makes no pieces: nothing to read, not "coming".
+        val spoken = if (ask.speak && reply?.outcome != TurnOutcome.Interrupted) speakableText(replyText).takeIf(::hasWordsToSay).orEmpty() else ""
         tell(done.copy(phase = ReplyPhase.Done, text = clipForWatch(replyText), speech = if (spoken.isEmpty()) ReplySpeech.Off else ReplySpeech.Coming))
         if (spoken.isNotEmpty() && !speak(node, ask.id, spoken, gateway, profile)) {
             tell(last.copy(speech = ReplySpeech.Unavailable))

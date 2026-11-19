@@ -4,6 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 class SpeechTest {
 
@@ -108,6 +110,187 @@ class SpeechTest {
         // Only a single word longer than the limit stays whole.
         val word = "x".repeat(2500)
         assertEquals(listOf("Read", word), speechChunks("Read $word", maxChars = 2000, firstChars = 4))
+    }
+
+    /**
+     * A long run of punctuation that is not a sentence end (`!!!` stuck to the next word) is examined once, not
+     * rescanned from each of its characters: the whole reply still comes back as one piece with every character
+     * kept, and the generous wall-clock bound below fails the quadratic scan (seconds at 64k) without being tight.
+     */
+    @Test
+    fun aLongRejectedPunctuationRunIsScannedOnceAndKeptWhole() {
+        val text = "a" + "!".repeat(64_000) + "b"
+        val started = TimeSource.Monotonic.markNow()
+        val chunks = speechChunks(text)
+        val elapsed = started.elapsedNow()
+        assertEquals(listOf(text), chunks)
+        assertTrue(elapsed < 3.seconds, "a 64,000-character punctuation run took $elapsed")
+    }
+
+    /** Runs of mixed terminators and closers next to digits keep their text, whether or not they end a sentence. */
+    @Test
+    fun longRejectedRunsBesideDigitsAndClosersKeepTheirText() {
+        val run = "?!\")]".repeat(4_000)
+        // Not a sentence end: the run stays inside the word it is stuck to, which the long-word exception keeps
+        // whole, and the surrounding words and numbers are untouched.
+        val attached = "Count 4${run}6 and 2.0.1 too."
+        assertEquals(listOf("Count", "4${run}6", "and 2.0.1 too."), speechChunks(attached))
+        assertEquals(attached, speechChunks(attached).joinToString(" "))
+        // A sentence end: the run closes a sentence, and the next one still splits normally at a matching cap.
+        val split = "Wait$run Next at 4.6."
+        assertEquals(listOf("Wait$run", "Next at 4.6."), speechChunks(split, maxChars = 16_005, firstChars = 16_005))
+        assertEquals(split, speechChunks(split).joinToString(" "))
+        // The decimal point itself inside a rejected run is not a sentence end either.
+        val decimalRun = "9.${"!".repeat(20_000)}5"
+        assertEquals(listOf(decimalRun), speechChunks(decimalRun))
+    }
+
+    /**
+     * A full stop inside a number is not the end of a sentence: read aloud must say "four point six", not
+     * "four. Six".
+     */
+    @Test
+    fun aDecimalIsNotASentenceEnd() {
+        assertEquals(listOf("The speed is 4.6 now."), speechChunks("The speed is 4.6 now."))
+        assertEquals(listOf("Speed 1.0× and 1.2× are fine."), speechChunks("Speed 1.0× and 1.2× are fine."))
+    }
+
+    @Test
+    fun aDottedVersionIsNotThreeSentences() {
+        assertEquals(listOf("Version 2.0.1 released."), speechChunks("Version 2.0.1 released."))
+        assertEquals(
+            listOf("Model 2.0.1 stays loaded.", "Next sentence here."),
+            speechChunks("Model 2.0.1 stays loaded. Next sentence here.", maxChars = 30, firstChars = 30),
+        )
+    }
+
+    @Test
+    fun quotedAndExclaimedSentencesStillEndWhereTheyShould() {
+        val text = "He asked \"Why?\" She said \"Fine!\" Then left."
+        // A tiny piece size keeps one sentence per piece, so this checks the split itself.
+        assertEquals(
+            listOf("He asked \"Why?\"", "She said \"Fine!\"", "Then left."),
+            speechChunks(text, maxChars = 20, firstChars = 20),
+        )
+        assertEquals(text, speechChunks(text).joinToString(" "))
+    }
+
+    /**
+     * Curly quotes, guillemets and corner brackets close a sentence like straight ones, so the sentences after them
+     * still split. Each case is one the cut at spaces would get wrong: without the closer, the next short word joins
+     * the first piece.
+     */
+    @Test
+    fun typographicClosersStillEndTheSentence() {
+        val text = "He said “Stop.” Then he left."
+        assertEquals(listOf("He said “Stop.”", "Then he left."), speechChunks(text, maxChars = 20, firstChars = 20))
+        assertEquals(text, speechChunks(text).joinToString(" "))
+        assertEquals(listOf("She asked «Why?»", "No one knew."), speechChunks("She asked «Why?» No one knew.", maxChars = 20, firstChars = 20))
+        assertEquals(listOf("He said ‘Go.’", "So we did go."), speechChunks("He said ‘Go.’ So we did go.", maxChars = 20, firstChars = 20))
+        assertEquals(listOf("他说「好。」", "我们走吧。"), speechChunks("他说「好。」我们走吧。", maxChars = 6, firstChars = 6))
+    }
+
+    /**
+     * Chinese and Japanese put no space after a sentence. A long reply in them is still cut at its stops, so the first
+     * piece is short and none passes the cap: there are no spaces to cut it at otherwise.
+     */
+    @Test
+    fun aReplyWithoutSpacesIsCutAtItsOwnStops() {
+        assertEquals(
+            listOf("第一句话。", "第二句话！", "第三句话？"),
+            speechChunks("第一句话。第二句话！第三句话？", maxChars = 5, firstChars = 5),
+        )
+        // A plain `.`, `!` or `?` with a Chinese character right after it ends a sentence too, as it always did.
+        assertEquals(listOf("真的吗?", "是的.", "好"), speechChunks("真的吗?是的.好", maxChars = 4, firstChars = 4))
+        val text = "这是一个用来测试的中文句子。".repeat(150)
+        val chunks = speechChunks(text)
+        assertTrue(chunks.first().length <= 160, "first piece ${chunks.first().length}")
+        assertTrue(chunks.all { it.length <= 1200 }, chunks.map { it.length }.toString())
+        assertEquals(text, chunks.joinToString("").replace(" ", ""))
+    }
+
+    @Test
+    fun arabicAndDevanagariStopsEndASentence() {
+        assertEquals(
+            listOf("هل أنت هنا؟", "نعم، أنا هنا الآن."),
+            speechChunks("هل أنت هنا؟ نعم، أنا هنا الآن.", maxChars = 20, firstChars = 20),
+        )
+        assertEquals(
+            listOf("यह पहला वाक्य है।", "यह दूसरा है।"),
+            speechChunks("यह पहला वाक्य है। यह दूसरा है।", maxChars = 20, firstChars = 20),
+        )
+    }
+
+    /** Punctuation alone is never a piece: the gateway has no words for it, and one it can't voice ends the reading. */
+    @Test
+    fun punctuationIsNeverAPieceOfItsOwn() {
+        assertEquals(emptyList<String>(), speechChunks(""))
+        assertEquals(emptyList<String>(), speechChunks("..."))
+        assertEquals(emptyList<String>(), speechChunks("?! !"))
+        // A leading `...` before a 157-character sentence would otherwise be a first piece of its own. It doesn't fit
+        // in front of the sentence without making the first piece longer than 160, so it's left out.
+        val sentence = "x".repeat(152) + " end."
+        assertEquals(listOf(sentence), speechChunks("... $sentence"))
+        // A `!` that would take the full first piece past its cap is left out too.
+        assertEquals(listOf("Fine then!"), speechChunks("Fine then! !", maxChars = 10, firstChars = 10))
+        // One that fits goes with the piece before it.
+        assertEquals(
+            listOf("Fine then!", "Good stuff is coming here now! !"),
+            speechChunks("Fine then! Good stuff is coming here now! !", maxChars = 100, firstChars = 10),
+        )
+    }
+
+    /** Joining punctuation to a piece never takes it past its cap, however much of it there is. */
+    @Test
+    fun punctuationNeverTakesAPiecePastItsCap() {
+        val chunks = speechChunks("Hi. " + ". ".repeat(5000), maxChars = 400)
+        assertEquals(1, chunks.size, chunks.map { it.length }.toString())
+        assertTrue(chunks.single().startsWith("Hi.") && chunks.single().length <= 160, "piece ${chunks.single().length}")
+    }
+
+    /** Letters past U+FFFF are two surrogates in a String, neither a letter alone: they still have words to say. */
+    @Test
+    fun lettersPastTheBasicPlaneAreWordsToSay() {
+        assertEquals(listOf("𝐃𝐨𝐧𝐞."), speechChunks("𝐃𝐨𝐧𝐞."))
+        assertEquals(listOf("𠀀𠀁。"), speechChunks("𠀀𠀁。"))
+        assertEquals("𝐃𝐨𝐧𝐞.", readAloudText("𝐃𝐨𝐧𝐞."))
+    }
+
+    @Test
+    fun symbolsPastTheBasicPlaneAreNotWordsToSay() {
+        // England's flag: the black flag is stripped as an emoji, its invisible tag characters are left.
+        assertEquals("", readAloudText("🏴󠁧󠁢󠁥󠁮󠁧󠁿!"))
+        // A musical symbol (U+1D11E).
+        assertEquals(emptyList(), speechChunks("𝄞"))
+        assertTrue(hasWordsToSay("Hi 𝄞"))
+    }
+
+    @Test
+    fun aNewlineInsideASentenceDoesNotCutIt() {
+        assertEquals(listOf("First line\nstill the same sentence."), speechChunks("First line\nstill the same sentence."))
+    }
+
+    @Test
+    fun paragraphsKeepTheirTextWithTheDecimalIntact() {
+        val text = "One paragraph line.\n\nSecond one at 4.6 speed."
+        assertEquals(
+            listOf("One paragraph line.", "Second one at 4.6 speed."),
+            speechChunks(text, maxChars = 200, firstChars = 20),
+        )
+        assertEquals("One paragraph line. Second one at 4.6 speed.", speechChunks(text).joinToString(" "))
+    }
+
+    /** Numbers stay whole without costing the growing pieces: the same caps and growth as before still hold. */
+    @Test
+    fun numbersStayWholeWhileLaterPiecesStillGrow() {
+        val text = "Build 2.0.1 runs at 4.6 and 1.2× the old rate. " +
+            "This sentence carries about seventy characters, and 4.6 stays whole in it. ".repeat(12)
+        val chunks = speechChunks(text)
+        assertTrue(chunks.first().length <= 160, "first piece ${chunks.first().length}")
+        chunks.zipWithNext { before, piece -> assertTrue(piece.length <= maxOf(160, before.length * 3), "${before.length} then ${piece.length}") }
+        assertTrue(chunks.all { it.length <= 1200 })
+        assertTrue(chunks.none { "4. 6" in it || "2. 0" in it || "1. 2" in it }, "a number was split: $chunks")
+        assertEquals(text.trim(), chunks.joinToString(" "))
     }
 
     /** Feeds [levels] as 20 ms frames; the time the recording would end, or null if it wouldn't. */

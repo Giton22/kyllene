@@ -256,7 +256,31 @@ fun speakableText(markdown: String): String = markdown
  * or only punctuation, which the gateway would have no words for.
  */
 fun readAloudText(reply: String): String =
-    speakableText(extractReplyMedia(reply).first).takeIf { text -> text.any { it.isLetterOrDigit() } }.orEmpty()
+    speakableText(extractReplyMedia(reply).first).takeIf(::hasWordsToSay).orEmpty()
+
+/**
+ * Whether [text] has anything for a voice to say: a letter or a digit. A character past U+FFFF (`𝐃`, `𠀀`) is a pair
+ * of surrogates, neither of which is a letter on its own, so it counts when it sits in a block of letters: the
+ * scripts of the first supplementary plane, the mathematical letters and digits, and the CJK planes. Symbols out
+ * there (music, emoji the strip missed, the invisible tags of a flag like England's) don't.
+ */
+fun hasWordsToSay(text: String): Boolean {
+    var i = 0
+    while (i < text.length) {
+        val c = text[i]
+        if (c.isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) {
+            val codePoint = 0x10000 + ((c.code - 0xD800) shl 10) + (text[i + 1].code - 0xDC00)
+            if (codePoint in 0x10000..0x1CFFF || codePoint in 0x1D400..0x1D7FF || codePoint in 0x1E000..0x1EFFF ||
+                codePoint in 0x20000..0x3FFFF
+            ) return true
+            i += 2
+            continue
+        }
+        if (c.isLetterOrDigit()) return true
+        i++
+    }
+    return false
+}
 
 /**
  * Cuts [text] into pieces at sentence ends where possible, so the first piece can be spoken while the rest
@@ -269,9 +293,11 @@ fun readAloudText(reply: String): String =
  *
  * A sentence longer than the piece it would go in (a list without full stops, say) is cut at its spaces, so it
  * neither delays the first words nor passes [maxChars]; only a single word longer than the limit stays whole.
+ * Punctuation with no words is never a piece of its own, which the gateway couldn't voice: it goes with the piece
+ * beside it while that stays inside its cap, and is left out where it wouldn't.
  */
 fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, growth: Double = 3.0): List<String> {
-    val sentences = Regex("""[^.!?]+(?:[.!?]+["')\]]*|$)\s*""").findAll(text).map { it.value.trim() }.filter { it.isNotEmpty() }.toList()
+    val sentences = sentencePieces(text)
     val chunks = mutableListOf<String>()
     val current = StringBuilder()
     var limit = minOf(firstChars, maxChars)
@@ -304,8 +330,98 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
         }
     }
     if (current.isNotEmpty()) chunks += current.toString()
-    return chunks
+    // A piece of only punctuation (a leading `...`, the `!` left where an emoji was) gives the gateway no words to
+    // say, and a piece it can't voice ends the reading: it goes with the piece before it, or the first one after,
+    // while that piece stays inside its cap ([firstChars] for the first, [maxChars] after). Past the cap it's left
+    // out, as there's nothing in it to hear. Text of only punctuation gives no pieces at all.
+    val firstLimit = minOf(firstChars, maxChars)
+    val spoken = mutableListOf<StringBuilder>()
+    val before = StringBuilder()
+    fun StringBuilder.join(part: String, cap: Int) {
+        if (length + (if (isEmpty()) 0 else 1) + part.length > cap) return
+        if (isNotEmpty()) this.append(' ')
+        this.append(part)
+    }
+    for (chunk in chunks) {
+        when {
+            hasWordsToSay(chunk) -> {
+                // Not `apply { append(...) }`: the local append above (into `current`) would win over the builder's.
+                val piece = StringBuilder()
+                if (before.isNotEmpty() && before.length + 1 + chunk.length <= firstLimit) piece.append(before).append(' ')
+                before.clear()
+                piece.append(chunk)
+                spoken += piece
+            }
+            spoken.isEmpty() -> before.join(chunk, firstLimit)
+            else -> spoken.last().join(chunk, if (spoken.size == 1) firstLimit else maxChars)
+        }
+    }
+    return spoken.map { it.toString() }
 }
+
+/**
+ * Cuts [text] into the sentences [speechChunks] fills its pieces with: a run of `.`, `!` or `?` plus any closing
+ * quotes or brackets, followed by whitespace or the end of the text (Arabic and Devanagari stops count too, and in
+ * Chinese or Japanese, written without spaces, a stop ends a sentence as it is). A full stop between digits is not
+ * a sentence end — it's the point in `4.6` or a dot in a version like `2.0.1` — so it stays inside its sentence.
+ * Splitting there made read aloud pause in the middle of a number ("four. Six") and turned `1.0×` into a piece
+ * starting `0×`, which the voice backend can't say at all. Dotted names (`notes.md`) and the inner dots of `e.g.` or
+ * `U.S.A.` stay put for the same reason; an abbreviation's last dot before a space still ends a sentence, as it
+ * always did.
+ *
+ * The pieces keep every character of the input: joining them with a single space gives the text back, with one
+ * space only where a piece boundary or a word cut fell — whitespace inside a sentence is kept as it is (a tab or
+ * an internal newline stays), and the text reaching this through [speakableText] has had its runs collapsed.
+ */
+private fun sentencePieces(text: String): List<String> {
+    val pieces = mutableListOf<String>()
+    // Typographic quotes too: a model's `“Stop.” Then…` ends a sentence after the closing quote.
+    fun closesSentence(c: Char) = c in SENTENCE_CLOSERS
+    fun endsSentence(c: Char) = c in SENTENCE_STOPS || c in UNSPACED_STOPS
+    var start = 0
+    var i = 0
+    while (i < text.length) {
+        if (!endsSentence(text[i])) {
+            i++
+            continue
+        }
+        var end = i + 1
+        var unspaced = text[i] in UNSPACED_STOPS
+        while (end < text.length && (endsSentence(text[end]) || closesSentence(text[end]))) {
+            if (text[end] in UNSPACED_STOPS) unspaced = true
+            end++
+        }
+        // Chinese and Japanese put no space after a sentence: their own full stop ends one wherever it is, and so
+        // does a `.`, `!` or `?` with one of their characters right after it.
+        if (end < text.length && !text[end].isWhitespace() && !unspaced && !writtenWithoutSpaces(text[end])) {
+            // Inside a number (a digit follows), or punctuation in the middle of a word: not a sentence end. The
+            // whole run was just scanned and every character in it is a full stop, ! or ? or a closer, so none of
+            // them can begin a sentence that ends elsewhere: carry on after the run. Rescanning the same suffix
+            // from each character would make a long run cost time quadratic in its length.
+            i = end
+            continue
+        }
+        pieces += text.substring(start, end).trim()
+        while (end < text.length && text[end].isWhitespace()) end++
+        start = end
+        i = end
+    }
+    val tail = text.substring(start).trim()
+    if (tail.isNotEmpty()) pieces += tail
+    return pieces
+}
+
+/** Full stops, `!` and `?` that a space follows: Latin ones, Arabic `؟` and `۔`, and Devanagari `।` and `॥`. */
+private const val SENTENCE_STOPS = ".!?؟۔।॥"
+
+/** Chinese and Japanese full stops, `！` and `？`, which end a sentence with no space after them. */
+private const val UNSPACED_STOPS = "。！？｡"
+
+/** What may close a sentence after its full stop, `!` or `?`: quotes and brackets, plain or typographic. */
+private const val SENTENCE_CLOSERS = "\"')]”’»›」』）】》〉"
+
+/** Chinese and Japanese characters and punctuation, full-width forms: text written with no spaces between sentences. */
+private fun writtenWithoutSpaces(c: Char) = c in '　'..'鿿' || c in '豈'..'﫿' || c in '＀'..'￯'
 
 private val STOP_PHRASES = setOf(
     "stop", "stop listening", "stop it", "stop please", "please stop", "stop stop", "that is all", "that's all",
