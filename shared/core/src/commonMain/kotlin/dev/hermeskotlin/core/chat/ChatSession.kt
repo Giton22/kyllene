@@ -2022,7 +2022,7 @@ class ChatSession(
                 if (_state.value.savedCopyAt != null) rows = emptyList()
                 val page = result.value.messages
                 val full = page.size >= HISTORY_PAGE
-                val joined = if (full && rows.isNotEmpty()) rows.withNewest(page.fromFirstTurn()) else null
+                val joined = if (full && rows.isNotEmpty()) rows.withNewestFull(page) else null
                 val older = if (joined != null) _state.value.olderMessages else full
                 rows = joined ?: if (full) page.fromFirstTurn() else page
                 rowsSessionId = result.value.sessionId
@@ -2080,7 +2080,7 @@ class ChatSession(
             if (!_state.value.historyRead || _state.value.storedSessionId != id) return
             val full = page.messages.size >= HISTORY_PAGE
             val newest = if (full) page.messages.fromFirstTurn() else page.messages
-            val joined = (if (full) rows.withNewest(newest) else null) ?: newest
+            val joined = (if (full) rows.withNewestFull(page.messages) else null) ?: newest
             saveCopy(id, joined, page.sessionId)
         }
     }

@@ -558,6 +558,23 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun whereTheReaderWasIsntKeptForTheSameChatReopenedAtANewReadPosition() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        val key = "s1-list"
+        vm.saveViewport(TranscriptViewport(key, "m13", 0, pinned = false, readUpTo = null, savedCopy = false,
+            readerNavigated = true, unreadSettled = true, positioned = true, unreadFrom = null, unreadPagesLoaded = 0))
+        assertNotNull(vm.viewportFor(key, target))
+
+        // Reopened from a notification: the screen asks before open() has run, and the list opens afresh.
+        val reopened = target.copy(readUpTo = 1_300.0)
+        assertNull(vm.viewportFor(key, reopened))
+        vm.open(reopened)
+        assertNull(vm.viewportFor(key, reopened))
+    }
+
+    @Test
     fun theSameChatFromANotificationAfterTheHostClosedGetsAFreshSession() = runTest(dispatcher) {
         val (vm, host) = viewModel()
         val target = ChatTarget(gateway, "s1", "Chat")
