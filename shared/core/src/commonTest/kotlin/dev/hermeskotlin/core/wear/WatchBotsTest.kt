@@ -11,6 +11,7 @@ import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.profiles.ProfileStore
 import dev.hermeskotlin.core.rpc.FakeGateway
+import dev.hermeskotlin.core.rpc.event
 import dev.hermeskotlin.core.rpc.json
 import dev.hermeskotlin.core.rpc.param
 import dev.hermeskotlin.core.sessions.SessionsApi
@@ -27,6 +28,7 @@ import dev.hermeskotlin.wearlink.WearPaths
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -407,6 +409,40 @@ class WatchBotsTest {
         delay(100)
         assertEquals(listOf("assistant", null), voiceChecks)
         assertEquals("true", s.outbox.messages.last { it.first == WearPaths.STATUS }.second["liveVoice"]?.jsonPrimitive?.content)
+    }
+
+    /**
+     * A spoken ask whose reply has no words left once cleaned up ("?!") makes no speech pieces: it is told as nothing
+     * to read, not as speech coming, which would leave the watch waiting for clips that never come.
+     */
+    @Test
+    fun aReplyWithNoWordsToSayIsNotPromisedToTheWatchAsSpeech() = runTest {
+        val s = setup()
+        val speakRequests = mutableListOf<String>()
+        val http = s.gateway.http
+        s.gateway.http = { request ->
+            if (request.url.encodedPath == "/api/audio/speak") speakRequests += request.url.encodedPath
+            http(request)
+        }
+        val answer = s.gateway.answer
+        s.gateway.answer = { call ->
+            if (call.method == "prompt.submit") {
+                backgroundScope.launch {
+                    delay(100)
+                    call.socket.push(event("message.start", "runtime"))
+                    call.socket.push(event("message.complete", "runtime", """{"text":"?!","status":"complete"}"""))
+                }
+                """{"status":"streaming"}"""
+            } else answer(call)
+        }
+        s.relay.ask("watch", WatchAsk("quiet", "hello", "ordinary", speak = true, scope = WatchScope(FakeGateway.URL.value)))
+        fun quiet(message: Pair<String, JsonObject>) =
+            message.first == WearPaths.REPLY && message.second["askId"]?.jsonPrimitive?.content == "quiet"
+        until { s.outbox.messages.any { quiet(it) && it.second["phase"]?.jsonPrimitive?.content == "Done" } }
+        val done = s.outbox.messages.last(::quiet).second
+        assertEquals("Done", done["phase"]?.jsonPrimitive?.content)
+        assertEquals("Off", done["speech"]?.jsonPrimitive?.content ?: "Off")
+        assertTrue(speakRequests.isEmpty(), "asked the gateway to say $speakRequests")
     }
 
     @Test
