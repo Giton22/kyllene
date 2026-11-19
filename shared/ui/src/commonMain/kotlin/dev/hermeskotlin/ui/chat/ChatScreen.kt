@@ -99,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.Ellipsis
 import dev.hermeskotlin.designsystem.HeraldBrandBlue
 import dev.hermeskotlin.designsystem.HeraldMark
+import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.designsystem.components.glow
 import dev.hermeskotlin.designsystem.components.halo
 import dev.hermeskotlin.designsystem.dangerSoft
@@ -3824,7 +3825,7 @@ internal fun ComposerTextInput(
         lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         onTextLayout = onTextLayout,
-        modifier = modifier.semantics(mergeDescendants = true) {},
+        modifier = modifier.commitComposingOnEnter(state).semantics(mergeDescendants = true) {},
         decorator = { innerTextField ->
             Box(Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Text, overrideDescendants = true).clipToBounds()) {
                 if (state.text.isEmpty()) {
