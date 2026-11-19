@@ -7,8 +7,9 @@ import kotlin.test.assertTrue
 import org.w3c.dom.Element
 
 /**
- * Every translation in `composeResources` against English: the same placeholders, no key English lacks, and no
- * `%%`, which Compose resources show as two percent signs rather than one.
+ * Every translation in `composeResources` against English: every English key, the same placeholders, no key English
+ * lacks, and no `%%`, which Compose resources show as two percent signs rather than one. A missing key falls back to
+ * English, so a release would show an English line in the middle of a translated screen.
  */
 class StringCatalogueTest {
     private val root = File("src/commonMain/composeResources")
@@ -40,8 +41,12 @@ class StringCatalogueTest {
         assertTrue(english.isNotEmpty(), "No English catalogue under ${root.absolutePath}")
         val problems = mutableListOf<String>()
         english.forEach { (key, text) -> if ("%%" in text) problems += "values: $key has %%" }
-        root.listFiles { f -> f.isDirectory && f.name.startsWith("values-") }.orEmpty().forEach { dir ->
-            catalogue(dir).forEach { (key, text) ->
+        val languages = root.listFiles { f -> f.isDirectory && f.name.startsWith("values-") }.orEmpty()
+        assertTrue(languages.isNotEmpty(), "No translations under ${root.absolutePath}")
+        languages.forEach { dir ->
+            val translated = catalogue(dir)
+            (english.keys - translated.keys).sorted().forEach { problems += "${dir.name}: $it is missing" }
+            translated.forEach { (key, text) ->
                 val base = english[key]
                 when {
                     base == null -> problems += "${dir.name}: $key isn't in values/"
