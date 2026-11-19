@@ -321,15 +321,18 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
     val before = StringBuilder()
     fun StringBuilder.join(part: String, cap: Int) {
         if (length + (if (isEmpty()) 0 else 1) + part.length > cap) return
-        if (isNotEmpty()) append(' ')
-        append(part)
+        if (isNotEmpty()) this.append(' ')
+        this.append(part)
     }
     for (chunk in chunks) {
         when {
-            hasWordsToSay(chunk) -> spoken += StringBuilder().apply {
-                if (before.isNotEmpty() && before.length + 1 + chunk.length <= firstLimit) append(before).append(' ')
+            hasWordsToSay(chunk) -> {
+                // Not `apply { append(...) }`: the local append above (into `current`) would win over the builder's.
+                val piece = StringBuilder()
+                if (before.isNotEmpty() && before.length + 1 + chunk.length <= firstLimit) piece.append(before).append(' ')
                 before.clear()
-                append(chunk)
+                piece.append(chunk)
+                spoken += piece
             }
             spoken.isEmpty() -> before.join(chunk, firstLimit)
             else -> spoken.last().join(chunk, if (spoken.size == 1) firstLimit else maxChars)
