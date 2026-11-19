@@ -121,6 +121,7 @@ import dev.hermeskotlin.ui.chat.AppMark
 import dev.hermeskotlin.ui.chat.BarButton
 import dev.hermeskotlin.ui.chat.BarStatus
 import dev.hermeskotlin.ui.chat.ComposerButton
+import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.ui.chat.DictationButton
 import dev.hermeskotlin.ui.chat.DockShadow
 import dev.hermeskotlin.ui.chat.InputRequestPanel
@@ -537,7 +538,7 @@ private fun Composer(
             selectionColors = LocalTextSelectionColors.current,
             lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).commitComposingOnEnter(actions.composer),
         ) {
             TextInput(
                 placeholder = {

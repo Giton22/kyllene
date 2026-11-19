@@ -54,6 +54,7 @@ import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.MarkdownText
+import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.designsystem.components.highlightColor
 import dev.hermeskotlin.designsystem.label
 import dev.hermeskotlin.designsystem.radii
@@ -124,7 +125,7 @@ private fun PendingCommentCard(number: Int, comment: PendingComment, focus: Bool
                 selectionColors = LocalTextSelectionColors.current,
                 lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).focusRequester(requester),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).focusRequester(requester).commitComposingOnEnter(comment.note),
             ) {
                 TextInput(
                     placeholder = {
