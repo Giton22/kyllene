@@ -182,6 +182,27 @@ internal data class ChatTranscript(val state: ChatState = ChatState(), val widge
 internal data class ChatReadPosition(val target: ChatTarget, val readUpTo: Double?)
 
 /**
+ * Where the reader was in the open chat's list when it last left the screen: the screen rebuilt (on waking the phone
+ * or turning it), or the list was swapped for a spinner for a moment. The list comes back there, not to its end or
+ * the "New messages" line as on opening the chat.
+ */
+internal data class TranscriptViewport(
+    val conversationKey: Any?,
+    /** The message at the top of the list, by key, and how far it's scrolled past. */
+    val firstKey: String?,
+    val firstOffset: Int,
+    val pinned: Boolean,
+    /** The read position and saved copy the opening below was worked out for; it holds for those only. */
+    val readUpTo: Double?,
+    val savedCopy: Boolean,
+    val readerNavigated: Boolean,
+    val unreadSettled: Boolean,
+    val positioned: Boolean,
+    val unreadFrom: String?,
+    val unreadPagesLoaded: Int,
+)
+
+/**
  * Shows the [ChatSession] the app-wide [ChatHost] has open; opening another target replaces it.
  * Remembers the open chat in [LastChatStore] so the next launch returns to it: a stored session once
  * it has messages, or nothing while a new chat is still empty. Each chat keeps its own unsent text in
@@ -263,6 +284,21 @@ class ChatViewModel(
     private var target: ChatTarget? = null
     private val _readPosition = MutableStateFlow<ChatReadPosition?>(null)
     internal val readPosition: StateFlow<ChatReadPosition?> = _readPosition.asStateFlow()
+    /** Where the reader was in the open chat's list when it last left the screen; outlives the screen being rebuilt. */
+    private var viewport: TranscriptViewport? = null
+
+    /**
+     * Where the reader was in [target]'s list, by its list's [key]. Not for the same chat reopened at a new read position
+     * (from a notification), which opens at its "New messages" line: the screen asks before [open] has run.
+     */
+    internal fun viewportFor(key: Any?, target: ChatTarget): TranscriptViewport? =
+        viewport?.takeIf { it.conversationKey == key && !reopensAtNewPosition(target) }
+
+    private fun reopensAtNewPosition(target: ChatTarget) = target.readUpTo != null && target.readUpTo != this.target?.readUpTo
+
+    internal fun saveViewport(value: TranscriptViewport) {
+        viewport = value
+    }
 
     private var readPositionJob: Job? = null
     private var readTail: Triple<String, String, Double>? = null
@@ -602,6 +638,7 @@ class ChatViewModel(
         // "New messages" line from the target; the chat itself, its draft and any voice chat stay as they are.
         if (this.target?.copy(readUpTo = null) == target.copy(readUpTo = null)) {
             val changed = this.target != target || session.value !== host.session.value
+            if (reopensAtNewPosition(target)) viewport = null
             this.target = target
             if (changed) resolveReadPosition(target)
             // An expired session or sign-out closes the host's chat; the same chat reopened after signing
@@ -621,6 +658,7 @@ class ChatViewModel(
         val typed = composer.text.toString().takeIf { sameChat }
         stashDraft()
         this.target = target
+        viewport = null
         resolveReadPosition(target)
         // A voice chat belongs to the chat it started in.
         voice.stopAll()
