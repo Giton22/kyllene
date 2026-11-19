@@ -186,6 +186,37 @@ class SpeechTest {
         assertEquals(text, speechChunks(text).joinToString(" "))
     }
 
+    /**
+     * Chinese and Japanese put no space after a sentence. A long reply in them is still cut at its stops, so the first
+     * piece is short and none passes the cap: there are no spaces to cut it at otherwise.
+     */
+    @Test
+    fun aReplyWithoutSpacesIsCutAtItsOwnStops() {
+        assertEquals(
+            listOf("第一句话。", "第二句话！", "第三句话？"),
+            speechChunks("第一句话。第二句话！第三句话？", maxChars = 5, firstChars = 5),
+        )
+        // A plain `.`, `!` or `?` with a Chinese character right after it ends a sentence too, as it always did.
+        assertEquals(listOf("真的吗?", "是的.", "好"), speechChunks("真的吗?是的.好", maxChars = 4, firstChars = 4))
+        val text = "这是一个用来测试的中文句子。".repeat(150)
+        val chunks = speechChunks(text)
+        assertTrue(chunks.first().length <= 160, "first piece ${chunks.first().length}")
+        assertTrue(chunks.all { it.length <= 1200 }, chunks.map { it.length }.toString())
+        assertEquals(text, chunks.joinToString("").replace(" ", ""))
+    }
+
+    @Test
+    fun arabicAndDevanagariStopsEndASentence() {
+        assertEquals(
+            listOf("هل أنت هنا؟", "نعم، أنا هنا الآن."),
+            speechChunks("هل أنت هنا؟ نعم، أنا هنا الآن.", maxChars = 20, firstChars = 20),
+        )
+        assertEquals(
+            listOf("यह पहला वाक्य है।", "यह दूसरा है।"),
+            speechChunks("यह पहला वाक्य है। यह दूसरा है।", maxChars = 20, firstChars = 20),
+        )
+    }
+
     @Test
     fun aNewlineInsideASentenceDoesNotCutIt() {
         assertEquals(listOf("First line\nstill the same sentence."), speechChunks("First line\nstill the same sentence."))

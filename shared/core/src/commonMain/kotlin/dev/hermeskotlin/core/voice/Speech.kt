@@ -309,11 +309,13 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
 
 /**
  * Cuts [text] into the sentences [speechChunks] fills its pieces with: a run of `.`, `!` or `?` plus any closing
- * quotes or brackets, followed by whitespace or the end of the text. A full stop between digits is not a sentence
- * end — it's the point in `4.6` or a dot in a version like `2.0.1` — so it stays inside its sentence. Splitting
- * there made read aloud pause in the middle of a number ("four. Six") and turned `1.0×` into a piece starting
- * `0×`, which the voice backend can't say at all. Dotted names (`notes.md`) and the inner dots of `e.g.` or `U.S.A.`
- * stay put for the same reason; an abbreviation's last dot before a space still ends a sentence, as it always did.
+ * quotes or brackets, followed by whitespace or the end of the text (Arabic and Devanagari stops count too, and in
+ * Chinese or Japanese, written without spaces, a stop ends a sentence as it is). A full stop between digits is not
+ * a sentence end — it's the point in `4.6` or a dot in a version like `2.0.1` — so it stays inside its sentence.
+ * Splitting there made read aloud pause in the middle of a number ("four. Six") and turned `1.0×` into a piece
+ * starting `0×`, which the voice backend can't say at all. Dotted names (`notes.md`) and the inner dots of `e.g.` or
+ * `U.S.A.` stay put for the same reason; an abbreviation's last dot before a space still ends a sentence, as it
+ * always did.
  *
  * The pieces keep every character of the input: joining them with a single space gives the text back, with one
  * space only where a piece boundary or a word cut fell — whitespace inside a sentence is kept as it is (a tab or
@@ -323,7 +325,7 @@ private fun sentencePieces(text: String): List<String> {
     val pieces = mutableListOf<String>()
     // Typographic quotes too: a model's `“Stop.” Then…` ends a sentence after the closing quote.
     fun closesSentence(c: Char) = c in SENTENCE_CLOSERS
-    fun endsSentence(c: Char) = c == '.' || c == '!' || c == '?'
+    fun endsSentence(c: Char) = c in SENTENCE_STOPS || c in UNSPACED_STOPS
     var start = 0
     var i = 0
     while (i < text.length) {
@@ -332,8 +334,14 @@ private fun sentencePieces(text: String): List<String> {
             continue
         }
         var end = i + 1
-        while (end < text.length && (endsSentence(text[end]) || closesSentence(text[end]))) end++
-        if (end < text.length && !text[end].isWhitespace()) {
+        var unspaced = text[i] in UNSPACED_STOPS
+        while (end < text.length && (endsSentence(text[end]) || closesSentence(text[end]))) {
+            if (text[end] in UNSPACED_STOPS) unspaced = true
+            end++
+        }
+        // Chinese and Japanese put no space after a sentence: their own full stop ends one wherever it is, and so
+        // does a `.`, `!` or `?` with one of their characters right after it.
+        if (end < text.length && !text[end].isWhitespace() && !unspaced && !writtenWithoutSpaces(text[end])) {
             // Inside a number (a digit follows), or punctuation in the middle of a word: not a sentence end. The
             // whole run was just scanned and every character in it is a full stop, ! or ? or a closer, so none of
             // them can begin a sentence that ends elsewhere: carry on after the run. Rescanning the same suffix
@@ -351,8 +359,17 @@ private fun sentencePieces(text: String): List<String> {
     return pieces
 }
 
+/** Full stops, `!` and `?` that a space follows: Latin ones, Arabic `؟` and `۔`, and Devanagari `।` and `॥`. */
+private const val SENTENCE_STOPS = ".!?؟۔।॥"
+
+/** Chinese and Japanese full stops, `！` and `？`, which end a sentence with no space after them. */
+private const val UNSPACED_STOPS = "。！？｡"
+
 /** What may close a sentence after its full stop, `!` or `?`: quotes and brackets, plain or typographic. */
 private const val SENTENCE_CLOSERS = "\"')]”’»›」』）】》〉"
+
+/** Chinese and Japanese characters and punctuation, full-width forms: text written with no spaces between sentences. */
+private fun writtenWithoutSpaces(c: Char) = c in '　'..'鿿' || c in '豈'..'﫿' || c in '＀'..'￯'
 
 private val STOP_PHRASES = setOf(
     "stop", "stop listening", "stop it", "stop please", "please stop", "stop stop", "that is all", "that's all",
