@@ -29,6 +29,11 @@ class StringCatalogueTest {
                 val e = plurals.item(i) as Element
                 out["plurals:" + e.getAttribute("name")] = e.textContent
             }
+            val arrays = doc.getElementsByTagName("string-array")
+            for (i in 0 until arrays.length) {
+                val e = arrays.item(i) as Element
+                out["array:" + e.getAttribute("name")] = e.textContent
+            }
         }
         return out
     }
