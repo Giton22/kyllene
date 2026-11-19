@@ -217,6 +217,21 @@ class SpeechTest {
         )
     }
 
+    /** Punctuation alone is never a piece: the gateway has no words for it, and one it can't voice ends the reading. */
+    @Test
+    fun punctuationIsNeverAPieceOfItsOwn() {
+        assertEquals(emptyList<String>(), speechChunks(""))
+        assertEquals(emptyList<String>(), speechChunks("..."))
+        assertEquals(emptyList<String>(), speechChunks("?! !"))
+        // A leading `...` before a 157-character sentence would otherwise be a first piece of its own.
+        val leading = "... " + "x".repeat(152) + " end."
+        val opened = speechChunks(leading)
+        assertTrue(opened.all { piece -> piece.any { it.isLetterOrDigit() } }, opened.toString())
+        assertEquals(leading, opened.joinToString(" "))
+        // A `!` after a full last piece goes with it.
+        assertEquals(listOf("Fine then! !"), speechChunks("Fine then! !", maxChars = 10, firstChars = 10))
+    }
+
     @Test
     fun aNewlineInsideASentenceDoesNotCutIt() {
         assertEquals(listOf("First line\nstill the same sentence."), speechChunks("First line\nstill the same sentence."))

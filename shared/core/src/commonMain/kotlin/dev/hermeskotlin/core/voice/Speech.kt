@@ -304,7 +304,21 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
         }
     }
     if (current.isNotEmpty()) chunks += current.toString()
-    return chunks
+    // A piece of only punctuation (a leading `...`, the `!` left where an emoji was) gives the gateway no words to
+    // say, and a piece it can't voice ends the reading: it goes with the piece before it, or the first one after.
+    // Text of only punctuation gives no pieces at all.
+    val spoken = mutableListOf<StringBuilder>()
+    val before = StringBuilder()
+    for (chunk in chunks) {
+        val into = when {
+            chunk.any { it.isLetterOrDigit() } -> StringBuilder(before).also { spoken += it; before.clear() }
+            spoken.isNotEmpty() -> spoken.last()
+            else -> before
+        }
+        if (into.isNotEmpty()) into.append(' ')
+        into.append(chunk)
+    }
+    return spoken.map { it.toString() }
 }
 
 /**
