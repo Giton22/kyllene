@@ -59,4 +59,13 @@ class HistoryPagesTest {
 
         assertEquals(listOf(1L, 2L), ids(loaded.afterNewestPage(listOf(row(1), row(2)))))
     }
+
+    @Test
+    fun aFullNewestPageJoinsWhenOverlapPrecedesItsFirstPrompt() {
+        val loaded = (1L..6L).map { row(it) }
+        val page = listOf(row(6, "assistant"), row(7, "assistant"), row(8, "user"), row(9, "assistant"))
+
+        assertEquals((1L..9L).toList(), ids(loaded.afterNewestPage(page, limit = 4)))
+        assertEquals(listOf(8L, 9L), ids(emptyList<SessionMessage>().afterNewestPage(page, limit = 4)))
+    }
 }

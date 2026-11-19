@@ -38,4 +38,4 @@ internal fun List<SessionMessage>.withNewest(page: List<SessionMessage>): List<S
  * when it fit, else joined to what's loaded. Null when it can't be joined.
  */
 internal fun List<SessionMessage>.afterNewestPage(page: List<SessionMessage>, limit: Int = HISTORY_PAGE): List<SessionMessage>? =
-    if (page.size < limit) page else withNewest(page.fromFirstTurn())
+    if (page.size < limit) page else if (isEmpty()) page.fromFirstTurn() else withNewest(page)
