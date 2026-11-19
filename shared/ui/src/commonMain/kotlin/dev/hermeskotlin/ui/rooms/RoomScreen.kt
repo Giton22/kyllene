@@ -48,7 +48,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import dev.hermeskotlin.ui.chat.ComposerKey
-import dev.hermeskotlin.ui.chat.commitComposingOnEnter
+import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.ui.chat.composerKey
 import dev.hermeskotlin.ui.chat.isPickKey
 import dev.hermeskotlin.ui.chat.moveHighlight

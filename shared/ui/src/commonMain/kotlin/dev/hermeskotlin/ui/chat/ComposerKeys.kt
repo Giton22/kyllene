@@ -1,7 +1,5 @@
 package dev.hermeskotlin.ui.chat
 
-import androidx.compose.foundation.text.input.TextFieldState
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -10,29 +8,7 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.text.TextRange
-
-/**
- * Finishes an active IME composing region when Enter inserts a newline on soft keyboards,
- * routing through [TextFieldState.edit] so Android restarts the IME and keyboards like Samsung Keyboard
- * do not re-insert the previous predicted word on the new line (#430).
- */
-internal fun Modifier.commitComposingOnEnter(state: TextFieldState): Modifier = onPreviewKeyEvent { event ->
-    if (event.type != KeyEventType.KeyDown ||
-        (event.key != Key.Enter && event.key != Key.NumPadEnter) ||
-        event.isShiftPressed || event.isCtrlPressed || event.isMetaPressed || event.isAltPressed
-    ) return@onPreviewKeyEvent false
-    if (state.composition == null) return@onPreviewKeyEvent false
-    state.edit {
-        val start = selection.min
-        val end = selection.max
-        replace(start, end, "\n")
-        selection = TextRange(start + 1)
-    }
-    true
-}
 
 /** What a key press in the composer does on the desktop. */
 internal enum class ComposerKey { Send, Queue, Older, Newer }
