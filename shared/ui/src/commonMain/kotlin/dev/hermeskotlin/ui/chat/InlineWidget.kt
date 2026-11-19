@@ -65,27 +65,38 @@ internal data class WidgetFiles(
 internal data class WidgetPreviewKey(val messageKey: String, val file: GatewayFile)
 
 internal class WidgetPreviewCache(private val capacity: Int = 12) {
-    class Preview(val document: FileText) {
-        var measurement: Measurement? = null
-    }
+    private data class Measurement(val width: Dp, val theme: WidgetTheme, val height: Dp)
 
-    data class Measurement(val width: Dp, val theme: WidgetTheme, val height: Int)
+    private val recent = LinkedHashMap<WidgetPreviewKey, FileText>()
+    // Heights are small. Keep them after the corresponding HTML is evicted.
+    private val measurements = LinkedHashMap<WidgetPreviewKey, Measurement>()
 
-    private val recent = LinkedHashMap<WidgetPreviewKey, Preview>()
-
-    operator fun get(key: WidgetPreviewKey): Preview? =
+    operator fun get(key: WidgetPreviewKey): FileText? =
         recent.remove(key)?.also { recent[key] = it }
 
-    fun store(key: WidgetPreviewKey, document: FileText): Preview {
+    fun store(key: WidgetPreviewKey, document: FileText): FileText {
         recent.remove(key)
-        val preview = Preview(document)
-        recent[key] = preview
+        recent[key] = document
         if (recent.size > capacity) recent.remove(recent.keys.first())
-        return preview
+        return document
+    }
+
+    fun height(key: WidgetPreviewKey, width: Dp, theme: WidgetTheme): Dp? {
+        val measurement = measurements[key]?.takeIf { it.width == width && it.theme == theme } ?: return null
+        measurements.remove(key)
+        measurements[key] = measurement
+        return measurement.height
+    }
+
+    fun rememberHeight(key: WidgetPreviewKey, width: Dp, theme: WidgetTheme, height: Dp) {
+        measurements.remove(key)
+        measurements[key] = Measurement(width, theme, height)
+        if (measurements.size > 256) measurements.remove(measurements.keys.first())
     }
 
     fun remove(key: WidgetPreviewKey) {
         recent.remove(key)
+        measurements.remove(key)
     }
 }
 
@@ -144,30 +155,33 @@ private fun WidgetFrame(item: ReplyMedia, file: GatewayFile, files: WidgetFiles,
     ) {
         ReplyFile(item, download = { downloadWidget(files, file) }, insidePreview = true)
         Spacer(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
-        val current = preview
-        when {
-            current != null && failed == null -> BoxWithConstraints(Modifier.fillMaxWidth()) {
-                val width = maxWidth
-                val sizing = remember(current, theme, width) { WidgetHeightTracker() }
-                var measured by remember(sizing) {
-                    mutableStateOf(current.measurement?.takeIf { it.width == width && it.theme == theme }?.height)
-                }
-                val height = measured?.dp?.coerceIn(160.dp, 640.dp)
-                    ?: (width * 0.625f).coerceIn(280.dp, 640.dp)
-                WidgetWebView(
-                    current.document.text, theme, item.name,
-                    Modifier.fillMaxWidth().height(height),
-                    onReport = { report ->
-                        sizing.measuredHeight(report)?.let {
-                            measured = it
-                            current.measurement = WidgetPreviewCache.Measurement(width, theme, it)
-                        }
-                    },
-                    onFailure = { failed = it },
-                )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val width = maxWidth
+            val restored = remember(attempt, width, theme) { files.cache.height(previewKey, width, theme) }
+            var height by remember(attempt, width, theme) {
+                mutableStateOf(restored ?: (width * 0.625f).coerceIn(280.dp, 640.dp))
             }
-            current == null && loadProblem == null ->
-                Box(Modifier.fillMaxWidth().height(80.dp), contentAlignment = Alignment.Center) { Spinner() }
+            val current = preview
+            when {
+                current != null && failed == null -> {
+                    val sizing = remember(current, theme, width) { WidgetHeightTracker() }
+                    WidgetWebView(
+                        current.text, theme, item.name,
+                        Modifier.fillMaxWidth().height(height),
+                        onReport = { report ->
+                            // A restarted page can report intermediate heights as it paints. Its cached
+                            // frame stays fixed for this visit; overflowing content scrolls inside it.
+                            if (restored == null && report.contentHeight != null && report.viewportHeight != null) {
+                                sizing.measuredHeight(report)?.let { height = it.dp.coerceIn(160.dp, 640.dp) }
+                                files.cache.rememberHeight(previewKey, width, theme, height)
+                            }
+                        },
+                        onFailure = { failed = it },
+                    )
+                }
+                current == null && loadProblem == null ->
+                    Box(Modifier.fillMaxWidth().height(height), contentAlignment = Alignment.Center) { Spinner() }
+            }
         }
         val problem = loadProblem?.let { fileProblemText(it) } ?: failed
         if (problem != null) {

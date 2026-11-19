@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import androidx.compose.ui.unit.dp
 import dev.hermeskotlin.core.chat.ReplyMedia
 import dev.hermeskotlin.core.media.FileText
 import dev.hermeskotlin.core.media.GatewayFile
@@ -165,6 +166,26 @@ class InlineWidgetTest {
         assertEquals(view, cache[first])
         cache.remove(first)
         assertNull(cache[first])
+    }
+
+    @Test
+    fun widgetHeightSurvivesHtmlEvictionAndOnlyAppliesAtItsMeasuredLayout() {
+        val cache = WidgetPreviewCache(capacity = 1)
+        val file = GatewayFile("/tmp/chart.html")
+        val first = WidgetPreviewKey("first", file)
+        val second = WidgetPreviewKey("second", file)
+        val document = FileText("<p>one</p>", 10, false, false)
+        cache.store(first, document)
+        cache.rememberHeight(first, 420.dp, theme, 176.dp)
+        cache.store(second, document.copy(text = "<p>two</p>"))
+
+        assertNull(cache[first])
+        assertEquals(176.dp, cache.height(first, 420.dp, theme))
+        assertNull(cache.height(first, 320.dp, theme))
+        assertNull(cache.height(first, 420.dp, theme.copy(fontSize = 20f)))
+        assertNull(cache.height(second, 420.dp, theme))
+        cache.remove(first)
+        assertNull(cache.height(first, 420.dp, theme))
     }
 
     @Test

@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui.chat
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -28,10 +29,10 @@ import org.koin.dsl.module
 @OptIn(ExperimentalTestApi::class)
 class InlineWidgetCacheTest {
     @Test
-    fun aRecreatedWidgetUsesItsCachedHtmlAndHeightBeforeItsBrowserReports() = runComposeUiTest {
-        val file = GatewayFile("/tmp/document.html")
+    fun stackedWidgetsKeepTheirHeightsWhenNewBrowsersReportDifferentSizes() = runComposeUiTest {
+        val widgets = (1..3).map { GatewayFile("/tmp/widget-$it.html") }
         var loads = 0
-        var views = 0
+        val views = mutableMapOf<String, Int>()
         var disposed = 0
         val files = WidgetFiles("chat", {
             loads++
@@ -47,9 +48,13 @@ class InlineWidgetCacheTest {
                 onTitle: (String?) -> Unit,
                 onFailure: (String) -> Unit,
             ) {
-                Box(modifier.testTag("widget"))
+                Box(modifier.testTag(name))
                 DisposableEffect(Unit) {
-                    if (++views == 1) onTitle("widget:tb||first|450,280")
+                    val count = (views[name] ?: 0) + 1
+                    views[name] = count
+                    val established = 176 + 12 * widgets.indexOfFirst { it.name == name }
+                    if (count == 1) onTitle("widget:tb||first|$established,280")
+                    else onTitle("widget:tb||second|248,$established")
                     onDispose { disposed++ }
                 }
             }
@@ -64,22 +69,24 @@ class InlineWidgetCacheTest {
         setContent {
             KoinIsolatedContext(app) {
                 HermesTheme {
-                    if (visible) Box(Modifier.width(width)) {
-                        InlineWidget(ReplyMedia(file.path, file.name, false, preview = true), file, files, messageKey)
+                    if (visible) Column(Modifier.width(width)) {
+                        widgets.forEach { file ->
+                            InlineWidget(ReplyMedia(file.path, file.name, false, preview = true), file, files, messageKey)
+                        }
                     }
                 }
             }
         }
 
-        fun height() = onNodeWithTag("widget").fetchSemanticsNode().boundsInRoot.height
-        val measured = height()
+        fun heights() = widgets.map { onNodeWithTag(it.name).fetchSemanticsNode().boundsInRoot.height }
+        val measured = heights()
         runOnIdle { visible = false }
-        onNodeWithTag("widget").assertDoesNotExist()
-        runOnIdle { assertEquals(1, disposed); visible = true }
-        assertEquals(measured, height())
-        runOnIdle { assertEquals(1, loads); assertEquals(2, views); width = 300.dp }
-        assertNotEquals(measured, height())
-        runOnIdle { assertEquals(1, loads); messageKey = "new-reply" }
-        runOnIdle { assertEquals(2, loads) }
+        widgets.forEach { onNodeWithTag(it.name).assertDoesNotExist() }
+        runOnIdle { assertEquals(3, disposed); visible = true }
+        assertEquals(measured, heights())
+        runOnIdle { assertEquals(3, loads); assertEquals(listOf(2, 2, 2), views.values.toList()); width = 300.dp }
+        assertNotEquals(measured, heights())
+        runOnIdle { assertEquals(3, loads); messageKey = "new-reply" }
+        runOnIdle { assertEquals(6, loads) }
     }
 }
