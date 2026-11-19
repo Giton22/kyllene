@@ -321,7 +321,8 @@ fun speechChunks(text: String, maxChars: Int = 1200, firstChars: Int = 160, grow
  */
 private fun sentencePieces(text: String): List<String> {
     val pieces = mutableListOf<String>()
-    fun closesSentence(c: Char) = c == '"' || c == '\'' || c == ')' || c == ']'
+    // Typographic quotes too: a model's `“Stop.” Then…` ends a sentence after the closing quote.
+    fun closesSentence(c: Char) = c in SENTENCE_CLOSERS
     fun endsSentence(c: Char) = c == '.' || c == '!' || c == '?'
     var start = 0
     var i = 0
@@ -349,6 +350,9 @@ private fun sentencePieces(text: String): List<String> {
     if (tail.isNotEmpty()) pieces += tail
     return pieces
 }
+
+/** What may close a sentence after its full stop, `!` or `?`: quotes and brackets, plain or typographic. */
+private const val SENTENCE_CLOSERS = "\"')]”’»›」』）】》〉"
 
 private val STOP_PHRASES = setOf(
     "stop", "stop listening", "stop it", "stop please", "please stop", "stop stop", "that is all", "that's all",

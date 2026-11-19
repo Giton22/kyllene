@@ -175,6 +175,17 @@ class SpeechTest {
         assertEquals(text, speechChunks(text).joinToString(" "))
     }
 
+    /** Curly quotes and guillemets close a sentence like straight ones, so the sentences after them still split. */
+    @Test
+    fun typographicClosersStillEndTheSentence() {
+        val text = "He said “Stop.” Then he left. She asked «Why?» Nobody knew."
+        assertEquals(
+            listOf("He said “Stop.”", "Then he left.", "She asked «Why?»", "Nobody knew."),
+            speechChunks(text, maxChars = 20, firstChars = 20),
+        )
+        assertEquals(text, speechChunks(text).joinToString(" "))
+    }
+
     @Test
     fun aNewlineInsideASentenceDoesNotCutIt() {
         assertEquals(listOf("First line\nstill the same sentence."), speechChunks("First line\nstill the same sentence."))
