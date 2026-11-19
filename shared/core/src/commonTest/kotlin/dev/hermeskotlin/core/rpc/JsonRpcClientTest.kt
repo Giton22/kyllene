@@ -21,6 +21,8 @@ import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class JsonRpcClientTest {
@@ -271,11 +273,40 @@ class JsonRpcClientTest {
         client.ready.await()
         client.setIdle(true)
 
-        // Silent past the idle deadline (150 s), checked on the next minute's ping.
-        testScheduler.advanceTimeBy(180_001)
+        // Two silent minutes are inside the idle deadline (150 s): the link is kept, where awake it would be dropped.
+        testScheduler.advanceTimeBy(120_001)
+        testScheduler.runCurrent()
+        assertFalse(pump.isCompleted, "the idle heartbeat gave up before its deadline")
+        // Silent past it, checked on the next minute's ping.
+        testScheduler.advanceTimeBy(60_000)
         testScheduler.runCurrent()
         assertTrue(pump.isCompleted, "the idle heartbeat never gave up")
-        assertTrue(pump.await() !is CancellationException)
+        assertIs<HeartbeatTimeoutException>(pump.await())
+    }
+
+    @Test
+    fun comingBackAfterAQuietIdleSpellIsNoTimeout() = runTest {
+        val transport = FakeTransport()
+        val client = JsonRpcClient(transport, clock = { testScheduler.currentTime })
+        val pump = async { runCatching { client.run() }.exceptionOrNull() }
+        fun pings() = transport.sent.value.count { it["method"]?.jsonPrimitive?.str() == "gateway.ping" }
+        transport.push(FakeTransport.READY)
+        client.ready.await()
+        client.setIdle(true)
+
+        // Two minutes out of sight with nothing coming in, then back: longer than the 45 s deadline, but idle silence.
+        testScheduler.advanceTimeBy(120_001)
+        testScheduler.runCurrent()
+        client.setIdle(false)
+        testScheduler.runCurrent()
+        assertFalse(pump.isCompleted, "dropped for the silence while idle")
+        // A ping goes out at once to test the link, and its pong keeps it.
+        assertEquals(3, pings())
+        transport.push("""{"jsonrpc":"2.0","id":"ping3","result":{}}""")
+        testScheduler.advanceTimeBy(30_000)
+        testScheduler.runCurrent()
+        assertFalse(pump.isCompleted, "dropped after the pong")
+        pump.cancel()
     }
 
     @Test
