@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import dev.hermeskotlin.ui.chat.ComposerKey
+import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.ui.chat.composerKey
 import dev.hermeskotlin.ui.chat.isPickKey
 import dev.hermeskotlin.ui.chat.moveHighlight
@@ -637,7 +638,7 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions, mentions: RoomM
                 // The desktop's keys, as the chat's composer has them: Enter sends, Shift+Enter starts a line,
                 // and with the `@` list up, Up and Down mark a member and Enter or Tab takes it.
                 if (!isDesktop) {
-                    Modifier
+                    Modifier.commitComposingOnEnter(viewModel.composer)
                 } else {
                     Modifier.onPreviewKeyEvent { event ->
                         mentions.onKey(event) || (composerKey(event) == ComposerKey.Send).also { send ->
