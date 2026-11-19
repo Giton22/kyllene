@@ -1770,7 +1770,22 @@ class ChatSession(
             return false
         }
         return try {
-            client.respond(request.id, result)
+            val delivery = request.delivery
+            val method = InputRequest.respondMethod(request)
+            if (delivery is InputRequestDelivery.PendingControl && method != null) {
+                val runtimeId = liveRuntimeId(client) ?: ensureAttached(client)
+                client.request(
+                    method,
+                    buildJsonObject {
+                        put("session_id", runtimeId)
+                        delivery.executionGeneration?.let { put("execution_generation", it) }
+                        put("prompt_id", request.id)
+                        result.forEach { (k, v) -> put(k, v) }
+                    },
+                )
+            } else {
+                client.respond(request.id, result)
+            }
             _state.update { state -> state.copy(inputRequests = state.inputRequests.filterNot { it.id == request.id }) }
             true
         } catch (e: CancellationException) {
@@ -1956,8 +1971,12 @@ class ChatSession(
                     scope.launch { refreshSavedCopy() }
                 }
             }
-            "request.cancel" -> {
-                val id = (event.payload as? JsonObject).string("id") ?: return
+            "clarify.request", "approval.request" -> {
+                val parsed = InputRequest.parseEvent(event.type, event.payload as? JsonObject) ?: return
+                _state.update { it.copy(inputRequests = it.inputRequests.plusNew(listOf(parsed))) }
+            }
+            "request.cancel", "approval.cancelled", "clarify.settled", "approval.settled", "approval.responded" -> {
+                val id = InputRequest.settledId(event.type, event.payload as? JsonObject) ?: return
                 _state.update { state -> state.copy(inputRequests = state.inputRequests.filterNot { it.id == id }) }
             }
         }
@@ -2238,13 +2257,7 @@ class ChatSession(
         val inflight = result["inflight"] as? JsonObject
         turnStartedAt = result.double("turn_started_at").takeIf { running }
         // Questions asked while no socket of ours was attached; the gateway keeps them open for us.
-        val open = result["open_requests"].asObjectList().mapNotNull { snapshot ->
-            InputRequest.parse(
-                id = snapshot.string("id") ?: return@mapNotNull null,
-                method = snapshot.string("method") ?: return@mapNotNull null,
-                params = snapshot["params"] as? JsonObject ?: JsonObject(emptyMap()),
-            )
-        }
+        val open = InputRequest.parseResume(result)
         val streamed = inflight.string("assistant").orEmpty()
         val epoch = readyEpoch(client)
         val (resumable, catchingUp) = streamMutex.withLock {
