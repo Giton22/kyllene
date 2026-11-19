@@ -287,7 +287,14 @@ class ChatViewModel(
     /** Where the reader was in the open chat's list when it last left the screen; outlives the screen being rebuilt. */
     private var viewport: TranscriptViewport? = null
 
-    internal fun viewportFor(key: Any?): TranscriptViewport? = viewport?.takeIf { it.conversationKey == key }
+    /**
+     * Where the reader was in [target]'s list, by its list's [key]. Not for the same chat reopened at a new read position
+     * (from a notification), which opens at its "New messages" line: the screen asks before [open] has run.
+     */
+    internal fun viewportFor(key: Any?, target: ChatTarget): TranscriptViewport? =
+        viewport?.takeIf { it.conversationKey == key && !reopensAtNewPosition(target) }
+
+    private fun reopensAtNewPosition(target: ChatTarget) = target.readUpTo != null && target.readUpTo != this.target?.readUpTo
 
     internal fun saveViewport(value: TranscriptViewport) {
         viewport = value
@@ -631,7 +638,7 @@ class ChatViewModel(
         // "New messages" line from the target; the chat itself, its draft and any voice chat stay as they are.
         if (this.target?.copy(readUpTo = null) == target.copy(readUpTo = null)) {
             val changed = this.target != target || session.value !== host.session.value
-            if (target.readUpTo != null && target.readUpTo != this.target?.readUpTo) viewport = null
+            if (reopensAtNewPosition(target)) viewport = null
             this.target = target
             if (changed) resolveReadPosition(target)
             // An expired session or sign-out closes the host's chat; the same chat reopened after signing

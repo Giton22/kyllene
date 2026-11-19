@@ -593,7 +593,7 @@ fun ChatScreen(
         },
         state = if (readPosition == null || !ownsTranscript) state.copy(historyLoaded = false) else state,
         conversationKey = conversationKey,
-        savedViewport = { viewModel.viewportFor(conversationKey) },
+        savedViewport = { viewModel.viewportFor(conversationKey, target) },
         onSaveViewport = viewModel::saveViewport,
         picker = picker,
         connected = connected,
@@ -1928,9 +1928,12 @@ private fun Messages(
     // growing below the lines being read leaves them where they are; following the bottom is done here instead.
     // Back on screen after the list was taken down (the screen rebuilt on waking, or a spinner in its place), it
     // comes back to where the reader was, and doesn't open again at the end or the "New messages" line.
-    val saved = remember { savedViewport() }
+    // Not when the message the reader was on is gone: the list opens afresh then, "New messages" line and all.
+    val saved = remember { savedViewport()?.takeIf { it.pinned || !openingPlace(messages, it).pinned } }
     val opening = remember { openingPlace(messages, saved) }
-    val listState = rememberLazyListState(opening.index, opening.offset)
+    // Not saved with the screen: the view model has where the reader was, by message, which outlasts rows loaded
+    // or replaced meanwhile where an index would not.
+    val listState = remember { LazyListState(opening.index, opening.offset) }
     // What the opening had worked out holds for the same read position (and the same saved copy or not) only.
     fun restored(sameCopy: Boolean) = saved?.takeIf { it.readUpTo == readUpTo && (!sameCopy || it.savedCopy == savedCopy) }
     val scope = rememberCoroutineScope()

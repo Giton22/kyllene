@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
@@ -174,6 +175,54 @@ class ChatScrollPreservationTest {
         assertTrue(isDisplayed(anchor), "message $anchor should still show; shown: ${shown()}")
         assertFalse(isDisplayed(2))
         assertFalse(isDisplayed(60))
+    }
+
+    @Test
+    fun aScreenRebuiltAfterAPageLoadedAboveComesBackToTheSameMessage() = runComposeUiTest {
+        var mounted by mutableStateOf(true)
+        var saved: TranscriptViewport? = null
+        var state by mutableStateOf(ChatState(messages = messages.drop(20), historyLoaded = true))
+        // Stands in for the screen's saved state, which a rebuilt screen gets back.
+        setContent {
+            val screen = rememberSaveableStateHolder()
+            if (mounted) screen.SaveableStateProvider("chat") { Chat(state, readUpTo = null, saved = { saved }, onSave = { saved = it }) }
+        }
+
+        onNode(hasScrollToIndexAction()).performTouchInput { repeat(2) { swipeDown() } }
+        waitForIdle()
+        val anchor = assertNotNull(middleOfScreen(), "a mid-chat message should show after scrolling up")
+
+        // Away, the transcript came back with 20 older rows above (a reload from the gateway).
+        mounted = false
+        waitForIdle()
+        state = state.copy(messages = messages)
+        mounted = true
+        waitForIdle()
+
+        assertTrue(isDisplayed(anchor), "message $anchor should still show; shown: ${shown()}")
+    }
+
+    @Test
+    fun aListThatCantComeBackToItsMessageOpensAfresh() = runComposeUiTest {
+        var mounted by mutableStateOf(true)
+        var saved: TranscriptViewport? = null
+        var state by mutableStateOf(ChatState(messages = messages, historyLoaded = true))
+        setContent { if (mounted) Chat(state, readUpTo = 10.0, saved = { saved }, onSave = { saved = it }) }
+        onNodeWithText("New messages").assertIsDisplayed()
+        onNode(hasScrollToIndexAction()).performTouchInput { repeat(2) { swipeUp() } }
+        waitForIdle()
+        assertNotNull(middleOfScreen(), "a mid-chat message should show after reading on")
+
+        // Away, the chat started over from its newest rows, without the message the reader was on.
+        mounted = false
+        waitForIdle()
+        state = state.copy(messages = messages.drop(40))
+        mounted = true
+        waitForIdle()
+
+        // It opens at the "New messages" line, as a chat opened afresh does, not at its end.
+        onNodeWithText("New messages").assertIsDisplayed()
+        assertTrue(isDisplayed(41), "the first new message should show; shown: ${shown()}")
     }
 
     @Test
