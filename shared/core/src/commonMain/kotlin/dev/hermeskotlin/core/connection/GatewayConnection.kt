@@ -78,7 +78,7 @@ class GatewayConnection(
     private var job: Job? = null
     private var url: GatewayUrl? = null
     private val wake = Channel<Unit>(Channel.CONFLATED)
-    @kotlin.concurrent.Volatile private var idle = false
+    private val idle = MutableStateFlow(false)
 
     fun start(gateway: GatewayUrl) {
         if (url == gateway && job?.isActive == true) return
@@ -96,8 +96,7 @@ class GatewayConnection(
 
     /** Nobody is looking: the socket's heartbeat slows down ([JsonRpcClient.setIdle]), for this socket and the next. */
     fun setIdle(idle: Boolean) {
-        this.idle = idle
-        (_state.value as? ConnectionState.Connected)?.client?.setIdle(idle)
+        this.idle.value = idle
     }
 
     /** Skip the current backoff wait, or restart after [ConnectionState.Failed]. */
@@ -195,7 +194,8 @@ class GatewayConnection(
      */
     private suspend fun runSession(transport: RpcTransport, onConnected: () -> Unit): Nothing = coroutineScope {
         val client = JsonRpcClient(transport, answers = InputRequest.METHODS::contains)
-        client.setIdle(idle)
+        // Followed for the socket's whole life, the wait for gateway.ready included: a change made then isn't lost.
+        launch { idle.collect { client.setIdle(it) } }
         val pump = async { client.run() }
         val ready = try {
             withTimeout(readyTimeoutMs) { client.ready.await() }
