@@ -68,10 +68,12 @@ class ReadAloudService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 keeper.stop()
+                stopIfIdle(startId)
                 return START_NOT_STICKY
             }
             ACTION_TOGGLE -> {
                 keeper.toggle()
+                stopIfIdle(startId)
                 return START_NOT_STICKY
             }
         }
@@ -120,6 +122,14 @@ class ReadAloudService : Service() {
         }
         if (!keeper.paused) requestFocus()
         return START_NOT_STICKY
+    }
+
+    /**
+     * A tap on the notification with nothing held (a second tap on Stop, say) may have started this service anew, never
+     * into the foreground: it stops, unless a reading started since, whose start is newer than [startId].
+     */
+    private fun stopIfIdle(startId: Int) {
+        if (!keeper.holding) stopSelf(startId)
     }
 
     /**
@@ -222,6 +232,8 @@ class ReadAloudKeeper(private val context: Context) : ReadAloudKeepAlive {
         private set
     /** The service while it runs, to show [paused] on. */
     internal var service: ReadAloudService? = null
+    /** A reading holds the service up now. */
+    internal val holding: Boolean get() = wanted
 
     override fun hold(controls: ReadAloudControls, onLost: () -> Unit): Boolean = try {
         this.controls = controls
