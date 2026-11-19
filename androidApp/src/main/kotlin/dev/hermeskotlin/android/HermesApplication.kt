@@ -34,6 +34,8 @@ import kotlinx.coroutines.flow.first
 import dev.hermeskotlin.ui.systemKeepsAppLanguage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
@@ -100,7 +102,12 @@ class HermesApplication : Application() {
                 !(inSight || panel || talking || watchTurn)
             }
                 .distinctUntilChanged()
-                .collect { connection.setIdle(it) }
+                .collectLatest { idle ->
+                    // A screen rebuilt (rotation, night mode) stops before its new copy starts: going idle waits a
+                    // moment, so that gap doesn't wake the heartbeat for a ping.
+                    if (idle) delay(2_000)
+                    connection.setIdle(idle)
+                }
         }
     }
 
