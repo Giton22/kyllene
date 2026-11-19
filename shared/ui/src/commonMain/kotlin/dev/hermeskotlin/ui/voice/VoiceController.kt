@@ -1129,6 +1129,9 @@ class VoiceController(
         stopReading()
         val text = readAloudText(reply)
         if (text.isEmpty()) return
+        // Another screen's or window's reading stops: the player and its Pause are one for all, and so is the hold.
+        Readings.current?.takeIf { it !== this }?.stopReading()
+        Readings.current = this
         // Started from the screen, so Herald is in sight.
         away = false
         _reading.value = ReadAloudState(key)
@@ -1195,6 +1198,7 @@ class VoiceController(
 
     /** Lets the hold go if this controller took it: the keep-alive is the app's, and another screen's reading may hold it. */
     private fun releaseReading() {
+        if (Readings.current === this) Readings.current = null
         if (!readingHeld) return
         readingHeld = false
         readAloudKeepAlive?.release()
@@ -1327,6 +1331,15 @@ class VoiceController(
         const val DICTATION_IDLE_MS = 15_000L
         const val DICTATION_MAX_MS = 120_000L
     }
+}
+
+/**
+ * The reply being read aloud in the app, by the controller reading it. One at a time: the player is one for all, so a
+ * reading paused on one screen or window would hold another's silent, and the platform's hold has one owner. All on
+ * the main thread, as Read aloud is.
+ */
+private object Readings {
+    var current: VoiceController? = null
 }
 
 /**

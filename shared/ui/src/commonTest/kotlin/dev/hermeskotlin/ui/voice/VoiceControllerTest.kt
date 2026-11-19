@@ -799,6 +799,33 @@ class VoiceControllerTest {
         assertFalse(player.held)
     }
 
+    /** The player is one for all: a reading paused on one screen or window mustn't hold another's silent. */
+    @Test
+    fun aReplyReadOnAnotherScreenStopsOneLeftPausedThereAndKeepsTheHold() = runTest {
+        val player = HeldPlayer(holds = true)
+        val keeper = ReadingKeeper()
+        val first = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+        val second = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        first.readAloud("r1", "The first reply.", gateway, null)
+        player.started.receive()
+        first.pauseReading()
+        second.readAloud("r2", "The second reply.", gateway, null)
+        assertEquals("The second reply.", player.started.receive())
+        testScheduler.runCurrent()
+
+        assertEquals(ReadAloudState(), first.reading.value)
+        assertEquals(1, player.cut)
+        assertFalse(player.held)
+        assertEquals(ReadAloudState("r2"), second.reading.value)
+        assertTrue(keeper.held)
+        // The first screen let its hold go when it stopped; stopping it again doesn't take the second's.
+        first.stopReading()
+        assertTrue(keeper.held)
+        second.stopReading()
+        assertFalse(keeper.held)
+    }
+
     @Test
     fun aGatewayWithoutAVoiceSaysWhyAndShowsReadAloudAgain() = runTest {
         val player = HeldPlayer()
