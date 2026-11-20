@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -276,11 +277,13 @@ private fun PhoneSheet(visible: Boolean, onDismiss: () -> Unit, content: @Compos
         // Constant on purpose: the library adds or drops a pointer input as this value changes, so a value derived
         // from the sheet's state rebuilt it mid-drag and every drag-down was cancelled. confirmDetentChange above
         // holds back early taps instead.
-        properties = ModalBottomSheetProperties(dismissOnClickOutside = true),
+        properties = ModalBottomSheetProperties(dismissOnClickOutside = true, offsetForIme = false),
         overlay = { Scrim(scrimColor = Color.Black.copy(alpha = 0.45f), enter = fadeIn(), exit = fadeOut()) },
     ) {
+        // Measure the keyboard space with the sheet, so its bottom anchor follows IME animation instead of
+        // subtracting a changing inset from an independently animated sheet offset.
         // A sheet tall enough to reach the top stops under the status bar rather than running beneath it.
-        Box(Modifier.fillMaxWidth().statusBarsPadding(), contentAlignment = Alignment.BottomCenter) {
+        Box(Modifier.fillMaxWidth().statusBarsPadding().imePadding(), contentAlignment = Alignment.BottomCenter) {
             Sheet(
                 Modifier
                     .widthIn(max = 640.dp)
