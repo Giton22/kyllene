@@ -89,7 +89,7 @@ actual fun PluginWebView(url: String, gateway: String, title: String, onClose: (
 
     /** Puts the app's current sign-in in the view's jar; [fresh] first drops whatever the jar held. */
     suspend fun lend(fresh: Boolean): WebSession {
-        val session = unlessFailed { cookies.sessionFor(url) } ?: WebSession(emptyList(), emptyMap(), null)
+        val session = unlessFailed { cookies.sessionFor(url, gateway) } ?: WebSession(emptyList(), emptyMap(), null)
         // A page closed meanwhile has cleared the jar: lend nothing after that.
         currentCoroutineContext().ensureActive()
         headers = session.headers
