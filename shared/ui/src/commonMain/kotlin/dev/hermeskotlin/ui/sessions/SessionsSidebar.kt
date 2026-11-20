@@ -593,11 +593,13 @@ fun SessionsSidebar(
                 results = state.searchResults,
                 searchOpen = searchOpen,
                 recentFilter = state.filter == SessionListFilter.Recent,
+                botsSide = mode == SidebarMode.Bots,
                 visible = visible,
                 desktop = isDesktop,
-                windowed = windowed,
             )
         }
+        // A chat in a window of its own never also opens in the main window.
+        shownChats.windowed = { if (isDesktop) windowed else emptySet() }
     }
     val modals = LocalOpenModals.current
     ShortcutHandler { shortcut ->
@@ -1704,20 +1706,25 @@ private fun SearchHeader(viewModel: SessionsViewModel, focusAsks: Int, list: Lis
 class ShownChats {
     internal var rows: () -> List<SessionSummary> = { emptyList() }
 
+    /** The chats in windows of their own, which don't take a deleted chat's place. */
+    internal var windowed: () -> Set<String> = { emptySet() }
+
     /**
      * The chat to open once [deleted] is gone: the one after it, or before it when it was last; null when none is
      * left. A thread's row can carry a later id of its chat than the one that is open, so the lineage counts.
      */
-    fun after(deleted: SessionSummary): SessionSummary? =
-        rows().let { list -> neighbourAfterRemoving(list, list.indexOfFirst { it.isChat(deleted.id) }) }
+    fun after(deleted: SessionSummary): SessionSummary? {
+        val elsewhere = windowed()
+        val list = rows().filter { it.isChat(deleted.id) || it.id !in elsewhere }
+        return neighbourAfterRemoving(list, list.indexOfFirst { it.isChat(deleted.id) })
+    }
 }
 
 /**
  * The chats the sidebar's list shows, top to bottom. [recent] is the Recent list as sectioned and folded, [others]
  * its chats outside Threads (what a desktop's search lists before a word is typed), [filtered] what another filter
  * loaded (Archived) and [results] the search's. A search left open in a sidebar that isn't [visible] doesn't
- * count: nobody sees its results. On a [desktop], chats in a window of their own ([windowed]) are left out, as one
- * never also opens in the main window.
+ * count: nobody sees its results. Nor do results left behind on the Bots side ([botsSide]), which shows its roster.
  */
 internal fun chatsInView(
     recent: List<SessionSummary>,
@@ -1726,18 +1733,18 @@ internal fun chatsInView(
     results: List<SessionSummary>?,
     searchOpen: Boolean,
     recentFilter: Boolean,
+    botsSide: Boolean,
     visible: Boolean,
     desktop: Boolean,
-    windowed: Set<String> = emptySet(),
 ): List<SessionSummary> {
     val found = results.takeIf { visible }
-    val view = when {
+    return when {
+        !searchOpen && recentFilter && botsSide -> recent
         found != null -> found.pinnedFirst()
         searchOpen && visible && desktop -> others.pinnedFirst()
         recentFilter -> recent
         else -> filtered.pinnedFirst()
     }
-    return if (desktop) view.filterNot { it.id in windowed } else view
 }
 
 /** Pinned chats first, as [SessionList] shows them. */

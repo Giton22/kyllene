@@ -21,9 +21,9 @@ class ChatsInViewTest {
         results: List<SessionSummary>? = null,
         searchOpen: Boolean = false,
         recentFilter: Boolean = true,
+        botsSide: Boolean = false,
         visible: Boolean = true,
         desktop: Boolean = false,
-        windowed: Set<String> = emptySet(),
     ) = chatsInView(
         recent = recent,
         // Unpinned first, as the gateway can list them: the view puts the pinned on top.
@@ -32,9 +32,9 @@ class ChatsInViewTest {
         results = results,
         searchOpen = searchOpen,
         recentFilter = recentFilter,
+        botsSide = botsSide,
         visible = visible,
         desktop = desktop,
-        windowed = windowed,
     ).map { it.id }
 
     @Test
@@ -69,15 +69,27 @@ class ChatsInViewTest {
     }
 
     @Test
-    fun aChatInAWindowOfItsOwnIsLeftOutOnADesktop() {
-        assertEquals(listOf("thread", "pinned", "b"), view(desktop = true, windowed = setOf("a")))
-        assertEquals(listOf("b"), view(results = listOf(a, b), searchOpen = true, desktop = true, windowed = setOf("a")))
-        // So the chat after a windowed neighbour opens, or a new chat when the rest all have windows.
+    fun theBotsSideKeepsTheRecentOrder() {
+        assertEquals(listOf("thread", "pinned", "a", "b"), view(botsSide = true))
+        // Results left behind by a search that has closed: the roster shows, not them.
+        assertEquals(listOf("thread", "pinned", "a", "b"), view(results = listOf(b), botsSide = true))
+        // A search opened from there lists its results as anywhere.
+        assertEquals(listOf("b"), view(results = listOf(b), searchOpen = true, botsSide = true))
+    }
+
+    @Test
+    fun aChatInAWindowOfItsOwnDoesNotTakeTheDeletedChatsPlace() {
         val shown = ShownChats()
-        shown.rows = { chatsInView(recent, recent, emptyList(), null, searchOpen = false, recentFilter = true, visible = true, desktop = true, windowed = setOf("a")) }
+        shown.rows = { listOf(pinned, a, b) }
+        shown.windowed = { setOf("a") }
+        // The chat after the windowed neighbour opens.
         assertEquals(b, shown.after(pinned))
-        shown.rows = { chatsInView(listOf(a, b), emptyList(), emptyList(), null, searchOpen = false, recentFilter = true, visible = true, desktop = true, windowed = setOf("b")) }
-        assertNull(shown.after(a))
+        // A new chat when the rest all have windows.
+        shown.windowed = { setOf("a", "b") }
+        assertNull(shown.after(pinned))
+        // The deleted chat having a window too doesn't lose its place in the list.
+        shown.windowed = { setOf("a") }
+        assertEquals(b, shown.after(a))
     }
 
     @Test
