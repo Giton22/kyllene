@@ -117,9 +117,17 @@ data class ProcessesState(
     /** The processes being stopped right now. */
     val stopping: Set<String> = emptySet(),
     val message: String? = null,
+    /** The subagents running now; null until the first answer arrives. */
     val subagents: List<SubagentRow>? = null,
     val subagentsUnavailable: Boolean = false,
-)
+) {
+    /** A poll's answer. One that didn't come keeps the last list, and only says unavailable when there is none. */
+    internal fun withProcesses(answer: List<BackgroundProcess>?): ProcessesState =
+        if (answer == null) copy(unavailable = processes == null) else copy(processes = answer, unavailable = false)
+
+    internal fun withSubagents(answer: List<SubagentRow>?): ProcessesState =
+        if (answer == null) copy(subagentsUnavailable = subagents == null) else copy(subagents = answer, subagentsUnavailable = false)
+}
 
 /**
  * The open chat's background processes, polled while the sheet is open, as Desktop's status stack
@@ -144,17 +152,13 @@ class ProcessesController(private val scope: CoroutineScope) {
                     launch {
                         while (isActive) {
                             val processes = chat?.processes()
-                            if (chats.value === chat) {
-                                _state.update { it.copy(processes = processes, unavailable = processes == null) }
-                            }
+                            if (chats.value === chat) _state.update { it.withProcesses(processes) }
                             delay(POLL_MILLIS)
                         }
                     }
                     while (isActive) {
                         val subagents = chat?.activeSubagents()
-                        if (chats.value === chat) {
-                            _state.update { it.copy(subagents = subagents, subagentsUnavailable = subagents == null) }
-                        }
+                        if (chats.value === chat) _state.update { it.withSubagents(subagents) }
                         delay(POLL_MILLIS)
                     }
                 }
@@ -225,7 +229,10 @@ internal fun ProcessesSheetView(
         val running = processes?.filter { it.running }.orEmpty()
         val finished = processes?.filterNot { it.running }.orEmpty()
         val subagents = state.subagents.orEmpty()
-        val active = running.size + subagents.size
+        val active = running.size + subagents.sumOf { it.count() }
+        // A first answer is still out, and what has come is empty: no claim yet that nothing runs.
+        val waiting = ((processes == null && !state.unavailable) || (state.subagents == null && !state.subagentsUnavailable)) &&
+            processes.isNullOrEmpty() && subagents.isEmpty()
         Header(
             when {
                 active > 0 -> pluralStringResource(Res.plurals.chat_processes_running, active, active)
@@ -235,8 +242,7 @@ internal fun ProcessesSheetView(
             live = active > 0,
         )
         when {
-            processes == null && !state.unavailable && state.subagents == null && !state.subagentsUnavailable ->
-                Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Spinner() }
+            waiting -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Spinner() }
             else -> ScrollbarBox { listState -> LazyColumn(
                 Modifier.fillMaxWidth().heightIn(max = 560.dp),
                 state = listState,
@@ -247,16 +253,21 @@ internal fun ProcessesSheetView(
                     item("subagents") { SectionLabel(stringResource(Res.string.chat_processes_subagents)) }
                     items(subagents, key = { "subagent:${it.key}" }) { SubagentCard(it) }
                 }
-                if (state.subagentsUnavailable) {
+                // A chat that isn't attached yet gets neither list, and the one note below says why.
+                if (state.subagentsUnavailable && processes != null) {
                     item("subagents-unavailable") { Note(stringResource(Res.string.chat_processes_subagents_unavailable)) }
                 }
-                if (subagents.isNotEmpty() && !processes.isNullOrEmpty()) {
+                // Finished ones have their own label.
+                if (subagents.isNotEmpty() && running.isNotEmpty()) {
                     item("shell-processes") { SectionLabel(stringResource(Res.string.chat_processes_shell)) }
                 }
-                if (processes?.isEmpty() == true) {
-                    item("empty-processes") { Note(stringResource(Res.string.chat_processes_shell_empty)) }
-                } else if (state.unavailable) {
-                    item("processes-unavailable") { Note(stringResource(Res.string.chat_available_after_first_reply)) }
+                when {
+                    processes == null -> if (state.unavailable) {
+                        item("processes-unavailable") { Note(stringResource(Res.string.chat_available_after_first_reply)) }
+                    }
+                    processes.isNotEmpty() -> Unit
+                    state.subagents?.isEmpty() == true -> item("empty") { Note(stringResource(Res.string.chat_processes_empty)) }
+                    else -> item("empty-processes") { Note(stringResource(Res.string.chat_processes_shell_empty)) }
                 }
                 items(running, key = { it.id }) { process ->
                     RunningCard(
@@ -284,6 +295,9 @@ internal fun ProcessesSheetView(
         state.message?.let { Note(it) }
     }
 }
+
+/** A subagent and those it started in turn. */
+private fun SubagentRow.count(): Int = 1 + children.sumOf { it.count() }
 
 @Composable
 private fun SectionLabel(label: String) {
