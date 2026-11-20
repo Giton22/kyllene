@@ -430,8 +430,9 @@ Open waits for an existing sign-in, modal, editor or plugin page to close,
 preserving its input, and rechecks ownership before revealing the chat.
 
 Notices expire when their source chat closes or is replaced. Separate chat windows
-retain their own notices across ordinary main-window chat changes, but sign-out,
-gateway changes and completed profile selections revoke the previous ownership.
+retain their own notices across main-window chat and profile changes, and go on
+notifying; sign-out and gateway changes close them and revoke their notices. A
+completed profile selection revokes the main window's previous notices.
 Turning a notification preference off withdraws its portal notices. Explicit Quit
 also withdraws this process's portal notices; actions do not cold-start the application.
 Portal failures fall back to the existing tray notification where a tray is available.

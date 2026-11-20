@@ -106,7 +106,7 @@ internal fun followSystemAppearance(osName: String?) {
 }
 
 /** A chat in a window of its own; [raise] goes up when it's asked for again. */
-private data class PoppedChat(val target: ChatTarget, val key: Int, val raise: Int = 0, val ownerVersion: Long = 0, val raiseGuard: (() -> Boolean)? = null)
+private data class PoppedChat(val target: ChatTarget, val key: Int, val raise: Int = 0, val raiseGuard: (() -> Boolean)? = null)
 
 fun main(args: Array<String>) {
     followSystemAppearance(System.getProperty("os.name"))
@@ -290,6 +290,19 @@ fun main(args: Array<String>) {
         // Chats opened in windows of their own, each with its own key so closing one keeps the others' state.
         val chatWindows = remember { mutableStateListOf<PoppedChat>() }
         var nextWindow by remember { mutableStateOf(0) }
+        // The taskbar button flashes (the Dock icon bounces once) until the user comes back.
+        fun askForAttention() {
+            if (!focused.value) runCatching {
+                if (Taskbar.isTaskbarSupported()) {
+                    val taskbar = Taskbar.getTaskbar()
+                    val window = frame
+                    when {
+                        window != null && taskbar.isSupported(Taskbar.Feature.USER_ATTENTION_WINDOW) -> taskbar.requestWindowUserAttention(window)
+                        taskbar.isSupported(Taskbar.Feature.USER_ATTENTION) -> taskbar.requestUserAttention(true, false)
+                    }
+                }
+            }
+        }
         val post: (DesktopNotice) -> Unit = { notice ->
             lastNotice = notice
             // Windows' own notification where it can be had (it has buttons and stays in the Action Center);
@@ -307,17 +320,7 @@ fun main(args: Array<String>) {
                 shortcuts.fire(Shortcut.RevealChat(source, current))
             }
             else if (!WindowsToasts.show(notice, approveOnce, deny)) tray.sendNotification(Notification(notice.title, notice.body, Notification.Type.None))
-            // The taskbar button flashes (the Dock icon bounces once) until the user comes back.
-            if (!focused.value) runCatching {
-                if (Taskbar.isTaskbarSupported()) {
-                    val taskbar = Taskbar.getTaskbar()
-                    val window = frame
-                    when {
-                        window != null && taskbar.isSupported(Taskbar.Feature.USER_ATTENTION_WINDOW) -> taskbar.requestWindowUserAttention(window)
-                        taskbar.isSupported(Taskbar.Feature.USER_ATTENTION) -> taskbar.requestUserAttention(true, false)
-                    }
-                }
-            }
+            askForAttention()
         }
         LaunchedEffect(Unit) { DesktopNotifier(koin.get(), settingsStore, focused, post) { linuxNotices?.reconcile() }.start(this) }
         // The global shortcut from any app, while the setting is on.
@@ -415,7 +418,7 @@ fun main(args: Array<String>) {
                             val id = shortcut.target.storedSessionId ?: return@ShortcutHandler false
                             val open = chatWindows.indexOfFirst { it.target.storedSessionId == id }
                             if (open >= 0) chatWindows[open] = chatWindows[open].let { it.copy(raise = it.raise + 1, raiseGuard = null) }
-                            else chatWindows += PoppedChat(shortcut.target, nextWindow++, ownerVersion = host.ownerVersion.value)
+                            else chatWindows += PoppedChat(shortcut.target, nextWindow++)
                             true
                         }
                         Shortcut.CloseWindow -> {
@@ -459,14 +462,18 @@ fun main(args: Array<String>) {
                     mac = mac,
                     onShowMain = ::show,
                     onPost = { notice ->
-                        if (linuxNotices == null) post(notice) else linuxPost(notice,
-                            owned = { host.ownerVersion.value == popped.ownerVersion &&
-                                host.session.value?.gateway == notice.origin?.session?.gateway && chatWindows.any { it.key == popped.key } },
-                            open = { _, current ->
-                                val at = chatWindows.indexOfFirst { it.key == popped.key }
-                                if (at >= 0) chatWindows[at] = chatWindows[at].let { it.copy(raise = it.raise + 1, raiseGuard = current) }
-                            },
-                        )
+                        if (linuxNotices == null) post(notice) else {
+                            linuxPost(notice,
+                                // The window outlives a profile switch in the main window, so its notices do too: it
+                                // closes with its gateway, and its own host says when its chat is replaced.
+                                owned = { host.session.value?.gateway == notice.origin?.session?.gateway && chatWindows.any { it.key == popped.key } },
+                                open = { _, current ->
+                                    val at = chatWindows.indexOfFirst { it.key == popped.key }
+                                    if (at >= 0) chatWindows[at] = chatWindows[at].let { it.copy(raise = it.raise + 1, raiseGuard = current) }
+                                },
+                            )
+                            askForAttention()
+                        }
                     },
                     onClose = { chatWindows.removeAll { it.key == popped.key }; linuxNotices?.reconcile() },
                     onNoticeChange = { linuxNotices?.reconcile() },
