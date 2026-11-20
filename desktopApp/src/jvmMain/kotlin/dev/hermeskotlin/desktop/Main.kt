@@ -344,9 +344,11 @@ fun main(args: Array<String>) {
             tooltip = TITLE,
             // A double-click on the icon, or a click on a notification: the window, at that notification's chat.
             onAction = {
-                show()
-                if (linuxNotices != null) lastLinuxOwner?.takeIf { it.current() }?.open()
-                else lastNotice?.sessionId?.let { links.open(it, lastNotice?.chatTitle) }
+                // A Linux notice's own open shows the window it came from: this one, or its chat's own, which the
+                // main window mustn't then come forward over.
+                val linuxOwner = lastLinuxOwner?.takeIf { linuxNotices != null && it.current() }
+                if (linuxOwner != null) linuxOwner.open() else show()
+                if (linuxNotices == null) lastNotice?.sessionId?.let { links.open(it, lastNotice?.chatTitle) }
                 lastNotice = null
                 lastLinuxOwner = null
             },

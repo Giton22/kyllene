@@ -89,7 +89,7 @@ internal class PortalNotificationDelivery(
                     if (binding?.valid?.get() != true) {
                         val previous = binding
                         previous?.valid?.set(false)
-                        previous?.subscription?.close()
+                        runCatching { previous?.subscription?.close() }
                         // A restarted portal's notices stay on the desktop: the new owner withdraws them by the same ids.
                         binding = bind(connection).also { next -> previous?.let { next.sent.addAll(it.sent) } }
                     }
