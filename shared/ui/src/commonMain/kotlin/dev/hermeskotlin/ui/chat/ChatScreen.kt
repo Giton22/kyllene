@@ -2010,11 +2010,12 @@ private fun Messages(
             listState.scrollToItem(messages.lastIndex, LIST_END)
         }
     }
-    // How much reply the bottom held when the reader last saw it; any more since is new to them.
+    // How much reply the bottom holds; more of it arriving while the reader is away from the end is new to them.
     val tail = messages.replyMark()
-    var seenTail by remember { mutableStateOf(tail) }
-    LaunchedEffect(awayFromBottom, tail) { if (!awayFromBottom) seenTail = tail }
-    val newBelow = awayFromBottom && tail != seenTail
+    val oldest = messages.firstOrNull()?.key
+    var replySeen by remember { mutableStateOf(ReplySeen(oldest, tail)) }
+    LaunchedEffect(awayFromBottom, oldest, tail) { replySeen = replySeen.next(awayFromBottom, oldest, tail) }
+    val newBelow = awayFromBottom && replySeen.new
     // Where the messages that came since the chat was last read begin. It stays put for the rest of this visit,
     // so reading on doesn't move or remove it under the reader; the next visit starts from the new last look.
     // Older pages load first while every loaded message is still new.
@@ -2374,24 +2375,33 @@ private suspend fun LazyListState.animateToEnd() {
     scrollToItem(last, LIST_END)
 }
 
-/** How much a message holds, so a reply growing at the bottom counts as new content. */
 /**
  * How much there is to read at the chat's end, for the "New reply" pill: the latest prompt's length and the reply
- * text written since it. Thinking, tools, events and notices add nothing, and keys aren't compared, so the live
- * reply giving way to its stored row at the end of a turn isn't news. Without a prompt, the last row with text.
+ * text written since it (all of it when no prompt is loaded). Thinking, tools, notices and other events add
+ * nothing, and keys aren't compared, so the live reply giving way to its stored row(s) isn't news.
  */
 internal fun List<ChatMessage>.replyMark(): Pair<Int, Int> {
     val prompt = indexOfLast { it is ChatMessage.User }
-    if (prompt < 0) return 0 to (lastOrNull { it.replyLength() > 0 }?.replyLength() ?: 0)
-    return this[prompt].replyLength() to subList(prompt + 1, size).sumOf { it.replyLength() }
+    return (getOrNull(prompt)?.replyLength() ?: 0) to subList(prompt + 1, size).sumOf { it.replyLength() }
 }
 
-/** The text a reader would scroll down for: a prompt, a reply's answer or a command's output. */
+/** The text a reader would scroll down for: a prompt, a reply's answer, a command's output, or why a turn failed. */
 private fun ChatMessage.replyLength(): Int = when (this) {
     is ChatMessage.User -> text.length
-    is ChatMessage.Assistant -> text.length
+    is ChatMessage.Assistant -> text.length + (error?.length ?: 0) + (warning?.length ?: 0)
     is ChatMessage.Command -> output.length
-    is ChatMessage.Notice, is ChatMessage.Event -> 0
+    is ChatMessage.Event -> (event as? TranscriptEvent.FailedTurn)?.text?.length ?: 0
+    is ChatMessage.Notice -> 0
+}
+
+/**
+ * The [replyMark] and oldest loaded row as they last were, and whether reply text has come ([new]) since the reader
+ * left the end. It stays new until they are back there, even if a later turn brings the mark back to what it was.
+ */
+internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val new: Boolean = false) {
+    /** A mark that changes together with the oldest row is an older page loading above, which isn't news. */
+    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>): ReplySeen =
+        ReplySeen(oldest, mark, new = away && (new || (mark != this.mark && oldest == this.oldest)))
 }
 
 /** Tells apart the ways the link can be down: none, being re-made, or needing a new sign-in. */

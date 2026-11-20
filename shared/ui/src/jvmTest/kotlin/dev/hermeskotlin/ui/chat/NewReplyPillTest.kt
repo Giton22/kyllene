@@ -64,6 +64,27 @@ class NewReplyPillTest {
         onNodeWithText("New reply").assertIsDisplayed()
     }
 
+    @Test
+    fun anOlderPageLoadingAboveShowsOnlyTheArrowAndAFailedTurnSaysNewReply() = runComposeUiTest {
+        // The end of one long turn, as a page that holds no prompt shows it.
+        val page = (1..40).map { ChatMessage.Assistant("a$it", text = "Step $it") }
+        var messages by mutableStateOf<List<ChatMessage>>(page)
+        setContent { Conversation(messages) }
+        waitForIdle()
+        onNode(hasScrollToIndexAction()).performMouseInput { moveTo(center); scroll(-600f) }
+        waitForIdle()
+        onNodeWithText("Step 40").assertDoesNotExist()
+
+        val older = listOf(ChatMessage.User("u0", "Go through the steps"), ChatMessage.Assistant("a0", text = "Starting"))
+        runOnIdle { messages = older + page }
+        waitForIdle()
+        onNodeWithText("New reply").assertDoesNotExist()
+
+        runOnIdle { messages = older + page + ChatMessage.Assistant("live-1", reasoning = "Trying the next step", error = "Model unavailable") }
+        waitForIdle()
+        onNodeWithText("New reply").assertIsDisplayed()
+    }
+
     @androidx.compose.runtime.Composable
     private fun Conversation(messages: List<ChatMessage>) {
         hermesTheme(AccentPalette.Blue)(ColorScheme.Dark) {
