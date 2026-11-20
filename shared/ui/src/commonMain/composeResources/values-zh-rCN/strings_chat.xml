@@ -186,6 +186,10 @@
         <item quantity="other">%1$d 个运行中</item>
     </plurals>
     <string name="chat_processes_empty">没有在运行的。智能体在后台启动的开发服务器、构建和监视程序会显示在这里。</string>
+    <string name="chat_processes_subagents">子智能体</string>
+    <string name="chat_processes_subagents_unavailable">无法获取子智能体状态。</string>
+    <string name="chat_processes_shell">终端进程</string>
+    <string name="chat_processes_shell_empty">没有后台终端进程。</string>
     <string name="chat_processes_finished">已结束</string>
     <string name="chat_process_hide_output">隐藏输出</string>
     <string name="chat_process_show_output">显示输出</string>
