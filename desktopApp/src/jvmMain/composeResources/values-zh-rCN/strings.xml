@@ -43,4 +43,12 @@
     <string name="web_close_page">关闭页面</string>
     <string name="web_page_failed">无法打开页面。</string>
     <string name="web_try_again">重试</string>
+
+    <!-- Desktop push reception. -->
+    <string name="notice_scheduled_job">计划任务</string>
+    <string name="notice_run_failed">运行失败。</string>
+    <string name="notice_run_finished">运行已完成。</string>
+    <string name="notice_push_working">推送通知运行正常。</string>
+    <string name="push_reconnecting">推送连接已中断。Kyllene 运行期间会重试。</string>
+    <string name="push_replay_unavailable">Kyllene 无法打开其推送重放状态。现有数据已保留；请先恢复已知正常的备份，然后重试。</string>
 </resources>

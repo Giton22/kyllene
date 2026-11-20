@@ -52,4 +52,12 @@
     <string name="web_close_page">Close the page</string>
     <string name="web_page_failed">Couldn’t open the page.</string>
     <string name="web_try_again">Try again</string>
+
+    <!-- Desktop push reception. -->
+    <string name="notice_scheduled_job">Scheduled job</string>
+    <string name="notice_run_failed">The run failed.</string>
+    <string name="notice_run_finished">The run finished.</string>
+    <string name="notice_push_working">Push notifications are working.</string>
+    <string name="push_reconnecting">Push connection interrupted. Retrying while Kyllene is running.</string>
+    <string name="push_replay_unavailable">Kyllene couldn't open its push replay state. Existing data has been preserved; restore a known-good backup before retrying.</string>
 </resources>

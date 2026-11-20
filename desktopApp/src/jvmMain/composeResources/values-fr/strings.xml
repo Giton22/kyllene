@@ -43,4 +43,12 @@
     <string name="web_close_page">Fermer la page</string>
     <string name="web_page_failed">Impossible d’ouvrir la page.</string>
     <string name="web_try_again">Réessayer</string>
+
+    <!-- Desktop push reception. -->
+    <string name="notice_scheduled_job">Tâche planifiée</string>
+    <string name="notice_run_failed">L’exécution a échoué.</string>
+    <string name="notice_run_finished">L’exécution est terminée.</string>
+    <string name="notice_push_working">Les notifications push fonctionnent.</string>
+    <string name="push_reconnecting">La connexion push a été interrompue. Kyllene réessaie tant qu’il est en cours d’exécution.</string>
+    <string name="push_replay_unavailable">Kyllene n’a pas pu ouvrir son état de relecture push. Les données existantes ont été conservées ; restaurez une sauvegarde fiable avant de réessayer.</string>
 </resources>

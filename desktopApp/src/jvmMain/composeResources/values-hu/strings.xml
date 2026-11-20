@@ -43,4 +43,12 @@
     <string name="web_close_page">Oldal bezárása</string>
     <string name="web_page_failed">Nem sikerült megnyitni az oldalt.</string>
     <string name="web_try_again">Újra</string>
+
+    <!-- Desktop push reception. -->
+    <string name="notice_scheduled_job">Ütemezett feladat</string>
+    <string name="notice_run_failed">A futtatás sikertelen.</string>
+    <string name="notice_run_finished">A futtatás befejeződött.</string>
+    <string name="notice_push_working">A push értesítések működnek.</string>
+    <string name="push_reconnecting">A push kapcsolat megszakadt. A Kyllene újrapróbálkozik, amíg fut.</string>
+    <string name="push_replay_unavailable">A Kyllene nem tudta megnyitni a push újrajátszási állapotát. A meglévő adatok megmaradtak; újrapróbálkozás előtt állíts vissza egy biztosan működő biztonsági másolatot.</string>
 </resources>
