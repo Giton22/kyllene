@@ -125,7 +125,12 @@ checksum together, checking the JCEF API version, rebuilding, and testing embedd
 content in the installed sandbox. Review native dependencies alongside JVM ones.
 The package uses XWayland under KDE Wayland. The entry point selects X11 for
 child runtimes, preventing Chromium from choosing an unavailable Wayland socket.
-Native Wayland is not qualified.
+Native Wayland is not qualified. The entry point also defaults `SKIKO_RENDER_API`
+to `SOFTWARE_FAST`, because Skia's OpenGL path tears while the window is made larger
+under XWayland (#405). A value already set wins, for example
+`flatpak run --env=SKIKO_RENDER_API=OPENGL app.kyllene.Kyllene.Devel`.
+Skia reads this variable before the `skiko.renderApi` system property, so in the
+Flatpak that property has no effect: use the variable.
 Voice remains separate work. Qualify secure storage on the target desktop before
 using personal credentials. A successful build alone does not
 qualify login, clipboard, window movement, portals or embedded content.

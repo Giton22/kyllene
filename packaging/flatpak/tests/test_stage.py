@@ -33,7 +33,7 @@ java-options=-Dliteral=space;$(touch INJECTED) café
 ''')
         java = self.root / 'jdk/bin/java'
         java.parent.mkdir(parents=True)
-        java.write_text('#!' + sys.executable + '\nimport json,sys,os\nprint(json.dumps(sys.argv[1:]))\nprint(json.dumps({k:os.environ.get(k) for k in ["XDG_SESSION_TYPE","WAYLAND_DISPLAY","LD_LIBRARY_PATH","_JPACKAGE_LAUNCHER"]}),file=sys.stderr)\n')
+        java.write_text('#!' + sys.executable + '\nimport json,sys,os\nprint(json.dumps(sys.argv[1:]))\nprint(json.dumps({k:os.environ.get(k) for k in ["XDG_SESSION_TYPE","WAYLAND_DISPLAY","LD_LIBRARY_PATH","_JPACKAGE_LAUNCHER","SKIKO_RENDER_API"]}),file=sys.stderr)\n')
         java.chmod(0o755)
         (app / 'main.jar').touch()
         native = self.image / 'lib/runtime/lib'
@@ -82,12 +82,21 @@ java-options=-Dliteral=space;$(touch INJECTED) café
         self.assertEqual(self.stage().returncode, 0)
         env = dict(os.environ, XDG_SESSION_TYPE='wayland', WAYLAND_DISPLAY='wayland-0')
         env.pop('LD_LIBRARY_PATH', None)
+        env.pop('SKIKO_RENDER_API', None)
         run = subprocess.run([str(self.prefix / 'bin/kyllene')], env=env,
                              capture_output=True, text=True, check=True)
         app = str(self.prefix / 'lib/kyllene/lib/app')
         self.assertEqual(json.loads(run.stderr),
                          {'XDG_SESSION_TYPE': 'x11', 'WAYLAND_DISPLAY': None,
-                          'LD_LIBRARY_PATH': app, '_JPACKAGE_LAUNCHER': None})
+                          'LD_LIBRARY_PATH': app, '_JPACKAGE_LAUNCHER': None,
+                          'SKIKO_RENDER_API': 'SOFTWARE_FAST'})
+
+    def test_render_api_set_by_the_user_is_kept(self):
+        self.assertEqual(self.stage().returncode, 0)
+        env = dict(os.environ, SKIKO_RENDER_API='OPENGL')
+        run = subprocess.run([str(self.prefix / 'bin/kyllene')], env=env,
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(run.stderr)['SKIKO_RENDER_API'], 'OPENGL')
 
     def test_library_path_keeps_inherited_entries_without_an_empty_one(self):
         self.assertEqual(self.stage().returncode, 0)
