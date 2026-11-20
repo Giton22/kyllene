@@ -5,21 +5,23 @@ import androidx.compose.ui.unit.Density
 import dev.hermeskotlin.ui.preview.HeraldPreview
 import dev.hermeskotlin.ui.preview.PreviewScene
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.jar.JarFile
-import javax.swing.SwingUtilities
-import kotlin.coroutines.CoroutineContext
 
 /**
  * Readies the app on a background thread soon after launch, so a page opens as quickly the first time as it does
- * the second. The first opening of a page (Settings, Config, a dialog) otherwise waits on the JVM: loading and
- * verifying some hundreds of classes, then running the page's code for the first time, slowly, before it's compiled.
+ * the second. The first opening of a page (Settings, Config, a dialog) otherwise waits on the JVM loading and
+ * verifying some hundreds of classes.
  *
- * Two steps: the app's classes are loaded and linked (verified, no code of theirs run), then its screens are drawn
- * once each from sample data, off screen, which runs the same code the real pages do.
+ * During a live launch ([start]), only class linking runs on the background thread (verified, no code run): Compose
+ * keeps unsynchronised process-global caches (such as `NodeKindKt`'s modifier map and `GlobalSnapshotManager`), so
+ * composing off-screen scenes on a second thread races with the window's EDT, while running them on the EDT blocks
+ * input and repaints for ~100–500 ms per scene.
+ *
+ * In the separate headless [ClassArchive] recording process ([runNow]), where no window exists, the scenes are also
+ * drawn off screen once each from sample data so the JVM records the classes they reach.
  */
 internal object Warmup {
     /**
@@ -49,67 +51,17 @@ internal object Warmup {
     )
 
     /**
-     * The pages opened most, readied before everything else: linking every class first takes some two seconds, which
-     * left Settings cold for about four after launch.
+     * Starts class linking on a low-priority background thread after [delayMs], once the window is up, so launch
+     * itself isn't slowed and Compose UI is never touched off the AWT EDT.
      */
-    internal val FIRST = listOf(PreviewScene.Settings, PreviewScene.Config, PreviewScene.Plugins, PreviewScene.Scheduled, PreviewScene.Bots)
-
-    /**
-     * Starts after [delayMs], once the window is up, so launch itself isn't slowed.
-     *
-     * Class linking runs on the background thread, while each off-screen scene is drawn on the AWT EDT one at a time:
-     * Compose keeps process-global, unsynchronized caches (such as `NodeKindKt`'s modifier map and
-     * `GlobalSnapshotManager`), so composing on a second thread races with the window's EDT.
-     */
-    fun start(delayMs: Long = 1_500) {
-        start(
-            delayMs = delayMs,
-            gapMs = SCENE_GAP_MS,
-            scenes = SCENES,
-            first = FIRST,
-            link = ::linkClasses,
-            drawScene = ::drawOnEdt,
-        )
-    }
-
-    internal fun start(
-        delayMs: Long,
-        gapMs: Long,
-        scenes: List<PreviewScene>,
-        first: List<PreviewScene>,
-        link: () -> Unit,
-        drawScene: (PreviewScene) -> Unit,
-    ): Thread = Thread({
+    fun start(delayMs: Long = 1_500, link: () -> Unit = ::linkClasses): Thread = Thread({
         if (delayMs > 0) Thread.sleep(delayMs)
-        for (scene in first) {
-            drawScene(scene)
-            if (gapMs > 0) Thread.sleep(gapMs)
-        }
         link()
-        for (scene in scenes - first.toSet()) {
-            drawScene(scene)
-            if (gapMs > 0) Thread.sleep(gapMs)
-        }
     }, "warmup").apply {
         isDaemon = true
         priority = Thread.MIN_PRIORITY
         start()
     }
-
-    internal fun drawOnEdt(
-        scene: PreviewScene,
-        render: (PreviewScene, CoroutineDispatcher) -> Unit = ::drawOnce,
-    ) {
-        runCatching { SwingUtilities.invokeAndWait { render(scene, edtDispatcher) } }
-    }
-
-    private val edtDispatcher: CoroutineDispatcher = object : CoroutineDispatcher() {
-        override fun dispatch(context: CoroutineContext, block: Runnable) {
-            SwingUtilities.invokeLater(block)
-        }
-    }
-
-    private const val SCENE_GAP_MS = 50L
 
     /** All of it at once, returning when it's done: for [ClassArchive]'s run, which records the classes it loads. */
     fun runNow() {

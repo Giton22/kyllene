@@ -1,8 +1,8 @@
 package dev.hermeskotlin.desktop
 
-import dev.hermeskotlin.ui.preview.PreviewScene
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,41 +26,27 @@ class WarmupTest {
         }
     }
 
-    // The pages readied first are drawn from the same list; one missing from it would never be readied at all.
+    // Warmup.start() runs alongside the live app window, so it must only link classes on its background thread and
+    // never compose off-screen scenes concurrently with the AWT EDT.
     @Test
-    fun thePagesReadiedFirstAreWarmedScenes() {
-        assertEquals(emptyList(), Warmup.FIRST - Warmup.SCENES.toSet())
-    }
-
-    // Compose keeps unsynchronised global caches (e.g. NodeKindKt's modifier map), so warming scenes must run on the
-    // AWT EDT alongside the app window rather than concurrently on the background warmup thread.
-    @Test
-    fun startDrawsScenesOnEdtAndLinksOffEdt() {
-        val steps = mutableListOf<String>()
+    fun startLinksOnBackgroundThreadOffEdt() {
+        val calls = AtomicInteger(0)
         var linkedOnEdt: Boolean? = null
-        val drawnOnEdt = mutableListOf<Boolean>()
+        var threadName: String? = null
+        var isDaemon: Boolean? = null
 
-        val worker = Warmup.start(
-            delayMs = 0,
-            gapMs = 0,
-            scenes = listOf(PreviewScene.EmptyPage, PreviewScene.LoadError),
-            first = listOf(PreviewScene.EmptyPage),
-            link = {
-                linkedOnEdt = SwingUtilities.isEventDispatchThread()
-                steps += "link"
-            },
-            drawScene = { scene ->
-                Warmup.drawOnEdt(scene) { drawn, _ ->
-                    drawnOnEdt += SwingUtilities.isEventDispatchThread()
-                    steps += "draw:$drawn"
-                }
-            },
-        )
+        val worker = Warmup.start(delayMs = 0) {
+            calls.incrementAndGet()
+            linkedOnEdt = SwingUtilities.isEventDispatchThread()
+            threadName = Thread.currentThread().name
+            isDaemon = Thread.currentThread().isDaemon
+        }
         worker.join(10_000)
 
         assertFalse(worker.isAlive, "warmup thread should finish")
+        assertEquals(1, calls.get())
         assertEquals(false, linkedOnEdt)
-        assertEquals(listOf(true, true), drawnOnEdt)
-        assertEquals(listOf("draw:EmptyPage", "link", "draw:LoadError"), steps)
+        assertEquals("warmup", threadName)
+        assertEquals(true, isDaemon)
     }
 }
