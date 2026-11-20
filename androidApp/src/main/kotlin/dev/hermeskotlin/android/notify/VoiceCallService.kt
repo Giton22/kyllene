@@ -11,6 +11,9 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.koin.android.ext.android.inject
 
 /**
@@ -72,11 +75,18 @@ class VoiceCallKeeper(private val context: Context) : VoiceKeepAlive {
 
     private var onEnd: (() -> Unit)? = null
     private var onLost: (() -> Unit)? = null
+    private val _held = MutableStateFlow(false)
     /** A voice chat holds it. */
     private var wanted = false
+        set(value) {
+            field = value
+            _held.value = value
+        }
 
     /** A voice chat or a call is on, holding the microphone. */
     val holding: Boolean get() = wanted
+    /** [holding], to follow. */
+    val held: StateFlow<Boolean> = _held.asStateFlow()
     /** The service is in the foreground, so it may be stopped. */
     private var foreground = false
 

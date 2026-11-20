@@ -6,8 +6,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -76,12 +76,15 @@ data class SentRequest(val method: String, val sessionId: String?, val atMillis:
  *
  * Call [run] to pump the socket; it returns only by throwing (closed, heartbeat timeout).
  * On `gateway.ready` it advertises `client.capabilities {server_requests: true}` and, when the server
- * offers it, starts the `gateway.ping` heartbeat (15 s interval, 45 s inbound deadline).
+ * offers it, starts the `gateway.ping` heartbeat (15 s interval, 45 s inbound deadline; 60 s and 150 s while
+ * [setIdle], so a phone with the screen off isn't woken every few seconds).
  */
 class JsonRpcClient(
     private val transport: RpcTransport,
     private val heartbeatIntervalMs: Long = 15_000,
     private val heartbeatDeadlineMs: Long = 45_000,
+    private val idleHeartbeatIntervalMs: Long = 60_000,
+    private val idleHeartbeatDeadlineMs: Long = 150_000,
     private val clock: () -> Long = { getTimeMillis() },
     /**
      * The server→client request methods this app can show. Any other is declined ([SESSION_NOT_SHOWN]),
@@ -102,6 +105,11 @@ class JsonRpcClient(
     private var nextPing = 0L
     @kotlin.concurrent.Volatile private var lastInboundAt = clock()
     private var heartbeatJob: Job? = null
+    @kotlin.concurrent.Volatile private var idle = false
+    /** When the heartbeat last went back to its short deadline, which only counts silence from then on. */
+    @kotlin.concurrent.Volatile private var activeSince = 0L
+    /** Wakes the heartbeat when [setIdle] changes, so coming back pings at once instead of after a long wait. */
+    private val idleChanged = Channel<Unit>(Channel.CONFLATED)
 
     /** The gateway counts a [SESSION_NOT_SHOWN] decline instead of taking it as the answer (`client.capabilities`). */
     @kotlin.concurrent.Volatile private var declinesNotShown = false
@@ -293,15 +301,30 @@ class JsonRpcClient(
         })
     }
 
+    /**
+     * Whether nobody is looking (on a phone: the app out of sight or the screen off). Idle, the heartbeat pings
+     * less often and waits longer before it gives up; back from idle it pings at once, to find a link that died
+     * meanwhile.
+     */
+    fun setIdle(idle: Boolean) {
+        if (this.idle == idle) return
+        if (!idle) activeSince = clock()
+        this.idle = idle
+        idleChanged.trySend(Unit)
+    }
+
     private fun startHeartbeat(scope: CoroutineScope) {
         if (heartbeatJob?.isActive == true) return
         heartbeatJob = scope.launch {
             while (isActive) {
-                delay(heartbeatIntervalMs)
-                if (clock() - lastInboundAt > heartbeatDeadlineMs) {
+                val woken = withTimeoutOrNull(if (idle) idleHeartbeatIntervalMs else heartbeatIntervalMs) { idleChanged.receive() } != null
+                val deadline = if (idle) idleHeartbeatDeadlineMs else heartbeatDeadlineMs
+                if (clock() - maxOf(lastInboundAt, if (idle) 0L else activeSince) > deadline) {
                     runCatching { transport.close(GOING_AWAY, "heartbeat timeout") }
                     throw HeartbeatTimeoutException()
                 }
+                // Going idle needs no ping: the next one comes after the longer wait.
+                if (woken && idle) continue
                 // Fire-and-forget: any inbound frame (including the pong) counts as liveness.
                 runCatching {
                     send(buildJsonObject {

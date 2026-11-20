@@ -14,8 +14,11 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -116,6 +119,27 @@ class GatewayConnectionTest {
         first.serverClose(1006, "abnormal")
 
         assertIs<ConnectionState.Reconnecting>(connection.state.first { it is ConnectionState.Reconnecting })
+        connection.stop()
+    }
+
+    @Test
+    fun goingIdleWhileTheSocketWaitsForReadyReachesItsHeartbeat() = runTest {
+        val transport = FakeTransport()
+        val opened = CompletableDeferred<Unit>()
+        val connection = GatewayConnection(auth(), { _, _ -> opened.complete(Unit); transport }, backgroundScope)
+        connection.start(url)
+        opened.await()
+        testScheduler.runCurrent()
+
+        // The socket is open and its client built, but gateway.ready hasn't come yet: the screen goes off now.
+        connection.setIdle(true)
+        transport.push(FakeTransport.READY)
+        connection.state.first { it is ConnectionState.Connected }
+
+        // Idle, the first ping waits a minute; at the 15 s pace three would be out by now.
+        testScheduler.advanceTimeBy(59_000)
+        testScheduler.runCurrent()
+        assertEquals(0, transport.sent.value.count { it["method"]?.jsonPrimitive?.contentOrNull == "gateway.ping" })
         connection.stop()
     }
 
