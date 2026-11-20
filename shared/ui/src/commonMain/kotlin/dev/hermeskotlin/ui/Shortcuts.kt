@@ -259,6 +259,16 @@ fun stepChat(at: Int, size: Int, forward: Boolean): Int = when {
 }
 
 /**
+ * The row that takes the place of the one at [at] once it is gone from [listed]: the row after it, or the one
+ * before when it was the last. Null when it was the only row, or isn't in the list (-1).
+ */
+fun <T> neighbourAfterRemoving(listed: List<T>, at: Int): T? = when {
+    at !in listed.indices || listed.size < 2 -> null
+    at < listed.lastIndex -> listed[at + 1]
+    else -> listed[at - 1]
+}
+
+/**
  * A window's shortcuts, handed to whichever screen takes them: like [DesktopBack], the newest handler that is
  * on and takes a shortcut runs it, so a page open over the chat gets the first say.
  */

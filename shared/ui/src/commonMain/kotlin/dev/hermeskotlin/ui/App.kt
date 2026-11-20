@@ -93,6 +93,8 @@ import dev.hermeskotlin.ui.gateways.GatewaysSheet
 import dev.hermeskotlin.ui.sessions.ArchiveUndoToast
 import dev.hermeskotlin.ui.sessions.ChatMenu
 import dev.hermeskotlin.ui.sessions.SessionsSidebar
+import dev.hermeskotlin.ui.sessions.ShownChats
+import dev.hermeskotlin.core.sessions.SessionSummary
 import dev.hermeskotlin.ui.settings.AppLockCover
 import dev.hermeskotlin.ui.settings.PhoneQuestion
 import dev.hermeskotlin.ui.settings.PhoneQuestionDialog
@@ -624,6 +626,12 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // the foreground; that keeps the gateway's live list polled then (every 10 s, as while the sidebar shows), and
     // never in the background.
     val sessions: SessionsViewModel = koinViewModel()
+    // The chats as the sidebar lists them: deleting the open chat, from there or its options, opens the one listed
+    // in its place, and a new chat only when none is left.
+    val shownChats = remember { ShownChats() }
+    val leaveDeleted: (next: SessionSummary?) -> Unit = { next ->
+        if (next != null) app.openSession(next.id, next.displayTitle, sessions.readUpTo(next)) else app.newChat()
+    }
     val profileRoster by sessions.roster.collectAsStateWithLifecycle()
     // The bot answering in the open chat, named above its replies. Only a launch profile the gateway named counts:
     // a guessed `default` could name the wrong bot. Equal unless what's drawn changed, so a roster refresh doesn't
@@ -783,7 +791,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     app.newChat(cwd = project?.path?.takeIf { !project.isNoProject }, picked = project != null)
                     closeDrawerToChat()
                 },
-                onDeleted = { if (it.id == openSessionId) app.newChat() },
+                onDeleted = { deleted, next -> if (deleted.id == openSessionId) leaveDeleted(next) },
                 onSessionExpired = app::onSessionExpired,
                 onSignOut = app::signOut,
                 onOpenGateways = onOpenGateways,
@@ -837,6 +845,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     if (app.openReportChat(chat, launch = profileRoster?.takeIf { it.launchKnown }?.launch)) closeDrawerToChat()
                 },
                 mainPage = mainPage,
+                shownChats = shownChats,
             )
         },
     ) {
@@ -971,7 +980,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         messages = chatState.messages,
         onDismiss = { menuOpen = false },
         onRenamed = chat::showTitle,
-        onDeleted = app::newChat,
+        onDeleted = leaveDeleted,
         onUsage = chat::openUsage,
         onProcesses = chat::openProcesses,
         onCheckpoints = chat::openCheckpoints,
@@ -980,6 +989,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         botChat = route.target.bot != null,
         onStartFresh = openBot?.let { bot -> { startOver = bot } },
         onOpenChat = app::openSession,
+        shownChats = shownChats,
     )
     StartOverDialog(startOver, onDismiss = { startOver = null }) { bot ->
         bots.startFresh(bot) { id -> app.openBotChat(bot, id) }
