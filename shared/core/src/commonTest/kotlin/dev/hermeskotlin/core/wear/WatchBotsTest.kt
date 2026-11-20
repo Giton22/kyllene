@@ -54,7 +54,8 @@ class WatchBotsTest {
     private val voiceChecks = mutableListOf<String?>()
     private data class Setup(val relay: WatchRelay, val gateway: FakeGateway, val outbox: Outbox, val settings: SettingsStore)
 
-    private suspend fun TestScope.setup(profiles: String = roster, store: KeyValueStore = InMemoryKeyValueStore(), liveForAll: Boolean = false): Setup {
+    private suspend fun TestScope.setup(profiles: String = roster, store: KeyValueStore = InMemoryKeyValueStore(), liveForAll: Boolean = false,
+        words: WatchCallWords = WatchCallWords.English): Setup {
         val gateway = FakeGateway(backgroundScope).apply {
             ready = { FakeGateway.QUIET_READY }
             http = { request ->
@@ -83,7 +84,7 @@ class WatchBotsTest {
         val bots = BotsApi(gateway.connection)
         val settings = SettingsStore(store, backgroundScope)
         val relay = WatchRelay(gateways, auth, ProfileStore(store), gateway.connection, sessions,
-            AudioApi(gateway.client), ChatHost(gateway.connection, sessions, backgroundScope), backgroundScope, outbox, bots, BotChats(bots), settings)
+            AudioApi(gateway.client), ChatHost(gateway.connection, sessions, backgroundScope), backgroundScope, outbox, bots, BotChats(bots), settings, words)
         return Setup(relay, gateway, outbox, settings)
     }
 
@@ -174,6 +175,27 @@ class WatchBotsTest {
         s.settings.update { it.copy(callTargets = mapOf(FakeGateway.URL.value to CallTarget(profile = "removed"))) }
         assertTrue(s.target("missing").error != null)
         assertTrue(s.gateway.sent("session.create").isEmpty())
+    }
+
+    @Test
+    fun whyACallCantStartIsToldInTheAppsLanguage() = runTest {
+        val german = mapOf(
+            WatchCallLine.ConversationChanged to "Die Unterhaltung hat sich geändert.",
+            WatchCallLine.TargetBotGone to "Diesen Bot gibt es nicht mehr.",
+            WatchCallLine.TargetChanged to "Das Standard-Anrufziel hat sich geändert.",
+            WatchCallLine.BotUnavailable to "Dieser Bot ist nicht mehr verfügbar.",
+        )
+        val s = setup(liveForAll = true, words = { german[it] ?: error("No words for $it") })
+        val wrong = WatchScope("https://other.example")
+        assertEquals("Die Unterhaltung hat sich geändert.", assertIs<CallChat.Failed>(s.relay.chatForCall("ordinary", scope = wrong)).message)
+        assertEquals("Dieser Bot ist nicht mehr verfügbar.", assertIs<CallChat.Failed>(s.relay.chatForCall(null, "removed")).message)
+        s.settings.update { it.copy(callTargets = mapOf(FakeGateway.URL.value to CallTarget(profile = "removed"))) }
+        assertEquals("Diesen Bot gibt es nicht mehr.", s.target("missing").error)
+        s.settings.update { it.copy(callTargets = emptyMap()) }
+        val target = s.target("fresh")
+        s.settings.update { it.copy(callTargets = mapOf(FakeGateway.URL.value to CallTarget(sessionId = "ordinary"))) }
+        assertEquals("Das Standard-Anrufziel hat sich geändert.",
+            assertIs<CallChat.Failed>(s.relay.chatForCall(target.chatId, defaultRequestId = "fresh", node = "watch")).message)
     }
 
     @Test
