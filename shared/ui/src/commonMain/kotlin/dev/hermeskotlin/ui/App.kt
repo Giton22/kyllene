@@ -1022,6 +1022,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         SettingsScreen(
             gateway = route.gateway,
             botFaces = faces,
+            botsLoading = roster.loading,
             onBack = { settingsOpen = false },
             onSignOut = app::signOut,
             onOpenGateways = onOpenGateways,
