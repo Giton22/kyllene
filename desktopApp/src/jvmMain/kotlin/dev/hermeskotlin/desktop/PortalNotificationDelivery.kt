@@ -87,10 +87,11 @@ internal class PortalNotificationDelivery(
                     }
                     val connection = bus
                     if (binding?.valid?.get() != true) {
-                        binding?.valid?.set(false)
-                        binding?.subscription?.close()
-                        binding?.let { withdraw(connection, it) }
-                        binding = bind(connection)
+                        val previous = binding
+                        previous?.valid?.set(false)
+                        previous?.subscription?.close()
+                        // A restarted portal's notices stay on the desktop: the new owner withdraws them by the same ids.
+                        binding = bind(connection).also { next -> previous?.let { next.sent.addAll(it.sent) } }
                     }
                     val target = checkNotNull(binding)
                     if (update.notice == null) {
