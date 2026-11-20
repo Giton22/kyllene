@@ -79,6 +79,30 @@ class SubagentsTest {
     }
 
     @Test
+    fun theActiveRosterNestsChildrenAndLeavesOutWhatTheGatewayNoLongerLists() {
+        fun snapshot(json: String) = HermesJson.parseToJsonElement(json) as JsonObject
+        val state = delegating
+            .reduce(event("subagent.start", """{"subagent_id":"s1","goal":"Read the docs"}"""))
+            .reduce(event("subagent.start", """{"subagent_id":"s2","parent_id":"s1","goal":"Skim chapter 2","depth":1}"""))
+            .reduce(event("subagent.start", """{"subagent_id":"s3","goal":"Write tests"}"""))
+        // s3's end was missed, but the roster no longer lists it.
+        val rows = state.activeSubagentRows(listOf(
+            snapshot("""{"subagent_id":"s1","goal":"Read the docs","status":"running"}"""),
+            snapshot("""{"subagent_id":"s2","parent_id":"s1","depth":1,"goal":"Skim chapter 2","status":"running"}"""),
+        ))
+        assertEquals(listOf("s1"), rows.map { it.key })
+        assertEquals(listOf("s2"), rows.single().children.map { it.key })
+
+        // A child whose parent has ended still shows, on its own.
+        val orphan = state.activeSubagentRows(listOf(snapshot("""{"subagent_id":"s2","parent_id":"s1","depth":1,"status":"running"}""")))
+        assertEquals(listOf("Skim chapter 2"), orphan.map { it.goal })
+
+        // With no roster, the events decide.
+        val ended = state.reduce(event("subagent.complete", """{"subagent_id":"s3","status":"completed"}"""))
+        assertEquals(listOf("s1"), ended.activeSubagentRows(null).map { it.key })
+    }
+
+    @Test
     fun anUnknownEndIsAFailureNotAForeverSpinner() {
         val state = delegating.reduce(event("subagent.complete", """{"subagent_id":"s1","goal":"Read the docs","status":"weird"}"""))
         assertEquals(SubagentStatus.Failed, state.rows()[0].status)

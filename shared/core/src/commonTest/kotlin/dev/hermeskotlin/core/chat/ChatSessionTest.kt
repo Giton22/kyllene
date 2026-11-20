@@ -125,8 +125,15 @@ class ChatSessionTest {
         assertEquals(emptyList<SubagentRow>(), chat.activeSubagents())
         assertTrue(chat.state.value.subagents.any { it.id == "child-1" })
 
-        gateway.answer = { "error:-32601" }
+        // An answer that fails says nothing about what runs.
+        gateway.answer = { "error:4001" }
         assertNull(chat.activeSubagents())
+
+        // An older gateway has no roster: the events this chat got are all there is, and it isn't asked again.
+        gateway.answer = { "error:-32601" }
+        assertEquals(listOf("child-1"), assertNotNull(chat.activeSubagents()).map { it.key })
+        gateway.answer = { """{"subagents":[]}""" }
+        assertEquals(listOf("child-1"), assertNotNull(chat.activeSubagents()).map { it.key })
     }
 
     @Test

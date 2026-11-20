@@ -1644,11 +1644,19 @@ class ChatSession(
         }
     }
 
-    /** The gateway's current active roster, with any activity already received in the chat. */
+    /** The link on which `subagent.list` came back "no such method": that gateway only sends subagent events. */
+    private var rosterUnsupportedOn: JsonRpcClient? = null
+
+    /**
+     * The subagents running now: the gateway's roster says which, with the activity this chat has seen. A gateway
+     * without `subagent.list` leaves it to the events. Null when the chat isn't attached or the answer didn't come.
+     */
     suspend fun activeSubagents(): List<SubagentRow>? {
         val client = connectedClient() ?: return null
         val runtimeId = liveRuntimeId(client) ?: return null
-        val snapshots = subagentSnapshots(client, runtimeId) ?: return null
+        if (client === rosterUnsupportedOn) return _state.value.activeSubagentRows(null)
+        val snapshots = subagentSnapshots(client, runtimeId)
+        if (snapshots == null && client !== rosterUnsupportedOn) return null
         return _state.value.activeSubagentRows(snapshots)
     }
 
@@ -1664,7 +1672,9 @@ class ChatSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            null // Older gateways may only supply subagent events.
+            // Older gateways may only supply subagent events.
+            if (e is RpcException && e.code == METHOD_NOT_FOUND) rosterUnsupportedOn = client
+            null
         }
         if (connectedClient() !== client || liveRuntimeId(client) != runtimeId) return null
         return (result?.get("subagents") as? JsonArray)?.asObjectList()
