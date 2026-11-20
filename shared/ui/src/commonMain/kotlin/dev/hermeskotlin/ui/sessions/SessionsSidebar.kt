@@ -585,16 +585,18 @@ fun SessionsSidebar(
     SideEffect {
         shownChats.rows = {
             val (pinned, rest) = sections.others.filter { attentionFilter.keeps(statuses[it.id]) }.partition { it.pinned }
-            val recent = visibleThreads(shownThreads, threadsCollapsed, selectedId, statuses, drafts).map { it.session } +
-                visiblePinned(pinned, pinnedCollapsed, selectedId, statuses, drafts) + rest
-            val results = state.searchResults
-            when {
-                !searchOpen && state.filter == SessionListFilter.Recent && mode == SidebarMode.Bots -> recent
-                searchOpen && results == null -> if (isDesktop) sections.others.pinnedFirst() else recent
-                results != null -> results.pinnedFirst()
-                state.filter == SessionListFilter.Recent -> recent
-                else -> state.sessions.pinnedFirst()
-            }
+            chatsInView(
+                recent = visibleThreads(shownThreads, threadsCollapsed, selectedId, statuses, drafts).map { it.session } +
+                    visiblePinned(pinned, pinnedCollapsed, selectedId, statuses, drafts) + rest,
+                others = sections.others,
+                filtered = state.sessions,
+                results = state.searchResults,
+                searchOpen = searchOpen,
+                recentFilter = state.filter == SessionListFilter.Recent,
+                visible = visible,
+                desktop = isDesktop,
+                windowed = windowed,
+            )
         }
     }
     val modals = LocalOpenModals.current
@@ -1695,7 +1697,6 @@ private fun SearchHeader(viewModel: SessionsViewModel, focusAsks: Int, list: Lis
     }
 }
 
-/** Lets the search field hand the focus to the first chat the list under it shows. */
 /**
  * The chats as the sidebar lists them, top to bottom, for the chat options menu: deleting the open chat there
  * opens the one listed after it, as a delete from the list does.
@@ -1703,13 +1704,46 @@ private fun SearchHeader(viewModel: SessionsViewModel, focusAsks: Int, list: Lis
 class ShownChats {
     internal var rows: () -> List<SessionSummary> = { emptyList() }
 
-    /** The chat to open once [deleted] is gone: the one after it, or before it when it was last; null when none is left. */
-    fun after(deleted: SessionSummary): SessionSummary? = rows().let { list -> neighbourAfterRemoving(list, list.indexOfFirst { it.id == deleted.id }) }
+    /**
+     * The chat to open once [deleted] is gone: the one after it, or before it when it was last; null when none is
+     * left. A thread's row can carry a later id of its chat than the one that is open, so the lineage counts.
+     */
+    fun after(deleted: SessionSummary): SessionSummary? =
+        rows().let { list -> neighbourAfterRemoving(list, list.indexOfFirst { it.isChat(deleted.id) }) }
+}
+
+/**
+ * The chats the sidebar's list shows, top to bottom. [recent] is the Recent list as sectioned and folded, [others]
+ * its chats outside Threads (what a desktop's search lists before a word is typed), [filtered] what another filter
+ * loaded (Archived) and [results] the search's. A search left open in a sidebar that isn't [visible] doesn't
+ * count: nobody sees its results. On a [desktop], chats in a window of their own ([windowed]) are left out, as one
+ * never also opens in the main window.
+ */
+internal fun chatsInView(
+    recent: List<SessionSummary>,
+    others: List<SessionSummary>,
+    filtered: List<SessionSummary>,
+    results: List<SessionSummary>?,
+    searchOpen: Boolean,
+    recentFilter: Boolean,
+    visible: Boolean,
+    desktop: Boolean,
+    windowed: Set<String> = emptySet(),
+): List<SessionSummary> {
+    val found = results.takeIf { visible }
+    val view = when {
+        found != null -> found.pinnedFirst()
+        searchOpen && visible && desktop -> others.pinnedFirst()
+        recentFilter -> recent
+        else -> filtered.pinnedFirst()
+    }
+    return if (desktop) view.filterNot { it.id in windowed } else view
 }
 
 /** Pinned chats first, as [SessionList] shows them. */
 private fun List<SessionSummary>.pinnedFirst(): List<SessionSummary> = partition { it.pinned }.let { (pinned, rest) -> pinned + rest }
 
+/** Lets the search field hand the focus to the first chat the list under it shows. */
 private class ListFocus {
     var first: (() -> Boolean)? = null
 
