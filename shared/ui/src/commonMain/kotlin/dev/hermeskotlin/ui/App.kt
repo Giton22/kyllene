@@ -336,6 +336,26 @@ private fun Routes() {
 
     val choices by app.gatewayChoices.collectAsStateWithLifecycle()
     var gatewaysOpen by remember { mutableStateOf(false) }
+    val shortcuts = LocalShortcuts.current
+    val boundChat = remember { mutableStateOf<ChatViewModel?>(null) }
+    var pendingReveal by remember { mutableStateOf<Shortcut.RevealChat?>(null) }
+    fun revealChat() {
+        gatewaysOpen = false
+        app.cancelPendingCall()
+    }
+    ShortcutHandler { shortcut ->
+        if (shortcut is Shortcut.RevealChat) {
+            val target = boundChat.value?.targetFor(shortcut.source)
+            if (shortcut.current() && target != null && (route as? Route.SignIn)?.adding == true) {
+                pendingReveal = shortcut
+                true
+            } else if (shortcut.current() && target != null && app.returnToChat(shortcut.source, target)) {
+                revealChat()
+                pendingReveal = shortcut
+                true
+            } else false
+        } else false
+    }
     LaunchedEffect((route as? Route.Chat)?.target) {
         if ((route as? Route.Chat)?.target?.draft?.start == DraftStart.VoiceChat) gatewaysOpen = false
     }
@@ -370,7 +390,21 @@ private fun Routes() {
             },
         )
 
-        is Route.Chat -> Home(r, app, onOpenGateways = { gatewaysOpen = true })
+        is Route.Chat -> {
+            val chat: ChatViewModel = koinViewModel()
+            SideEffect { boundChat.value = chat }
+            Home(r, app, onOpenGateways = { gatewaysOpen = true }, onRevealChat = ::revealChat, chat = chat)
+        }
+    }
+
+    LaunchedEffect(route, pendingReveal) {
+        val pending = pendingReveal ?: return@LaunchedEffect
+        if (!pending.current()) {
+            pendingReveal = null
+        } else if (route is Route.Chat) {
+            pendingReveal = null
+            shortcuts.fire(pending)
+        }
     }
 
     val dismissCall = if (openingCall) app::cancelPendingCall else app::dismissCallError
@@ -436,8 +470,7 @@ private class BotEditing(val bot: Bot?)
 
 /** The signed-in home: the chat, with the sessions sidebar to its left (a drawer on phones, docked on wide screens). */
 @Composable
-private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Unit) {
-    val chat: ChatViewModel = koinViewModel()
+private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Unit, onRevealChat: () -> Unit, chat: ChatViewModel) {
     val chatState by chat.state.collectAsStateWithLifecycle()
     val untitled = stringResource(Res.string.app_untitled_session)
     val sidebar = rememberSidebarState()
@@ -677,6 +710,19 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     var paletteOpen by remember { mutableStateOf(false) }
     var shortcutsOpen by remember { mutableStateOf(false) }
     val bus = LocalShortcuts.current
+    val openModals = LocalOpenModals.current
+    var pendingReveal by remember { mutableStateOf<Shortcut.RevealChat?>(null) }
+    LaunchedEffect(pendingReveal, openModals.any, editing, pluginUrl) {
+        val pending = pendingReveal ?: return@LaunchedEffect
+        if (!pending.current()) {
+            pendingReveal = null
+        } else if (!openModals.any && editing == null && pluginUrl == null) {
+            pendingReveal = null
+            settingsOpen = false
+            menuOpen = false
+            closeDrawerToChat()
+        }
+    }
     ShortcutHandler { shortcut ->
         when (shortcut) {
             // The open chat moves to a window of its own; this one goes on with a new chat.
@@ -694,6 +740,12 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                 closeDrawerToChat()
             }
             Shortcut.Settings -> true.also { settingsOpen = true }
+            is Shortcut.RevealChat -> true.also {
+                if (shortcut.current()) {
+                    onRevealChat()
+                    pendingReveal = shortcut
+                }
+            }
             Shortcut.ToggleSidebar -> true.also { scope.launch { sidebar.toggle() } }
             // The sidebar has opened its search already; it has to show to be used.
             Shortcut.SearchChats -> true.also { scope.launch { sidebar.open() } }

@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import dev.hermeskotlin.ui.chat.BotIdentity
 import dev.hermeskotlin.core.chat.ChatHost
+import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.chat.ChatLinks
 import dev.hermeskotlin.core.chat.ComposeDraft
 import dev.hermeskotlin.core.chat.DraftStart
@@ -318,6 +319,18 @@ class AppViewModel(
         }
     }
 
+    /** A notification leaves gateway-add for its still-owned live target, without reloading a remembered chat. */
+    fun returnToChat(source: ChatSession, target: ChatTarget): Boolean {
+        val route = _route.value
+        if ((route as? Route.Connect)?.canCancel != true) return false
+        if (host.session.value !== source || host.ownerVersion.value != source.ownerVersion ||
+            source.gateway != target.gateway.gatewayUrl || source.profile != target.profile) return false
+        cancelPendingCall()
+        certs.clear()
+        _route.value = Route.Chat(target)
+        return true
+    }
+
     /**
      * Makes [gateway] the current one: its chats when it still holds a session, else its sign-in. With [fresh], a new
      * chat there rather than the one the user left off in (switched from an empty chat, to start one there).
@@ -561,6 +574,7 @@ class AppViewModel(
         if (profile == currentProfile()) return
         viewModelScope.launch {
             profiles.set(gateway.gatewayUrl, profile)
+            host.invalidateOwner()
             _route.value = home(gateway, fresh)
         }
     }

@@ -419,3 +419,23 @@ The action starts a call and may use the microphone and configured voice provide
 
 The equivalent explicit invocation is `flatpak run
 app.kyllene.Kyllene.Devel herald://voice-chat`.
+
+### Desktop notifications
+
+Linux notifications use the XDG Notification portal and the existing reply/request
+preferences. Their bodies are plain text. Open reveals the original chat window;
+Approve and Deny answer only the exact approval still pending in that source.
+Repeated actions are consumed once. Questions and other requests open the app.
+Open waits for an existing sign-in, modal, editor or plugin page to close,
+preserving its input, and rechecks ownership before revealing the chat.
+
+Notices expire when their source chat closes or is replaced. Separate chat windows
+retain their own notices across main-window chat and profile changes, and go on
+notifying; sign-out and gateway changes close them and revoke their notices. A
+completed profile selection revokes the main window's previous notices.
+Turning a notification preference off withdraws its portal notices. Explicit Quit
+also withdraws this process's portal notices; actions do not cold-start the application.
+Portal failures fall back to the existing tray notification where a tray is available.
+The desktop controls presentation and dismissal; the portal does not report whether
+a notice was shown or dismissed. Bringing its window forward remains subject to
+the compositor's focus policy.

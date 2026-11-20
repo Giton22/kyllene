@@ -77,8 +77,10 @@ fun ChatWindow(
     onShowMain: () -> Unit,
     onPost: (DesktopNotice) -> Unit,
     onClose: () -> Unit,
+    onNoticeChange: () -> Unit = {},
     /** Goes up each time the chat is asked for again, which brings this window forward. */
     raise: Int = 0,
+    raiseGuard: (() -> Boolean)? = null,
 ) {
     val shortcuts = remember { ShortcutBus() }
     val back = remember { DesktopBack() }
@@ -114,16 +116,17 @@ fun ChatWindow(
         // A chat window narrows to a phone's width at most: the composer and replies still fit.
         LaunchedEffect(Unit) { window.minimumSize = java.awt.Dimension(380, 420) }
         LaunchedEffect(raise) {
-            if (raise > 0) {
+            if (raise > 0 && raiseGuard?.invoke() != false) {
                 window.toFront()
                 window.requestFocus()
+                if (raiseGuard?.invoke() != false) LinuxWindowActivation.request(window)
             }
         }
         val host = remember { ChatHost(koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get()) }
         val focused = remember { MutableStateFlow(false) }
         val windowFocused = LocalWindowInfo.current.isWindowFocused
         LaunchedEffect(windowFocused) { focused.value = windowFocused }
-        LaunchedEffect(host) { DesktopNotifier(host, koin.get(), focused, onPost).start(this) }
+        LaunchedEffect(host) { DesktopNotifier(host, koin.get(), focused, onPost, onNoticeChange).start(this) }
         val mainHost = koinInject<ChatHost>()
         DisposableEffect(owner) {
             onDispose {
