@@ -2010,8 +2010,8 @@ private fun Messages(
             listState.scrollToItem(messages.lastIndex, LIST_END)
         }
     }
-    // What the bottom held when the reader last saw it; anything since is new to them.
-    val tail = messages.lastOrNull()?.let { it.key to it.contentSize() }
+    // How much reply the bottom held when the reader last saw it; any more since is new to them.
+    val tail = messages.replyMark()
     var seenTail by remember { mutableStateOf(tail) }
     LaunchedEffect(awayFromBottom, tail) { if (!awayFromBottom) seenTail = tail }
     val newBelow = awayFromBottom && tail != seenTail
@@ -2375,12 +2375,23 @@ private suspend fun LazyListState.animateToEnd() {
 }
 
 /** How much a message holds, so a reply growing at the bottom counts as new content. */
-private fun ChatMessage.contentSize(): Int = when (this) {
+/**
+ * How much there is to read at the chat's end, for the "New reply" pill: the latest prompt's length and the reply
+ * text written since it. Thinking, tools, events and notices add nothing, and keys aren't compared, so the live
+ * reply giving way to its stored row at the end of a turn isn't news. Without a prompt, the last row with text.
+ */
+internal fun List<ChatMessage>.replyMark(): Pair<Int, Int> {
+    val prompt = indexOfLast { it is ChatMessage.User }
+    if (prompt < 0) return 0 to (lastOrNull { it.replyLength() > 0 }?.replyLength() ?: 0)
+    return this[prompt].replyLength() to subList(prompt + 1, size).sumOf { it.replyLength() }
+}
+
+/** The text a reader would scroll down for: a prompt, a reply's answer or a command's output. */
+private fun ChatMessage.replyLength(): Int = when (this) {
     is ChatMessage.User -> text.length
-    is ChatMessage.Assistant -> text.length + reasoning.length + tools.size
+    is ChatMessage.Assistant -> text.length
     is ChatMessage.Command -> output.length
-    is ChatMessage.Notice -> text.length
-    is ChatMessage.Event -> event.hashCode()
+    is ChatMessage.Notice, is ChatMessage.Event -> 0
 }
 
 /** Tells apart the ways the link can be down: none, being re-made, or needing a new sign-in. */
