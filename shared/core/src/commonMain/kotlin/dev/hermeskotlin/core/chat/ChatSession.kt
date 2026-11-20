@@ -63,7 +63,7 @@ import kotlinx.serialization.json.put
  * create, resume and REST calls carry it; the gateway scopes the rest by the runtime session.
  */
 class ChatSession(
-    private val gateway: GatewayUrl,
+    val gateway: GatewayUrl,
     initialStoredId: String?,
     initialTitle: String?,
     private val connection: GatewayConnection,
@@ -83,6 +83,8 @@ class ChatSession(
     sideTasks: List<ChatMessage.Command> = emptyList(),
     /** For a new chat: what it tells the agent first, out of sight (see `putStartInstruction`); read when it's created. */
     private val startInstruction: () -> String? = { null },
+    /** The host's account/profile lifetime when this source was created, even if a collector starts later. */
+    val ownerVersion: Long = 0,
 ) {
     private fun nowSeconds(): Double = clock.now().toEpochMilliseconds() / 1000.0
 
