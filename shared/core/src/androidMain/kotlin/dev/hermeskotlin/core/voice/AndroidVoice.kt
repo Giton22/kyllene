@@ -287,7 +287,16 @@ class AndroidSpeechPlayer(
     }
 
     init {
-        route.check = { synchronized(lock) { reroute(); restoreChatAudio != null } }
+        route.check = { callRoutingHeld() }
+    }
+
+    /**
+     * Whether call routing is held, taken up again first if the system dropped it. Asked before every listen and
+     * reply, so a route that didn't take isn't tried again here: that waits for the outputs to change.
+     */
+    private fun callRoutingHeld(): Boolean = synchronized(lock) {
+        if (restoreChatAudio != null) reroute()
+        restoreChatAudio != null
     }
 
     /** Held ([hold]): what plays now is paused, and what's ready meanwhile waits to start. */
@@ -371,11 +380,8 @@ class AndroidSpeechPlayer(
     }
 
     /** Call audio while a chained chat has call routing, assistant audio otherwise. */
-    private fun speechUsage() = synchronized(lock) {
-        // A reply after a quiet spell finds call mode taken up again first.
-        reroute()
-        if (restoreChatAudio != null) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_ASSISTANT
-    }
+    // A reply after a quiet spell finds call mode taken up again first.
+    private fun speechUsage() = if (callRoutingHeld()) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_ASSISTANT
 
     override fun hold(on: Boolean): Boolean {
         synchronized(lock) {

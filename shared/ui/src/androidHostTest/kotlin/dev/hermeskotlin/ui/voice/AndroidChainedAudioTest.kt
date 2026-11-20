@@ -187,6 +187,22 @@ class AndroidChainedAudioTest {
         assertEquals(AudioManager.MODE_NORMAL, manager.mode)
     }
 
+    /** A route that didn't take is tried again when the outputs change, not before every listen and reply. */
+    @Test
+    fun aRouteThatDidntTakeIsntTriedAgainEachTurn() {
+        shadowOf(manager).setOutputDevices(listOf(speaker))
+        shadowOf(manager).setAvailableCommunicationDevices(listOf(device(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)))
+        manager.mode = AudioManager.MODE_NORMAL
+        val route = ChatAudioRoute()
+        val close = AndroidSpeechPlayer(context, route).chainedChatAudio()
+        assertFalse(route.callAudio())
+        shadowOf(manager).setAvailableCommunicationDevices(listOf(speaker))
+        assertFalse(route.callAudio())
+        assertEquals(AudioManager.MODE_NORMAL, manager.mode)
+        assertNull(manager.communicationDevice)
+        close()
+    }
+
     /** Headphones keep their usual route, and the recorder its usual microphone. */
     @Test
     fun noCallAudioWithoutCallRouting() {
