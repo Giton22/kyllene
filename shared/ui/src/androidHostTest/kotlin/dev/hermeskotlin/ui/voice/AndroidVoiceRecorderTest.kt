@@ -192,6 +192,23 @@ class AndroidVoiceRecorderTest {
         assertEquals(2, released.get())
     }
 
+    /** The listen over a reply opens its microphone in call mode too, not in one the system dropped meanwhile. */
+    @Test fun listenOverTakesCallModeUpAgainFirst() = runBlocking {
+        mode = "zero"
+        val context = RuntimeEnvironment.getApplication()
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val speaker = AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER).build()
+        shadowOf(manager).setOutputDevices(listOf(speaker))
+        shadowOf(manager).setAvailableCommunicationDevices(listOf(speaker))
+        manager.mode = AudioManager.MODE_NORMAL
+        val route = ChatAudioRoute()
+        val close = AndroidSpeechPlayer(context, route).chainedChatAudio()
+        manager.mode = AudioManager.MODE_NORMAL
+        withTimeout(2_000) { runCatching { AndroidVoiceRecorder(noAudioMs = 200, route = route).listenOver(BargeIn(), { true }, {}) } }
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
+        close()
+    }
+
     @Test fun silentPcmKeepsTheExistingDuration() = checkPcm("pcm")
     @Test fun partialReadsKeepTheSameDuration() = checkPcm("partial")
     @Test fun emptyReadsBetweenPcmFramesRecover() = checkPcm("gapped")

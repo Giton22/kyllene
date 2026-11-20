@@ -144,6 +144,7 @@ class AndroidChainedAudioTest {
         val route = ChatAudioRoute()
         val close = AndroidSpeechPlayer(context, route).chainedChatAudio()
         manager.mode = AudioManager.MODE_NORMAL
+        manager.clearCommunicationDevice()
         assertTrue(route.callAudio())
         assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
         assertEquals(speaker, manager.communicationDevice)

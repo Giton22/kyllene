@@ -130,6 +130,8 @@ class AndroidVoiceRecorder(
     ): Recording? =
         withContext(Dispatchers.IO) {
             finishRequested = false
+            // Call mode the system dropped is taken up again before the microphone opens, not under it by the reply.
+            route?.callAudio()
             val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val record = try {
                 AudioRecord(
