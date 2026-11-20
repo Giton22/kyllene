@@ -5,10 +5,13 @@ import androidx.compose.ui.unit.Density
 import dev.hermeskotlin.ui.preview.HeraldPreview
 import dev.hermeskotlin.ui.preview.PreviewScene
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Runnable
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.jar.JarFile
+import javax.swing.SwingUtilities
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Readies the app on a background thread soon after launch, so a page opens as quickly the first time as it does
@@ -51,24 +54,62 @@ internal object Warmup {
      */
     internal val FIRST = listOf(PreviewScene.Settings, PreviewScene.Config, PreviewScene.Plugins, PreviewScene.Scheduled, PreviewScene.Bots)
 
-    /** Starts after [delayMs], once the window is up, so launch itself isn't slowed. */
+    /**
+     * Starts after [delayMs], once the window is up, so launch itself isn't slowed.
+     *
+     * Class linking runs on the background thread, while each off-screen scene is drawn on the AWT EDT one at a time:
+     * Compose keeps process-global, unsynchronized caches (such as `NodeKindKt`'s modifier map and
+     * `GlobalSnapshotManager`), so composing on a second thread races with the window's EDT.
+     */
     fun start(delayMs: Long = 1_500) {
-        // One thread for all of it: the scenes' effects resume on their dispatcher, and Compose wants a scene's
-        // layout and drawing on one thread only, never the window's.
-        val executor = Executors.newSingleThreadExecutor { task ->
-            Thread(task, "warmup").apply {
-                isDaemon = true
-                priority = Thread.MIN_PRIORITY
-            }
-        }
-        val dispatcher = executor.asCoroutineDispatcher()
-        executor.execute { Thread.sleep(delayMs) }
-        // A task each, so what a scene's effects queue runs before the next one. The thread is kept (it waits,
-        // idle), so nothing a closed scene still hands it is ever refused.
-        for (scene in FIRST) executor.execute { drawOnce(scene, dispatcher) }
-        executor.execute { linkClasses() }
-        for (scene in SCENES - FIRST.toSet()) executor.execute { drawOnce(scene, dispatcher) }
+        start(
+            delayMs = delayMs,
+            gapMs = SCENE_GAP_MS,
+            scenes = SCENES,
+            first = FIRST,
+            link = ::linkClasses,
+            drawScene = ::drawOnEdt,
+        )
     }
+
+    internal fun start(
+        delayMs: Long,
+        gapMs: Long,
+        scenes: List<PreviewScene>,
+        first: List<PreviewScene>,
+        link: () -> Unit,
+        drawScene: (PreviewScene) -> Unit,
+    ): Thread = Thread({
+        if (delayMs > 0) Thread.sleep(delayMs)
+        for (scene in first) {
+            drawScene(scene)
+            if (gapMs > 0) Thread.sleep(gapMs)
+        }
+        link()
+        for (scene in scenes - first.toSet()) {
+            drawScene(scene)
+            if (gapMs > 0) Thread.sleep(gapMs)
+        }
+    }, "warmup").apply {
+        isDaemon = true
+        priority = Thread.MIN_PRIORITY
+        start()
+    }
+
+    internal fun drawOnEdt(
+        scene: PreviewScene,
+        render: (PreviewScene, CoroutineDispatcher) -> Unit = ::drawOnce,
+    ) {
+        runCatching { SwingUtilities.invokeAndWait { render(scene, edtDispatcher) } }
+    }
+
+    private val edtDispatcher: CoroutineDispatcher = object : CoroutineDispatcher() {
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            SwingUtilities.invokeLater(block)
+        }
+    }
+
+    private const val SCENE_GAP_MS = 50L
 
     /** All of it at once, returning when it's done: for [ClassArchive]'s run, which records the classes it loads. */
     fun runNow() {
