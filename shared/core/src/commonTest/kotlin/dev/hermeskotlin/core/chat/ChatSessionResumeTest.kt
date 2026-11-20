@@ -885,4 +885,28 @@ class ChatSessionResumeTest {
         // "p149" is already shown; the same text again never arrived.
         assertEquals(SendOutcome.NotSent, lostReply(backgroundScope, "p149", arrives = false))
     }
+
+    @Test
+    fun resyncKeepsOlderLoadedPagesWhenNewestPageOverlapsBeforeItsFirstPrompt() = runTest {
+        // Turn 119 spans rows 120..160; rows 21..140 are loaded (user navigated up once). While asleep, rows
+        // 141..160 finish turn 119 and turn 161 adds 161..180. Newest page 121..180 overlaps rows (at 121..140)
+        // only before fromFirstTurn() trims it to 161..180.
+        fun storedRows(last: Int) = (1..last).map { id ->
+            when {
+                id in 120..160 -> """{"id":$id,"role":"assistant","content":"a$id"}"""
+                id == 161 || (id < 120 && id % 2 == 1) -> """{"id":$id,"role":"user","content":"p$id"}"""
+                else -> """{"id":$id,"role":"assistant","content":"a$id"}"""
+            }
+        }
+        val (chat, _) = longChat(backgroundScope, 140, storedRows(140))
+        chat.loadOlder()
+        assertEquals("row-21", chat.state.value.messages.first().key)
+
+        transcript = storedRows(180)
+        chat.resync()
+
+        val state = chat.state.first { it.messages.any { m -> m.key == "row-161" } }
+        assertEquals("row-21", state.messages.first().key)
+        assertTrue(state.olderMessages)
+    }
 }

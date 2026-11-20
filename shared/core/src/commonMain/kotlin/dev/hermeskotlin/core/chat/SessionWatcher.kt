@@ -143,8 +143,23 @@ class SessionWatcher(
     /** Sends [result] as the answer to [requestId] (see [InputAnswers]). False when it couldn't go out. */
     suspend fun answer(requestId: String, result: JsonObject): Boolean {
         val client = connectedClient() ?: return false
+        val found = find(requestId)
         return try {
-            client.respond(requestId, result)
+            val delivery = found?.second?.delivery
+            val method = found?.second?.let(InputRequest::respondMethod)
+            if (delivery is InputRequestDelivery.PendingControl && method != null) {
+                client.request(
+                    method,
+                    buildJsonObject {
+                        put("session_id", found.first.runtimeId)
+                        delivery.executionGeneration?.let { put("execution_generation", it) }
+                        put("prompt_id", found.second.id)
+                        result.forEach { (k, v) -> put(k, v) }
+                    },
+                )
+            } else {
+                client.respond(requestId, result)
+            }
             drop(requestId)
             attention.answered(requestId)
             true
@@ -240,13 +255,7 @@ class SessionWatcher(
         }
         val runtimeId = result.string("session_id") ?: row.runtimeId
         // Requests asked before this socket was attached: the gateway keeps them open and hands them over.
-        val open = result["open_requests"].asObjectList().mapNotNull { snapshot ->
-            InputRequest.parse(
-                id = snapshot.string("id") ?: return@mapNotNull null,
-                method = snapshot.string("method") ?: return@mapNotNull null,
-                params = snapshot["params"] as? JsonObject ?: JsonObject(emptyMap()),
-            )
-        }
+        val open = InputRequest.parseResume(result)
         val now = clock()
         _chats.update { all ->
             val chat = all[storedId] ?: return@update all
@@ -285,7 +294,17 @@ class SessionWatcher(
         val chat = _chats.value.values.firstOrNull { it.runtimeId == runtimeId } ?: return
         val payload = event.payload as? JsonObject
         when (event.type) {
-            "request.cancel", "approval.cancelled" -> (payload.string("id") ?: payload.string("request_id"))?.let(::drop)
+            "clarify.request", "approval.request" -> {
+                val parsed = InputRequest.parseEvent(event.type, payload) ?: return
+                val now = clock()
+                _chats.update { all ->
+                    val current = all[chat.storedId] ?: return@update all
+                    if (current.requests.any { it.id == parsed.id }) return@update all
+                    all + (chat.storedId to current.copy(requests = current.requests + parsed, arrivals = current.arrivals + (parsed.id to now)))
+                }
+            }
+            "request.cancel", "approval.cancelled", "clarify.settled", "approval.settled", "approval.responded" ->
+                InputRequest.settledId(event.type, payload)?.let(::drop)
             "session.title" -> payload.string("title")?.takeIf { it.isNotBlank() }?.let { title ->
                 _chats.update { all -> all[chat.storedId]?.let { all + (chat.storedId to it.copy(title = title)) } ?: all }
             }

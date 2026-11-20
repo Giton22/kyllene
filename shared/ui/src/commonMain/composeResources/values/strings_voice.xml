@@ -57,6 +57,19 @@
     <string name="watch_call_target_changed">Default Call Target changed. Tap Call again.</string>
     <string name="watch_call_not_live">Live voice isn’t set up on your gateway any more. Tap to ask one question at a time.</string>
     <string name="watch_call_lost">Kyllene on your phone lost the call.</string>
+    <!-- Why a call from the watch couldn't start, shown on the watch's call screen -->
+    <string name="watch_call_signed_out">Sign in to Kyllene on your phone first.</string>
+    <string name="watch_call_on_another_call">You’re already on a call with Hermes. Hang up there first.</string>
+    <string name="watch_call_conversation_changed">Conversation changed. Choose it again on your watch.</string>
+    <string name="watch_call_unreachable">Kyllene can’t reach your gateway right now.</string>
+    <string name="watch_call_bot_unavailable">This bot is no longer available. Choose another conversation.</string>
+    <string name="watch_call_bot_chat_failed">Couldn’t open the bot’s conversation.</string>
+    <string name="watch_call_target_invalid">Invalid Default Call Target. Choose it again on your phone.</string>
+    <string name="watch_call_target_bot_gone">That bot no longer exists. Choose another target on your phone.</string>
+    <string name="watch_call_target_unopened">Couldn’t open Default Call Target. Check it on your phone.</string>
+    <string name="watch_call_target_replaced">A newer call replaced this request.</string>
+    <string name="watch_call_target_unreached">Couldn’t reach Default Call Target. Try again.</string>
+    <string name="watch_call_target_failed">Couldn’t open Default Call Target.</string>
     <string name="voice_said_questions_in_chat">Hermes has a few questions for you. They’re waiting in the chat.</string>
     <string name="call_title">Kyllene call</string>
     <string name="call_answer">Answer</string>

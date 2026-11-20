@@ -99,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.Ellipsis
 import dev.hermeskotlin.designsystem.HeraldBrandBlue
 import dev.hermeskotlin.designsystem.HeraldMark
+import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.designsystem.components.glow
 import dev.hermeskotlin.designsystem.components.halo
 import dev.hermeskotlin.designsystem.dangerSoft
@@ -252,6 +253,8 @@ import com.composables.icons.lucide.TriangleAlert
 import com.composables.icons.lucide.Users
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.RefreshCw
+import com.composables.icons.lucide.Pause
+import com.composables.icons.lucide.Play
 import com.composables.icons.lucide.Square
 import com.composables.icons.lucide.Volume2
 import com.composables.icons.lucide.SquarePen
@@ -582,6 +585,7 @@ fun ChatScreen(
     val refs = if (isDesktop) refChoices(mention, pathRef, pathEntries) else emptyList()
     val density = LocalDensity.current
     val modelPillBounds = remember { mutableStateOf<Rect?>(null) }
+    val conversationKey = Triple(target.gateway.gatewayUrl, target.profile, target.storedSessionId)
     Box(Modifier.fillMaxSize().onSizeChanged { paneWidth = with(density) { it.width.toDp() } }) {
     CompositionLocalProvider(LocalModelPillBounds provides modelPillBounds) {
     ChatView(
@@ -591,7 +595,9 @@ fun ChatScreen(
             faces.find(target.bot?.name)?.let { bot -> { BotAvatar(bot, faces.picture(bot), size = 22.dp) } }
         },
         state = if (readPosition == null || !ownsTranscript) state.copy(historyLoaded = false) else state,
-        conversationKey = Triple(target.gateway.gatewayUrl, target.profile, target.storedSessionId),
+        conversationKey = conversationKey,
+        savedViewport = { viewModel.viewportFor(conversationKey, target) },
+        onSaveViewport = viewModel::saveViewport,
         picker = picker,
         connected = connected,
         connectionLabel = connectionLabel(connection),
@@ -758,6 +764,9 @@ internal fun ChatView(
     state: ChatState,
     /** Isolates the transcript's scroll state across gateways, profiles and chats. */
     conversationKey: Any? = null,
+    /** Where the reader was in this chat's list when it last left the screen, read as the list comes back. */
+    savedViewport: () -> TranscriptViewport? = { null },
+    onSaveViewport: ((TranscriptViewport) -> Unit)? = null,
     picker: ModelPickerState,
     connected: Boolean,
     /** Which way the link is down, shown under the title while not [connected]. */
@@ -851,8 +860,17 @@ internal fun ChatView(
         val voiceFull = voiceOn && !voiceFolded
         LaunchedEffect(voiceOn) { if (!voiceOn) voiceFolded = false }
         // A reply read aloud plays to its end with the phone put down, and stops if it leaves the chat
-        // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays.
-        KeepScreenOn(readAloud.key != null)
+        // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays. Paused for a minute,
+        // it may wait for good, so the screen goes dark as usual; a moment of other audio (a chime, a navigation
+        // prompt) pauses it too, and goes on by itself, so that doesn't turn the screen off.
+        val pausedForGood by produceState(false, readAloud.paused) {
+            value = false
+            if (readAloud.paused) {
+                delay(60_000)
+                value = true
+            }
+        }
+        KeepScreenOn(readAloud.key != null && !pausedForGood)
         // A chat whose transcript hasn't loaded yet hasn't lost it.
         LaunchedEffect(readAloud.key, state.messages, state.historyLoaded) {
             val key = readAloud.key ?: return@LaunchedEffect
@@ -1098,6 +1116,9 @@ internal fun ChatView(
                             key(conversationKey) {
                                 Messages(
                                     listed,
+                                    conversationKey = conversationKey,
+                                    savedViewport = savedViewport,
+                                    onSaveViewport = onSaveViewport,
                                     olderMessages = state.olderMessages,
                                     loadingOlder = state.loadingOlder,
                                     savedCopy = state.savedCopyAt != null,
@@ -1112,6 +1133,7 @@ internal fun ChatView(
                                     readUpTo = readUpTo,
                                     onReadLatest = onReadLatest,
                                     reading = readAloud.key,
+                                    readingPaused = readAloud.paused,
                                     // The voice chat and dictation have the speaker and the microphone.
                                     canReadAloud = hasSpeechPlayback && !voiceOn && !dictation.active,
                                     found = found,
@@ -1859,9 +1881,22 @@ private val FOLLOW_UP_PROMPTS = listOf(
     Res.string.chat_prompt_follow_7,
 )
 
+/** Where the list opens: the end, following, or where a reader scrolled away from it last stood, by message. */
+internal data class ListPlace(val index: Int, val offset: Int, val pinned: Boolean)
+
+internal fun openingPlace(messages: List<ChatMessage>, saved: TranscriptViewport?): ListPlace {
+    val at = saved?.takeIf { !it.pinned }?.firstKey?.let { key -> messages.indexOfFirst { it.key == key } } ?: -1
+    // A message no longer loaded (the chat started over from its newest page) leaves nothing to come back to.
+    return if (at >= 0) ListPlace(at, saved!!.firstOffset.coerceAtLeast(0), pinned = false)
+    else ListPlace(messages.lastIndex.coerceAtLeast(0), LIST_END, pinned = true)
+}
+
 @Composable
 private fun Messages(
     messages: List<ChatMessage>,
+    conversationKey: Any?,
+    savedViewport: () -> TranscriptViewport?,
+    onSaveViewport: ((TranscriptViewport) -> Unit)?,
     /** The conversation goes back further than [messages]; nearing the top loads the page before. */
     olderMessages: Boolean,
     loadingOlder: Boolean,
@@ -1881,6 +1916,8 @@ private fun Messages(
     onReadLatest: (() -> Unit)? = null,
     /** The reply being read aloud, by its key. */
     reading: String? = null,
+    /** The reply being read is held where it is. */
+    readingPaused: Boolean = false,
     /** Replies offer Read aloud. */
     canReadAloud: Boolean = true,
     /** The message Find in chat is on, by its key, marked with an outline. */
@@ -1904,18 +1941,29 @@ private fun Messages(
     }
     // Laid out top-down and opened at the end. A list holds its place by the top of what's on screen, so a reply
     // growing below the lines being read leaves them where they are; following the bottom is done here instead.
-    val listState = rememberLazyListState(messages.lastIndex.coerceAtLeast(0), LIST_END)
+    // Back on screen after the list was taken down (the screen rebuilt on waking, or a spinner in its place), it
+    // comes back to where the reader was, and doesn't open again at the end or the "New messages" line.
+    // Not when the message the reader was on is gone: the list opens afresh then, "New messages" line and all.
+    val saved = remember { savedViewport()?.takeIf { it.pinned || !openingPlace(messages, it).pinned } }
+    val opening = remember { openingPlace(messages, saved) }
+    // Not saved with the screen: the view model has where the reader was, by message, which outlasts rows loaded
+    // or replaced meanwhile where an index would not.
+    val listState = remember { LazyListState(opening.index, opening.offset) }
+    // What the opening had worked out holds for the same read position (and the same saved copy or not) only.
+    fun restored(sameCopy: Boolean) = saved?.takeIf { it.readUpTo == readUpTo && (!sameCopy || it.savedCopy == savedCopy) }
     val scope = rememberCoroutineScope()
     val newest = messages.lastOrNull()
     val awayFromBottom by remember { derivedStateOf { listState.layoutInfo.hiddenBelow() > 600 } }
     // Following while the reader sits right at the end; where they drag to decides whether it carries on.
-    var pinned by remember { mutableStateOf(true) }
-    var readerNavigated by remember(readUpTo) { mutableStateOf(false) }
+    var pinned by remember { mutableStateOf(opening.pinned) }
+    var readerNavigated by remember(readUpTo) { mutableStateOf(restored(sameCopy = false)?.readerNavigated ?: false) }
     // Once the user sends from here, what follows is their own conversation, not news to mark or jump to.
-    var unreadSettled by remember(readUpTo) { mutableStateOf(false) }
+    var unreadSettled by remember(readUpTo) { mutableStateOf(restored(sameCopy = false)?.unreadSettled ?: false) }
     // The opening jump is done; only then may reaching the end mark the chat read. A saved copy giving way to
     // current history looks for the unread line again, so it waits for that too.
-    var positioned by remember(readUpTo, savedCopy) { mutableStateOf(readUpTo == null || unreadSettled) }
+    var positioned by remember(readUpTo, savedCopy) {
+        mutableStateOf(restored(sameCopy = true)?.positioned ?: (readUpTo == null || unreadSettled))
+    }
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo }.collect { info ->
             when (followStep(pinned, info.hiddenBelow(), listState.isScrollInProgress)) {
@@ -1946,6 +1994,8 @@ private fun Messages(
     val readBack = remember(readBackTravel, fold) { ReadBackDetector(readBackTravel) { fold.heldOpen = false } }
     // A prompt just sent here is always shown, wherever the reader was. One sent elsewhere, or a stored one coming
     // in with history, only pulls a reader who hasn't moved.
+    // The newest message when the list came back where the reader was: it isn't news, so it pulls no one.
+    val newestWhenRestored = remember { newest?.key.takeIf { !opening.pinned } }
     LaunchedEffect(newest?.key) {
         // A fast submit can acknowledge the local prompt before the screen ever draws it pending.
         val sentHere = newest is ChatMessage.User && (newest.pending || newest.key.startsWith("local-"))
@@ -1953,7 +2003,7 @@ private fun Messages(
             unreadSettled = true
             positioned = true
         }
-        if (newest is ChatMessage.User && (sentHere || !readerNavigated)) {
+        if (newest is ChatMessage.User && (sentHere || (!readerNavigated && newest.key != newestWhenRestored))) {
             pinned = true
             listState.scrollToItem(messages.lastIndex, LIST_END)
         }
@@ -1968,10 +2018,29 @@ private fun Messages(
     // Older pages load first while every loaded message is still new.
     // A saved copy may omit older unread messages or contain rows the gateway no longer serves.
     // Discover the boundary again against current history, without pulling a reader who has taken over.
-    var unreadFrom by remember(readUpTo, savedCopy) { mutableStateOf<String?>(null) }
-    var unreadPagesLoaded by remember(readUpTo, savedCopy) { mutableStateOf(0) }
+    var unreadFrom by remember(readUpTo, savedCopy) { mutableStateOf(restored(sameCopy = true)?.unreadFrom) }
+    var unreadPagesLoaded by remember(readUpTo, savedCopy) { mutableStateOf(restored(sameCopy = true)?.unreadPagesLoaded ?: 0) }
     // The oldest message when a page was last asked for: a reply streaming in reruns this before the page loads.
     var unreadPageAskedAt by remember(readUpTo, savedCopy) { mutableStateOf<String?>(null) }
+    // Kept as the list leaves the screen. Read through the latest composition: the values above are replaced, not
+    // changed, when the read position or the saved copy changes.
+    val viewport by rememberUpdatedState {
+        TranscriptViewport(
+            conversationKey = conversationKey,
+            firstKey = messages.getOrNull(listState.firstVisibleItemIndex)?.key,
+            firstOffset = listState.firstVisibleItemScrollOffset,
+            pinned = pinned,
+            readUpTo = readUpTo,
+            savedCopy = savedCopy,
+            readerNavigated = readerNavigated,
+            unreadSettled = unreadSettled,
+            positioned = positioned,
+            unreadFrom = unreadFrom,
+            unreadPagesLoaded = unreadPagesLoaded,
+        )
+    }
+    val saveViewport by rememberUpdatedState(onSaveViewport)
+    DisposableEffect(listState) { onDispose { saveViewport?.invoke(viewport()) } }
     LaunchedEffect(readUpTo, messages, olderMessages, loadingOlder, savedCopy) {
         if (readUpTo == null || unreadFrom != null || unreadSettled) return@LaunchedEffect
         if (messages.any { it is ChatMessage.User && it.pending }) {
@@ -2125,8 +2194,11 @@ private fun Messages(
                                     last = message.key == lastReply,
                                     unservable = unservable,
                                     reading = message.key == reading,
+                                    readingPaused = readingPaused,
                                     onReadAloud = if (canReadAloud) ({ text -> actions.readAloud(message.key, text) }) else null,
                                     onStopReading = actions::stopReading,
+                                    onPauseReading = actions::pauseReading,
+                                    onResumeReading = actions::resumeReading,
                                 )
                             }
                             // An answer to another bot's message folds under it; never while it's still being written.
@@ -2803,9 +2875,13 @@ internal fun AssistantReply(
     unservable: List<GeneratedImage> = emptyList(),
     /** This reply is being read aloud: Stop shows in place of Read aloud. */
     reading: Boolean = false,
+    /** This reply's reading is held where it is: Resume shows in place of Pause. */
+    readingPaused: Boolean = false,
     /** Reads the reply's text, as shown, aloud; null when it can't be now. */
     onReadAloud: ((String) -> Unit)? = null,
     onStopReading: () -> Unit = {},
+    onPauseReading: () -> Unit = {},
+    onResumeReading: () -> Unit = {},
 ) {
     val settings = LocalAppSettings.current
     val showReasoning = settings.showReasoning && message.reasoning.isNotBlank()
@@ -2830,6 +2906,8 @@ internal fun AssistantReply(
     val regenerateLabel = stringResource(Res.string.chat_regenerate)
     val branchLabel = stringResource(Res.string.chat_branch_here)
     val stopReadingLabel = stringResource(Res.string.chat_stop_reading)
+    val pauseReadingLabel = stringResource(Res.string.chat_pause_reading)
+    val resumeReadingLabel = stringResource(Res.string.chat_resume_reading)
     val readAloudLabel = stringResource(Res.string.chat_read_aloud)
     if (canMenu) {
         RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
@@ -2837,6 +2915,8 @@ internal fun AssistantReply(
                 RowMenuItem(copyLabel, Lucide.Copy) { scope.launch { clipboard.setClipEntry(plainTextClipEntry(text)) } },
                 onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
                 onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
+                if (reading) RowMenuItem(if (readingPaused) resumeReadingLabel else pauseReadingLabel, if (readingPaused) Lucide.Play else Lucide.Pause, run = if (readingPaused) onResumeReading else onPauseReading)
+                else null,
                 if (reading) RowMenuItem(stopReadingLabel, Lucide.Square, run = onStopReading)
                 else onReadAloud?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
             )
@@ -2952,7 +3032,11 @@ internal fun AssistantReply(
                     onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, action) }
                     onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, action) }
                     when {
-                        reading -> ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, action)
+                        reading -> {
+                            if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, action)
+                            else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, action)
+                            ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, action)
+                        }
                         speakable && onReadAloud != null -> ReplyAction(Lucide.Volume2, readAloudLabel, { onReadAloud(text) }, action)
                     }
                     CopyButton(text, Modifier.trimEndTop(end = 16.dp, top = 4.dp).size(MinTouchTarget))
@@ -3824,7 +3908,7 @@ internal fun ComposerTextInput(
         lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         onTextLayout = onTextLayout,
-        modifier = modifier.semantics(mergeDescendants = true) {},
+        modifier = modifier.commitComposingOnEnter(state).semantics(mergeDescendants = true) {},
         decorator = { innerTextField ->
             Box(Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Text, overrideDescendants = true).clipToBounds()) {
                 if (state.text.isEmpty()) {
