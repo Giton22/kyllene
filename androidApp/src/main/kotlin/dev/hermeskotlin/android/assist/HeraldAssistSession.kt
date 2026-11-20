@@ -30,6 +30,7 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import dev.hermeskotlin.android.HeraldActivity
+import dev.hermeskotlin.android.notify.AppVisibility
 import dev.hermeskotlin.android.notify.ChatNotifications
 import dev.hermeskotlin.core.bots.BotsApi
 import dev.hermeskotlin.core.profiles.ProfilesApi
@@ -128,10 +129,12 @@ class HeraldAssistSession(context: Context) :
             )
         }
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        get<AppVisibility>().assistantShown(true)
     }
 
     override fun onHide() {
         super.onHide()
+        get<AppVisibility>().assistantShown(false)
         model.voice.cancelDictation()
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
     }
@@ -171,6 +174,7 @@ class HeraldAssistSession(context: Context) :
     }
 
     override fun onDestroy() {
+        get<AppVisibility>().assistantShown(false)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         model.close()
         work.cancel()
