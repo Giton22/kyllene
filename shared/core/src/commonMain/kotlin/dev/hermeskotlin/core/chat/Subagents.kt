@@ -367,7 +367,15 @@ internal fun ChatState.activeSubagentRows(snapshots: List<JsonObject>?): List<Su
     val known = if (snapshots == null) subagents else withSubagentSnapshots(snapshots).subagents
     val active = known.filter { it.status.live && (listed == null || it.id in listed) }
     val ids = active.mapTo(HashSet()) { it.id }
-    return active.filter { it.parentId !in ids }.map { row(it, active, depth = 0) }
+    val rows = active.filter { it.parentId !in ids }.map { row(it, active, depth = 0) }
+    val shown = HashSet<String>()
+    fun mark(row: SubagentRow) {
+        shown += row.key
+        row.children.forEach(::mark)
+    }
+    rows.forEach(::mark)
+    // A malformed parent chain (a loop, or one too deep) still lists its agents, on their own.
+    return rows + active.filter { it.id !in shown }.map { row(it, emptyList(), depth = 0) }
 }
 
 private fun row(subagent: Subagent, all: List<Subagent>, depth: Int): SubagentRow = SubagentRow(

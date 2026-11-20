@@ -97,6 +97,13 @@ class SubagentsTest {
         val orphan = state.activeSubagentRows(listOf(snapshot("""{"subagent_id":"s2","parent_id":"s1","depth":1,"status":"running"}""")))
         assertEquals(listOf("Skim chapter 2"), orphan.map { it.goal })
 
+        // Parents that name each other have no top; both are still listed.
+        val loop = ChatState().activeSubagentRows(listOf(
+            snapshot("""{"subagent_id":"a","parent_id":"b","status":"running"}"""),
+            snapshot("""{"subagent_id":"b","parent_id":"a","status":"running"}"""),
+        ))
+        assertEquals(listOf("a", "b"), loop.map { it.key })
+
         // With no roster, the events decide.
         val ended = state.reduce(event("subagent.complete", """{"subagent_id":"s3","status":"completed"}"""))
         assertEquals(listOf("s1"), ended.activeSubagentRows(null).map { it.key })
