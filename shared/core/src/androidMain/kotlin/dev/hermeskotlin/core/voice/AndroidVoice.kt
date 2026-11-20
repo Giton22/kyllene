@@ -327,8 +327,9 @@ class AndroidSpeechPlayer(
         val held = restoreChatAudio
         if (wanted && held != null) {
             // The system puts the mode back to normal once no call audio has played or listened for a few seconds,
-            // as between a reply and the next turn (#408). Held routing is taken up again, or let go if it won't take.
-            if (audioManager.mode == AudioManager.MODE_IN_COMMUNICATION) return
+            // as between a reply and the next turn (#408). Held routing is taken up again from there, or let go if it
+            // won't take; a mode someone else holds, such as a phone call ringing or in progress, is left alone.
+            if (audioManager.mode != AudioManager.MODE_NORMAL) return
             if (!runCatching { callRouting() }.getOrDefault(false)) {
                 held()
                 restoreChatAudio = null

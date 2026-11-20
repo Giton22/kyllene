@@ -153,6 +153,23 @@ class AndroidChainedAudioTest {
         assertNull(manager.communicationDevice)
     }
 
+    /** A phone call ringing or in progress owns the mode: the chat neither takes it over nor puts it back. */
+    @Test
+    fun aPhoneCallsModeIsLeftAlone() {
+        shadowOf(manager).setOutputDevices(listOf(speaker))
+        shadowOf(manager).setAvailableCommunicationDevices(listOf(speaker))
+        manager.mode = AudioManager.MODE_NORMAL
+        val route = ChatAudioRoute()
+        val close = AndroidSpeechPlayer(context, route).chainedChatAudio()
+        for (call in listOf(AudioManager.MODE_RINGTONE, AudioManager.MODE_IN_CALL)) {
+            manager.mode = call
+            shadowOf(manager).setAvailableCommunicationDevices(listOf(device(AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)))
+            route.callAudio()
+            assertEquals(call, manager.mode)
+        }
+        close()
+    }
+
     /** Taken up again on the earpiece only, the reply would go there; the chat lets call routing go instead. */
     @Test
     fun aResetRouteThatWontTakeAgainIsLetGo() {
