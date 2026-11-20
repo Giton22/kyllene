@@ -400,7 +400,10 @@ fun main(args: Array<String>) {
             LaunchedEffect(windowFocused, windowShown) {
                 focused.value = windowFocused && windowShown
                 // Back in the window, the user has seen what's new: a later tray click shouldn't jump to an old chat.
-                if (focused.value) lastNotice = null
+                if (focused.value) {
+                    lastNotice = null
+                    lastLinuxOwner = null
+                }
                 if (focused.value && connection.state.value is ConnectionState.Reconnecting) connection.retry()
             }
             val titleBar = DesktopTitleBar.rememberFor(window)
