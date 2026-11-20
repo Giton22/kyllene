@@ -12,11 +12,16 @@ import java.util.jar.JarFile
 
 /**
  * Readies the app on a background thread soon after launch, so a page opens as quickly the first time as it does
- * the second. The first opening of a page (Settings, Config, a dialog) otherwise waits on the JVM: loading and
- * verifying some hundreds of classes, then running the page's code for the first time, slowly, before it's compiled.
+ * the second. The first opening of a page (Settings, Config, a dialog) otherwise waits on the JVM loading and
+ * verifying some hundreds of classes.
  *
- * Two steps: the app's classes are loaded and linked (verified, no code of theirs run), then its screens are drawn
- * once each from sample data, off screen, which runs the same code the real pages do.
+ * During a live launch ([start]), only class linking runs on the background thread (verified, no code run): Compose
+ * keeps unsynchronised process-global caches (such as `NodeKindKt`'s modifier map and `GlobalSnapshotManager`), so
+ * composing off-screen scenes on a second thread races with the window's EDT, while running them on the EDT blocks
+ * input and repaints for ~100–500 ms per scene.
+ *
+ * In the separate headless [ClassArchive] recording process ([runNow]), where no window exists, the scenes are also
+ * drawn off screen once each from sample data so the JVM records the classes they reach.
  */
 internal object Warmup {
     /**
@@ -46,28 +51,16 @@ internal object Warmup {
     )
 
     /**
-     * The pages opened most, readied before everything else: linking every class first takes some two seconds, which
-     * left Settings cold for about four after launch.
+     * Starts class linking on a low-priority background thread after [delayMs], once the window is up, so launch
+     * itself isn't slowed and Compose UI is never touched off the AWT EDT.
      */
-    internal val FIRST = listOf(PreviewScene.Settings, PreviewScene.Config, PreviewScene.Plugins, PreviewScene.Scheduled, PreviewScene.Bots)
-
-    /** Starts after [delayMs], once the window is up, so launch itself isn't slowed. */
-    fun start(delayMs: Long = 1_500) {
-        // One thread for all of it: the scenes' effects resume on their dispatcher, and Compose wants a scene's
-        // layout and drawing on one thread only, never the window's.
-        val executor = Executors.newSingleThreadExecutor { task ->
-            Thread(task, "warmup").apply {
-                isDaemon = true
-                priority = Thread.MIN_PRIORITY
-            }
-        }
-        val dispatcher = executor.asCoroutineDispatcher()
-        executor.execute { Thread.sleep(delayMs) }
-        // A task each, so what a scene's effects queue runs before the next one. The thread is kept (it waits,
-        // idle), so nothing a closed scene still hands it is ever refused.
-        for (scene in FIRST) executor.execute { drawOnce(scene, dispatcher) }
-        executor.execute { linkClasses() }
-        for (scene in SCENES - FIRST.toSet()) executor.execute { drawOnce(scene, dispatcher) }
+    fun start(delayMs: Long = 1_500, link: () -> Unit = ::linkClasses): Thread = Thread({
+        if (delayMs > 0) Thread.sleep(delayMs)
+        link()
+    }, "warmup").apply {
+        isDaemon = true
+        priority = Thread.MIN_PRIORITY
+        start()
     }
 
     /** All of it at once, returning when it's done: for [ClassArchive]'s run, which records the classes it loads. */
