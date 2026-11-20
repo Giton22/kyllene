@@ -882,7 +882,10 @@ class ChatSession(
         val client = connectedClient() ?: return null
         val runtimeId = liveRuntimeId(client) ?: return null
         return try {
-            BackgroundProcess.parseList(client.request("process.list", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject)
+            val result = client.request("process.list", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+            result?.takeIf {
+                it["processes"] is JsonArray && connectedClient() === client && liveRuntimeId(client) == runtimeId
+            }?.let(BackgroundProcess::parseList)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1641,17 +1644,30 @@ class ChatSession(
         }
     }
 
-    /** Subagents already running when this chat attached (`subagent.list`); their events only cover what comes next. */
+    /** The gateway's current active roster, with any activity already received in the chat. */
+    suspend fun activeSubagents(): List<SubagentRow>? {
+        val client = connectedClient() ?: return null
+        val runtimeId = liveRuntimeId(client) ?: return null
+        val snapshots = subagentSnapshots(client, runtimeId) ?: return null
+        return _state.value.activeSubagentRows(snapshots)
+    }
+
+    /** Subagents already running when this chat attached; events supply their subsequent activity. */
     private suspend fun refreshSubagents(client: JsonRpcClient, runtimeId: String) {
+        val snapshots = subagentSnapshots(client, runtimeId) ?: return
+        if (snapshots.isNotEmpty()) _state.update { it.withSubagentSnapshots(snapshots) }
+    }
+
+    private suspend fun subagentSnapshots(client: JsonRpcClient, runtimeId: String): List<JsonObject>? {
         val result = try {
             client.request("subagent.list", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            null // an older gateway without the method; live events still show new ones
-        } ?: return
-        val snapshots = result["subagents"].asObjectList()
-        if (snapshots.isNotEmpty()) _state.update { it.withSubagentSnapshots(snapshots) }
+            null // Older gateways may only supply subagent events.
+        }
+        if (connectedClient() !== client || liveRuntimeId(client) != runtimeId) return null
+        return (result?.get("subagents") as? JsonArray)?.asObjectList()
     }
 
     /**

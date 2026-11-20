@@ -789,9 +789,9 @@ class ChatViewModel(
         viewModelScope.launch { _requests.send(ChatRequest.OpenProcesses) }
     }
 
-    fun watchProcesses() = processes.start(session.value)
+    fun watchProcesses() = processes.start(session)
 
-    fun killProcess(process: BackgroundProcess) = processes.kill(session.value, process)
+    fun killProcess(process: BackgroundProcess) = processes.kill(session, process)
 
     /** Shows the checkpoints sheet (from the chat menu, or `/rollback`). */
     fun openCheckpoints() {

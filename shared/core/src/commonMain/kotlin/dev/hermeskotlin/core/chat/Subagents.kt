@@ -358,6 +358,14 @@ fun subagentRows(call: ToolActivity, subagents: List<Subagent>): List<SubagentRo
     return rows + unclaimed.map { row(it, subagents, depth = 0) }
 }
 
+/** Keep only agents the gateway still reports, retaining their activity from this chat. */
+internal fun ChatState.activeSubagentRows(snapshots: List<JsonObject>): List<SubagentRow> {
+    val active = snapshots.mapNotNull { it.string("subagent_id") }.toSet()
+    return withSubagentSnapshots(snapshots).subagents
+        .filter { it.id in active && it.status.live }
+        .map { row(it, emptyList(), depth = 0) }
+}
+
 private fun row(subagent: Subagent, all: List<Subagent>, depth: Int): SubagentRow = SubagentRow(
     key = subagent.id,
     goal = subagent.goal.ifEmpty { "Subagent" },

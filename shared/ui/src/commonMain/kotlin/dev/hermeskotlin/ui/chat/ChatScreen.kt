@@ -449,7 +449,7 @@ fun ChatScreen(
     var petsOpen by remember { mutableStateOf(false) }
     var journeyOpen by remember { mutableStateOf(false) }
     var usageOpen by remember { mutableStateOf(false) }
-    var processesOpen by remember { mutableStateOf(false) }
+    var processesOpen by rememberSaveable(target.copy(readUpTo = null)) { mutableStateOf(false) }
     var checkpointsOpen by remember { mutableStateOf(false) }
     var controlOpen by remember { mutableStateOf(false) }
     var focusComposer by remember { mutableIntStateOf(0) }
@@ -693,7 +693,7 @@ fun ChatScreen(
         onDismiss = { usageOpen = false },
     )
     ProcessesSheet(
-        visible = processesOpen,
+        visible = processesOpen && ownsTranscript,
         controller = viewModel.processes,
         onStart = viewModel::watchProcesses,
         onKill = viewModel::killProcess,
