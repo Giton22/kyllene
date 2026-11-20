@@ -1,5 +1,7 @@
 package dev.hermeskotlin.ui.assistant
 
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import dev.hermeskotlin.ui.imeVisible
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -37,6 +39,7 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -119,6 +122,7 @@ import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.stringResource
 import dev.hermeskotlin.ui.chat.AppMark
 import dev.hermeskotlin.ui.chat.BarButton
+import dev.hermeskotlin.ui.KeepScreenOn
 import dev.hermeskotlin.ui.chat.BarStatus
 import dev.hermeskotlin.ui.chat.ComposerButton
 import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
@@ -197,6 +201,7 @@ private fun Panel(
     onOpenScreenSettings: () -> Unit,
     onClose: () -> Unit,
 ) {
+    AssistantScreenOn(model)
     AssistantBackdrop(onClose) {
         val circling by model.circling.collectAsState()
         if (circling) {
@@ -205,9 +210,24 @@ private fun Panel(
             MessengerEdge(model, Modifier.fillMaxSize())
         } else {
             MessengerEdge(model, Modifier.fillMaxSize())
-            Card(model, microphoneAllowed, onOpenHerald, onAllowMicrophone, onOpenScreenSettings, onClose)
+            AssistantPanelCard(model, microphoneAllowed, onOpenHerald, onAllowMicrophone, onOpenScreenSettings, onClose)
         }
     }
+}
+
+/** The overlay outlives onHide; hidden gateway work must not hold the display awake. */
+@Composable
+internal fun AssistantScreenOn(model: AssistantPanelModel) {
+    val shown by model.shown.collectAsState()
+    val phase by model.phase.collectAsState()
+    val session by model.session.collectAsState()
+    val chat by key(session) {
+        (session?.state ?: remember { emptyFlow() }).collectAsState(ChatState())
+    }
+    val dictation by model.voice.dictation.collectAsState()
+    val reading by model.voice.reading.collectAsState()
+    val sending = chat.messages.any { it is ChatMessage.User && it.pending }
+    KeepScreenOn(shown && (phase == AssistantPhase.Loading || dictation.active || sending || chat.running || reading.key != null))
 }
 
 /** The dimmed screen behind the card, which closes the panel when tapped. */
@@ -233,6 +253,7 @@ internal data class AssistantCardState(
     val includeScreen: Boolean = false,
     val circled: ScreenContext? = null,
     val dictation: DictationState = DictationState(),
+    val targetUnavailable: Boolean = false,
 )
 
 /** What the card does: [AssistantPanelModel]'s calls, or nothing in a preview. */
@@ -248,7 +269,7 @@ internal interface AssistantActions {
 }
 
 @Composable
-private fun Card(
+internal fun AssistantPanelCard(
     model: AssistantPanelModel,
     microphoneAllowed: Boolean,
     onOpenHerald: (String?) -> Unit,
@@ -257,8 +278,11 @@ private fun Card(
     onClose: () -> Unit,
 ) {
     val phase by model.phase.collectAsState()
+    val targetUnavailable by model.targetUnavailable.collectAsState()
     val session by model.session.collectAsState()
-    val chat by (session?.state ?: remember { emptyFlow() }).collectAsState(ChatState())
+    val chat by key(session) {
+        (session?.state ?: remember { emptyFlow() }).collectAsState(ChatState())
+    }
     val connection by model.connectionState.collectAsState()
     val screen by model.screen.collectAsState()
     val includeScreen by model.includeScreen.collectAsState()
@@ -268,10 +292,13 @@ private fun Card(
     val speaker by model.speaker.collectAsState()
 
     // Calling the assistant up is asking to talk: listen straight away, on every call-up, when the app may.
-    if (phase == AssistantPhase.Ready) {
-        LaunchedEffect(model, shows, microphoneAllowed) {
-            if (microphoneAllowed && !chat.hasConversation && !dictation.active && model.claimListening(shows)) model.toggleDictation()
-        }
+    LaunchedEffect(model, shows, microphoneAllowed) {
+        if (!microphoneAllowed) return@LaunchedEffect
+        // Target validation and the previous recognizer can finish after this call-up was drawn.
+        combine(model.phase, model.targetUnavailable, model.voice.dictation) { ready, unavailable, speech ->
+            ready == AssistantPhase.Ready && !unavailable && !speech.active
+        }.first { it }
+        if (model.claimListening(shows)) model.toggleDictation()
     }
     val actions = remember(model) {
         object : AssistantActions {
@@ -289,7 +316,7 @@ private fun Card(
     ProvideReplySpeaker(speaker) {
         AssistantCard(
             state = AssistantCardState(
-                phase, chat, connection is ConnectionState.Connected, connectionLabel(connection), screen, includeScreen, circled, dictation,
+                phase, chat, connection is ConnectionState.Connected, connectionLabel(connection), screen, includeScreen, circled, dictation, targetUnavailable,
             ),
             actions = actions,
             microphoneAllowed = microphoneAllowed,
@@ -442,7 +469,7 @@ private fun ColumnScope.Ready(
             Text(currentAction(chat), style = Theme[typography][caption], color = Theme[colors][textSecondary], maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
-    (chat.error ?: state.dictation.error?.let(::briefError))?.let {
+    (if (state.targetUnavailable) stringResource(Res.string.assistant_target_unavailable) else chat.error ?: state.dictation.error?.let(::briefError))?.let {
         Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger], modifier = Modifier.padding(start = 6.dp, end = 6.dp, bottom = 10.dp))
     }
 
@@ -501,8 +528,8 @@ private fun Composer(
     val screen = state.screen
     val circled = state.circled
     val dictation = state.dictation
-    // The whole screen goes with the first question only.
-    val includeScreen = state.includeScreen && !chat.hasConversation
+    // Each invocation offers only its current capture; sending clears the opt-in.
+    val includeScreen = state.includeScreen
     val hasText = actions.composer.text.isNotBlank()
     val shape = RoundedCornerShape(Theme[radii][radiusXLarge])
     var focused by remember { mutableStateOf(false) }
@@ -513,8 +540,8 @@ private fun Composer(
     LaunchedEffect(keyboardUp) { if (!keyboardUp && focused) focusManager.clearFocus() }
     val tray: (@Composable () -> Unit)? = when {
         circled != null -> { { CircledChip(circled, onCircleAgain = actions::startCircling, onRemove = actions::dropCircled) } }
-        !chat.hasConversation && screen.missed -> { { ScreenUnavailable(onOpenScreenSettings) } }
-        !chat.hasConversation && !(screen.context.isEmpty && screen.pending == 0) -> {
+        screen.missed -> { { ScreenUnavailable(onOpenScreenSettings) } }
+        !(screen.context.isEmpty && screen.pending == 0) -> {
             { ScreenChip(screen, included = state.includeScreen, onIncluded = actions::setIncludeScreen) }
         }
         else -> null

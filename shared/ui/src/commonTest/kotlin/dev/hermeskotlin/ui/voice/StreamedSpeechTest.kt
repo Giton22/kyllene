@@ -21,6 +21,7 @@ import dev.hermeskotlin.core.voice.SpokenAudio
 import dev.hermeskotlin.core.voice.VoiceActivity
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
@@ -40,8 +41,10 @@ import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -329,7 +332,8 @@ class StreamedSpeechTest {
         val spoken = mutableListOf<String>()
         var transcribed = 0
         val client = createHttpClient(
-            MockEngine { request ->
+            // The scripted replies must finish on the same clock as advanceTimeBy, not on a real worker.
+            MockEngine(MockEngineConfig().apply { dispatcher = StandardTestDispatcher(testScheduler) }.also { it.addHandler { request ->
                 when (request.url.encodedPath) {
                     "/api/auth/ws-ticket" -> respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
                     "/api/audio/transcribe" -> {
@@ -349,7 +353,7 @@ class StreamedSpeechTest {
                     }
                     else -> respond("""{"ok":true}""", HttpStatusCode.OK, json)
                 }
-            },
+            } }),
             PersistentCookiesStorage(InMemoryKeyValueStore()),
         )
         val socket = Socket().also { it.holdPrompts = holdPrompts }
@@ -362,6 +366,23 @@ class StreamedSpeechTest {
         voice.startChat(session, gateway, "rin")
         if (awaitSubmit) socket.submits.first { it.isNotEmpty() }
         return Setup(socket, voice, player, spoken, session)
+    }
+
+    @Test
+    fun transcriptionLatencyUsesTheTestClock() = runTest {
+        val transcribing = CompletableDeferred<Unit>()
+        val setup = chat(awaitSubmit = false, transcribing = {
+            transcribing.complete(Unit)
+            delay(1_000)
+        }) { null }
+        transcribing.await()
+        advanceTimeBy(999)
+        runCurrent()
+        assertTrue(setup.socket.submits.value.isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(1, setup.socket.submits.value.size)
+        setup.voice.stopChat()
     }
 
     @Test

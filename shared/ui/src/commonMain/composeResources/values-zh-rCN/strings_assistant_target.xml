@@ -1,0 +1,10 @@
+<resources>
+    <string name="settings_assistant_target">数字助理聊天</string>
+    <string name="assistant_target_new">新建聊天</string>
+    <string name="assistant_target_new_detail">每次唤起手机助理时都开始新的聊天。</string>
+    <string name="assistant_target_unavailable">无法打开为助理选定的聊天。请检查连接，或在“设置 → 数字助理聊天”中选择其他聊天。</string>
+    <string name="assistant_target_account_error">无法验证当前登录的账号。请重试。</string>
+    <string name="call_target_search_placeholder">按 ID 或消息搜索</string>
+    <string name="call_target_search_detail">按 ID 开头或消息文本搜索，最多显示 30 条结果。</string>
+    <string name="call_target_no_matches">没有匹配的会话。</string>
+</resources>
