@@ -67,7 +67,7 @@ class NewReplyPillTest {
     @Test
     fun anOlderPageLoadingAboveShowsOnlyTheArrowAndAFailedTurnSaysNewReply() = runComposeUiTest {
         // The end of one long turn, as a page that holds no prompt shows it.
-        val page = (1..40).map { ChatMessage.Assistant("a$it", text = "Step $it") }
+        val page = (1..40).map { ChatMessage.Assistant("row-${it + 10}", text = "Step $it") }
         var messages by mutableStateOf<List<ChatMessage>>(page)
         setContent { Conversation(messages) }
         waitForIdle()
@@ -75,7 +75,7 @@ class NewReplyPillTest {
         waitForIdle()
         onNodeWithText("Step 40").assertDoesNotExist()
 
-        val older = listOf(ChatMessage.User("u0", "Go through the steps"), ChatMessage.Assistant("a0", text = "Starting"))
+        val older = listOf(ChatMessage.User("row-1", "Go through the steps"), ChatMessage.Assistant("row-2", text = "Starting"))
         runOnIdle { messages = older + page }
         waitForIdle()
         onNodeWithText("New reply").assertDoesNotExist()

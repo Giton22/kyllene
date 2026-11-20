@@ -2385,12 +2385,17 @@ internal fun List<ChatMessage>.replyMark(): Pair<Int, Int> {
     return (getOrNull(prompt)?.replyLength() ?: 0) to subList(prompt + 1, size).sumOf { it.replyLength() }
 }
 
-/** The text a reader would scroll down for: a prompt, a reply's answer, a command's output, or why a turn failed. */
+/**
+ * The text a reader would scroll down for: a prompt, a reply's answer, a command's output, or a turn having failed
+ * or ended with a warning. A reply's blank space isn't counted: the stream and the stored rows space its steps
+ * differently. A failure counts the same whatever it says, as the stored row may word it differently.
+ */
 private fun ChatMessage.replyLength(): Int = when (this) {
     is ChatMessage.User -> text.length
-    is ChatMessage.Assistant -> text.length + (error?.length ?: 0) + (warning?.length ?: 0)
+    is ChatMessage.Assistant -> text.count { !it.isWhitespace() } +
+        (if (error != null || outcome == TurnOutcome.Error) 1 else 0) + (if (warning != null) 1 else 0)
     is ChatMessage.Command -> output.length
-    is ChatMessage.Event -> (event as? TranscriptEvent.FailedTurn)?.text?.length ?: 0
+    is ChatMessage.Event -> if (event is TranscriptEvent.FailedTurn) 1 else 0
     is ChatMessage.Notice -> 0
 }
 
@@ -2399,10 +2404,17 @@ private fun ChatMessage.replyLength(): Int = when (this) {
  * left the end. It stays new until they are back there, even if a later turn brings the mark back to what it was.
  */
 internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val new: Boolean = false) {
-    /** A mark that changes together with the oldest row is an older page loading above, which isn't news. */
-    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>): ReplySeen =
-        ReplySeen(oldest, mark, new = away && (new || (mark != this.mark && oldest == this.oldest)))
+    /** A mark that changes as an earlier stored row becomes the oldest is an older page loading above, which isn't news. */
+    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>): ReplySeen {
+        val was = this.oldest.storedRowId()
+        val now = oldest.storedRowId()
+        val olderPage = was != null && now != null && now < was
+        return ReplySeen(oldest, mark, new = away && (new || (mark != this.mark && !olderPage)))
+    }
 }
+
+/** The stored row a message's key (`row-<id>`, as `historyToMessages` gives it) was made from, if any. */
+private fun String?.storedRowId(): Long? = this?.takeIf { it.startsWith("row-") }?.removePrefix("row-")?.substringBefore('-')?.toLongOrNull()
 
 /** Tells apart the ways the link can be down: none, being re-made, or needing a new sign-in. */
 @Composable

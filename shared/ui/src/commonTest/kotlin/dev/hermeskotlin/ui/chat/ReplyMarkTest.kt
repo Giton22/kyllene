@@ -3,6 +3,7 @@ package dev.hermeskotlin.ui.chat
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ToolActivity
 import dev.hermeskotlin.core.chat.TranscriptEvent
+import dev.hermeskotlin.core.chat.TurnOutcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -63,21 +64,32 @@ class ReplyMarkTest {
         val seen = listOf(prompt, ChatMessage.Assistant("live-1", reasoning = "Thinking", streaming = true)).replyMark()
         assertNotEquals(seen, listOf(prompt, ChatMessage.Assistant("live-1", reasoning = "Thinking", error = "Model unavailable")).replyMark())
         assertNotEquals(seen, listOf(prompt, ChatMessage.Assistant("live-1", reasoning = "Thinking", warning = "Not saved")).replyMark())
-        assertNotEquals(seen, listOf(prompt, ChatMessage.Event("row-9", TranscriptEvent.FailedTurn("Model unavailable"))).replyMark())
+        assertNotEquals(seen, listOf(prompt, ChatMessage.Assistant("live-1", reasoning = "Thinking", outcome = TurnOutcome.Error)).replyMark())
+        assertNotEquals(seen, listOf(prompt, ChatMessage.Event("row-9", TranscriptEvent.FailedTurn(""))).replyMark())
     }
 
     @Test
-    fun withoutAPromptAReplySplitIntoSeveralStoredRowsIsNotNews() {
-        val live = listOf(ChatMessage.Assistant("live-1", text = "Checking.Done.", streaming = true))
-        val stored = listOf(ChatMessage.Assistant("s1", text = "Checking."), ChatMessage.Notice("n1", "Subagent done", stored = true), ChatMessage.Assistant("s2", text = "Done."))
+    fun aFailedTurnsStoredRowTakingOverIsNotNews() {
+        val live = listOf(prompt, ChatMessage.Assistant("live-1", reasoning = "Thinking", outcome = TurnOutcome.Error, error = "Model unavailable"))
+        val stored = listOf(prompt, ChatMessage.Event("row-9", TranscriptEvent.FailedTurn("The model could not be reached")))
         assertEquals(live.replyMark(), stored.replyMark())
+    }
+
+    @Test
+    fun blankSpaceInAReplyIsNotCounted() {
+        // The stream runs a reply's steps together; the stored rows are joined with blank lines.
+        val live = listOf(ChatMessage.Assistant("live-1", text = "Checking.Done.\n", streaming = true))
+        val stored = listOf(ChatMessage.Assistant("row-4", text = "Checking.\n\nDone."))
+        assertEquals(live.replyMark(), stored.replyMark())
+        val thinking = listOf(prompt, ChatMessage.Assistant("live-1", reasoning = "Thinking", streaming = true))
+        assertEquals(thinking.replyMark(), listOf(prompt, ChatMessage.Assistant("live-1", text = "\n", reasoning = "Thinking", streaming = true)).replyMark())
     }
 
     @Test
     fun anOlderPageLoadingAboveIsNotNewsButReplyTextAfterItIs() {
         // One long turn: the page loaded holds its end only, and the page before brings its prompt and start.
         val end = listOf(ChatMessage.Assistant("row-60", text = "Done."))
-        val whole = listOf(prompt, ChatMessage.Assistant("row-2", text = "Checking.\n\nDone."))
+        val whole = listOf(ChatMessage.User("row-1", "What changed?"), ChatMessage.Assistant("row-2", text = "Checking.\n\nDone."))
         val away = ReplySeen(end.first().key, end.replyMark()).next(away = true, end.first().key, end.replyMark())
         val paged = away.next(away = true, whole.first().key, whole.replyMark())
         assertFalse(paged.new)
@@ -86,19 +98,28 @@ class ReplyMarkTest {
     }
 
     @Test
+    fun aReplyThatComesAsTheChatsOwnPromptIsStoredIsNews() {
+        // A chat begun here keeps its local prompt until the transcript is read again, e.g. on reconnecting.
+        val live = listOf(ChatMessage.User("local-0", "What changed?"), ChatMessage.Assistant("live-1", reasoning = "Thinking", streaming = true))
+        val reread = listOf(ChatMessage.User("row-1", "What changed?"), ChatMessage.Assistant("row-2", text = "Two files"))
+        val away = ReplySeen("local-0", live.replyMark()).next(away = true, "local-0", live.replyMark())
+        assertTrue(away.next(away = true, "row-1", reread.replyMark()).new)
+    }
+
+    @Test
     fun newStaysNewUntilTheReaderIsBackAtTheEnd() {
         val seen = listOf(prompt, ChatMessage.Assistant("a1", text = "Done."))
         // The same prompt again, answered alike: the mark ends up where it was.
         val again = seen + ChatMessage.User("u2", prompt.text)
-        var state = ReplySeen("u1", seen.replyMark()).next(away = true, "u1", seen.replyMark())
+        var state = ReplySeen("row-7", seen.replyMark()).next(away = true, "row-7", seen.replyMark())
         assertFalse(state.new)
-        state = state.next(away = true, "u1", again.replyMark())
-        state = state.next(away = true, "u1", (again + ChatMessage.Assistant("a2", text = "Done.")).replyMark())
+        state = state.next(away = true, "row-7", again.replyMark())
+        state = state.next(away = true, "row-7", (again + ChatMessage.Assistant("a2", text = "Done.")).replyMark())
         assertEquals(seen.replyMark(), state.mark)
         assertTrue(state.new)
         // An older page meanwhile doesn't take it back.
-        assertTrue(state.next(away = true, "u0", state.mark).new)
-        assertFalse(state.next(away = false, "u0", state.mark).new)
+        assertTrue(state.next(away = true, "row-1", state.mark).new)
+        assertFalse(state.next(away = false, "row-1", state.mark).new)
     }
 
     @Test
