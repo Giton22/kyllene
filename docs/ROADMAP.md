@@ -113,7 +113,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Swipe a chat row: right pins or unpins, left archives (with Undo); in Archived, right unarchives and left deletes (after asking). A row's swipe wins over the drawer's swipe-left close; screen readers get the same actions
 - [x] Chat options (⋮ beside new chat) for the open chat: rename, pin, export as Markdown, copy session ID, archive, delete
 - [x] Floating see-through composer over the conversation
-- [x] Reading back stays put while a reply streams below; the jump arrow then reads "New reply"
+- [x] Reading back stays put while a reply streams below; the jump arrow then reads "New reply" once reply text arrives (not while it only thinks or runs tools)
 - [x] Live list updates (`sessions.changed`, `session.title` → refetch; also refetch after reconnect)
 - [x] Live per-session status in the list, turns started on other clients included: `session.active_list` is asked on connect, after turn and list events, and every 10 s while the list shows; a chat waiting on a request this phone never saw reads "Waiting for you"
 - [x] Search sessions by title, session id and message text from the sidebar search button (`GET /api/sessions/search`, debounced, with match snippet, one row per chat even when the gateway repeats one)
