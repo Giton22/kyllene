@@ -192,6 +192,10 @@
         <item quantity="other">%1$d en cours</item>
     </plurals>
     <string name="chat_processes_empty">Rien en cours. Les serveurs de dev, builds et watchers que l’agent lance en arrière-plan apparaissent ici.</string>
+    <string name="chat_processes_subagents">Sous-agents</string>
+    <string name="chat_processes_subagents_unavailable">L’état des sous-agents est indisponible.</string>
+    <string name="chat_processes_shell">Processus du terminal</string>
+    <string name="chat_processes_shell_empty">Aucun processus du terminal en arrière-plan.</string>
     <string name="chat_processes_finished">Terminés</string>
     <string name="chat_process_hide_output">Masquer la sortie</string>
     <string name="chat_process_show_output">Afficher la sortie</string>

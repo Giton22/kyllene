@@ -192,6 +192,10 @@
         <item quantity="other">%1$d fut</item>
     </plurals>
     <string name="chat_processes_empty">Semmi sem fut. Az ügynök által a háttérben indított fejlesztői szerverek, buildek és figyelők itt jelennek meg.</string>
+    <string name="chat_processes_subagents">Alügynökök</string>
+    <string name="chat_processes_subagents_unavailable">Az alügynökök állapota nem érhető el.</string>
+    <string name="chat_processes_shell">Parancsértelmező-folyamatok</string>
+    <string name="chat_processes_shell_empty">Nincsenek háttérben futó parancsértelmező-folyamatok.</string>
     <string name="chat_processes_finished">Befejezett</string>
     <string name="chat_process_hide_output">Kimenet elrejtése</string>
     <string name="chat_process_show_output">Kimenet megjelenítése</string>

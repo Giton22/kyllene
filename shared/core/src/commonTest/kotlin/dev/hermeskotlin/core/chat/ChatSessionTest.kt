@@ -108,6 +108,35 @@ class ChatSessionTest {
     }
 
     @Test
+    fun activeSubagentRosterRetainsActivityAndDropsFinishedAgents() = runTest {
+        val live = """{"subagents":[{"subagent_id":"child-1","goal":"Read fixture","status":"running","last_tool":"read_file"}]}"""
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "subagent.list" to live,
+            "process.list" to """{"processes":[]}""",
+        ))
+        chat.state.first { it.subagents.any { agent -> agent.id == "child-1" } }
+        assertEquals(emptyList<BackgroundProcess>(), chat.processes())
+        val row = assertNotNull(chat.activeSubagents()).single()
+        assertEquals("Read fixture", row.goal)
+        assertEquals(listOf("read_file"), row.activity)
+        assertEquals("rt1", transport.awaitSent { it.isCall("subagent.list") }.param("session_id"))
+
+        gateway.answer = { """{"subagents":[]}""" }
+        assertEquals(emptyList<SubagentRow>(), chat.activeSubagents())
+        assertTrue(chat.state.value.subagents.any { it.id == "child-1" })
+
+        // An answer that fails says nothing about what runs.
+        gateway.answer = { "error:4001" }
+        assertNull(chat.activeSubagents())
+
+        // An older gateway has no roster: the events this chat got are all there is, and it isn't asked again.
+        gateway.answer = { "error:-32601" }
+        assertEquals(listOf("child-1"), assertNotNull(chat.activeSubagents()).map { it.key })
+        gateway.answer = { """{"subagents":[]}""" }
+        assertEquals(listOf("child-1"), assertNotNull(chat.activeSubagents()).map { it.key })
+    }
+
+    @Test
     fun openingAChatSkipsStructuredTextPartsWithoutLosingTheTranscript() = runTest {
         history = """{"session_id":"stored-1","messages":[
             {"id":1,"role":"user","content":[{"text":"Hello"},{"text":{"value":"unsupported"}}]},

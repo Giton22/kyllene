@@ -884,7 +884,10 @@ class ChatSession(
         val client = connectedClient() ?: return null
         val runtimeId = liveRuntimeId(client) ?: return null
         return try {
-            BackgroundProcess.parseList(client.request("process.list", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject)
+            val result = client.request("process.list", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+            result?.takeIf {
+                it["processes"] is JsonArray && connectedClient() === client && liveRuntimeId(client) == runtimeId
+            }?.let(BackgroundProcess::parseList)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1643,17 +1646,40 @@ class ChatSession(
         }
     }
 
-    /** Subagents already running when this chat attached (`subagent.list`); their events only cover what comes next. */
+    /** The link on which `subagent.list` came back "no such method": that gateway only sends subagent events. */
+    private var rosterUnsupportedOn: JsonRpcClient? = null
+
+    /**
+     * The subagents running now: the gateway's roster says which, with the activity this chat has seen. A gateway
+     * without `subagent.list` leaves it to the events. Null when the chat isn't attached or the answer didn't come.
+     */
+    suspend fun activeSubagents(): List<SubagentRow>? {
+        val client = connectedClient() ?: return null
+        val runtimeId = liveRuntimeId(client) ?: return null
+        if (client === rosterUnsupportedOn) return _state.value.activeSubagentRows(null)
+        val snapshots = subagentSnapshots(client, runtimeId)
+        if (snapshots == null && client !== rosterUnsupportedOn) return null
+        return _state.value.activeSubagentRows(snapshots)
+    }
+
+    /** Subagents already running when this chat attached; events supply their subsequent activity. */
     private suspend fun refreshSubagents(client: JsonRpcClient, runtimeId: String) {
+        val snapshots = subagentSnapshots(client, runtimeId) ?: return
+        if (snapshots.isNotEmpty()) _state.update { it.withSubagentSnapshots(snapshots) }
+    }
+
+    private suspend fun subagentSnapshots(client: JsonRpcClient, runtimeId: String): List<JsonObject>? {
         val result = try {
             client.request("subagent.list", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            null // an older gateway without the method; live events still show new ones
-        } ?: return
-        val snapshots = result["subagents"].asObjectList()
-        if (snapshots.isNotEmpty()) _state.update { it.withSubagentSnapshots(snapshots) }
+            // Older gateways may only supply subagent events.
+            if (e is RpcException && e.code == METHOD_NOT_FOUND) rosterUnsupportedOn = client
+            null
+        }
+        if (connectedClient() !== client || liveRuntimeId(client) != runtimeId) return null
+        return (result?.get("subagents") as? JsonArray)?.asObjectList()
     }
 
     /**

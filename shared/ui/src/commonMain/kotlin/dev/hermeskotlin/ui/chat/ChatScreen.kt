@@ -449,7 +449,8 @@ fun ChatScreen(
     var petsOpen by remember { mutableStateOf(false) }
     var journeyOpen by remember { mutableStateOf(false) }
     var usageOpen by remember { mutableStateOf(false) }
-    var processesOpen by remember { mutableStateOf(false) }
+    // Not keyed by the chat: the requests collector below holds this one state, and the sheet follows the chat.
+    var processesOpen by rememberSaveable { mutableStateOf(false) }
     var checkpointsOpen by remember { mutableStateOf(false) }
     var controlOpen by remember { mutableStateOf(false) }
     var focusComposer by remember { mutableIntStateOf(0) }
@@ -468,7 +469,8 @@ fun ChatScreen(
     val docked = previewing?.let { isDesktop && wide && it.kind != GatewayFileKind.Image } == true
     val railFile = previewing.takeIf { docked && railShown }
     // Over a sheet or a viewer, typing and shortcuts are the dialog's, not the chat's behind it.
-    val dialogOpen = modelsOpen || attachOpen || petsOpen || journeyOpen || usageOpen || processesOpen ||
+    val processesShown = processesOpen && ownsTranscript
+    val dialogOpen = modelsOpen || attachOpen || petsOpen || journeyOpen || usageOpen || processesShown ||
         checkpointsOpen || controlOpen || viewing != null || (previewing != null && !docked)
     // Esc in the rail is the viewer's own: back a file, then closed.
     ShortcutHandler(enabled = keysEnabled && docked) { shortcut ->
@@ -693,7 +695,7 @@ fun ChatScreen(
         onDismiss = { usageOpen = false },
     )
     ProcessesSheet(
-        visible = processesOpen,
+        visible = processesShown,
         controller = viewModel.processes,
         onStart = viewModel::watchProcesses,
         onKill = viewModel::killProcess,
