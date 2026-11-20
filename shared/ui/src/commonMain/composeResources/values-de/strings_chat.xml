@@ -192,8 +192,8 @@
         <item quantity="other">%1$d laufen</item>
     </plurals>
     <string name="chat_processes_empty">Nichts läuft. Dev-Server, Builds und Watcher, die der Agent im Hintergrund startet, erscheinen hier.</string>
-    <string name="chat_processes_subagents">Unteragenten</string>
-    <string name="chat_processes_subagents_unavailable">Der Status der Unteragenten ist nicht verfügbar.</string>
+    <string name="chat_processes_subagents">Subagenten</string>
+    <string name="chat_processes_subagents_unavailable">Der Status der Subagenten ist nicht verfügbar.</string>
     <string name="chat_processes_shell">Shell-Prozesse</string>
     <string name="chat_processes_shell_empty">Keine Shell-Prozesse im Hintergrund.</string>
     <string name="chat_processes_finished">Beendet</string>
