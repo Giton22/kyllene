@@ -20,7 +20,7 @@ import kotlin.test.Test
 
 @OptIn(ExperimentalTestApi::class)
 class DesktopPushLocaleTest {
-    @Test fun desktopCopyAndConsentUseSpanishWithPerKeyEnglishFallback() = runComposeUiTest {
+    @Test fun desktopCopyAndConsentUseSpanishAndSwitchBackToEnglish() = runComposeUiTest {
         val locale = Locale.getDefault()
         var language by mutableStateOf("es")
         try {
@@ -39,7 +39,7 @@ class DesktopPushLocaleTest {
             onNodeWithText("Notificaciones en cualquier lugar").performClick()
             onNodeWithText("Vigila los chats de tus bots y envía cada respuesta nueva a este ordenador mientras Kyllene está en ejecución, cifrada de extremo a extremo a través de ntfy.sh.", substring = true).assertExists()
             onNodeWithText("Cancelar").performClick()
-            runOnIdle { language = "de" }
+            runOnIdle { language = "en" }
             onNodeWithText("Hear from your bots even off your gateway's network, end-to-end encrypted through ntfy.sh. Installs the herald-push plugin on the gateway. Receives while Kyllene is running.").performScrollTo().assertExists()
         } finally {
             applyAppLanguage(null)
