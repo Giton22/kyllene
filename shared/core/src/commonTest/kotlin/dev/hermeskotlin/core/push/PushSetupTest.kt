@@ -226,14 +226,14 @@ class PushSetupTest {
 
     private class Setup(val setup: PushSetup, val connection: GatewayConnection, val settings: SettingsStore, val gateways: GatewayRepository)
 
-    private suspend fun TestScope.setup(keys: PushKeys, url: String = "https://a.example"): Setup {
+    private suspend fun TestScope.setup(keys: PushKeys, url: String = "https://a.example", available: Boolean = true): Setup {
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
         val engine = MockEngine { respond("""{"ticket":"T","ttl_seconds":30}""", headers = headersOf(HttpHeaders.ContentType, "application/json")) }
         val connection = GatewayConnection(AuthApi(createHttpClient(engine, cookies), cookies), { _, _ -> transports.removeFirst() }, backgroundScope)
         val settings = SettingsStore(InMemoryKeyValueStore(), backgroundScope)
         settings.settings.filterNotNull().first()
         val gateways = GatewayRepository(InMemoryKeyValueStore()).apply { save(SavedGateway(url)) }
-        val setup = PushSetup(PushApi(connection), keys, connection, gateways, settings, backgroundScope) { "Pixel" }
+        val setup = PushSetup(PushApi(connection), keys, connection, gateways, settings, backgroundScope, available = available) { "Pixel" }
         setup.start()
         return Setup(setup, connection, settings, gateways)
     }
@@ -255,6 +255,31 @@ class PushSetupTest {
         """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}"""
 
     private suspend fun until(condition: () -> Boolean) = withTimeout(10_000) { while (!condition()) delay(10) }
+
+    @Test
+    fun unsupportedReceiverCannotEnableOrInstall() = runTest {
+        val keys = FakeKeys()
+        val s = setup(keys, available = false)
+        val gateway = FakeGateway(installed = false)
+        connect(s, gateway)
+        s.setup.enable()
+        s.setup.updatePlugin()
+        assertFalse(s.setup.test())
+        assertFalse(s.settings.settings.value!!.pushAnywhere)
+        assertTrue(gateway.actions().isEmpty())
+        assertEquals(null, keys.pin)
+    }
+
+    @Test
+    fun unsupportedReceiverDoesNotRegisterAnExistingPreference() = runTest {
+        val s = setup(FakeKeys(), available = false)
+        s.settings.update { it.copy(pushAnywhere = true) }
+        val gateway = FakeGateway(installed = true)
+        connect(s, gateway)
+        kotlinx.coroutines.yield()
+        assertTrue(gateway.actions().isEmpty())
+        assertEquals(PushStatus.State.Off, s.setup.status.value.state)
+    }
 
     @Test
     fun enableInstallsThePinnedCommitThenRegistersAndPins() = runTest {

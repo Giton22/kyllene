@@ -86,10 +86,12 @@ class AppViewModelTest {
     private var botTransport: BotTransport? = null
     private var profileGate: CompletableDeferred<Unit>? = null
     private var lastChatGate: CompletableDeferred<Unit>? = null
+    private var pushSeenGate: CompletableDeferred<Unit>? = null
     private val disk = InMemoryKeyValueStore()
     private val store = object : KeyValueStore by disk {
         override suspend fun get(key: String): String? {
             if (key.startsWith("chat.last.v1.")) lastChatGate?.await()
+            if (key.startsWith("chat.seen.v1.")) pushSeenGate?.await()
             return disk.get(key)
         }
         override suspend fun put(key: String, value: String) {
@@ -815,6 +817,55 @@ class AppViewModelTest {
 
         assertNull(cache.savedList(home.gatewayUrl, null, SessionListFilter.Recent))
         assertNotNull(cache.savedList(other.gatewayUrl, null, SessionListFilter.Recent))
+    }
+
+    @Test
+    fun aCurrentPushLinkOpensOnlyItsNamedBotSession() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val app = viewModel()
+        app.awaitChat(home)
+        links.openOwnedBot("worker", "Worker", "push-session", current = { true })
+        val target = assertIs<Route.Chat>(app.route.value).target
+        assertEquals(home, target.gateway)
+        assertEquals("worker", target.profile)
+        assertEquals("push-session", target.storedSessionId)
+        assertNull(links.pending.value)
+    }
+
+    @Test
+    fun aQueuedPushLinkIsDroppedIfItsOwnerChangedBeforeReturningFromSignIn() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val app = viewModel()
+        app.awaitChat(home)
+        var owned = true
+        app.addGateway()
+        app.onGatewayChosen(work)
+        assertIs<Route.SignIn>(app.route.value)
+        links.openOwnedBot("worker", "Worker", "push-session", current = { owned })
+        owned = false
+        app.cancelAddGateway()
+        val restored = app.awaitChat(home)
+        assertFalse(restored.target.storedSessionId == "push-session")
+        assertNull(links.pending.value)
+    }
+
+    @Test
+    fun aPushLinkRechecksOwnershipAfterReadingItsLastSeenState() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val app = viewModel()
+        val before = app.awaitChat(home)
+        var owned = true
+        val gate = CompletableDeferred<Unit>()
+        pushSeenGate = gate
+        links.openOwnedBot("worker", "Worker", "push-session", current = { owned })
+        assertSame(before, app.route.value)
+        owned = false
+        gate.complete(Unit)
+        assertSame(before, app.route.value)
+        assertNull(links.pending.value)
     }
 
     @Test

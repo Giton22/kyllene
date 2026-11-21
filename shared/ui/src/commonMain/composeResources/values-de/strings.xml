@@ -289,4 +289,6 @@
     <string name="managed_update_restart_title">Kyllene neu starten?</string>
     <string name="managed_update_restart_warning">Beende Anrufe und speichere deine Arbeit. Der Neustart schließt alle Fenster; ungespeicherte Änderungen und Anhänge können verloren gehen.</string>
     <string name="managed_update_restart_now">Jetzt neu starten</string>
+    <string name="plugin_notifications_what_desktop">Es beobachtet die Chats deiner Bots und schickt jede neue Antwort Ende-zu-Ende verschlüsselt über ntfy.sh an diesen Computer, solange Kyllene läuft.</string>
+    <string name="settings_notifications_anywhere_desktop_detail">Erfahre von deinen Bots auch außerhalb des Netzes deines Gateways, Ende-zu-Ende verschlüsselt über ntfy.sh. Installiert das herald-push-Plugin auf dem Gateway. Empfängt Nachrichten, solange Kyllene läuft.</string>
 </resources>

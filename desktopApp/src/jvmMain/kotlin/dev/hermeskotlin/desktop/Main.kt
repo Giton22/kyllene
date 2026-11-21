@@ -39,6 +39,19 @@ import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatLinks
 import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.chat.InputAnswers
+import dev.hermeskotlin.core.gateway.GatewayRepository
+import dev.hermeskotlin.core.inbox.InboxLinks
+import dev.hermeskotlin.core.inbox.InboxStore
+import dev.hermeskotlin.core.push.NtfyClient
+import dev.hermeskotlin.core.push.PushApi
+import dev.hermeskotlin.core.push.PushKeys
+import dev.hermeskotlin.core.push.PushSetup
+import dev.hermeskotlin.core.push.linuxPushInbox
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.collectLatest
@@ -144,6 +157,7 @@ fun main(args: Array<String>) {
     // Waited for briefly, so the first frame is in the right theme; a desktop that can't say leaves it to Compose.
     colorScheme?.awaitFirst(1_000)
     val links = koin.get<ChatLinks>()
+    koin.get<PushSetup>().start()
     val saved = WindowMemory.read(koin.get())
     // The same mark as docs/logo.svg, for the title bar, the taskbar and the tray.
     val icon = Thread.currentThread().contextClassLoader.getResourceAsStream("herald.svg")!!.use { loadSvgPainter(it, Density(1f)) }
@@ -217,6 +231,54 @@ fun main(args: Array<String>) {
         DisposableEffect(linuxNotices) { onDispose { linuxNotices?.close() } }
         LaunchedEffect(settings) { linuxNotices?.reconcile() }
         LaunchedEffect(Unit) { host.ownerVersion.collectLatest { linuxNotices?.reconcile() } }
+        LaunchedEffect(Unit) { koin.get<PushApi>().registrations.collectLatest { linuxNotices?.reconcile() } }
+
+        val pushInbox = remember { linuxPushInbox(koin.get<PushKeys>()) }
+        LaunchedEffect(pushInbox) {
+            val inbox = pushInbox ?: return@LaunchedEffect
+            val gateways = koin.get<GatewayRepository>()
+            val api = koin.get<PushApi>()
+            val ntfy = koin.get<NtfyClient>()
+            val watches = combine(settingsStore.settings, gateways.list, host.ownerVersion, api.registrations) { prefs, saved, version, registration ->
+                saved.current?.takeIf { prefs?.pushAnywhere == true }?.let { PushWatch(it.gatewayUrl.value, version, registration) }
+            }.stateIn(this, SharingStarted.Eagerly, null)
+            DesktopPush(watches, inbox, { sub -> ntfy.subscribe(sub.server, sub.topic, sub.sinceSeconds) }, { watch, sub, message ->
+                fun owned() = watches.value == watch && settingsStore.settings.value?.pushAnywhere == true &&
+                    gateways.list.value.current?.gatewayUrl?.value == watch.gatewayUrl &&
+                    host.ownerVersion.value == watch.ownerVersion && api.registrations.value == watch.registration
+                val projected = desktopPushNotice(watch.gatewayUrl, message, { url, run -> koin.get<InboxStore>().receive(url, run) }, ::owned)
+                    ?: return@DesktopPush
+                fun current() = owned() && settingsStore.settings.value?.notifyReplies == true
+                val owner = LinuxNoticeOwner(watch.gatewayUrl, projected.profile, ::current, {
+                    val source = host.session.value
+                    scope.launch {
+                        val trusted = withContext(Dispatchers.IO) { runCatching { inbox.current(sub) }.getOrDefault(false) }
+                        if (trusted && current()) {
+                            shortcuts.fire(Shortcut.RevealNotice(source, ::current) {
+                                if (current()) {
+                                    val mapped = frame?.takeIf { windowShown && it.isShowing && it.extendedState and Frame.ICONIFIED == 0 }
+                                    show()
+                                    if (mapped != null) {
+                                        if (current()) LinuxWindowActivation.request(mapped)
+                                    } else {
+                                        launcherRaiseGuard = ::current
+                                    }
+                                    when (val destination = projected.destination) {
+                                        is PushDestination.Bot -> links.openOwnedBot(destination.name, destination.label, destination.session, ::current)
+                                        is PushDestination.Inbox -> koin.get<InboxLinks>().open(destination.key, ::current)
+                                        null -> Unit
+                                    }
+                                }
+                            })
+                        }
+                    }
+                }, {})
+                linuxNotices?.post(projected.notice, owner)
+            }, status = { detail ->
+                koin.get<PushSetup>().reportReceiver(detail)
+                linuxNotices?.reconcile()
+            }).start(this)
+        }
 
         fun linuxPost(notice: DesktopNotice, owned: () -> Boolean, open: (ChatSession, () -> Boolean) -> Unit) {
             val origin = notice.origin ?: return
