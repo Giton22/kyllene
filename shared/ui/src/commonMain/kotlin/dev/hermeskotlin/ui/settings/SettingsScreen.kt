@@ -50,6 +50,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalWindowInfo
 import com.composables.icons.lucide.Monitor
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -270,7 +272,19 @@ fun SettingsScreen(
     var callTargetOpen by remember { mutableStateOf(false) }
     var assistantTargetOpen by remember(gateway.url, profile) { mutableStateOf(false) }
     var assistantUser by remember(gateway.url, profile) { mutableStateOf<String?>(null) }
-    LaunchedEffect(gateway.url, profile) { assistantUser = viewModel.assistantUser(gateway) }
+    var assistantChecking by remember(gateway.url, profile) { mutableStateOf(true) }
+    LaunchedEffect(gateway.url, profile, assistantTargetOpen) {
+        if (!isDesktop) {
+            assistantUser = null
+            assistantChecking = true
+            if (!assistantTargetOpen) {
+                val user = viewModel.assistantUser(gateway)
+                currentCoroutineContext().ensureActive()
+                assistantUser = user
+                assistantChecking = false
+            }
+        }
+    }
     var appIconOpen by remember { mutableStateOf(false) }
     var startInstructionOpen by remember { mutableStateOf(false) }
     var sidebarPagesOpen by remember { mutableStateOf(false) }
@@ -313,7 +327,9 @@ fun SettingsScreen(
         botFaces = botFaces,
         onChooseCallTarget = { callTargetOpen = true },
         assistantTarget = settings.assistantTargets[gateway.url]?.get(profile.orEmpty())?.takeIf { it.userId == assistantUser },
-        onChooseAssistantTarget = { assistantTargetOpen = true },
+        assistantAccountVerified = assistantUser != null,
+        assistantChecking = assistantChecking || assistantTargetOpen,
+        onChooseAssistantTarget = { assistantUser = null; assistantChecking = true; assistantTargetOpen = true },
         appIcon = appIcons.current,
         onOpenAppIcon = { appIconOpen = true },
         language = appLanguage(language.picked),
@@ -330,7 +346,7 @@ fun SettingsScreen(
         callTargetOpen = false
     }
     if (assistantTargetOpen) key(gateway.url, profile) {
-        CallTargetPicker(gateway, viewModel, botFaces, onDismiss = { assistantTargetOpen = false }, assistant = true, profile = profile) { target, user ->
+        CallTargetPicker(gateway, viewModel, botFaces, onDismiss = { assistantUser = null; assistantChecking = true; assistantTargetOpen = false }, assistant = true, profile = profile) { target, user ->
             if (target.sessionId == null) {
                 viewModel.update { prefs -> prefs.copy(assistantTargets = prefs.assistantTargets +
                     (gateway.url to (prefs.assistantTargets[gateway.url].orEmpty() - profile.orEmpty()))) }
@@ -339,6 +355,8 @@ fun SettingsScreen(
                     (gateway.url to (prefs.assistantTargets[gateway.url].orEmpty() +
                         (profile.orEmpty() to dev.hermeskotlin.core.settings.AssistantTarget(user, target.sessionId, target.label))))) }
             }
+            assistantUser = null
+            assistantChecking = true
             assistantTargetOpen = false
         }
     }
@@ -436,6 +454,8 @@ internal fun SettingsView(
     botFaces: BotFaces = BotFaces(),
     onChooseCallTarget: () -> Unit = {},
     assistantTarget: dev.hermeskotlin.core.settings.AssistantTarget? = null,
+    assistantAccountVerified: Boolean = true,
+    assistantChecking: Boolean = false,
     onChooseAssistantTarget: () -> Unit = {},
     appIcon: AppIcon = AppIcon.Blue,
     onOpenAppIcon: () -> Unit = {},
@@ -735,7 +755,11 @@ internal fun SettingsView(
                     if (!isDesktop) {
                         NavRow(
                             title = stringResource(Res.string.settings_assistant_target),
-                            detail = assistantTarget?.sessionId?.let { assistantTarget.label } ?: stringResource(Res.string.assistant_target_new),
+                            detail = when {
+                                assistantChecking -> stringResource(Res.string.common_checking)
+                                !assistantAccountVerified -> stringResource(Res.string.assistant_target_account_error)
+                                else -> assistantTarget?.sessionId?.let { assistantTarget.label } ?: stringResource(Res.string.assistant_target_new)
+                            },
                             icon = Lucide.MessagesSquare,
                             onClick = onChooseAssistantTarget,
                         )

@@ -51,6 +51,7 @@ internal object PreviewAssistantActions : AssistantActions {
     override fun stop() = Unit
     override fun answer(request: InputRequest, result: JsonObject) = Unit
     override fun toggleDictation() = Unit
+    override fun retryTarget() = Unit
     override fun setIncludeScreen(include: Boolean) = Unit
     override fun startCircling() = Unit
     override fun dropCircled() = Unit

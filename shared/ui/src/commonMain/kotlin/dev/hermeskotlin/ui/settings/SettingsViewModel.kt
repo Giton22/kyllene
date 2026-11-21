@@ -139,7 +139,8 @@ class SettingsViewModel(
         else sessionsApi.search(gateway.gatewayUrl, query.trim(), limit = 30, profile = profile)
             .map { SessionPage(sessions = it) }
 
-    suspend fun assistantUser(gateway: SavedGateway) = (auth.me(gateway.gatewayUrl) as? ApiResult.Success)?.value?.userId
+    suspend fun assistantUser(gateway: SavedGateway): String? =
+        if (dev.hermeskotlin.ui.isDesktop) null else (auth.me(gateway.gatewayUrl) as? ApiResult.Success)?.value?.userId
 
     fun update(transform: (AppSettings) -> AppSettings) = store.update(transform)
 

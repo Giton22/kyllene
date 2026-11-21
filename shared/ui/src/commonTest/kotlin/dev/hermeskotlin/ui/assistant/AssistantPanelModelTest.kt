@@ -30,6 +30,9 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runCurrent
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.AssistantTarget
@@ -47,6 +50,9 @@ class AssistantPanelModelTest {
     // chat would hang instead of time out); every other call fails.
     private var account = "sample-user"
     private var missing = false
+    private var authStatus = HttpStatusCode.OK
+    private var totalsStatus = HttpStatusCode.OK
+    private var authGate: CompletableDeferred<Unit>? = null
     private val totalsStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
     private var totalsGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
     private val reads = mutableListOf<String?>()
@@ -54,12 +60,12 @@ class AssistantPanelModelTest {
         MockEngine { request ->
             if (request.url.encodedPath.endsWith("ws-ticket")) awaitCancellation()
             when {
-                request.url.encodedPath.endsWith("/auth/me") -> respond("""{"user_id":"$account"}""", headers = io.ktor.http.headersOf("Content-Type", "application/json"))
+                request.url.encodedPath.endsWith("/auth/me") -> { authGate?.await(); respond("""{"user_id":"$account"}""", authStatus, headers = io.ktor.http.headersOf("Content-Type", "application/json")) }
                 request.url.encodedPath.endsWith("/sample-chat") -> {
                     reads += request.url.parameters["profile"]
                     totalsStarted.complete(Unit)
                     totalsGate?.await()
-                    respond(if (missing) "{}" else """{"id":"sample-chat"}""", if (missing) HttpStatusCode.NotFound else HttpStatusCode.OK,
+                    respond(if (missing) "{}" else """{"id":"sample-chat"}""", if (missing) HttpStatusCode.NotFound else totalsStatus,
                         headers = io.ktor.http.headersOf("Content-Type", "application/json"))
                 }
                 else -> respond("", HttpStatusCode.ServiceUnavailable)
@@ -97,7 +103,7 @@ class AssistantPanelModelTest {
         gateways.select(home.url)
         val model = model()
         val first = model.session.first { it != null }
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
 
         // Herald switches to the other gateway while the panel is hidden, then the user calls it up again.
         gateways.select(work.url)
@@ -115,7 +121,7 @@ class AssistantPanelModelTest {
         signedIn(home)
         val model = model()
         val first = model.session.first { it != null }
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
 
         model.begin(expectText = false, expectScreenshot = false)
 
@@ -131,22 +137,22 @@ class AssistantPanelModelTest {
         settings.update { it.copy(assistantTargets = mapOf(home.url to mapOf("" to AssistantTarget(account, "sample-chat", "Example")))) }
         runCurrent()
         val model = model(settings)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         val first = model.session.value
         assertEquals("sample-chat", first?.state?.value?.storedSessionId)
         model.begin(true, true)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         assertEquals(first, model.session.value)
         model.setIncludeScreen(true)
         model.onScreenshot(model.callUp, byteArrayOf(1))
         model.begin(false, false)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         assertNull(model.screen.value.screenshot)
         assertEquals(false, model.includeScreen.value)
         model.close()
         runCurrent()
         val reopened = model(SettingsStore(store, backgroundScope))
-        reopened.phase.first { it == AssistantPhase.Ready }
+        reopened.checkingTarget.first { !it }
         assertEquals("sample-chat", reopened.session.value?.state?.value?.storedSessionId)
         reopened.close()
     }
@@ -160,16 +166,16 @@ class AssistantPanelModelTest {
         settings.update { it.copy(assistantTargets = mapOf(home.url to mapOf("" to AssistantTarget(account, "sample-chat")))) }
         runCurrent()
         val model = model(settings)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         ProfileStore(store).set(home.gatewayUrl, "other")
         model.begin(false, false)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         assertEquals("other", model.session.value?.profile)
         assertNull(model.session.value?.state?.value?.storedSessionId)
         ProfileStore(store).set(home.gatewayUrl, null)
         account = "another-user"
         model.begin(false, false)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         assertNull(model.session.value?.state?.value?.storedSessionId)
         model.close()
     }
@@ -184,7 +190,7 @@ class AssistantPanelModelTest {
         ProfileStore(store).set(home.gatewayUrl, "work")
         missing = true
         val model = model(settings)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         assertTrue(model.targetUnavailable.value)
         assertNull(model.session.value)
         assertEquals(listOf<String?>("work"), reads)
@@ -210,7 +216,7 @@ class AssistantPanelModelTest {
         assertEquals(listOf<String?>(null), reads)
         ProfileStore(store).set(home.gatewayUrl, "other")
         gate.complete(Unit)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         assertEquals("other", model.session.value?.profile)
         assertNull(model.session.value?.state?.value?.storedSessionId)
         model.close()
@@ -226,16 +232,139 @@ class AssistantPanelModelTest {
         settings.update { it.copy(assistantTargets = mapOf(home.url to mapOf("" to AssistantTarget(account, "sample-chat")))) }
         runCurrent()
         val model = model(settings)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         gateways.save(work)
         model.begin(false, false)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         assertNull(model.session.value?.state?.value?.storedSessionId)
         gateways.select(home.url)
         settings.update { it.copy(assistantTargets = emptyMap()) }
         model.begin(false, false)
-        model.phase.first { it == AssistantPhase.Ready }
+        model.checkingTarget.first { !it }
         assertNull(model.session.value?.state?.value?.storedSessionId)
+        model.close()
+    }
+
+    @Test
+    fun sameContextRevalidationKeepsTheChatAndDisablesUnsafeActions() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val settings = SettingsStore(store, backgroundScope)
+        runCurrent()
+        settings.update { it.copy(assistantTargets = mapOf(home.url to mapOf("" to AssistantTarget(account, "sample-chat")))) }
+        runCurrent()
+        val model = model(settings)
+        model.checkingTarget.first { !it }
+        val existing = model.session.value
+        assertTrue(model.targetVerified.value)
+        authGate = CompletableDeferred()
+        model.begin(false, false)
+        assertEquals(AssistantPhase.Ready, model.phase.value)
+        assertEquals(existing, model.session.value)
+        assertFalse(model.targetVerified.value)
+        model.composer.setTextAndPlaceCursorAtEnd("Keep these words")
+        model.send()
+        model.toggleDictation()
+        assertEquals("Keep these words", model.composer.text.toString())
+        assertFalse(model.voice.dictation.value.active)
+        authStatus = HttpStatusCode.ServiceUnavailable
+        authGate!!.complete(Unit)
+        model.checkingTarget.first { !it }
+        assertEquals(existing, model.session.value)
+        assertFalse(model.targetUnavailable.value)
+        assertFalse(model.targetVerified.value)
+        authStatus = HttpStatusCode.OK
+        totalsStatus = HttpStatusCode.ServiceUnavailable
+        model.retryTarget()
+        model.checkingTarget.first { !it }
+        assertEquals(existing, model.session.value)
+        assertFalse(model.targetVerified.value)
+        totalsStatus = HttpStatusCode.OK
+        val shows = model.shows.value
+        model.retryTarget()
+        model.checkingTarget.first { !it }
+        assertEquals(existing, model.session.value)
+        assertEquals(shows, model.shows.value)
+        assertTrue(model.targetVerified.value)
+        model.close()
+    }
+
+    @Test
+    fun definiteTargetAccessLossClearsTheChatAndBlocksDictationAndSend() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val settings = SettingsStore(store, backgroundScope)
+        runCurrent()
+        settings.update { it.copy(assistantTargets = mapOf(home.url to mapOf("" to AssistantTarget(account, "sample-chat")))) }
+        runCurrent()
+        val model = model(settings)
+        model.checkingTarget.first { !it }
+        totalsStatus = HttpStatusCode.Forbidden
+        model.begin(false, false)
+        model.checkingTarget.first { !it }
+        assertNull(model.session.value)
+        assertTrue(model.targetUnavailable.value)
+        assertFalse(model.targetVerified.value)
+        model.composer.setTextAndPlaceCursorAtEnd("Do not discard")
+        model.toggleDictation()
+        model.send()
+        assertFalse(model.voice.dictation.value.active)
+        assertEquals("Do not discard", model.composer.text.toString())
+        model.close()
+    }
+
+    @Test fun expiredIdentityClearsTheOldChatAndRequiresSignIn() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val settings = SettingsStore(store, backgroundScope)
+        runCurrent()
+        settings.update { it.copy(assistantTargets = mapOf(home.url to mapOf("" to AssistantTarget(account, "sample-chat")))) }
+        runCurrent()
+        val model = model(settings)
+        model.checkingTarget.first { !it }
+        assertNotNull(model.session.value)
+        authStatus = HttpStatusCode.Unauthorized
+        model.begin(false, false)
+        model.checkingTarget.first { !it }
+        assertEquals(AssistantPhase.SignedOut, model.phase.value)
+        assertNull(model.session.value)
+        assertFalse(model.targetVerified.value)
+        model.close()
+    }
+
+    @Test fun profileChangeWhileWaitingForCaptureRestoresDraftWithoutAnotherCallUp() = captureContextChange(false)
+    @Test fun gatewayChangeWhileWaitingForCaptureRestoresDraftWithoutAnotherCallUp() = captureContextChange(true)
+
+    private fun captureContextChange(changeGateway: Boolean) = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val model = model()
+        model.checkingTarget.first { !it }
+        model.begin(expectText = true, expectScreenshot = true)
+        model.checkingTarget.first { !it }
+        val capture = model.callUp
+        val existing = model.session.value
+        val shows = model.shows.value
+        model.setIncludeScreen(true)
+        model.composer.setTextAndPlaceCursorAtEnd("Unsent question")
+        model.send()
+        runCurrent()
+        model.composer.setTextAndPlaceCursorAtEnd("New draft")
+        if (changeGateway) { gateways.save(work); signedIn(work) }
+        else ProfileStore(store).set(home.gatewayUrl, "other")
+        model.onScreenText(capture, "Synthetic app", emptyList())
+        model.onScreenshot(capture, byteArrayOf(1, 2, 3))
+        model.session.first { it != null && it !== existing }
+        model.checkingTarget.first { !it }
+        assertEquals(if (changeGateway) null else "other", model.session.value?.profile)
+        assertEquals("Unsent question\nNew draft", model.composer.text.toString())
+        assertEquals(shows, model.shows.value)
+        assertFalse(model.includeScreen.value)
+        assertTrue(model.screen.value.context.isEmpty)
+        assertFalse(model.voice.dictation.value.active)
+        assertNull(model.session.value?.state?.value?.storedSessionId)
+        model.onScreenshot(capture, byteArrayOf(9))
+        assertTrue(model.screen.value.context.isEmpty, "Late capture from the old context is ignored")
         model.close()
     }
 

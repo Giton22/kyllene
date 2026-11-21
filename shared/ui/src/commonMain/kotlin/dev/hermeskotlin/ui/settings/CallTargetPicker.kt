@@ -82,10 +82,6 @@ internal fun CallTargetPicker(
     onSelect: (CallTarget, String?) -> Unit,
 ) {
     val prefs by viewModel.settings.collectAsStateWithLifecycle()
-    var userId by remember(gateway.url, profile, assistant) { mutableStateOf<String?>(null) }
-    val selected = if (assistant) prefs.assistantTargets[gateway.url]?.get(profile.orEmpty())
-        ?.takeIf { it.userId == userId }?.let { CallTarget(sessionId = it.sessionId, label = it.label) } ?: CallTarget()
-        else (prefs.callTargets[gateway.url] ?: CallTarget()).takeIf { it.valid }
     var mode by remember(gateway.url, profile, assistant) { mutableStateOf(0) }
     val query = remember(gateway.url, profile, assistant, mode) { TextFieldState() }
     val search = query.text.toString().trim()
@@ -93,8 +89,13 @@ internal fun CallTargetPicker(
     var profiles by remember(gateway.url, profile, assistant) { mutableStateOf<List<Profile>>(emptyList()) }
     var page by remember(gateway.url, profile, assistant) { mutableStateOf(SessionPage()) }
     var retry by remember { mutableStateOf(0) }
-    var loading by remember(gateway.url, profile, assistant, mode, offset, search, retry) { mutableStateOf(mode != 0) }
+    var loading by remember(gateway.url, profile, assistant, mode, offset, search, retry) { mutableStateOf(mode != 0 || assistant) }
     var error by remember(gateway.url, profile, assistant, mode, offset, search, retry) { mutableStateOf<String?>(null) }
+    var userId by remember(gateway.url, profile, assistant, mode, offset, search, retry) { mutableStateOf<String?>(null) }
+    val selected = if (assistant) {
+        if (userId == null) null else prefs.assistantTargets[gateway.url]?.get(profile.orEmpty())
+            ?.takeIf { it.userId == userId }?.let { CallTarget(sessionId = it.sessionId, label = it.label) } ?: CallTarget()
+    } else (prefs.callTargets[gateway.url] ?: CallTarget()).takeIf { it.valid }
     val accountError = stringResource(Res.string.assistant_target_account_error)
     LaunchedEffect(gateway.url, profile, assistant, mode, offset, search, retry) {
         if (mode == 0) {
@@ -102,7 +103,9 @@ internal fun CallTargetPicker(
                 val user = viewModel.assistantUser(gateway)
                 currentCoroutineContext().ensureActive()
                 userId = user
+                if (user == null) error = accountError
             }
+            loading = false
             return@LaunchedEffect
         }
         loading = true
@@ -125,7 +128,7 @@ internal fun CallTargetPicker(
                 currentCoroutineContext().ensureActive()
                 val sameAccount = !assistant || viewModel.assistantUser(gateway) == userId
                 currentCoroutineContext().ensureActive()
-                if (!sameAccount) error = accountError
+                if (!sameAccount) { userId = null; error = accountError }
                 else if (result is ApiResult.Success) page = result.value else error = result.errorMessage
             }
         }
@@ -151,6 +154,11 @@ internal fun CallTargetPicker(
             )
             when {
                 mode == 0 -> {
+                    if (assistant && loading) Text(stringResource(Res.string.common_checking), color = Theme[colors][textSecondary])
+                    if (assistant && error != null) {
+                        Text(error.orEmpty(), color = Theme[colors][text])
+                        Button(stringResource(Res.string.call_target_try_again), onClick = { retry++ })
+                    }
                     CallTargetCard(stringResource(if (assistant) Res.string.assistant_target_new else Res.string.call_target_new_session), stringResource(if (assistant) Res.string.assistant_target_new_detail else Res.string.call_target_new_session_detail), selected != null && selected.profile == null && selected.sessionId == null, { onSelect(CallTarget(), userId) }) {
                         UnstyledIcon(Lucide.MessageSquarePlus, contentDescription = null, tint = Theme[colors][accentText], modifier = Modifier.size(32.dp))
                     }

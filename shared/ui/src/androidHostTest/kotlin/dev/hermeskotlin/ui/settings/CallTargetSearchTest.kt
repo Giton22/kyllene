@@ -55,11 +55,13 @@ class CallTargetSearchTest {
     private var gate: CompletableDeferred<Unit>? = null
     private var user = "sample-user"
     private var failSearch = false
+    private var failAccount = false
+    private var accountGate: CompletableDeferred<Unit>? = null
     private var selected: Pair<CallTarget, String?>? = null
 
-    @After fun close() { gate?.complete(Unit); models.clear(); scope.cancel() }
+    @After fun close() { gate?.complete(Unit); accountGate?.complete(Unit); models.clear(); scope.cancel() }
 
-    private fun show(assistant: Boolean = true) {
+    private fun show(assistant: Boolean = true, choice: Boolean = false, settingsPage: Boolean = false, stored: Boolean = false) {
         val disk = InMemoryKeyValueStore()
         val cookies = PersistentCookiesStorage(disk)
         val client = createHttpClient(MockEngine(MockEngineConfig().apply {
@@ -68,7 +70,11 @@ class CallTargetSearchTest {
                 val url = request.url
                 requests += url
                 val body = when {
-                    url.encodedPath.endsWith("/auth/me") -> """{"user_id":"$user"}"""
+                    url.encodedPath.endsWith("/auth/me") -> {
+                        accountGate?.await()
+                        if (failAccount) return@addHandler respond("{}", HttpStatusCode.ServiceUnavailable)
+                        """{"user_id":"$user"}"""
+                    }
                     url.encodedPath.endsWith("/search") -> {
                         // Deliberately finish even after cancellation: the picker must reject this response.
                         val pending = gate
@@ -84,6 +90,7 @@ class CallTargetSearchTest {
         }), cookies)
         val auth = AuthApi(client, cookies)
         val settings = SettingsStore(disk, scope)
+        if (stored) settings.update { it.copy(assistantTargets = mapOf(gateway.value.url to mapOf("work" to AssistantTarget("sample-user", "older-900", "Owner A synthetic label")))) }
         val probe = GatewayProbe(client)
         val connection = GatewayConnection(auth, { _, _ -> error("no socket") }, scope)
         val vm = SettingsViewModel(settings, auth, probe, ConnectionCheck(probe, auth, { _, _ -> error("no socket") }),
@@ -92,12 +99,61 @@ class CallTargetSearchTest {
         models.put("settings", vm)
         compose.setContent {
             HermesTheme(ColorScheme.Light) {
-                CallTargetPicker(gateway.value, vm, BotFaces(), {}, assistant, profile.value) { target, owner -> selected = target to owner }
+                if (settingsPage) org.koin.compose.KoinApplication(application = {
+                    modules(org.koin.dsl.module { single { settings } })
+                }) {
+                    SettingsScreen(gateway.value, onBack = {}, onSignOut = {}, onOpenGateways = {}, profile = profile.value, viewModel = vm)
+                }
+                else CallTargetPicker(gateway.value, vm, BotFaces(), {}, assistant, profile.value) { target, owner -> selected = target to owner }
             }
         }
-        compose.onNodeWithText("Existing session").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("Recent 0").fetchSemanticsNodes().isNotEmpty() }
+        if (!choice && !settingsPage) {
+            compose.onNodeWithText("Existing session").performClick()
+            compose.waitUntil(10_000) { compose.onAllNodesWithText("Recent 0").fetchSemanticsNodes().isNotEmpty() }
+        }
     }
+
+    @Test fun anUnverifiedPickerDoesNotSelectNewChatAndCanRetry() {
+        accountGate = CompletableDeferred()
+        failAccount = true
+        show(choice = true, stored = true)
+        compose.onNodeWithText("Checking…").assertExists()
+        choiceCard("New chat").assertIsNotSelected()
+        compose.onNodeWithText("Owner A synthetic label").assertDoesNotExist()
+        compose.runOnIdle { accountGate!!.complete(Unit) }
+        awaitHit("Couldn’t verify the signed-in account. Try again.")
+        choiceCard("New chat").assertIsNotSelected()
+        compose.runOnIdle { failAccount = false }
+        compose.onNodeWithText("Try again").performClick()
+        compose.waitUntil(10_000) { choiceCard("Existing session").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Selected] }
+        choiceCard("Existing session").assertIsSelected()
+        choiceCard("New chat").assertIsNotSelected()
+    }
+
+    @Test fun settingsRetryCannotDiscloseTheStoredLabelToAnotherAccount() {
+        accountGate = CompletableDeferred()
+        show(settingsPage = true, stored = true)
+        compose.onNode(hasSetTextAction()).performTextReplacement("assistant")
+        compose.onNodeWithText("Owner A synthetic label").assertDoesNotExist()
+        choiceCard("New chat").assertDoesNotExist()
+        compose.runOnIdle { accountGate!!.complete(Unit) }
+        awaitHit("Owner A synthetic label")
+        compose.runOnIdle { failAccount = true }
+        compose.onNodeWithText("Digital assistant chat").performClick()
+        awaitHit("Try again")
+        compose.onNodeWithText("Owner A synthetic label").assertDoesNotExist()
+        choiceCard("New chat").assertIsNotSelected()
+        compose.runOnIdle { failAccount = false; user = "another-user" }
+        compose.onNodeWithText("Try again").performClick()
+        compose.waitUntil(10_000) { choiceCard("New chat").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.Selected] }
+        choiceCard("New chat").assertIsSelected()
+        compose.onNodeWithText("Owner A synthetic label").assertDoesNotExist()
+        choiceCard("New chat").performClick()
+        awaitHit("New chat")
+        compose.onNodeWithText("Owner A synthetic label").assertDoesNotExist()
+    }
+
+    private fun choiceCard(title: String) = compose.onNode(hasText(title) and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected))
 
     private fun search(text: String) {
         compose.onNode(hasSetTextAction()).performTextReplacement(text)

@@ -7,6 +7,8 @@ import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -59,7 +61,9 @@ class AssistantInvocationTest {
     @Test fun fixedTargetListensAfterValidationAndRecognizerWindDown() = invocation(fixed = true)
     @Test fun newChatListensAfterPermissionReturnAndRecognizerWindDown() = invocation(fixed = false)
 
-    private fun invocation(fixed: Boolean) {
+    @Test fun sameContextStreamingSurvivesDelayedAndFailedRevalidation() = invocation(fixed = true, revalidation = true)
+
+    private fun invocation(fixed: Boolean, revalidation: Boolean = false) {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val disk = InMemoryKeyValueStore()
         val gateway = SavedGateway("https://example.com")
@@ -74,6 +78,9 @@ class AssistantInvocationTest {
         var validation = CompletableDeferred<Unit>()
         var reads = 0
         var missing = false
+        var authGate: CompletableDeferred<Unit>? = null
+        var authStatus = HttpStatusCode.OK
+        var totalsStatus = HttpStatusCode.OK
         val reading = CompletableDeferred<Unit>()
         val client = createHttpClient(MockEngine(MockEngineConfig().apply {
             dispatcher = Dispatchers.Unconfined
@@ -81,11 +88,16 @@ class AssistantInvocationTest {
                 val body = when {
                     request.url.encodedPath.endsWith("ws-ticket") -> """{"ticket":"synthetic"}"""
                     request.url.encodedPath.endsWith("/audio/speak") -> { reading.await(); "{}" }
-                    request.url.encodedPath.endsWith("/auth/me") -> """{"user_id":"user"}"""
+                    request.url.encodedPath.endsWith("/auth/me") -> {
+                        authGate?.await()
+                        if (authStatus != HttpStatusCode.OK) return@addHandler respond("{}", authStatus)
+                        """{"user_id":"user"}"""
+                    }
                     request.url.encodedPath.endsWith("/picked") -> {
                         reads++
                         validation.await()
                         if (missing) return@addHandler respond("{}", HttpStatusCode.NotFound)
+                        if (totalsStatus != HttpStatusCode.OK) return@addHandler respond("{}", totalsStatus)
                         "{}"
                     }
                     else -> """{"session_id":"picked","messages":[{"role":"user","content":"Scoped synthetic message"}]}"""
@@ -139,6 +151,76 @@ class AssistantInvocationTest {
             assertEquals(if (fixed) "picked" else null, firstSession?.state?.value?.storedSessionId)
             assertTrue(model.voice.dictation.value.recording)
             compose.runOnIdle { assertTrue(panelView.keepScreenOn, "Visible listening keeps the display on") }
+
+            if (revalidation) {
+                compose.runOnIdle { allowed.value = false; model.begin(true, true) }
+                compose.waitUntil(10_000) { model.targetVerified.value }
+                val capture = model.callUp
+                compose.runOnIdle {
+                    model.setIncludeScreen(true)
+                    model.composer.setTextAndPlaceCursorAtEnd("Capture draft")
+                    model.send()
+                }
+                compose.runOnIdle {
+                    authGate = CompletableDeferred()
+                    model.retryTarget()
+                    model.onScreenText(capture, "Synthetic app", emptyList())
+                    model.onScreenshot(capture, byteArrayOf(1, 2, 3))
+                }
+                compose.waitUntil(10_000) { model.composer.text.toString() == "Capture draft" }
+                compose.runOnIdle {
+                    assertTrue(transport.methods.none { it.startsWith("prompt.") || it.startsWith("image.") || it.startsWith("file.") })
+                    authGate!!.complete(Unit)
+                }
+                compose.waitUntil(10_000) { model.targetVerified.value }
+                compose.runOnIdle { model.setIncludeScreen(false); model.voice.cancelDictation(); transport.submitting.complete(Unit) }
+                compose.waitUntil(10_000) { !model.voice.dictation.value.active }
+                compose.runOnIdle { model.composer.setTextAndPlaceCursorAtEnd("Synthetic streaming question"); model.send() }
+                compose.waitUntil(10_000) { model.session.value?.state?.value?.running == true }
+                compose.runOnIdle { authGate = CompletableDeferred(); model.begin(false, false) }
+                compose.runOnIdle {
+                    assertEquals(AssistantPhase.Ready, model.phase.value)
+                    assertEquals(firstSession, model.session.value)
+                    assertFalse(model.targetVerified.value)
+                }
+                compose.onNodeWithText("Scoped synthetic message").assertExists()
+                compose.runOnIdle { transport.delta("Still streaming during verification") }
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("Still streaming during verification").fetchSemanticsNodes().isNotEmpty() }
+                val starts = recognizer.starts
+                compose.runOnIdle {
+                    model.composer.setTextAndPlaceCursorAtEnd("Blocked prompt")
+                    model.send(); model.toggleDictation()
+                    assertEquals("Blocked prompt", model.composer.text.toString())
+                    assertEquals(starts, recognizer.starts)
+                    authStatus = HttpStatusCode.ServiceUnavailable
+                    authGate!!.complete(Unit)
+                }
+                compose.waitUntil(10_000) { !model.checkingTarget.value }
+                compose.runOnIdle {
+                    assertEquals(firstSession, model.session.value)
+                    assertTrue(firstSession!!.state.value.running)
+                    assertFalse(model.targetVerified.value)
+                }
+                compose.onNodeWithText("Still streaming during verification").assertExists()
+                compose.runOnIdle { transport.delta("Stream survives failed checks") }
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("Stream survives failed checks", substring = true).fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText("Couldn’t verify the signed-in account. Try again.").assertExists()
+                compose.runOnIdle { authStatus = HttpStatusCode.OK; totalsStatus = HttpStatusCode.ServiceUnavailable; model.retryTarget() }
+                compose.waitUntil(10_000) { !model.checkingTarget.value }
+                compose.runOnIdle { assertEquals(firstSession, model.session.value); assertTrue(firstSession!!.state.value.running) }
+                val shows = model.shows.value
+                compose.runOnIdle { totalsStatus = HttpStatusCode.OK; model.retryTarget() }
+                compose.waitUntil(10_000) { model.targetVerified.value }
+                compose.runOnIdle { assertEquals(shows, model.shows.value); assertEquals(firstSession, model.session.value); allowed.value = false; model.voice.cancelDictation() }
+                compose.runOnIdle { missing = true; model.retryTarget() }
+                compose.waitUntil(10_000) { model.targetUnavailable.value }
+                compose.onNodeWithText("Stream survives failed checks", substring = true).assertDoesNotExist()
+                compose.onNodeWithText("Scoped synthetic message").assertDoesNotExist()
+                compose.runOnIdle { model.composer.setTextAndPlaceCursorAtEnd("Keep the draft"); model.toggleDictation(); model.send() }
+                compose.onNodeWithContentDescription("Dictate").assertIsNotEnabled()
+                compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
+                return
+            }
 
             // A real recognizer can need a main-thread hop to release its old microphone. Let target
             // validation finish before that release: the invocation must wait, then start without a tap.
@@ -212,6 +294,7 @@ class AssistantInvocationTest {
             compose.runOnIdle { assertTrue(panelView.keepScreenOn); mounted.value = false }
             compose.runOnIdle { assertFalse(panelView.keepScreenOn, "Disposal releases the display") }
         } finally {
+            authGate?.complete(Unit)
             reading.complete(Unit)
             validation.complete(Unit)
             recognizer.release.complete(Unit)
@@ -225,6 +308,7 @@ class AssistantInvocationTest {
     /** The same JSON-RPC frames as the gateway; completion is held until the test asks for it. */
     private class ReplyTransport : RpcTransport {
         val submitting = CompletableDeferred<Unit>()
+        val methods = mutableListOf<String>()
         private val frames = Channel<String>(Channel.UNLIMITED).apply {
             trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
         }
@@ -232,6 +316,7 @@ class AssistantInvocationTest {
         override suspend fun send(text: String) {
             val request = Json.parseToJsonElement(text).jsonObject
             val id = request["id"] ?: return
+            methods += request["method"]?.jsonPrimitive?.content.orEmpty()
             val result = when (request["method"]?.jsonPrimitive?.content) {
                 "session.resume" -> """{"session_id":"runtime","stored_session_id":"picked","running":false}"""
                 "session.create" -> """{"session_id":"runtime","stored_session_id":"created"}"""
@@ -239,6 +324,10 @@ class AssistantInvocationTest {
                 else -> "{}"
             }
             frames.send("""{"jsonrpc":"2.0","id":$id,"result":$result}""")
+        }
+        fun delta(text: String) {
+            frames.trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"runtime","payload":{}}}""")
+            frames.trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"runtime","payload":{"text":"$text"}}}""")
         }
         fun complete() {
             frames.trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"runtime","payload":{"text":"Synthetic reply","status":"complete"}}}""")
