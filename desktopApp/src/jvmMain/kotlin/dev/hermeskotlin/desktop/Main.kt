@@ -262,7 +262,6 @@ fun main(args: Array<String>) {
                                         if (current()) LinuxWindowActivation.request(mapped)
                                     } else {
                                         launcherRaiseGuard = ::current
-                                        launcherRaise++
                                     }
                                     when (val destination = projected.destination) {
                                         is PushDestination.Bot -> links.openOwnedBot(destination.name, destination.label, destination.session, ::current)
