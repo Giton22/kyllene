@@ -452,7 +452,7 @@ class VoiceController(
             }
         } finally {
             systemCall?.close()
-            call.close()
+            conversation.close()
             // A chat started again on this screen meanwhile has its own call and panel; this one leaves them be.
             if (live === conversation) live = null
             val mine = currentCoroutineContext().job

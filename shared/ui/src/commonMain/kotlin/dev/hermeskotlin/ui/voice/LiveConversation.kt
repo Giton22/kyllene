@@ -91,6 +91,14 @@ internal class LiveConversation(
     private val heldBack = mutableSetOf<String>()
     /** The voice was told how to ask for Hermes. */
     private var steered = false
+    private var closed = false
+
+    /** Also used when system-call setup ends before [run] takes over the audio. */
+    fun close() {
+        if (closed) return
+        closed = true
+        call.close()
+    }
 
     /** The chat so far, for the voice to open with. */
     fun history(): List<LiveHistoryMessage> = liveHistory(
@@ -113,10 +121,10 @@ internal class LiveConversation(
         try {
             connect()
         } catch (e: CancellationException) {
-            call.close()
+            close()
             throw e
         } catch (e: Exception) {
-            call.close()
+            close()
             return@coroutineScope e.message ?: getString(Res.string.voice_error_live_start)
         }
         state.update { it.copy(phase = VoicePhase.Listening) }
@@ -265,7 +273,7 @@ internal class LiveConversation(
             taking?.cancel()
             delegation?.cancel()
             call.send(LiveCommands.close())
-            call.close()
+            close()
         }
     }
 
