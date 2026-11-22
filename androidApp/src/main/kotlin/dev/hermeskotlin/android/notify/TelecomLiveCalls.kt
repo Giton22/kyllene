@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.telecom.CallAudioState
 import android.telecom.Connection
@@ -15,7 +16,10 @@ import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.util.Log
+import dev.hermeskotlin.core.settings.SettingsStore
+import dev.hermeskotlin.core.settings.canUseAndroidSystemCalling
 import dev.hermeskotlin.core.voice.LiveSystemCall
+import dev.hermeskotlin.core.voice.SystemCallingStatus
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,8 +28,12 @@ import org.koin.android.ext.android.inject
 import java.util.UUID
 
 /** Calls belong to this installation and are routed only against a pending Kyllene request. */
-internal class TelecomLiveCalls(private val context: Context) {
+internal class TelecomLiveCalls(private val context: Context, private val settings: SettingsStore) {
     private val manager = context.getSystemService(TelecomManager::class.java)
+    private val supported = manager != null && (
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELECOM)
+        )
     private val account = PhoneAccountHandle(ComponentName(context, ManagedCallService::class.java), "live-voice")
     private val _name = MutableStateFlow<String?>(null)
     val name = _name.asStateFlow()
@@ -33,21 +41,31 @@ internal class TelecomLiveCalls(private val context: Context) {
     private val _incoming = MutableStateFlow<String?>(null)
     val incoming = _incoming.asStateFlow()
 
-    init {
-        runCatching {
-            manager?.registerPhoneAccount(
+    fun setupStatus(): SystemCallingStatus = when {
+        !supported -> SystemCallingStatus.Unavailable
+        context.checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED ||
+            context.checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED ->
+            SystemCallingStatus.NeedsPermissions
+        runCatching { manager?.getPhoneAccount(account)?.isEnabled == true }.getOrDefault(false) ->
+            SystemCallingStatus.Ready
+        else -> SystemCallingStatus.NeedsAccount
+    }
+
+    fun prepareAccount(): Boolean = when (setupStatus()) {
+        SystemCallingStatus.Ready -> true
+        SystemCallingStatus.NeedsAccount -> runCatching {
+            requireNotNull(manager).registerPhoneAccount(
                 PhoneAccount.builder(account, "Kyllene")
                     .setCapabilities(PhoneAccount.CAPABILITY_CALL_PROVIDER)
                     .setSupportedUriSchemes(listOf(PhoneAccount.SCHEME_SIP))
                     .build(),
             )
-        }.onFailure { Log.w(TAG, "Couldn't register Kyllene's calling account", it) }
+        }.onFailure { Log.w(TAG, "Couldn't register Kyllene's calling account", it) }.isSuccess
+        SystemCallingStatus.Unavailable, SystemCallingStatus.NeedsPermissions -> false
     }
 
     private fun enabled(): Boolean =
-        context.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED &&
-            context.checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED &&
-            runCatching { manager?.getPhoneAccount(account)?.isEnabled == true }.getOrDefault(false)
+        settings.settings.value?.canUseAndroidSystemCalling(setupStatus() == SystemCallingStatus.Ready) == true
 
     suspend fun register(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? {
         if (pending != null || !enabled()) return null

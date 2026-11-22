@@ -118,6 +118,9 @@ import dev.hermeskotlin.ui.settings.ConnectedDevicesView
 import dev.hermeskotlin.ui.settings.ConnectionCheckSheet
 import dev.hermeskotlin.ui.settings.GatewayInfo
 import dev.hermeskotlin.ui.settings.SettingsView
+import dev.hermeskotlin.ui.settings.SystemCallingAccess
+import dev.hermeskotlin.core.voice.SystemCallingStatus
+import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.settings.StartInstructionView
 import dev.hermeskotlin.ui.settings.SidebarPagesView
 import dev.hermeskotlin.ui.SidebarPage
@@ -630,7 +633,13 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                     SessionControlSheetView(visible = true, control = PageSamples.control, busy = null, error = null, onAction = { _, _, _ -> }, onDismiss = {})
                 }
                 PreviewScene.Settings -> SettingsView(
-                    settings = AppSettings(theme = if (dark) ThemeMode.Dark else ThemeMode.Light, accent = accent, glow = glow),
+                    settings = AppSettings(
+                        theme = if (dark) ThemeMode.Dark else ThemeMode.Light,
+                        accent = accent,
+                        glow = glow,
+                        androidSystemCalling = !isDesktop,
+                    ),
+                    systemCalling = SystemCallingAccess(SystemCallingStatus.NeedsAccount).takeUnless { isDesktop },
                     info = GatewayInfo(userLabel = ChatSamples.USER, version = "0.9.0"),
                     gatewayUrl = "https://hermes.example.ts.net",
                     gatewayName = "homelab",

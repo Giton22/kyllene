@@ -16,7 +16,16 @@ interface VoiceKeepAlive {
 
     fun attachIncomingLiveCall(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? = null
 
+    /** Readiness independent of the app's opt-in, so settings can explain what's still needed. */
+    fun systemCallingStatus(): SystemCallingStatus = SystemCallingStatus.Unavailable
+
+    fun prepareSystemCallingAccount(): Boolean = false
+
     fun release()
+}
+
+enum class SystemCallingStatus {
+    Unavailable, NeedsPermissions, NeedsAccount, Ready,
 }
 
 interface LiveSystemCall {

@@ -16,6 +16,23 @@ import kotlin.test.assertTrue
 class SettingsStoreTest {
 
     @Test
+    fun androidSystemCallingRequiresOptInAndAReadyCallingAccount() = runTest {
+        val disk = InMemoryKeyValueStore()
+        disk.put("settings.v1", """{"theme":"Dark"}""")
+        val settings = SettingsStore(disk, backgroundScope)
+        val original = settings.settings.filterNotNull().first()
+        assertFalse(original.canUseAndroidSystemCalling(accountReady = true))
+
+        settings.update { it.copy(androidSystemCalling = true) }
+        advanceUntilIdle()
+        val optedIn = SettingsStore(disk, backgroundScope).settings.filterNotNull().first()
+        assertFalse(optedIn.canUseAndroidSystemCalling(accountReady = false))
+        assertTrue(optedIn.canUseAndroidSystemCalling(accountReady = true))
+        assertEquals(ThemeMode.Dark, optedIn.theme)
+        assertFalse(optedIn.copy(androidSystemCalling = false).canUseAndroidSystemCalling(accountReady = true))
+    }
+
+    @Test
     fun callTargetsSurviveLoadingAndSavingAlongsideOtherPreferences() = runTest {
         val disk = InMemoryKeyValueStore()
         disk.put("settings.v1", """{"theme":"Dark","callTargets":{"https://home.example":{"profile":"sample_bot","sessionId":"r1","label":"Sample · Planning"}}}""")

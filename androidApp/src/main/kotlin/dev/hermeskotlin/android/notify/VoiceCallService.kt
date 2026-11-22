@@ -10,6 +10,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.voice.LiveSystemCall
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import kotlinx.coroutines.CoroutineScope
@@ -83,10 +84,14 @@ class VoiceCallService : Service() {
  * [VoiceKeepAlive] on Android: holds [VoiceCallService] up for the voice chat. All on the main thread, as the
  * service's callbacks and the voice chat are.
  */
-class VoiceCallKeeper(private val context: Context) : VoiceKeepAlive {
+class VoiceCallKeeper(private val context: Context, settings: SettingsStore) : VoiceKeepAlive {
 
-    internal val telecom = TelecomLiveCalls(context)
+    internal val telecom = TelecomLiveCalls(context, settings)
     internal val telecomName = telecom.name
+
+    override fun systemCallingStatus() = telecom.setupStatus()
+
+    override fun prepareSystemCallingAccount() = telecom.prepareAccount()
 
     override suspend fun registerLiveCall(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? =
         if (holding) telecom.register(name, onMute, onEnd) else null
