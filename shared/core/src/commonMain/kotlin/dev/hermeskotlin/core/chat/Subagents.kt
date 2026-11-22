@@ -358,6 +358,26 @@ fun subagentRows(call: ToolActivity, subagents: List<Subagent>): List<SubagentRo
     return rows + unclaimed.map { row(it, subagents, depth = 0) }
 }
 
+/**
+ * The agents running now, each with its activity from this chat and the ones it started beneath it. Only those
+ * the gateway still lists in [snapshots]; with no roster (null), those the events say are live.
+ */
+internal fun ChatState.activeSubagentRows(snapshots: List<JsonObject>?): List<SubagentRow> {
+    val listed = snapshots?.mapNotNullTo(HashSet()) { it.string("subagent_id") }
+    val known = if (snapshots == null) subagents else withSubagentSnapshots(snapshots).subagents
+    val active = known.filter { it.status.live && (listed == null || it.id in listed) }
+    val ids = active.mapTo(HashSet()) { it.id }
+    val rows = active.filter { it.parentId !in ids }.map { row(it, active, depth = 0) }
+    val shown = HashSet<String>()
+    fun mark(row: SubagentRow) {
+        shown += row.key
+        row.children.forEach(::mark)
+    }
+    rows.forEach(::mark)
+    // A malformed parent chain (a loop, or one too deep) still lists its agents, on their own.
+    return rows + active.filter { it.id !in shown }.map { row(it, emptyList(), depth = 0) }
+}
+
 private fun row(subagent: Subagent, all: List<Subagent>, depth: Int): SubagentRow = SubagentRow(
     key = subagent.id,
     goal = subagent.goal.ifEmpty { "Subagent" },

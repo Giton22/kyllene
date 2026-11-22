@@ -16,7 +16,16 @@ class AppVisibility(application: Application) {
     private val _visible = MutableStateFlow(false)
     val visible: StateFlow<Boolean> = _visible.asStateFlow()
 
+    private val _assistant = MutableStateFlow(false)
+
+    /** The assistant panel is up over another app: Herald in use, though none of its chats is in sight. */
+    val assistant: StateFlow<Boolean> = _assistant.asStateFlow()
+
     private var started = 0
+
+    fun assistantShown(shown: Boolean) {
+        _assistant.value = shown
+    }
 
     init {
         application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {

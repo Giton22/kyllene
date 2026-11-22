@@ -43,6 +43,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.hermeskotlin.ui.chat.AttachSheet
+import dev.hermeskotlin.ui.chat.rememberAttachmentPicker
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import dev.hermeskotlin.designsystem.components.Toast
@@ -109,6 +114,7 @@ import dev.hermeskotlin.ui.chat.GreetingPlaces
 import dev.hermeskotlin.ui.sessions.ProjectActionsSheet
 import dev.hermeskotlin.ui.sessions.NewProjectDialog
 import dev.hermeskotlin.ui.settings.AppIconScreen
+import dev.hermeskotlin.ui.settings.ConnectedDevicesView
 import dev.hermeskotlin.ui.settings.ConnectionCheckSheet
 import dev.hermeskotlin.ui.settings.GatewayInfo
 import dev.hermeskotlin.ui.settings.SettingsView
@@ -150,6 +156,7 @@ enum class PreviewScene(val label: String) {
     Voice("Voice chat"),
     VoiceCutIn("A reply read in the voice chat, talking over it on"),
     ReadAloud("A reply being read aloud"),
+    ReadAloudPaused("A reply being read aloud, paused"),
     ReadAloudFailed("A reply the gateway couldn't voice"),
     NewChat("A new chat"),
     Sidebar("The sessions sidebar"),
@@ -162,6 +169,7 @@ enum class PreviewScene(val label: String) {
     Settings("Settings"),
     AppIcons("The app icons"),
     StartInstruction("The starting instruction for new chats"),
+    ConnectedDevices("Connected devices: the Pebble and its prompts"),
     SidebarPages("The sidebar's page buttons, a few hidden"),
     Gateways("Saved gateways"),
     Journey("What the agent has learned"),
@@ -192,6 +200,7 @@ enum class PreviewScene(val label: String) {
     GoalStrip("A chat with a goal, loop and heartbeat above the composer"),
     Comments("Comments on a reply"),
     MidTask("Typing while a task runs"),
+    Attachments("Opening attachments with the keyboard up"),
     ConnectionCheck("The connection check"),
     LongChat("A chat to scroll back through"),
     Tables("Tables in an answer"),
@@ -255,6 +264,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                 PreviewScene.Voice -> SampleChat(ChatSamples.voice, voiceChat = ChatSamples.listening)
                 PreviewScene.VoiceCutIn -> SampleChat(ChatSamples.voice, voiceChat = ChatSamples.speakingCutIn)
                 PreviewScene.ReadAloud -> SampleChat(ChatSamples.reply, readAloud = ReadAloudState(key = "a1"))
+                PreviewScene.ReadAloudPaused -> SampleChat(ChatSamples.reply, readAloud = ReadAloudState(key = "a1", paused = true))
                 PreviewScene.ReadAloudFailed -> SampleChat(ChatSamples.reply, readAloud = ReadAloudState(error = "Speech synthesis failed"))
                 PreviewScene.NewChat -> SampleChat(ChatSamples.empty, placeholder = "What are we building?", places = samplePlaces, cwd = "/srv/site")
                 PreviewScene.Sidebar -> OpenSidebar {
@@ -370,6 +380,12 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                 PreviewScene.Comments -> SampleChat(ChatSamples.reply, comments = remember { ChatSamples.comments() })
                 PreviewScene.LongChat -> SampleChat(ChatSamples.longChat)
                 PreviewScene.MidTask ->SampleChat(ChatSamples.working, composerText = "Also check the photos share")
+                PreviewScene.Attachments -> {
+                    var open by remember { mutableStateOf(false) }
+                    val picker = rememberAttachmentPicker(onPicked = {}, onError = {})
+                    SampleChat(ChatSamples.reply, composerText = "Here is the file", onAttach = { open = true })
+                    AttachSheet(visible = open, onDismiss = { open = false }, picker = picker)
+                }
                 PreviewScene.Offline -> SampleChat(ChatSamples.reply, offline = true)
                 PreviewScene.EmptyPage -> OpenSidebar {
                     SidebarPage {
@@ -628,6 +644,11 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                     onChange = {},
                     onBack = {},
                 )
+                PreviewScene.ConnectedDevices -> ConnectedDevicesView(
+                    settings = AppSettings(theme = if (dark) ThemeMode.Dark else ThemeMode.Light, glow = glow, pebbleAnswers = true),
+                    onUpdate = {},
+                    onBack = {},
+                )
                 PreviewScene.SidebarPages -> SidebarPagesView(
                     settings = AppSettings(sidebarNavHidden = listOf(SidebarPage.Insights.name, SidebarPage.Config.name)),
                     onUpdate = {},
@@ -743,6 +764,7 @@ private fun SampleChat(
     /** An empty new chat's projects and profiles to pick from on its greeting. */
     places: GreetingPlaces? = null,
     cwd: String? = null,
+    onAttach: () -> Unit = {},
 ) {
     ChatView(
         title = state.title ?: "New chat",
@@ -766,7 +788,7 @@ private fun SampleChat(
         onNewChat = {},
         onOpenMenu = {},
         onOpenModels = {},
-        onAttach = {},
+        onAttach = onAttach,
         onDictate = {},
         onVoiceChat = {},
         onOpenPets = {},
@@ -852,6 +874,10 @@ private fun SettingsPreview() = HeraldPreview(PreviewScene.Settings)
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
 private fun StartInstructionPreview() = HeraldPreview(PreviewScene.StartInstruction)
+
+@Preview(widthDp = 412, heightDp = 892)
+@Composable
+private fun ConnectedDevicesPreview() = HeraldPreview(PreviewScene.ConnectedDevices)
 
 @Preview(widthDp = 412, heightDp = 892)
 @Composable

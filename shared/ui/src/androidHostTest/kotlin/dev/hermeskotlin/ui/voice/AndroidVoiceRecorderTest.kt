@@ -1,6 +1,10 @@
 package dev.hermeskotlin.ui.voice
 
+import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import dev.hermeskotlin.core.auth.AuthApi
@@ -29,6 +33,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.AudioDeviceInfoBuilder
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
@@ -44,6 +51,9 @@ class AndroidVoiceRecorderTest {
         reads.set(0)
         opened.set(0)
         released.set(0)
+        sources.clear()
+        echoAvailable = false
+        echoCreated.set(0)
     }
 
     @After fun unblockRead() { unblock.countDown() }
@@ -156,6 +166,49 @@ class AndroidVoiceRecorderTest {
         }
     }
 
+    /**
+     * Under a chained chat's call routing, the turn between replies listens on the call microphone with echo
+     * cancelling, as over the reply; a speech-recognition stream there can get a microphone that hears nothing (#408).
+     */
+    @Test fun recordUsesTheCallMicrophoneOnlyWhileCallRoutingIsHeld() = runBlocking {
+        mode = "pcm"
+        echoAvailable = true
+        val context = RuntimeEnvironment.getApplication()
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val speaker = AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER).build()
+        shadowOf(manager).setOutputDevices(listOf(speaker))
+        shadowOf(manager).setAvailableCommunicationDevices(listOf(speaker))
+        manager.mode = AudioManager.MODE_NORMAL
+        val route = ChatAudioRoute()
+        val recorder = AndroidVoiceRecorder(route = route)
+        val close = AndroidSpeechPlayer(context, route).chainedChatAudio()
+        withTimeout(2_000) { recorder.record(VoiceActivity(idleMs = 0, maxMs = 100)) }
+        assertEquals(listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION), sources.toList())
+        assertEquals(1, echoCreated.get())
+        close()
+        withTimeout(2_000) { recorder.record(VoiceActivity(idleMs = 0, maxMs = 100)) }
+        assertEquals(MediaRecorder.AudioSource.VOICE_RECOGNITION, sources.last())
+        assertEquals(1, echoCreated.get())
+        assertEquals(2, released.get())
+    }
+
+    /** The listen over a reply opens its microphone in call mode too, not in one the system dropped meanwhile. */
+    @Test fun listenOverTakesCallModeUpAgainFirst() = runBlocking {
+        mode = "zero"
+        val context = RuntimeEnvironment.getApplication()
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val speaker = AudioDeviceInfoBuilder.newBuilder().setType(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER).build()
+        shadowOf(manager).setOutputDevices(listOf(speaker))
+        shadowOf(manager).setAvailableCommunicationDevices(listOf(speaker))
+        manager.mode = AudioManager.MODE_NORMAL
+        val route = ChatAudioRoute()
+        val close = AndroidSpeechPlayer(context, route).chainedChatAudio()
+        manager.mode = AudioManager.MODE_NORMAL
+        withTimeout(2_000) { runCatching { AndroidVoiceRecorder(noAudioMs = 200, route = route).listenOver(BargeIn(), { true }, {}) } }
+        assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
+        close()
+    }
+
     @Test fun silentPcmKeepsTheExistingDuration() = checkPcm("pcm")
     @Test fun partialReadsKeepTheSameDuration() = checkPcm("partial")
     @Test fun emptyReadsBetweenPcmFramesRecover() = checkPcm("gapped")
@@ -209,7 +262,10 @@ class AndroidVoiceRecorderTest {
     @Implements(AudioRecord::class)
     class Microphone {
         private val disposed = AtomicBoolean()
-        @Implementation fun __constructor__(source: Int, rate: Int, channels: Int, format: Int, buffer: Int) { opened.incrementAndGet() }
+        @Implementation fun __constructor__(source: Int, rate: Int, channels: Int, format: Int, buffer: Int) {
+            sources += source
+            opened.incrementAndGet()
+        }
         @Implementation fun getState() = AudioRecord.STATE_INITIALIZED
         @Implementation fun getAudioSessionId() = 1
         @Implementation fun startRecording() = Unit
@@ -247,7 +303,11 @@ class AndroidVoiceRecorderTest {
     @Implements(AcousticEchoCanceler::class)
     class EchoCancelling {
         companion object {
-            @JvmStatic @Implementation fun isAvailable() = false
+            @JvmStatic @Implementation fun isAvailable() = echoAvailable
+            @JvmStatic @Implementation fun create(session: Int): AcousticEchoCanceler? {
+                echoCreated.incrementAndGet()
+                return null
+            }
         }
     }
 
@@ -259,5 +319,8 @@ class AndroidVoiceRecorderTest {
         private val opened = AtomicInteger()
         private val reads = AtomicInteger()
         private val released = AtomicInteger()
+        private val sources = java.util.concurrent.CopyOnWriteArrayList<Int>()
+        @Volatile private var echoAvailable = false
+        private val echoCreated = AtomicInteger()
     }
 }

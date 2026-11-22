@@ -58,6 +58,7 @@ Nearly every contributed PR so far got fixes in review, and most were the same f
 - **Secrets and private addresses.** Don't put tokens or tickets in URLs. Never fetch an address on the user's own network because a reply links to it. Give a component only the token it needs.
 - **New UI where the app already has some.** Reuse its rows, composer, viewers, banners, sheets and menus. Actions on a chat message are inline icons under the reply, or a long-press dropdown on the user's prompt, never a sheet or a ⋯ button. Give icon buttons a content description. Menus and sheets must fit a short landscape window. A new kind of alert is off by default.
 - **Words.** Say what happened, in the user's terms: a job that didn't run is "missed" and a process the user stopped is "stopped", not "failed". When something fails, say why.
+- **Translations.** A new string goes in every `values-*` folder next to the English one, in that language's existing wording and form of address. `StringCatalogueTest` fails on a missing key, a placeholder that differs from English, or `%%`.
 - **Leftovers.** Remove fields and helpers that nothing uses, and don't add a second loader or provider for something that has one. Don't sort, copy or read again on every frame.
 - **The desktop app.** `shared:core`, `shared:designsystem` and `shared:ui` also run in the desktop app. Build it too (`./gradlew :desktopApp:compileKotlinJvm`), and hide in it what doesn't apply to a desktop. The command under "Tests" already builds the watch app.
 - **An old branch.** Merge `master` into your branch before you ask for a review, and again if it falls behind.
@@ -73,8 +74,8 @@ Never show private data: no real chats, prompts, scheduled jobs, bots or gateway
 
 The landing page at [kyllene.app](https://kyllene.app) is the static site in `website/`: plain HTML and CSS, no build
 step. Preview it with any static server, for example `npx http-server website`, and check it at 375 px wide as well as
-on a desktop. Its screenshots are copies from `docs/screenshots`, so the same rules apply. Maintainers deploy it to
-Cloudflare Pages by hand:
+on a desktop. Its screenshots are copies from `docs/screenshots`, so the same rules apply. A merge to `master` that
+changes `website/` deploys it to Cloudflare Pages (`.github/workflows/website.yml`). By hand, maintainers run:
 
 ```bash
 npx wrangler pages deploy website --project-name kyllene --branch master

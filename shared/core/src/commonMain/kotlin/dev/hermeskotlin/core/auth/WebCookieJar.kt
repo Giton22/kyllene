@@ -41,10 +41,14 @@ class WebCookieJar(
     private val clock: () -> Long = { getTimeMillis() },
 ) {
 
-    suspend fun sessionFor(url: String): WebSession {
+    /** The sign-in for the page at [url] on [gateway], whose address says where a proxy mounts it. */
+    suspend fun sessionFor(url: String, gateway: String): WebSession {
         val parsed = runCatching { Url(url) }.getOrNull() ?: return WebSession(emptyList(), emptyMap(), null)
         val native = tokens.forRequest(parsed)
-        if (native != null) return WebSession(nativeCookies(parsed, native), accessHeaders(parsed), native.expiresAt.takeIf { it > 0 }?.times(1000))
+        if (native != null) {
+            val mount = runCatching { Url(GatewayUrl.parse(gateway).value).encodedPath.trimEnd('/') }.getOrDefault("")
+            return WebSession(nativeCookies(parsed, mount, native), accessHeaders(parsed), native.expiresAt.takeIf { it > 0 }?.times(1000))
+        }
         val cookies = storage.webCookies(url)
         return WebSession(cookies.values, accessHeaders(parsed), cookies.accessExpiresAt)
     }
@@ -59,7 +63,7 @@ class WebCookieJar(
      * replay it.
      */
     suspend fun renew(gateway: String, page: String) = renewing.withLock {
-        val expiresAt = sessionFor(page).expiresAt
+        val expiresAt = sessionFor(page, gateway).expiresAt
         if (expiresAt != null && expiresAt > clock()) return@withLock
         val url = runCatching { GatewayUrl.parse(gateway) }.getOrNull() ?: return@withLock
         auth.me(url)
@@ -67,12 +71,23 @@ class WebCookieJar(
 
     private val renewing = Mutex()
 
-    /** The access token and provider hint, as the gateway names them over plain http; it reads either form. */
-    private fun nativeCookies(url: Url, session: NativeSession): List<String> {
-        val attributes = "; Path=/" + (if (url.protocol.isSecure()) "; Secure" else "") + "; HttpOnly"
+    /**
+     * The access token and provider hint, under the names the gateway sets and reads itself: bare over plain
+     * http, `__Host-` over https. Since hermes-agent 0.23.2 the gateway reads no other name over https
+     * (`hermes_cli/dashboard_auth/cookies.py`, `_read_with_fallback`); older ones read every form.
+     *
+     * Behind a proxy that mounts it at [mount] (`/hermes`) and says so (`X-Forwarded-Prefix`), the gateway
+     * reads `__Secure-` with that path instead. The app can't see whether the proxy does, so the page gets both.
+     */
+    private fun nativeCookies(url: Url, mount: String, session: NativeSession): List<String> {
+        val values = buildList {
+            add(SESSION_AT to session.accessToken)
+            session.provider?.takeIf { it.isNotBlank() }?.let { add(SESSION_PROVIDER to it) }
+        }
+        if (!url.protocol.isSecure()) return values.map { (name, value) -> "$name=$value; Path=/; HttpOnly" }
         return buildList {
-            add("$SESSION_AT=${session.accessToken}$attributes")
-            session.provider?.takeIf { it.isNotBlank() }?.let { add("$SESSION_PROVIDER=$it$attributes") }
+            values.forEach { (name, value) -> add("__Host-$name=$value; Path=/; Secure; HttpOnly") }
+            if (mount.isNotEmpty()) values.forEach { (name, value) -> add("__Secure-$name=$value; Path=$mount; Secure; HttpOnly") }
         }
     }
 

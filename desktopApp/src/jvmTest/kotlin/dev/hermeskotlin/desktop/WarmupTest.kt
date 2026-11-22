@@ -2,8 +2,11 @@ package dev.hermeskotlin.desktop
 
 import kotlinx.coroutines.asCoroutineDispatcher
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import javax.swing.SwingUtilities
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class WarmupTest {
 
@@ -23,9 +26,27 @@ class WarmupTest {
         }
     }
 
-    // The pages readied first are drawn from the same list; one missing from it would never be readied at all.
+    // Warmup.start() runs alongside the live app window, so it must only link classes on its background thread and
+    // never compose off-screen scenes concurrently with the AWT EDT.
     @Test
-    fun thePagesReadiedFirstAreWarmedScenes() {
-        assertEquals(emptyList(), Warmup.FIRST - Warmup.SCENES.toSet())
+    fun startLinksOnBackgroundThreadOffEdt() {
+        val calls = AtomicInteger(0)
+        var linkedOnEdt: Boolean? = null
+        var threadName: String? = null
+        var isDaemon: Boolean? = null
+
+        val worker = Warmup.start(delayMs = 0) {
+            calls.incrementAndGet()
+            linkedOnEdt = SwingUtilities.isEventDispatchThread()
+            threadName = Thread.currentThread().name
+            isDaemon = Thread.currentThread().isDaemon
+        }
+        worker.join(10_000)
+
+        assertFalse(worker.isAlive, "warmup thread should finish")
+        assertEquals(1, calls.get())
+        assertEquals(false, linkedOnEdt)
+        assertEquals("warmup", threadName)
+        assertEquals(true, isDaemon)
     }
 }

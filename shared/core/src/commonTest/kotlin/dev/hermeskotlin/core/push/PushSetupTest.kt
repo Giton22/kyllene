@@ -70,14 +70,24 @@ class PushSetupTest {
 
     /**
      * A dashboard that answers what PushApi asks. [installed] is the plugin directory, [enabled] whether it
-     * is loaded (only then does `/herald-push` exist); `install` makes both true at [latest].
+     * is loaded (only then does `/herald-push` exist); `install` makes both true at [latest]. With [authority]
+     * its socket runs on the session authority, as the gateway-hosted listener's does: a command runs only in a
+     * chat it holds, and a plugin's answer is an `exec`.
      */
     private inner class FakeGateway(
         var installed: Boolean,
         var enabled: Boolean = installed,
         var version: String = PushApi.PLUGIN_VERSION,
         val latest: String = PushApi.PLUGIN_VERSION,
+        val authority: Boolean = false,
     ) {
+        /** The chats the authority holds; a titled create resumes the one it has. */
+        val chats = mutableSetOf<String>()
+        private var minted = 0
+
+        /** When set, a chat is gone again as soon as it is opened. */
+        var chatsVanish = false
+
         val profiles = mutableMapOf<String, Copy?>()
         val failedProfiles = mutableSetOf<String>()
         val failedChecks = mutableSetOf<String>()
@@ -102,13 +112,25 @@ class PushSetupTest {
                             put("profiles", JsonArray(profiles.keys.map { name -> buildJsonObject { put("name", name) } }))
                         }.toString() else "UNSUPPORTED"
                         "plugins.manage" -> manage(params)
-                        "command.dispatch" -> if (!(installed && enabled)) null else command(params["arg"]!!.jsonPrimitive.content)
+                        "session.create" -> if (!authority) "UNSUPPORTED" else {
+                            val id = chats.firstOrNull() ?: "chat-${++minted}".also { if (!chatsVanish) chats += it }
+                            """{"session_id":"$id"}"""
+                        }
+                        "command.dispatch" -> when {
+                            // Checked before the command is looked at, as the authority does.
+                            authority && params["session_id"]?.jsonPrimitive?.contentOrNull !in chats -> "REFUSED:not_found"
+                            !(installed && enabled) -> if (authority) "REFUSED:unsupported_command" else null
+                            else -> command(params["arg"]!!.jsonPrimitive.content)
+                        }
                         else -> "{}"
                     }
                     transport.push(
                         when {
                             reply == "UNSUPPORTED" -> """{"jsonrpc":"2.0","id":$id,"error":{"code":-32601,"message":"unknown method"}}"""
                             reply == null -> """{"jsonrpc":"2.0","id":$id,"error":{"code":4018,"message":"not a command"}}"""
+                            reply.startsWith("REFUSED:") -> reply.removePrefix("REFUSED:").let {
+                                """{"jsonrpc":"2.0","id":$id,"error":{"code":4001,"message":"$it","data":{"reason":"$it"}}}"""
+                            }
                             reply.startsWith("ERROR:") -> """{"jsonrpc":"2.0","id":$id,"error":{"code":5026,"message":"${reply.removePrefix("ERROR:")}"}}"""
                             else -> """{"jsonrpc":"2.0","id":$id,"result":$reply}"""
                         },
@@ -187,10 +209,13 @@ class PushSetupTest {
                 else -> buildJsonObject { put("ok", false) }
             }
             return HermesJson.encodeToString(JsonObject.serializer(), buildJsonObject {
-                put("type", "plugin")
+                put("type", if (authority) "exec" else "plugin")
                 put("output", output.toString())
             })
         }
+
+        fun sent(method: String): List<JsonObject> =
+            calls.filter { (it["method"] as JsonPrimitive).content == method }.map { it["params"] as JsonObject }
 
         fun actions(): List<String> = calls.mapNotNull { call ->
             (call["params"] as? JsonObject)?.let { p -> p["action"]?.jsonPrimitive?.contentOrNull ?: p["arg"]?.jsonPrimitive?.contentOrNull?.substringBefore(' ') }
@@ -220,10 +245,14 @@ class PushSetupTest {
         transports += transport
         gateway.serve(backgroundScope, transport)
         s.connection.start(GatewayUrl.parse(url))
-        transport.push(FakeTransport.READY)
+        transport.push(if (gateway.authority) authorityReady else FakeTransport.READY)
         s.connection.state.first { it is ConnectionState.Connected }
         return transport
     }
+
+    /** `gateway.ready` from a gateway whose socket runs on the session authority (the gateway-hosted listener). */
+    private val authorityReady =
+        """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}"""
 
     private suspend fun until(condition: () -> Boolean) = withTimeout(10_000) { while (!condition()) delay(10) }
 
@@ -241,6 +270,83 @@ class PushSetupTest {
         assertEquals(setOf("device-1"), gateway.registered)
         assertEquals(gatewayKeys, keys.pinned("https://a.example"))
         assertEquals(PushStatus.State.On, s.setup.status.value.state)
+    }
+
+    @Test
+    fun aDashboardWithoutTheSessionAuthorityIsAskedWithoutAChat() = runTest {
+        val s = setup(FakeKeys())
+        val gateway = FakeGateway(installed = true)
+        connect(s, gateway)
+        s.setup.enable()
+
+        assertEquals(PushStatus.State.On, s.setup.status.value.state)
+        assertTrue(gateway.sent("session.create").isEmpty())
+        assertTrue(gateway.sent("command.dispatch").none { "session_id" in it })
+    }
+
+    @Test
+    fun onTheSessionAuthorityThePluginIsSetUpThroughAHiddenChat() = runTest {
+        // Such a gateway answers a command without a chat `not_found`, whatever the command (#454).
+        val keys = FakeKeys()
+        val s = setup(keys)
+        val gateway = FakeGateway(installed = false, authority = true)
+        connect(s, gateway)
+        s.setup.enable()
+
+        assertEquals(PushStatus.State.On, s.setup.status.value.state)
+        assertEquals(setOf("device-1"), gateway.registered)
+        assertEquals(gatewayKeys, keys.pinned("https://a.example"))
+        // One chat for the connection, hidden, found again by its title; opened before the first command.
+        val create = gateway.sent("session.create").single()
+        assertEquals(true, create["hidden"]!!.jsonPrimitive.booleanOrNull)
+        assertEquals(PushApi.COMMAND_CHAT_TITLE, create["title"]!!.jsonPrimitive.content)
+        val methods = gateway.calls.map { (it["method"] as JsonPrimitive).content }
+        assertTrue(methods.indexOf("session.create") < methods.indexOf("command.dispatch"))
+        assertTrue(gateway.sent("command.dispatch").all { it["session_id"]?.jsonPrimitive?.content == "chat-1" })
+        // Not loaded is `unsupported_command` there: the plugin is installed, not reported as a failure.
+        assertEquals(listOf("info", "toggle", "install", "info", "register"), gateway.actions())
+    }
+
+    @Test
+    fun aCommandChatTheGatewayLostIsOpenedAgainOnce() = runTest {
+        val s = setup(FakeKeys())
+        val gateway = FakeGateway(installed = true, authority = true)
+        connect(s, gateway)
+        s.setup.enable()
+        assertEquals(1, gateway.sent("session.create").size)
+
+        // Deleted on the gateway, say.
+        gateway.chats.clear()
+        s.setup.enable()
+        assertEquals(PushStatus.State.On, s.setup.status.value.state)
+        assertEquals(2, gateway.sent("session.create").size)
+        assertEquals("chat-2", gateway.sent("command.dispatch").last()["session_id"]!!.jsonPrimitive.content)
+
+        // Gone every time: said after one more try, not asked for ever.
+        gateway.chats.clear()
+        gateway.chatsVanish = true
+        val before = gateway.sent("command.dispatch").size
+        s.setup.enable()
+        assertEquals(PushStatus.State.Failed, s.setup.status.value.state)
+        assertEquals("not_found", s.setup.status.value.detail)
+        assertEquals(2, gateway.sent("command.dispatch").size - before)
+    }
+
+    @Test
+    fun aNewConnectionOpensTheCommandChatAgain() = runTest {
+        val s = setup(FakeKeys())
+        val gateway = FakeGateway(installed = true, authority = true)
+        connect(s, gateway)
+        s.setup.enable()
+        s.connection.stop()
+        s.connection.state.first { it !is ConnectionState.Connected }
+
+        // A chat is attached to the socket that opened it; the title gets the same one back.
+        connect(s, gateway)
+        s.setup.enable()
+        assertEquals(PushStatus.State.On, s.setup.status.value.state)
+        assertEquals(2, gateway.sent("session.create").size)
+        assertEquals(setOf("chat-1"), gateway.chats)
     }
 
     @Test
