@@ -29,8 +29,9 @@ internal data class PushWatch(val gatewayUrl: String, val ownerVersion: Long, va
 internal class DesktopPush(
     private val watches: StateFlow<PushWatch?>,
     private val inbox: PushInbox,
-    private val subscribe: (PushSubscription) -> Flow<NtfyEvent>,
-    private val post: suspend (PushWatch, PushSubscription, PushMessage) -> Unit,
+    private val subscribe: (PushSubscription, suspend () -> Unit) -> Flow<NtfyEvent>,
+    private val post: suspend (PushWatch, PushSubscription, PushMessage, String?) -> Unit,
+    private val persist: suspend (String, PushMessage) -> String? = { _, _ -> null },
     private val status: (String?) -> Unit = {},
     private val work: CoroutineContext = Dispatchers.IO,
 ) {
@@ -50,15 +51,35 @@ internal class DesktopPush(
                         // Re-read on each reconnect, so the cursor and key pin are never a stale cache.
                         val subscription = withContext(work) { inbox.subscription(watch.gatewayUrl) }
                             ?: return@collectLatest
-                        subscribe(subscription).collect { event ->
-                            val message = withContext(work) { inbox.receive(subscription, event) }
+                        subscribe(subscription) {
+                            if (watches.value == watch) status(null)
+                        }.collect { event ->
+                            var jobTitle: String? = null
+                            val message = withContext(work) {
+                                inbox.receivePersisting(subscription, event) { signed ->
+                                    if (signed.type == PushMessage.CRON_RUN) {
+                                        try {
+                                            jobTitle = persist(watch.gatewayUrl, signed)
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
+                                            throw InboxWriteFailed()
+                                        }
+                                    }
+                                }
+                            }
                             currentCoroutineContext().ensureActive()
                             if (message != null) {
                                 val current = withContext(work) { inbox.current(subscription) }
                                 currentCoroutineContext().ensureActive()
                                 if (current && watches.value == watch) {
-                                    status(null)
-                                    post(watch, subscription, message)
+                                    try {
+                                        post(watch, subscription, message, jobTitle)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        if (watches.value == watch) status(getString(Res.string.push_notice_failed))
+                                    }
                                 }
                             }
                         }
@@ -70,6 +91,7 @@ internal class DesktopPush(
                     } catch (e: Exception) {
                         // HTTP exceptions may contain a secret topic URL: only our own safe guidance is shown.
                         val detail = when (e) {
+                            is InboxWriteFailed -> getString(Res.string.push_inbox_write_failed)
                             is PushInboxException -> getString(Res.string.push_replay_unavailable)
                             is SecureStorageException -> getString(storageReasonText(e.reason))
                             else -> getString(Res.string.push_reconnecting)
@@ -85,6 +107,8 @@ internal class DesktopPush(
             if (job === running) { job = null; status(null) }
         }
     }.also { job = it }
+
+    private class InboxWriteFailed : Exception()
 
     private companion object {
         const val HEALTHY_NANOS = 60_000_000_000L

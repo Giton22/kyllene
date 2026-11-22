@@ -6,6 +6,7 @@ import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -122,6 +123,20 @@ class LinuxPushInboxTest {
         }
         f.store.values[cache] = original
         assertNull(inbox.receive(subscription, f.event()))
+    }
+
+    @Test fun aFailedInboxWriteLeavesTheAuthenticatedEventAvailableForRetry() = runTest {
+        val f = Fixture()
+        val inbox = f.inbox()
+        val subscription = assertNotNull(inbox.subscription(URL))
+        assertFailsWith<IOException> {
+            inbox.receivePersisting(subscription, f.event()) { throw IOException("Synthetic Inbox failure") }
+        }
+        assertNull(inbox.subscription(URL)?.sinceSeconds)
+        var writes = 0
+        assertEquals(f.message, inbox.receivePersisting(subscription, f.event()) { writes++ })
+        assertNull(inbox.receivePersisting(subscription, f.event()) { writes++ })
+        assertEquals(1, writes)
     }
 
     @Test fun twoAdaptersCannotAcceptOneEnvelopeTwice() {

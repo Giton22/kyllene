@@ -22,7 +22,7 @@ class LinuxNotificationsTest {
     private var prefs = AppSettings()
     private var opened = 0
     private val answers = mutableListOf<ApprovalChoice>()
-    private val owner = LinuxNoticeOwner("https://example.invalid", "work", { valid }, { opened++ }, { answers += it })
+    private val owner = LinuxNoticeOwner("https://example.invalid", "work", { valid }, { opened++ }) { answers += it }
     private var labels = "Approve" to "Deny"
     private val notifications = LinuxNotifications(delivery, actionLabels = { labels }) { prefs }
     private val reply = DesktopNotice("Release", "```\r\nplain <b>text</b>", "s1", "Release")
@@ -120,6 +120,16 @@ class LinuxNotificationsTest {
         assertTrue(delivery.shown.isEmpty())
         notifications.post(reply, owner)
         assertTrue(delivery.shown.isEmpty())
+    }
+
+    @Test
+    fun pushNoticesWithoutTheReplyPreferenceStillPostAndOpen() {
+        prefs = prefs.copy(notifyReplies = false)
+        notifications.post(reply, owner.copy(usesReplyPreference = false))
+        val (id, notice) = delivery.shown.entries.single()
+        notifications.reconcile()
+        notifications.action(id, notice.defaultAction)
+        assertEquals(1, opened)
     }
 
     @Test

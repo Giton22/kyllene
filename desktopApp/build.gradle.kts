@@ -29,7 +29,6 @@ kotlin {
             compileOnly(libs.jcef)
             // Windows' global hotkey for the quick entry.
             implementation(libs.jna.platform)
-            implementation(libs.dbus.core)
             // The tray's, quick entry's and system prompts' words (src/jvmMain/composeResources).
             implementation(compose.components.resources)
             // FileKit uses the same D-Bus runtime; the Linux shortcut portal uses no file descriptors.

@@ -39,6 +39,8 @@ class DesktopPushTest {
         override fun subscription(gatewayUrl: String) = snapshot?.takeIf { it.gatewayUrl == gatewayUrl }
         override fun current(subscription: PushSubscription) = valid
         override fun receive(subscription: PushSubscription, event: NtfyEvent) = open()
+        override suspend fun receivePersisting(subscription: PushSubscription, event: NtfyEvent,
+            persist: suspend (PushMessage) -> Unit) = open()?.also { persist(it) }
     }
 
     @Test fun disabledOrUnpinnedStateDoesNotSubscribeAndStartIsIdempotent() = runTest {
@@ -46,10 +48,10 @@ class DesktopPushTest {
         val inbox = Inbox().apply { snapshot = null }
         var started = 0
         var closed = 0
-        val listener = DesktopPush(watches, inbox, { flow {
+        val listener = DesktopPush(watches, inbox, { _, _ -> flow {
             started++
             try { awaitCancellation() } finally { closed++ }
-        } }, { _, _, _ -> }, work = StandardTestDispatcher(testScheduler))
+        } }, { _, _, _, _ -> }, work = StandardTestDispatcher(testScheduler))
         val job = listener.start(backgroundScope)
         listener.start(backgroundScope)
         runCurrent()
@@ -76,14 +78,15 @@ class DesktopPushTest {
         val requests = mutableListOf<PushSubscription>()
         val statuses = mutableListOf<String?>()
         val interrupted = CompletableDeferred<Unit>()
-        val listener = DesktopPush(watches, inbox, { request -> flow {
+        val listener = DesktopPush(watches, inbox, { request, connected -> flow {
+            connected()
             requests += request
             if (requests.size == 1) throw IOException("private https://broker.example/secret-topic")
             awaitCancellation()
-        } }, { _, _, _ -> }, {
+        } }, { _, _, _, _ -> }, status = {
             statuses += it
             if (it != null) interrupted.complete(Unit)
-        }, StandardTestDispatcher(testScheduler))
+        }, work = StandardTestDispatcher(testScheduler))
         val job = listener.start(backgroundScope)
         try {
             runCurrent()
@@ -98,6 +101,7 @@ class DesktopPushTest {
             advanceTimeBy(1)
             runCurrent()
             assertEquals(listOf<Long?>(null, 777), requests.map { it.sinceSeconds })
+            assertEquals(null, statuses.last())
         } finally { job.cancelAndJoin() }
     }
 
@@ -106,7 +110,7 @@ class DesktopPushTest {
         val inbox = Inbox()
         val events = Channel<NtfyEvent>(Channel.UNLIMITED)
         val delivered = mutableListOf<PushMessage>()
-        val listener = DesktopPush(watches, inbox, { events.receiveAsFlow() }, { _, _, item -> delivered += item },
+        val listener = DesktopPush(watches, inbox, { _, _ -> events.receiveAsFlow() }, { _, _, item, _ -> delivered += item },
             work = StandardTestDispatcher(testScheduler))
         val job = listener.start(backgroundScope)
         try {
@@ -139,9 +143,9 @@ class DesktopPushTest {
         } }
         var delivered = 0
         var closed = 0
-        val listener = DesktopPush(watches, inbox, { flow {
+        val listener = DesktopPush(watches, inbox, { _, _ -> flow {
             try { emit(event); awaitCancellation() } finally { closed++; streamClosed.complete(Unit) }
-        } }, { _, _, _ -> delivered++ })
+        } }, { _, _, _, _ -> delivered++ })
         val job = listener.start(backgroundScope)
         try {
             runCurrent()
@@ -156,4 +160,27 @@ class DesktopPushTest {
             assertEquals(1, closed)
         } finally { release.countDown(); job.cancelAndJoin() }
     }
+    @Test fun aLocalPostingFailureDoesNotRestartTheStream() = runTest {
+        val watches = MutableStateFlow<PushWatch?>(watch)
+        var subscribed = 0
+        var attempts = 0
+        val recovered = CompletableDeferred<Unit>()
+        val listener = DesktopPush(watches, Inbox(), { _, connected -> flow {
+            subscribed++
+            connected()
+            emit(event)
+            emit(event)
+            awaitCancellation()
+        } }, { _, _, _, _ ->
+            if (++attempts == 1) throw IOException("local failure")
+            recovered.complete(Unit)
+        }, work = StandardTestDispatcher(testScheduler))
+        val job = listener.start(backgroundScope)
+        runCurrent()
+        recovered.await()
+        assertEquals(2, attempts)
+        assertEquals(1, subscribed)
+        job.cancelAndJoin()
+    }
+
 }

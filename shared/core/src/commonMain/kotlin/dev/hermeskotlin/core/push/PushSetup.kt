@@ -127,7 +127,10 @@ class PushSetup(
         _status.value = PushStatus(State.Working)
         try {
             // An identity registered with another gateway is retired, never shared.
-            keys.pinnedGatewayUrl()?.takeIf { it != url }?.let(keys::retire)
+            keys.pinnedGatewayUrl()?.takeIf { it != url }?.let { previous ->
+                keys.retire(previous)
+                api.registrationChanged()
+            }
             val ready = plugin(install, update) ?: return@withLock
             val info = ready.info
             // Refused keys would leave a registration the phone can't retire: check them first.
@@ -143,6 +146,7 @@ class PushSetup(
                 return@withLock
             }
             // Learned over the authenticated socket: the keys every push must be signed with.
+            val previous = keys.pinned(url)
             try {
                 keys.pin(url, gateway)
             } catch (e: CancellationException) {
@@ -153,7 +157,7 @@ class PushSetup(
                 _status.value = PushStatus(State.Failed, "The gateway's plugin sent unusable keys.")
                 return@withLock
             }
-            api.registrationChanged()
+            if (previous != gateway) api.registrationChanged()
             _status.value = PushStatus(State.On, listOfNotNull(ready.detail,
                 if (reply.watching) null else "Restart the gateway's dashboard to start sending.",
             ).joinToString("\n").ifEmpty { null }, ready.update)

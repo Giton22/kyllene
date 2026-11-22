@@ -51,4 +51,6 @@
     <string name="notice_push_working">A push értesítések működnek.</string>
     <string name="push_reconnecting">A push kapcsolat megszakadt. A Kyllene újrapróbálkozik, amíg fut.</string>
     <string name="push_replay_unavailable">A Kyllene nem tudta megnyitni a push újrajátszási állapotát. A meglévő adatok megmaradtak; újrapróbálkozás előtt állíts vissza egy biztosan működő biztonsági másolatot.</string>
+    <string name="push_notice_failed">A Kyllene nem tudott megjeleníteni egy push értesítést.</string>
+    <string name="push_inbox_write_failed">A Kyllene nem tudta menteni az ütemezett futást a beérkezett üzenetek közé. Újra megpróbálja.</string>
 </resources>

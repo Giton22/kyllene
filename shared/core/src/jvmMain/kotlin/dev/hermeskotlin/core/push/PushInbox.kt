@@ -9,6 +9,9 @@ interface PushInbox {
     fun subscription(gatewayUrl: String): PushSubscription?
     fun current(subscription: PushSubscription): Boolean
     fun receive(subscription: PushSubscription, event: NtfyEvent): PushMessage?
+    /** Store idempotent application data before marking an authenticated message as received. */
+    suspend fun receivePersisting(subscription: PushSubscription, event: NtfyEvent,
+        persist: suspend (PushMessage) -> Unit): PushMessage?
 }
 
 /** Only the secure Linux identity adapter can decrypt and commit replay state. */

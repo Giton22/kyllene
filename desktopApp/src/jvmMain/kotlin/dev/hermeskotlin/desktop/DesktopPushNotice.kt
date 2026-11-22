@@ -14,15 +14,18 @@ internal data class PushNotice(val notice: DesktopNotice, val profile: String?, 
 
 /** Maps authenticated news only. Phone tools, incoming calls and remote content fetches are outside this receiver. */
 internal suspend fun desktopPushNotice(
-    gatewayUrl: String,
     message: PushMessage,
-    persist: suspend (String, InboxRun) -> Unit,
     current: () -> Boolean,
+    jobTitle: String? = null,
+    foreground: Boolean = false,
+    notifyReplies: Boolean = true,
+    botHidden: (String) -> Boolean = { false },
 ): PushNotice? {
     if (!current()) return null
     return when (message.type) {
         PushMessage.BOT_MESSAGE -> {
             val bot = message.bot?.takeIf { PROFILE.matches(it) } ?: return null
+            if (foreground || !notifyReplies || botHidden(bot)) return null
             val session = message.session?.takeIf { SESSION.matches(it) } ?: return null
             val label = cleanLabel(message.label).ifBlank { bot }
             PushNotice(DesktopNotice(label, preview(message.text, getString(Res.string.notice_reply_in)), session, label),
@@ -30,10 +33,8 @@ internal suspend fun desktopPushNotice(
         }
         PushMessage.CRON_RUN -> {
             val run = InboxRun.from(message) ?: return null
-            // The Inbox stores under the source gateway even if selection changes during its write.
-            persist(gatewayUrl, run)
-            if (!current() || !message.notify) return null
-            val title = cleanLabel(run.title).ifBlank { getString(Res.string.notice_scheduled_job) }
+            if (foreground || !message.notify) return null
+            val title = cleanLabel(jobTitle ?: run.title).ifBlank { getString(Res.string.notice_scheduled_job) }
             PushNotice(DesktopNotice(title, preview(run.text, getString(if (run.failed) Res.string.notice_run_failed else Res.string.notice_run_finished)),
                 run.key, title), run.bot.takeUnless { it == "default" }, PushDestination.Inbox(run.key))
         }

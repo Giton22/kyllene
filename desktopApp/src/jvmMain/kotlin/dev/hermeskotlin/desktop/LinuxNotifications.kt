@@ -26,6 +26,7 @@ internal data class LinuxNoticeOwner(
     val profile: String?,
     val current: () -> Boolean,
     val open: () -> Unit,
+    val usesReplyPreference: Boolean = true,
     val answer: (ApprovalChoice) -> Unit,
 )
 
@@ -42,7 +43,7 @@ internal class LinuxNotifications(
 
     fun post(notice: DesktopNotice, owner: LinuxNoticeOwner) {
         reconcile()
-        if (closed || !owner.current() || !enabled(notice)) return
+        if (closed || !owner.current() || !enabled(notice, owner)) return
         val id = idFor(owner, notice)
         val nonce = UUID.randomUUID().toString()
         val open = "open-$nonce"
@@ -63,7 +64,7 @@ internal class LinuxNotifications(
 
     fun action(id: String, action: String) {
         val entry = entries[id] ?: return
-        if (closed || !entry.owner.current() || !enabled(entry.notice)) {
+        if (closed || !entry.owner.current() || !enabled(entry.notice, entry.owner)) {
             withdraw(id)
             return
         }
@@ -75,7 +76,7 @@ internal class LinuxNotifications(
     }
 
     fun reconcile() {
-        entries.filterValues { !it.owner.current() || !enabled(it.notice) }.keys.toList().forEach(::withdraw)
+        entries.filterValues { !it.owner.current() || !enabled(it.notice, it.owner) }.keys.toList().forEach(::withdraw)
     }
 
     fun failed(id: String, defaultAction: String) {
@@ -86,7 +87,7 @@ internal class LinuxNotifications(
     private fun fallback(id: String) {
         val entry = entries[id] ?: return
         withdraw(id)
-        if (!closed && entry.owner.current() && enabled(entry.notice)) fallback(entry.notice, entry.owner)
+        if (!closed && entry.owner.current() && enabled(entry.notice, entry.owner)) fallback(entry.notice, entry.owner)
     }
 
     fun unavailable() = entries.keys.toList().forEach(::fallback)
@@ -98,7 +99,7 @@ internal class LinuxNotifications(
         delivery.close()
     }
 
-    private fun enabled(notice: DesktopNotice): Boolean = settings().let {
+    private fun enabled(notice: DesktopNotice, owner: LinuxNoticeOwner): Boolean = !owner.usesReplyPreference || settings().let {
         if (notice.request == null) it.notifyReplies else it.notifyRequests
     }
 

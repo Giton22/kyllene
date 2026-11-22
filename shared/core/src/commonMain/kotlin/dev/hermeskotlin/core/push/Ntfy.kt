@@ -28,7 +28,9 @@ class NtfyClient(private val client: HttpClient) {
      * The messages of [topic] from [sinceSeconds] (the unix time of the last one read; ntfy keeps messages
      * for hours) or all it still holds. Ends when the stream does; the caller reconnects.
      */
-    fun subscribe(server: String, topic: String, sinceSeconds: Long?): Flow<NtfyEvent> = flow {
+    fun subscribe(
+        server: String, topic: String, sinceSeconds: Long?, onConnected: suspend () -> Unit = {},
+    ): Flow<NtfyEvent> = flow {
         client.prepareGet(topicUrl(server, topic) + "/json") {
             // A time, not the last message's id: ntfy doesn't say what an id that has left its cache means,
             // and that is exactly the case after a long stretch offline. The message at that very second
@@ -41,6 +43,7 @@ class NtfyClient(private val client: HttpClient) {
             }
         }.execute { response ->
             check(response.status.isSuccess()) { "ntfy answered ${response.status.value}" }
+            onConnected()
             val channel = response.bodyAsChannel()
             while (true) {
                 // Bounded: the server isn't trusted, and an endless line must not fill memory.

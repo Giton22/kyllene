@@ -91,9 +91,24 @@ internal class LinuxPushKeys(private val store: KeyValueStore) : PushKeys, PushI
     override fun current(subscription: PushSubscription): Boolean = locked { matches(subscription, read()) }
 
     override fun receive(subscription: PushSubscription, event: NtfyEvent): PushMessage? = locked {
+        val message = open(subscription, event) ?: return@locked null
+        commit(subscription, event, message)
+    }
+
+    override suspend fun receivePersisting(
+        subscription: PushSubscription, event: NtfyEvent, persist: suspend (PushMessage) -> Unit,
+    ): PushMessage? {
+        val message = locked {
+            open(subscription, event)?.takeIf { acceptedReplay(subscription, event, it) != null }
+        } ?: return null
+        persist(message)
+        return locked { commit(subscription, event, message) }
+    }
+
+    private fun open(subscription: PushSubscription, event: NtfyEvent): PushMessage? {
         val state = read()
-        if (!matches(subscription, state) || event.event != "message" || event.topic != subscription.topic) return@locked null
-        val body = event.message?.takeIf { it.length <= NtfyClient.MAX_BODY } ?: return@locked null
+        if (!matches(subscription, state) || event.event != "message" || event.topic != subscription.topic) return null
+        val body = event.message?.takeIf { it.length <= NtfyClient.MAX_BODY } ?: return null
         val message = runCatching {
             val envelope = PushCrypto.decodeEnvelope(body)
             val encoded = PushCrypto.unb64(checkNotNull(state.device).encPrivate)
@@ -102,18 +117,26 @@ internal class LinuxPushKeys(private val store: KeyValueStore) : PushKeys, PushI
                 PushCrypto.decodePublic(subscription.gateway.sigPub))
             try { HermesJson.decodeFromString(PushMessage.serializer(), plain.decodeToString()) }
             finally { plain.fill(0) }
-        }.getOrNull() ?: return@locked null
-        if (message.ts < 0) return@locked null
+        }.getOrNull() ?: return null
+        return message.takeIf { it.ts >= 0 }
+    }
+
+    private fun commit(subscription: PushSubscription, event: NtfyEvent, message: PushMessage): PushMessage? {
+        if (!matches(subscription, read())) return null
+        val next = acceptedReplay(subscription, event, message) ?: return null
+        runBlocking(Dispatchers.IO) { store.put(REPLAY_KEY, stateJson.encodeToString(Replay.serializer(), next)) }
+        return message
+    }
+
+    private fun acceptedReplay(subscription: PushSubscription, event: NtfyEvent, message: PushMessage): Replay? {
         val cached = replay(subscription)
         val now = System.currentTimeMillis() / 1000
         val guard = PushGuard(PushMessage.MAX_AGE_G2P_SECONDS) { now }
         guard.remember(cached.seen)
-        if (!guard.accept(message)) return@locked null
+        if (!guard.accept(message)) return null
         // Neither a broker's forged timestamp nor a gateway clock ahead may skip later valid messages.
         val cursor = minOf(event.time.takeIf { it > 0 } ?: message.ts, message.ts, now)
-        val next = cached.copy(seen = guard.snapshot(), since = maxOf(cached.since ?: 0, cursor))
-        runBlocking(Dispatchers.IO) { store.put(REPLAY_KEY, stateJson.encodeToString(Replay.serializer(), next)) }
-        message
+        return cached.copy(seen = guard.snapshot(), since = maxOf(cached.since ?: 0, cursor))
     }
 
     private fun matches(subscription: PushSubscription, state: State): Boolean =
