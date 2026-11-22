@@ -103,6 +103,7 @@
     <string name="phone_allow">Allow</string>
     <string name="phone_deny">Deny</string>
     <string name="phone_question_change">The agent wants to change your phone</string>
+    <string name="phone_unlock_before_approval">Unlock your phone before approving this action.</string>
     <!-- Joins the items of a short list, such as days or settings -->
     <string name="phone_list_separator">", "</string>
     <!-- Ends a sentence built from parts; %1$s: the sentence -->

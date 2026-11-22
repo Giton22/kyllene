@@ -23,6 +23,7 @@ import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.phone.enabledPhoneTools
 import dev.hermeskotlin.core.phone.requiresPhoneToolPermission
 import dev.hermeskotlin.core.settings.SettingsStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -39,7 +40,7 @@ import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Asks before a tool's write/action in Kyllene or a notification when its confirmation preference is on. */
+/** Asks before a tool action when approval is enabled or Android requires a user interaction. */
 class PhoneConfirmations(private val context: Context, private val settings: SettingsStore) {
 
     internal class Pending(val action: (Activity) -> Unit, val done: CompletableDeferred<Unit>)
@@ -101,10 +102,10 @@ class PhoneConfirmations(private val context: Context, private val settings: Set
         if (tool !in settings.settings.value?.enabledPhoneTools().orEmpty()) throw PhoneToolException(PhoneToolsBridge.SWITCHED_OFF)
     }
 
-    /**
-     * Keeps the validated description for a change; opt-out executes without asking, on Main. Android access
-     * and the lock still apply. Launching another activity without a user tap also needs Kyllene visible.
-     */
+    private fun deviceLocked(): Boolean =
+        context.getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true
+
+    /** Direct actions use the worker dispatcher unless they launch an activity. */
     suspend fun confirm(
         tool: PhoneTool,
         what: String,
@@ -112,21 +113,30 @@ class PhoneConfirmations(private val context: Context, private val settings: Set
         needsActivity: Boolean = false,
         action: (Context) -> Unit,
     ) = withContext(Dispatchers.Main.immediate) {
-        checkEnabled(tool)
         val caller = currentCoroutineContext()
-        val required = settings.settings.value?.requiresPhoneToolPermission(tool) != false
-        val guarded: (Context) -> Unit = { from ->
+        fun requiresApproval(): Boolean =
+            settings.settings.value?.requiresPhoneToolPermission(tool) != false ||
+                deviceLocked() || (needsActivity && !inApp.value)
+
+        fun runAction(from: Context) {
             caller.ensureActive()
             checkEnabled(tool)
-            if (context.getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true) {
-                throw PhoneToolException("Unlock the phone before using this tool.")
-            }
-            if (!required && needsActivity && !inApp.value) {
-                throw PhoneToolException("Open Kyllene to use this tool without confirmation; Android restricts opening apps in the background.")
-            }
+            if (deviceLocked()) throw PhoneToolException(text(R.string.phone_unlock_before_approval))
             action(from)
         }
-        if (required) ask(what, title) { guarded(it) } else guarded(context)
+
+        checkEnabled(tool)
+        val dispatcher = if (needsActivity) Dispatchers.Main.immediate else Dispatchers.IO
+        if (!requiresApproval() && withContext(dispatcher) {
+                // The lock or the preference may have changed while this waited for a worker.
+                if (requiresApproval()) false else {
+                    withToolFailure { runAction(context) }
+                    true
+                }
+            }) return@withContext
+
+        checkEnabled(tool)
+        ask(what, title, ::runAction)
     }
 
     /** An unanswered or cancelled question never executes; a pending question still needs Allow after opt-out. */
@@ -221,7 +231,9 @@ class PhoneConfirmations(private val context: Context, private val settings: Set
             .setDeleteIntent(deny)
             .setTimeoutAfter(ANSWER_MS)
             .addAction(0, text(R.string.phone_deny), deny)
-            .addAction(0, text(R.string.phone_allow), allow)
+            .addAction(NotificationCompat.Action.Builder(0, text(R.string.phone_allow), allow)
+                .setAuthenticationRequired(true)
+                .build())
             .build()
         return runCatching { manager.notify(TAG, id, notification) }.isSuccess
     }
@@ -245,15 +257,27 @@ class PhoneConfirmations(private val context: Context, private val settings: Set
         /** Whether Herald is open and unlocked, so a question is asked there and not in a notification. */
         val inApp = MutableStateFlow(false)
 
+        private inline fun withToolFailure(action: () -> Unit) {
+            try {
+                action()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: PhoneToolException) {
+                throw e
+            } catch (e: Exception) {
+                throw PhoneToolException(e.message ?: "The phone couldn't do it.")
+            }
+        }
+
         /** Allow on question [key], from [activity]; false when nothing waits on it any more. */
         fun allow(key: String, activity: Activity): Boolean {
             val pending = waiting.remove(key) ?: return false
             asking.update { list -> list.filterNot { it.key == key } }
             try {
-                pending.action(activity)
+                withToolFailure { pending.action(activity) }
                 pending.done.complete(Unit)
             } catch (e: Exception) {
-                pending.done.completeExceptionally(PhoneToolException(e.message ?: "The phone couldn't do it."))
+                pending.done.completeExceptionally(e)
             }
             return true
         }

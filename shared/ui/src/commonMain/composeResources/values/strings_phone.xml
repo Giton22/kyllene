@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Settings → Phone tools: the tools, the calls and quiet hours, the phones the gateway knows, watched places. -->
-    <string name="phone_intro">Let the agent use this phone: read how it is, or do something on it. Every tool is off until you turn it on, and anything that changes the phone asks you first: in Kyllene while it’s open, else in a notification. A tool you turn off is taken away from the agent at once.</string>
+    <string name="phone_intro">Tools stay off until you enable them. Reads run without asking. For supported actions, you can turn off the approval prompt. If your phone is locked or Android needs you to act before opening another app, approval is still required. Android permissions still apply. Turning off a tool removes access immediately.</string>
     <string name="phone_install_what">It offers the agent the tools you turn on here, and passes their calls to this phone.</string>
     <string name="phone_let_agent">Let the agent use this phone</string>
     <string name="phone_set_up">Set up on the gateway</string>
@@ -96,21 +96,21 @@
     <string name="phone_tool_network">Network</string>
     <string name="phone_tool_network_detail">Wi-Fi, mobile data or offline, whether it’s metered, and a VPN.</string>
     <string name="phone_tool_sound">Sound</string>
-    <string name="phone_tool_sound_detail">Do Not Disturb, the ringer and volumes. A change asks you first.</string>
+    <string name="phone_tool_sound_detail">Read or change Do Not Disturb, the ringer and volume.</string>
     <string name="phone_tool_alarms">Alarms and timers</string>
-    <string name="phone_tool_alarms_detail">Sets one in your clock app after you allow it.</string>
+    <string name="phone_tool_alarms_detail">Set alarms and timers in your clock app.</string>
     <string name="phone_tool_screen_time">Screen time</string>
     <string name="phone_tool_screen_time_detail">Which apps you used and for how long, screen-on time and unlocks, up to a week back.</string>
     <string name="phone_tool_open">Open links, maps and apps</string>
-    <string name="phone_tool_open_detail">Opens a link, a place, an app or the share sheet after you allow it.</string>
+    <string name="phone_tool_open_detail">Open a link, a place, an app or the share sheet.</string>
     <string name="phone_tool_clipboard">Copy to the clipboard</string>
-    <string name="phone_tool_clipboard_detail">Puts text on your clipboard after you allow it. Never reads what’s there.</string>
+    <string name="phone_tool_clipboard_detail">Copy text to your clipboard. Never reads what’s already there.</string>
     <string name="phone_tool_location">Location</string>
     <string name="phone_tool_location_detail">Where the phone is and the nearest address, as precisely as you allow. While Kyllene is open, unless you also allow it while closed.</string>
     <string name="phone_tool_geofences">Watched places</string>
-    <string name="phone_tool_geofences_detail">Arriving at or leaving a place sends its message to the chat it was added from. Adding or removing one asks you first; needs precise location all the time.</string>
+    <string name="phone_tool_geofences_detail">When you arrive at or leave a watched place, send its message to the chat it was added from. Requires precise location all the time.</string>
     <string name="phone_tool_calendar">Calendar</string>
-    <string name="phone_tool_calendar_detail">Your events in a time range. Adding or moving one asks you first.</string>
+    <string name="phone_tool_calendar_detail">Read, add or move calendar events.</string>
     <string name="phone_tool_contacts">Contacts</string>
     <string name="phone_tool_contacts_detail">Looks people up by name, number or email: only their names, numbers and emails, a few at a time.</string>
     <string name="phone_tool_health">Health</string>
@@ -119,4 +119,10 @@
     <string name="phone_tool_show_ui_detail">The agent draws a small screen under its reply, with buttons, choices or a form, and waits up to 5 minutes for your tap. Android only.</string>
     <string name="phone_tool_call_me">Hermes can call me</string>
     <string name="phone_tool_call_me_detail">The agent rings you when something can’t wait, or when you ask it to call you, from a scheduled job too. Answer, and Hermes tells you why on the line. It only ever calls you.</string>
+    <string name="phone_approval_sound">Require approval to change sound controls</string>
+    <string name="phone_approval_alarms">Require approval to set alarms</string>
+    <string name="phone_approval_open">Require approval to open links, maps and apps</string>
+    <string name="phone_approval_clipboard">Require approval to copy text</string>
+    <string name="phone_approval_geofences">Require approval to change watched places</string>
+    <string name="phone_approval_calendar">Require approval to change calendar events</string>
 </resources>

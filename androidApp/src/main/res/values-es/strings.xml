@@ -91,6 +91,7 @@
     <string name="phone_allow">Permitir</string>
     <string name="phone_deny">Denegar</string>
     <string name="phone_question_change">El agente quiere cambiar tu teléfono</string>
+    <string name="phone_unlock_before_approval">Desbloquea el teléfono antes de aprobar esta acción.</string>
     <string name="phone_list_separator">", "</string>
     <string name="phone_sentence">%1$s.</string>
 

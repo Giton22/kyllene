@@ -2,6 +2,7 @@ package dev.hermeskotlin.android.phone
 
 import android.app.Activity
 import android.app.KeyguardManager
+import android.app.NotificationManager
 import android.os.Looper
 import dev.hermeskotlin.core.phone.PhoneTool
 import dev.hermeskotlin.core.phone.PhoneToolException
@@ -119,14 +120,42 @@ class PhoneConfirmationsTest {
         assertEquals(0, runs)
     }
 
-    @Test fun optOutPreservesPlatformFailuresAndDoesNotLaunchFromBackground() = runTest {
+    @Test fun optOutReportsThePlatformFailureWithoutTryingTheActionAgain() = runTest {
         val (_, confirmations) = fixture(ask = false)
-        assertFailsWith<SecurityException> {
-            confirmations.confirm(PhoneTool.Clipboard, "Copy") { throw SecurityException("Android refused") }
+        var attempts = 0
+        val failure = assertFailsWith<PhoneToolException> {
+            confirmations.confirm(PhoneTool.Clipboard, "Copy") {
+                attempts++
+                throw SecurityException("Android refused")
+            }
         }
+        assertEquals("Android refused", failure.message)
+        assertEquals(1, attempts)
+        assertTrue(PhoneConfirmations.asking.value.isEmpty())
+    }
+
+    @Test fun optOutRequiresApprovalForAnActivityLaunchFromTheBackground() = runTest {
+        val (_, confirmations) = fixture(ask = false)
         PhoneConfirmations.inApp.value = false
-        assertFailsWith<PhoneToolException> {
-            confirmations.confirm(PhoneTool.Open, "Open", needsActivity = true) { error("Must not launch") }
+        val application = org.robolectric.RuntimeEnvironment.getApplication()
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        val result = async {
+            confirmations.confirm(PhoneTool.Alarms, "Set a timer", needsActivity = true) { from ->
+                assertTrue(from === activity)
+                assertEquals(Looper.getMainLooper(), Looper.myLooper())
+            }
+        }
+        runCurrent()
+        try {
+            val question = PhoneConfirmations.asking.value.single()
+            assertFalse(result.isCompleted)
+            val notification = application.getSystemService(NotificationManager::class.java).activeNotifications.single().notification
+            assertTrue(notification.actions.last().isAuthenticationRequired)
+            assertTrue(PhoneConfirmations.allow(question.key, activity))
+            result.await()
+            assertFalse(PhoneConfirmations.allow(question.key, activity))
+        } finally {
+            result.cancelAndJoin()
         }
     }
 
@@ -146,18 +175,60 @@ class PhoneConfirmationsTest {
         assertEquals(1, runs)
     }
 
-    @Test fun optOutDoesNotBypassTheDeviceLockAndRunsOnMain() = runTest {
+    @Test fun optOutWaitsForUnlockAndAllowWhenThePhoneIsLocked() = runTest {
         val (_, confirmations) = fixture(ask = false)
         val context = org.robolectric.RuntimeEnvironment.getApplication()
         val keyguard = shadowOf(context.getSystemService(KeyguardManager::class.java))
         keyguard.setIsDeviceLocked(true)
-        assertFailsWith<PhoneToolException> {
-            confirmations.confirm(PhoneTool.Clipboard, "Copy") { error("Must not execute") }
+        PhoneConfirmations.inApp.value = false
+        var runs = 0
+        val result = async { confirmations.confirm(PhoneTool.Calendar, "Add event") { runs++ } }
+        runCurrent()
+        try {
+            val question = PhoneConfirmations.asking.value.single()
+            assertFalse(result.isCompleted)
+            assertEquals(0, runs)
+            keyguard.setIsDeviceLocked(false)
+            runCurrent()
+            assertEquals(0, runs)
+            assertTrue(PhoneConfirmations.allow(question.key, Robolectric.buildActivity(Activity::class.java).setup().get()))
+            result.await()
+            assertEquals(1, runs)
+        } finally {
+            result.cancelAndJoin()
         }
-        keyguard.setIsDeviceLocked(false)
-        confirmations.confirm(PhoneTool.Clipboard, "Copy") {
+    }
+
+    @Test fun aPendingFallbackCannotExecuteWhileStillLocked() = runTest {
+        val (_, confirmations) = fixture(ask = false)
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        shadowOf(context.getSystemService(KeyguardManager::class.java)).setIsDeviceLocked(true)
+        PhoneConfirmations.inApp.value = false
+        val result = async { runCatching {
+            confirmations.confirm(PhoneTool.Calendar, "Add event") { error("Must not execute") }
+        } }
+        runCurrent()
+        try {
+            val question = PhoneConfirmations.asking.value.single()
+            assertTrue(PhoneConfirmations.allow(question.key, Robolectric.buildActivity(Activity::class.java).setup().get()))
+            assertTrue(result.await().exceptionOrNull() is PhoneToolException)
+        } finally {
+            result.cancelAndJoin()
+        }
+    }
+
+    @Test fun optOutRunsForegroundActivityLaunchesOnMainAndBackgroundWritesOffMain() = runTest {
+        val (_, confirmations) = fixture(ask = false)
+        confirmations.confirm(PhoneTool.Open, "Open a link", needsActivity = true) {
             assertEquals(Looper.getMainLooper(), Looper.myLooper())
         }
+        PhoneConfirmations.inApp.value = false
+        for (tool in listOf(PhoneTool.Calendar, PhoneTool.Geofences)) {
+            confirmations.confirm(tool, "Change ${tool.title}") {
+                assertFalse(Looper.getMainLooper() == Looper.myLooper())
+            }
+        }
+        assertTrue(PhoneConfirmations.asking.value.isEmpty())
     }
 
     @Test fun approvedPlatformFailureAndTimeoutNeverReportSuccess() = runTest {

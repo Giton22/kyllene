@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="phone_intro">Lass den Agenten dieses Telefon nutzen: ablesen, wie es ihm geht, oder etwas darauf tun. Jedes Tool ist aus, bis du es einschaltest, und alles, was das Telefon ändert, fragt dich vorher: in Kyllene, solange es offen ist, sonst per Benachrichtigung. Ein Tool, das du ausschaltest, wird dem Agenten sofort entzogen.</string>
+    <string name="phone_intro">Werkzeuge bleiben aus, bis du sie einschaltest. Zum Lesen ist keine Bestätigung nötig. Bei unterstützten Aktionen kannst du die Abfrage abschalten. Ist dein Telefon gesperrt oder verlangt Android eine Eingabe, bevor eine andere App geöffnet wird, musst du die Aktion weiterhin bestätigen. Android-Berechtigungen gelten weiterhin. Wenn du ein Werkzeug ausschaltest, endet der Zugriff sofort.</string>
     <string name="phone_install_what">Es bietet dem Agenten die Tools an, die du hier einschaltest, und leitet ihre Aufrufe an dieses Telefon weiter.</string>
     <string name="phone_let_agent">Agenten dieses Telefon nutzen lassen</string>
     <string name="phone_set_up">Auf dem Gateway einrichten</string>
@@ -94,21 +94,21 @@
     <string name="phone_tool_network">Netzwerk</string>
     <string name="phone_tool_network_detail">WLAN, mobile Daten oder offline, ob es getaktet ist, und ein VPN.</string>
     <string name="phone_tool_sound">Ton</string>
-    <string name="phone_tool_sound_detail">„Bitte nicht stören“, Klingelton und Lautstärken. Eine Änderung fragt dich vorher.</string>
+    <string name="phone_tool_sound_detail">„Nicht stören“, Klingelton und Lautstärke abfragen oder ändern.</string>
     <string name="phone_tool_alarms">Wecker und Timer</string>
-    <string name="phone_tool_alarms_detail">Stellt einen in deiner Uhr-App, nachdem du es erlaubst.</string>
+    <string name="phone_tool_alarms_detail">Wecker und Timer in deiner Uhr-App stellen.</string>
     <string name="phone_tool_screen_time">Bildschirmzeit</string>
     <string name="phone_tool_screen_time_detail">Welche Apps du wie lange genutzt hast, Bildschirmzeit und Entsperrungen, bis zu einer Woche zurück.</string>
     <string name="phone_tool_open">Links, Karten und Apps öffnen</string>
-    <string name="phone_tool_open_detail">Öffnet einen Link, einen Ort, eine App oder das Teilen-Menü, nachdem du es erlaubst.</string>
+    <string name="phone_tool_open_detail">Einen Link, einen Ort, eine App oder das Teilen-Menü öffnen.</string>
     <string name="phone_tool_clipboard">In die Zwischenablage kopieren</string>
-    <string name="phone_tool_clipboard_detail">Legt Text in deine Zwischenablage, nachdem du es erlaubst. Liest nie, was dort ist.</string>
+    <string name="phone_tool_clipboard_detail">Text in deine Zwischenablage kopieren. Liest vorhandene Inhalte nie aus.</string>
     <string name="phone_tool_location">Standort</string>
     <string name="phone_tool_location_detail">Wo das Telefon ist und die nächste Adresse, so genau, wie du es erlaubst. Solange Kyllene offen ist, außer du erlaubst es auch geschlossen.</string>
     <string name="phone_tool_geofences">Beobachtete Orte</string>
-    <string name="phone_tool_geofences_detail">Ankommen an einem Ort oder ihn verlassen schickt seine Nachricht an den Chat, aus dem er hinzugefügt wurde. Hinzufügen oder Entfernen fragt dich vorher; braucht immer den genauen Standort.</string>
+    <string name="phone_tool_geofences_detail">Beim Betreten oder Verlassen eines überwachten Orts die Nachricht an den ursprünglichen Chat senden. Benötigt jederzeit den genauen Standort.</string>
     <string name="phone_tool_calendar">Kalender</string>
-    <string name="phone_tool_calendar_detail">Deine Termine in einem Zeitraum. Hinzufügen oder Verschieben fragt dich vorher.</string>
+    <string name="phone_tool_calendar_detail">Kalendertermine lesen, hinzufügen oder verschieben.</string>
     <string name="phone_tool_contacts">Kontakte</string>
     <string name="phone_tool_contacts_detail">Sucht Personen nach Name, Nummer oder E-Mail: nur ihre Namen, Nummern und E-Mails, wenige auf einmal.</string>
     <string name="phone_tool_health">Gesundheit</string>
@@ -117,4 +117,10 @@
     <string name="phone_tool_show_ui_detail">Der Agent zeichnet unter seiner Antwort einen kleinen Bildschirm mit Knöpfen, Auswahl oder einem Formular und wartet bis zu 5 Minuten auf dein Tippen. Nur Android.</string>
     <string name="phone_tool_call_me">Hermes darf mich anrufen</string>
     <string name="phone_tool_call_me_detail">Der Agent ruft dich an, wenn etwas nicht warten kann oder du ihn darum bittest, auch aus einem geplanten Job. Nimm an, und Hermes sagt dir am Telefon, warum. Er ruft nur dich an.</string>
+    <string name="phone_approval_sound">Änderungen an den Toneinstellungen bestätigen</string>
+    <string name="phone_approval_alarms">Stellen von Weckern bestätigen</string>
+    <string name="phone_approval_open">Öffnen von Links, Karten und Apps bestätigen</string>
+    <string name="phone_approval_clipboard">Kopieren von Text bestätigen</string>
+    <string name="phone_approval_geofences">Änderungen an überwachten Orten bestätigen</string>
+    <string name="phone_approval_calendar">Änderungen an Kalenderterminen bestätigen</string>
 </resources>
