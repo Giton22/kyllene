@@ -2498,6 +2498,66 @@ class ChatSessionTest {
     }
 
     @Test
+    fun anEarlierLiveTurnBranchesThroughItsOwnRows() = runTest {
+        // Two turns sent in one view: neither is in the loaded rows, and the first isn't the newest stored row.
+        storedSessions["local-1"] = """{"session_id":"local-1","messages":[
+            {"id":21,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
+            {"id":22,"role":"user","content":"one"},
+            {"id":23,"role":"assistant","content":"Checking.","tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},
+            {"id":24,"role":"tool","tool_call_id":"c1","content":"ok"},{"id":25,"role":"assistant","content":"First"},
+            {"id":26,"role":"user","content":"two"},{"id":27,"role":"assistant","content":"Second"}]}"""
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"local-1","stored_session_id":"local-1","revision":0,"execution_generation":0,"info":{}}""",
+                "prompt.submit" to """{"status":"queued"}""",
+                "session.mutate" to """{"session_id":"local-1","operation":"branch","revision":2,"branched_session_id":"local-2","copied_messages":2}""",
+            ),
+            ready = AUTHORITY_READY,
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        for (reply in listOf("First", "Second")) {
+            assertTrue(chat.send(if (reply == "First") "one" else "two"))
+            transport.push(event("message.start", "local-1"))
+            transport.push(event("message.complete", "local-1", """{"text":"$reply","status":"complete"}"""))
+            chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Assistant && it.text == reply } }
+        }
+        val through = { transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString() }
+        val messages = chat.state.value.messages
+
+        // The first reply: up to the row before the second prompt's.
+        assertEquals("local-2" to null, chat.branchFrom(messages.first { it is ChatMessage.Assistant }.key))
+        assertEquals("25", through())
+        chat.branchFrom(messages.first { it is ChatMessage.User }.key)
+        assertEquals("22", through())
+        chat.branchFrom(messages.last { it is ChatMessage.User }.key)
+        assertEquals("26", through())
+        // `/branch 1` counts on the rows as stored now: the instruction and "one".
+        chat.branch(1)
+        assertEquals("22", through())
+    }
+
+    @Test
+    fun aChatOpenedWithoutATitleTakesTheOneItsResumeNames() = runTest {
+        // A branch on the session authority: `session.mutate` names the new chat, not its title.
+        val (connection, _) = setup(
+            backgroundScope,
+            mapOf("session.resume" to """{"session_id":"stored-1","running":false,"info":{"title":"Greeting #2"}}"""),
+            ready = AUTHORITY_READY,
+        )
+        val untitled = ChatSession(url, "stored-1", null, connection, SessionsApi(client()), backgroundScope)
+        untitled.start()
+        assertEquals("Greeting #2", untitled.state.first { it.runtimeSessionId == "stored-1" }.title)
+
+        // The title it was opened with stays.
+        val titled = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        titled.start()
+        assertEquals("Greeting", titled.state.first { it.runtimeSessionId == "stored-1" }.title)
+    }
+
+    @Test
     fun aBranchPresentsTheRevisionTheGatewayLastAnnounced() = runTest {
         val (chat, transport) = authorityChat(backgroundScope) { it.branched() }
 
