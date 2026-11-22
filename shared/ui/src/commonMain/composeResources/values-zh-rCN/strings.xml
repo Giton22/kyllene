@@ -31,7 +31,7 @@
     <string name="settings_section_chat">对话</string>
     <string name="settings_section_voice">语音</string>
     <string name="settings_system_calling">Android 通话控制</string>
-    <string name="settings_system_calling_detail">在 GPT-Live 通话中使用 Android Auto。</string>
+    <string name="settings_system_calling_detail">通过 Android Auto、Wear OS 和蓝牙耳机控制 GPT-Live 通话。</string>
     <string name="settings_system_calling_step_permissions">电话权限</string>
     <string name="settings_system_calling_permissions_detail">Android 请求电话权限时，请选择允许。</string>
     <string name="settings_system_calling_allow">允许通话权限</string>

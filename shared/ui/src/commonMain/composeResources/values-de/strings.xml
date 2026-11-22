@@ -31,7 +31,7 @@
     <string name="settings_section_chat">Chat</string>
     <string name="settings_section_voice">Stimme</string>
     <string name="settings_system_calling">Android-Anrufsteuerung</string>
-    <string name="settings_system_calling_detail">Android Auto für GPT-Live-Anrufe.</string>
+    <string name="settings_system_calling_detail">GPT-Live-Anrufe über Android Auto, Wear OS und Bluetooth-Headsets steuern.</string>
     <string name="settings_system_calling_step_permissions">Telefonberechtigungen</string>
     <string name="settings_system_calling_permissions_detail">Wähle Zulassen, wenn Android nach Telefonberechtigungen fragt.</string>
     <string name="settings_system_calling_allow">Telefonberechtigungen erlauben</string>

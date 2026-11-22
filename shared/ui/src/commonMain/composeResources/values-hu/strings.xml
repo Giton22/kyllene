@@ -31,7 +31,7 @@
     <string name="settings_section_chat">Csevegés</string>
     <string name="settings_section_voice">Hang</string>
     <string name="settings_system_calling">Android-hívásvezérlők</string>
-    <string name="settings_system_calling_detail">Android Auto GPT-Live-hívásokhoz.</string>
+    <string name="settings_system_calling_detail">GPT-Live-hívások vezérlése Android Auto, Wear OS és Bluetooth-fejhallgatók használatával.</string>
     <string name="settings_system_calling_step_permissions">Telefonengedélyek</string>
     <string name="settings_system_calling_permissions_detail">Válaszd az Engedélyezés lehetőséget, amikor az Android telefonengedélyt kér.</string>
     <string name="settings_system_calling_allow">Hívási engedélyek megadása</string>
