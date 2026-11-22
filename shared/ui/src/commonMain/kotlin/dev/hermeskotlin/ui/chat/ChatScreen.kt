@@ -592,7 +592,9 @@ fun ChatScreen(
     CompositionLocalProvider(LocalModelPillBounds provides modelPillBounds) {
     ChatView(
         // A bot's chat is titled "Bot Chat" on the gateway; the bot's name says more.
-        title = target.bot?.label ?: state.title?.takeIf { it.isNotBlank() } ?: target.title ?: stringResource(Res.string.chat_new_chat),
+        // A stored chat opened without its title (a branch, until its resume names it) isn't a new one.
+        title = target.bot?.label ?: state.title?.takeIf { it.isNotBlank() } ?: target.title
+            ?: stringResource(if (target.storedSessionId != null) Res.string.app_untitled_session else Res.string.chat_new_chat),
         titleFace = LocalBotFaces.current.let { faces ->
             faces.find(target.bot?.name)?.let { bot -> { BotAvatar(bot, faces.picture(bot), size = 22.dp) } }
         },
