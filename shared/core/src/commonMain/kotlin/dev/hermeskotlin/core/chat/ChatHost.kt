@@ -38,6 +38,13 @@ class ChatHost(
     private val _session = MutableStateFlow<ChatSession?>(null)
     val session: StateFlow<ChatSession?> = _session.asStateFlow()
 
+    private val _ownerVersion = MutableStateFlow(0L)
+    /** Account/profile lifetime, retained across ordinary chat switches. Captured before an external action is made. */
+    val ownerVersion: StateFlow<Long> = _ownerVersion.asStateFlow()
+
+    /** Revokes external actions for the previous context without stopping its work. */
+    fun invalidateOwner() = _ownerVersion.update { it + 1 }
+
     private val _sideChats = MutableStateFlow<Set<String>>(emptySet())
 
     /**
@@ -75,7 +82,7 @@ class ChatHost(
      */
     fun open(gateway: GatewayUrl, storedSessionId: String?, title: String?, profile: String? = null, cwd: String? = null): ChatSession {
         val current = _session.value
-        if (current != null && storedSessionId != null && this.gateway == gateway && this.profile == profile &&
+        if (current != null && current.ownerVersion == _ownerVersion.value && storedSessionId != null && this.gateway == gateway && this.profile == profile &&
             current.state.value.storedSessionId == storedSessionId
         ) {
             return current
@@ -87,13 +94,14 @@ class ChatHost(
         this.profile = profile
         sessionScope = childScope
         val cards = storedSessionId?.let { sideTasks.remove(Triple(gateway, profile, it)) }.orEmpty()
-        return ChatSession(gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache, sideTasks = cards, startInstruction = startInstruction)
+        return ChatSession(gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache, sideTasks = cards, startInstruction = startInstruction, ownerVersion = _ownerVersion.value)
             .also { it.start() }
             .also { _session.value = it }
     }
 
     /** Drops the open chat, e.g. on sign-out, and the side-task cards kept for others: they belonged to that account. */
     fun close() {
+        invalidateOwner()
         sideTasks.clear()
         closeOpen()
     }

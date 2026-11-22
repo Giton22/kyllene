@@ -394,6 +394,9 @@ class ChatViewModel(
     private val session = MutableStateFlow<ChatSession?>(null)
     private val widgetSession = MutableStateFlow<Pair<ChatSession, ChatTarget>?>(null)
 
+    /** An external return uses the target actually bound to this source, including its draft and bot identity. */
+    fun targetFor(source: ChatSession): ChatTarget? = target.takeIf { session.value === source }
+
     init {
         // Caught up only while the end that was read is still the end: a turn starting or a message coming in lets go.
         viewModelScope.launch {
@@ -789,9 +792,9 @@ class ChatViewModel(
         viewModelScope.launch { _requests.send(ChatRequest.OpenProcesses) }
     }
 
-    fun watchProcesses() = processes.start(session.value)
+    fun watchProcesses() = processes.start(session)
 
-    fun killProcess(process: BackgroundProcess) = processes.kill(session.value, process)
+    fun killProcess(process: BackgroundProcess) = processes.kill(session, process)
 
     /** Shows the checkpoints sheet (from the chat menu, or `/rollback`). */
     fun openCheckpoints() {

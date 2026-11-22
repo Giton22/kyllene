@@ -276,6 +276,8 @@ import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isMetaPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import dev.hermeskotlin.ui.stepChat
+import dev.hermeskotlin.ui.neighbourAfterRemoving
+import androidx.compose.runtime.SideEffect
 import dev.hermeskotlin.ui.components.ConnectionLine
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.ListSkeleton
@@ -324,7 +326,8 @@ fun SessionsSidebar(
     onOpenSession: (session: SessionSummary, readUpTo: Double?) -> Unit,
     /** A new chat, in the project the list shows when one is picked (Home among them); null when none is. */
     onNewChat: (project: Project?) -> Unit,
-    onDeleted: (SessionSummary) -> Unit,
+    /** [deleted] is gone; [next] is the chat listed in its place, to open if [deleted] was open (null: none is left). */
+    onDeleted: (deleted: SessionSummary, next: SessionSummary?) -> Unit,
     onSessionExpired: () -> Unit,
     onSignOut: () -> Unit,
     onOpenGateways: () -> Unit,
@@ -355,6 +358,8 @@ fun SessionsSidebar(
     onOpenReportChat: (ReportChat) -> Unit = {},
     /** Where the pages show beside the docked sidebar on a desktop; null keeps them in the sidebar. */
     mainPage: MainPageSlot? = null,
+    /** Kept up to date with the chats this list shows, for the chat options menu's Delete. */
+    shownChats: ShownChats = remember { ShownChats() },
     viewModel: SessionsViewModel = koinViewModel(),
     bots: BotsViewModel = koinViewModel(),
     rooms: RoomsViewModel = koinViewModel(),
@@ -575,6 +580,27 @@ fun SessionsSidebar(
     }
     // The desktop's keys for the list: search, and stepping through the chats in the order they're listed.
     val listed = shownThreads.map { it.session } + sections.others.filter { attentionFilter.keeps(statuses[it.id]) }
+    // The chats as the list in view shows them, top to bottom, read when one is deleted for the chat to open in
+    // its place. With none in view (the Bots side, a phone's search before a word is typed), the Chats side's.
+    SideEffect {
+        shownChats.rows = {
+            val (pinned, rest) = sections.others.filter { attentionFilter.keeps(statuses[it.id]) }.partition { it.pinned }
+            chatsInView(
+                recent = visibleThreads(shownThreads, threadsCollapsed, selectedId, statuses, drafts).map { it.session } +
+                    visiblePinned(pinned, pinnedCollapsed, selectedId, statuses, drafts) + rest,
+                others = sections.others,
+                filtered = state.sessions,
+                results = state.searchResults,
+                searchOpen = searchOpen,
+                recentFilter = state.filter == SessionListFilter.Recent,
+                botsSide = mode == SidebarMode.Bots,
+                visible = visible,
+                desktop = isDesktop,
+            )
+        }
+        // A chat in a window of its own never also opens in the main window.
+        shownChats.windowed = { if (isDesktop) windowed else emptySet() }
+    }
     val modals = LocalOpenModals.current
     ShortcutHandler { shortcut ->
         when (shortcut) {
@@ -1122,8 +1148,10 @@ fun SessionsSidebar(
         deleteTarget,
         onDismiss = { deleteTarget = null },
         onDelete = {
+            // Before the delete, which takes the row out of the list at once.
+            val next = shownChats.after(it)
             viewModel.delete(it)
-            onDeleted(it)
+            onDeleted(it, next)
         },
     )
     // The picked profile, else the one the gateway runs as.
@@ -1670,6 +1698,57 @@ private fun SearchHeader(viewModel: SessionsViewModel, focusAsks: Int, list: Lis
         IconButton(Lucide.X, contentDescription = stringResource(Res.string.sessions_close_search), onClick = onClose, tint = Theme[colors][text])
     }
 }
+
+/**
+ * The chats as the sidebar lists them, top to bottom, for the chat options menu: deleting the open chat there
+ * opens the one listed after it, as a delete from the list does.
+ */
+class ShownChats {
+    internal var rows: () -> List<SessionSummary> = { emptyList() }
+
+    /** The chats in windows of their own, which don't take a deleted chat's place. */
+    internal var windowed: () -> Set<String> = { emptySet() }
+
+    /**
+     * The chat to open once [deleted] is gone: the one after it, or before it when it was last; null when none is
+     * left. A thread's row can carry a later id of its chat than the one that is open, so the lineage counts.
+     */
+    fun after(deleted: SessionSummary): SessionSummary? {
+        val elsewhere = windowed()
+        val list = rows().filter { it.isChat(deleted.id) || it.id !in elsewhere }
+        return neighbourAfterRemoving(list, list.indexOfFirst { it.isChat(deleted.id) })
+    }
+}
+
+/**
+ * The chats the sidebar's list shows, top to bottom. [recent] is the Recent list as sectioned and folded, [others]
+ * its chats outside Threads (what a desktop's search lists before a word is typed), [filtered] what another filter
+ * loaded (Archived) and [results] the search's. A search left open in a sidebar that isn't [visible] doesn't
+ * count: nobody sees its results. Nor do results left behind on the Bots side ([botsSide]), which shows its roster.
+ */
+internal fun chatsInView(
+    recent: List<SessionSummary>,
+    others: List<SessionSummary>,
+    filtered: List<SessionSummary>,
+    results: List<SessionSummary>?,
+    searchOpen: Boolean,
+    recentFilter: Boolean,
+    botsSide: Boolean,
+    visible: Boolean,
+    desktop: Boolean,
+): List<SessionSummary> {
+    val found = results.takeIf { visible }
+    return when {
+        !searchOpen && recentFilter && botsSide -> recent
+        found != null -> found.pinnedFirst()
+        searchOpen && visible && desktop -> others.pinnedFirst()
+        recentFilter -> recent
+        else -> filtered.pinnedFirst()
+    }
+}
+
+/** Pinned chats first, as [SessionList] shows them. */
+private fun List<SessionSummary>.pinnedFirst(): List<SessionSummary> = partition { it.pinned }.let { (pinned, rest) -> pinned + rest }
 
 /** Lets the search field hand the focus to the first chat the list under it shows. */
 private class ListFocus {

@@ -42,7 +42,7 @@ class WebCookieJarTest {
         cookies.addCookie(Url(gateway), Cookie("__Host-hermes_session_at", "at", maxAge = 600, path = "/", secure = true, httpOnly = true))
         cookies.addCookie(Url(gateway), Cookie("__Host-hermes_session_rt", "rt", maxAge = 86400, path = "/", secure = true, httpOnly = true))
 
-        val session = jar().sessionFor(page)
+        val session = jar().sessionFor(page, gateway)
 
         assertEquals(listOf("__Host-hermes_session_at=at; Path=/; Secure; HttpOnly"), session.cookies)
         assertEquals(now + 600_000, session.expiresAt)
@@ -53,22 +53,53 @@ class WebCookieJarTest {
         // The gateway checks the access-token cookie with the same providers as a bearer token.
         tokens.set(GatewayUrl.parse(gateway), NativeSession("AT1", "RT1", expiresAt = 1_900_000_000, provider = "oidc"))
 
-        val session = jar().sessionFor(page)
+        val session = jar().sessionFor(page, gateway)
 
+        // Over https the gateway reads only the name it sets itself there (hermes-agent 0.23.2, #456).
         assertEquals(
-            listOf("hermes_session_at=AT1; Path=/; Secure; HttpOnly", "hermes_session_provider=oidc; Path=/; Secure; HttpOnly"),
+            listOf("__Host-hermes_session_at=AT1; Path=/; Secure; HttpOnly", "__Host-hermes_session_provider=oidc; Path=/; Secure; HttpOnly"),
             session.cookies,
         )
         assertEquals(1_900_000_000_000, session.expiresAt)
     }
 
     @Test
+    fun aBrowserSignInBehindAPathPrefixLendsBothNamesTheGatewayMayRead() = runTest {
+        // With X-Forwarded-Prefix the gateway reads __Secure- at the prefix; without it, __Host- at the root.
+        val mounted = "https://hermes.example.ts.net/hermes"
+        tokens.set(GatewayUrl.parse(mounted), NativeSession("AT1", "RT1", expiresAt = 1_900_000_000, provider = "oidc"))
+
+        val session = jar().sessionFor("$mounted/example-board", "$mounted/")
+
+        assertEquals(
+            listOf(
+                "__Host-hermes_session_at=AT1; Path=/; Secure; HttpOnly",
+                "__Host-hermes_session_provider=oidc; Path=/; Secure; HttpOnly",
+                "__Secure-hermes_session_at=AT1; Path=/hermes; Secure; HttpOnly",
+                "__Secure-hermes_session_provider=oidc; Path=/hermes; Secure; HttpOnly",
+            ),
+            session.cookies,
+        )
+    }
+
+    @Test
+    fun aBrowserSignInOverPlainHttpLendsTheBareNames() = runTest {
+        // Prefixed names need Secure, which plain http can't carry; the gateway sets and reads bare ones there.
+        val plain = "http://hermes.example.ts.net:9119"
+        tokens.set(GatewayUrl.parse(plain), NativeSession("AT1", "RT1", expiresAt = 1_900_000_000, provider = "oidc"))
+
+        val session = jar().sessionFor("$plain/example-board", plain)
+
+        assertEquals(listOf("hermes_session_at=AT1; Path=/; HttpOnly", "hermes_session_provider=oidc; Path=/; HttpOnly"), session.cookies)
+    }
+
+    @Test
     fun theAccessServiceTokenGoesOverHttpsOnly() = runTest {
         access.set("hermes.example.ts.net", AccessToken("id", "secret"))
 
-        assertEquals(mapOf(CF_ACCESS_CLIENT_ID to "id", CF_ACCESS_CLIENT_SECRET to "secret"), jar().sessionFor(page).headers)
-        assertTrue(jar().sessionFor("http://hermes.example.ts.net/example-board").headers.isEmpty())
-        assertTrue(jar().sessionFor("https://other.ts.net/example-board").headers.isEmpty())
+        assertEquals(mapOf(CF_ACCESS_CLIENT_ID to "id", CF_ACCESS_CLIENT_SECRET to "secret"), jar().sessionFor(page, gateway).headers)
+        assertTrue(jar().sessionFor("http://hermes.example.ts.net/example-board", "http://hermes.example.ts.net").headers.isEmpty())
+        assertTrue(jar().sessionFor("https://other.ts.net/example-board", "https://other.ts.net").headers.isEmpty())
     }
 
     @Test
@@ -95,7 +126,7 @@ class WebCookieJarTest {
         jar.renew(gateway, page)
 
         assertEquals("__Host-hermes_session_rt=rt1", sent)
-        val session = jar.sessionFor(page)
+        val session = jar.sessionFor(page, gateway)
         assertEquals(listOf("__Host-hermes_session_at=new; Path=/; Secure; HttpOnly"), session.cookies)
         assertEquals(now + 600_000, session.expiresAt)
     }

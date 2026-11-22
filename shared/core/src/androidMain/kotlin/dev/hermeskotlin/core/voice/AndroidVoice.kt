@@ -43,6 +43,8 @@ import kotlin.math.sqrt
 class AndroidVoiceRecorder(
     /** How long a microphone may send nothing before the recording fails. */
     private val noAudioMs: Long = NO_AUDIO_MS,
+    /** Whether a chained chat holds call routing, which changes the microphone [record] opens. */
+    private val route: ChatAudioRoute? = null,
 ) : VoiceRecorder {
 
     @Volatile private var finishRequested = false
@@ -50,9 +52,13 @@ class AndroidVoiceRecorder(
     @SuppressLint("MissingPermission") // The UI asks for RECORD_AUDIO before starting.
     override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording = withContext(Dispatchers.IO) {
         finishRequested = false
+        // Under a chained chat's call routing, a speech-recognition stream can be given another microphone (the back
+        // one on Samsung's speakerphone route) that hears next to nothing until the idle wait ends it (#408). The call
+        // microphone the reply is listened over with hears them, so the turn between replies uses it too.
+        val callAudio = route?.callAudio() == true
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val record = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            if (callAudio) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.VOICE_RECOGNITION,
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
@@ -62,17 +68,19 @@ class AndroidVoiceRecorder(
             record.release()
             error("The microphone isn't available.")
         }
-        // Noise suppression only: automatic gain lifts the room's hum in every pause until it reads as
-        // talking, and the end of speech is never found.
-        val effects = listOfNotNull(
-            if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(record.audioSessionId)?.apply { enabled = true } else null,
-        )
+        // Noise suppression, and on the call microphone echo cancelling as over the reply. No automatic gain: it
+        // lifts the room's hum in every pause until it reads as talking, and the end of speech is never found.
+        val effects = ArrayList<AudioEffect>(2)
         val pcm = ByteArrayOutputStream()
         val frame = ShortArray(FRAME_SAMPLES)
         val bytes = ByteBuffer.allocate(FRAME_SAMPLES * 2).order(ByteOrder.LITTLE_ENDIAN)
         val endOfSpeech = EndOfSpeech(activity)
         var elapsed = 0L
         try {
+            // Inside the try, so the recorder is let go whatever they do; one that won't switch on is done without.
+            if (callAudio && AcousticEchoCanceler.isAvailable()) runCatching { AcousticEchoCanceler.create(record.audioSessionId) }.getOrNull()?.let(effects::add)
+            if (NoiseSuppressor.isAvailable()) runCatching { NoiseSuppressor.create(record.audioSessionId) }.getOrNull()?.let(effects::add)
+            effects.forEach { runCatching { it.enabled = true } }
             record.startRecording()
             if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) error("The microphone isn't available.")
             while (!finishRequested) {
@@ -96,7 +104,7 @@ class AndroidVoiceRecorder(
             }
         } finally {
             runCatching { record.stop() }
-            effects.forEach { it.release() }
+            effects.forEach { runCatching { it.release() } }
             record.release()
             onLevel(0f)
         }
@@ -122,6 +130,8 @@ class AndroidVoiceRecorder(
     ): Recording? =
         withContext(Dispatchers.IO) {
             finishRequested = false
+            // Call mode the system dropped is taken up again before the microphone opens, not under it by the reply.
+            route?.callAudio()
             val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
             val record = try {
                 AudioRecord(
@@ -256,7 +266,11 @@ class AndroidVoiceRecorder(
  * Plays each reply clip from a cache file with [MediaPlayer], and streamed speech straight into an
  * [AudioTrack] as it arrives, as assistant audio outside a chained voice chat.
  */
-class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
+class AndroidSpeechPlayer(
+    private val context: Context,
+    /** Tells the recorder whether this player holds call routing for a chained chat. */
+    route: ChatAudioRoute = ChatAudioRoute(),
+) : SpeechPlayer {
     override suspend fun playRingback() {
         val bytes = withContext(Dispatchers.IO) { context.assets.open("call_ringback.wav").use { it.readBytes() } }
         play(SpokenAudio(bytes, "audio/wav"))
@@ -272,6 +286,19 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
     private val outputsChanged = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = reroute()
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = reroute()
+    }
+
+    init {
+        route.check = { callRoutingHeld() }
+    }
+
+    /**
+     * Whether call routing is held, taken up again first if the system dropped it. Asked before every listen and
+     * reply, so a route that didn't take isn't tried again here: that waits for the outputs to change.
+     */
+    private fun callRoutingHeld(): Boolean = synchronized(lock) {
+        if (restoreChatAudio != null) reroute()
+        restoreChatAudio != null
     }
 
     /** Held ([hold]): what plays now is paused, and what's ready meanwhile waits to start. */
@@ -308,9 +335,21 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
     private fun reroute(): Unit = synchronized(lock) {
         val outputs = runCatching { audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS) }.getOrNull()
         val wanted = chatAudioOwners.isNotEmpty() && outputs != null && outputs.none { it.type in OWN_OUTPUTS }
-        if (wanted == (restoreChatAudio != null)) return
+        val held = restoreChatAudio
+        if (wanted && held != null) {
+            // The system puts the mode back to normal once no call audio has played or listened for a few seconds,
+            // as between a reply and the next turn (#408). Held routing is taken up again from there, or let go if it
+            // won't take; a mode someone else holds, such as a phone call ringing or in progress, is left alone.
+            if (audioManager.mode != AudioManager.MODE_NORMAL) return
+            if (!runCatching { callRouting() }.getOrDefault(false)) {
+                held()
+                restoreChatAudio = null
+            }
+            return
+        }
+        if (wanted == (held != null)) return
         if (!wanted) {
-            restoreChatAudio?.invoke()
+            held?.invoke()
             restoreChatAudio = null
             return
         }
@@ -323,21 +362,28 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
             Unit
         }
         try {
-            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            if (Build.VERSION.SDK_INT >= 31) {
-                val builtIn = audioManager.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
-                check(builtIn != null && audioManager.setCommunicationDevice(builtIn))
-            } else audioManager.isSpeakerphoneOn = true
+            check(callRouting())
             restoreChatAudio = restore
         } catch (_: Exception) {
             restore()
         }
     }
 
-    /** Call audio while a chained chat has call routing, assistant audio otherwise. */
-    private fun speechUsage() = synchronized(lock) {
-        if (restoreChatAudio != null) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_ASSISTANT
+    /** Call mode on the phone's speaker; false (or a throw) when the speaker can't be the call's. */
+    @Suppress("DEPRECATION")
+    private fun callRouting(): Boolean {
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (Build.VERSION.SDK_INT >= 31) {
+            val builtIn = audioManager.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            return builtIn != null && audioManager.setCommunicationDevice(builtIn)
+        }
+        audioManager.isSpeakerphoneOn = true
+        return true
     }
+
+    /** Call audio while a chained chat has call routing, assistant audio otherwise. */
+    // A reply after a quiet spell finds call mode taken up again first.
+    private fun speechUsage() = if (callRoutingHeld()) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_ASSISTANT
 
     override fun hold(on: Boolean): Boolean {
         synchronized(lock) {
@@ -511,4 +557,16 @@ class AndroidSpeechPlayer(private val context: Context) : SpeechPlayer {
             AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_BLE_SPEAKER, AudioDeviceInfo.TYPE_BLE_BROADCAST,
         )
     }
+}
+
+/**
+ * Whether a chained chat holds call routing right now, shared by the [AndroidSpeechPlayer] that holds it and the
+ * [AndroidVoiceRecorder] whose microphone depends on it.
+ */
+class ChatAudioRoute {
+    /** Set by the player: takes held routing up again if the system dropped it, and says whether it's held. */
+    @Volatile internal var check: () -> Boolean = { false }
+
+    /** True while a chained chat has call routing, taken up again first if the system let it go meanwhile. */
+    fun callAudio(): Boolean = check()
 }

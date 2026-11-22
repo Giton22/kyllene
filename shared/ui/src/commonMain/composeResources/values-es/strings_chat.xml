@@ -192,6 +192,10 @@
         <item quantity="other">%1$d en curso</item>
     </plurals>
     <string name="chat_processes_empty">Nada en curso. Los servidores de desarrollo, compilaciones y vigilantes que el agente inicia en segundo plano aparecen aquí.</string>
+    <string name="chat_processes_subagents">Subagentes</string>
+    <string name="chat_processes_subagents_unavailable">El estado de los subagentes no está disponible.</string>
+    <string name="chat_processes_shell">Procesos de terminal</string>
+    <string name="chat_processes_shell_empty">No hay procesos de terminal en segundo plano.</string>
     <string name="chat_processes_finished">Terminados</string>
     <string name="chat_process_hide_output">Ocultar salida</string>
     <string name="chat_process_show_output">Mostrar salida</string>

@@ -41,7 +41,13 @@ data class GatewayEvent(
  * JSON-RPC error returned by the gateway. [reason] is the machine-readable cause some errors carry in
  * `data.reason` (`SESSION_NOT_OWNED` on a 4090, a delivery failure class), so callers needn't read prose.
  */
-class RpcException(val code: Int, override val message: String, val reason: String? = null) : Exception(message)
+class RpcException(
+    val code: Int,
+    override val message: String,
+    val reason: String? = null,
+    /** The error's whole `data` object, for errors that carry more than [reason] (a refusal's fresh fences). */
+    val data: JsonObject? = null,
+) : Exception(message)
 
 /**
  * No reply to [method] within its timeout. The call went out, so the gateway may still have acted on it.
@@ -244,6 +250,7 @@ class JsonRpcClient(
                             error["message"]?.jsonPrimitive?.contentOrNull ?: "RPC error",
                             ((error["data"] as? JsonObject)?.get("reason") as? JsonPrimitive)
                                 ?.takeIf { it.isString }?.contentOrNull,
+                            error["data"] as? JsonObject,
                         ),
                     )
                 } else {

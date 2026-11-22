@@ -93,6 +93,8 @@ import dev.hermeskotlin.ui.gateways.GatewaysSheet
 import dev.hermeskotlin.ui.sessions.ArchiveUndoToast
 import dev.hermeskotlin.ui.sessions.ChatMenu
 import dev.hermeskotlin.ui.sessions.SessionsSidebar
+import dev.hermeskotlin.ui.sessions.ShownChats
+import dev.hermeskotlin.core.sessions.SessionSummary
 import dev.hermeskotlin.ui.settings.AppLockCover
 import dev.hermeskotlin.ui.settings.PhoneQuestion
 import dev.hermeskotlin.ui.settings.PhoneQuestionDialog
@@ -336,6 +338,26 @@ private fun Routes() {
 
     val choices by app.gatewayChoices.collectAsStateWithLifecycle()
     var gatewaysOpen by remember { mutableStateOf(false) }
+    val shortcuts = LocalShortcuts.current
+    val boundChat = remember { mutableStateOf<ChatViewModel?>(null) }
+    var pendingReveal by remember { mutableStateOf<Shortcut.RevealChat?>(null) }
+    fun revealChat() {
+        gatewaysOpen = false
+        app.cancelPendingCall()
+    }
+    ShortcutHandler { shortcut ->
+        if (shortcut is Shortcut.RevealChat) {
+            val target = boundChat.value?.targetFor(shortcut.source)
+            if (shortcut.current() && target != null && (route as? Route.SignIn)?.adding == true) {
+                pendingReveal = shortcut
+                true
+            } else if (shortcut.current() && target != null && app.returnToChat(shortcut.source, target)) {
+                revealChat()
+                pendingReveal = shortcut
+                true
+            } else false
+        } else false
+    }
     LaunchedEffect((route as? Route.Chat)?.target) {
         if ((route as? Route.Chat)?.target?.draft?.start == DraftStart.VoiceChat) gatewaysOpen = false
     }
@@ -370,7 +392,21 @@ private fun Routes() {
             },
         )
 
-        is Route.Chat -> Home(r, app, onOpenGateways = { gatewaysOpen = true })
+        is Route.Chat -> {
+            val chat: ChatViewModel = koinViewModel()
+            SideEffect { boundChat.value = chat }
+            Home(r, app, onOpenGateways = { gatewaysOpen = true }, onRevealChat = ::revealChat, chat = chat)
+        }
+    }
+
+    LaunchedEffect(route, pendingReveal) {
+        val pending = pendingReveal ?: return@LaunchedEffect
+        if (!pending.current()) {
+            pendingReveal = null
+        } else if (route is Route.Chat) {
+            pendingReveal = null
+            shortcuts.fire(pending)
+        }
     }
 
     val dismissCall = if (openingCall) app::cancelPendingCall else app::dismissCallError
@@ -436,8 +472,7 @@ private class BotEditing(val bot: Bot?)
 
 /** The signed-in home: the chat, with the sessions sidebar to its left (a drawer on phones, docked on wide screens). */
 @Composable
-private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Unit) {
-    val chat: ChatViewModel = koinViewModel()
+private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Unit, onRevealChat: () -> Unit, chat: ChatViewModel) {
     val chatState by chat.state.collectAsStateWithLifecycle()
     val untitled = stringResource(Res.string.app_untitled_session)
     val sidebar = rememberSidebarState()
@@ -591,6 +626,12 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     // the foreground; that keeps the gateway's live list polled then (every 10 s, as while the sidebar shows), and
     // never in the background.
     val sessions: SessionsViewModel = koinViewModel()
+    // The chats as the sidebar lists them: deleting the open chat, from there or its options, opens the one listed
+    // in its place, and a new chat only when none is left.
+    val shownChats = remember { ShownChats() }
+    val leaveDeleted: (next: SessionSummary?) -> Unit = { next ->
+        if (next != null) app.openSession(next.id, next.displayTitle, sessions.readUpTo(next)) else app.newChat()
+    }
     val profileRoster by sessions.roster.collectAsStateWithLifecycle()
     // The bot answering in the open chat, named above its replies. Only a launch profile the gateway named counts:
     // a guessed `default` could name the wrong bot. Equal unless what's drawn changed, so a roster refresh doesn't
@@ -677,6 +718,19 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     var paletteOpen by remember { mutableStateOf(false) }
     var shortcutsOpen by remember { mutableStateOf(false) }
     val bus = LocalShortcuts.current
+    val openModals = LocalOpenModals.current
+    var pendingReveal by remember { mutableStateOf<Shortcut.RevealChat?>(null) }
+    LaunchedEffect(pendingReveal, openModals.any, editing, pluginUrl) {
+        val pending = pendingReveal ?: return@LaunchedEffect
+        if (!pending.current()) {
+            pendingReveal = null
+        } else if (!openModals.any && editing == null && pluginUrl == null) {
+            pendingReveal = null
+            settingsOpen = false
+            menuOpen = false
+            closeDrawerToChat()
+        }
+    }
     ShortcutHandler { shortcut ->
         when (shortcut) {
             // The open chat moves to a window of its own; this one goes on with a new chat.
@@ -694,6 +748,12 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                 closeDrawerToChat()
             }
             Shortcut.Settings -> true.also { settingsOpen = true }
+            is Shortcut.RevealChat -> true.also {
+                if (shortcut.current()) {
+                    onRevealChat()
+                    pendingReveal = shortcut
+                }
+            }
             Shortcut.ToggleSidebar -> true.also { scope.launch { sidebar.toggle() } }
             // The sidebar has opened its search already; it has to show to be used.
             Shortcut.SearchChats -> true.also { scope.launch { sidebar.open() } }
@@ -731,7 +791,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     app.newChat(cwd = project?.path?.takeIf { !project.isNoProject }, picked = project != null)
                     closeDrawerToChat()
                 },
-                onDeleted = { if (it.id == openSessionId) app.newChat() },
+                onDeleted = { deleted, next -> if (deleted.id == openSessionId) leaveDeleted(next) },
                 onSessionExpired = app::onSessionExpired,
                 onSignOut = app::signOut,
                 onOpenGateways = onOpenGateways,
@@ -785,6 +845,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                     if (app.openReportChat(chat, launch = profileRoster?.takeIf { it.launchKnown }?.launch)) closeDrawerToChat()
                 },
                 mainPage = mainPage,
+                shownChats = shownChats,
             )
         },
     ) {
@@ -822,7 +883,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                                 menuOpen = true
                             }
                         },
-                        onOpenChat = { id, title -> app.openSession(id, title ?: untitled) },
+                        onOpenChat = app::openSession,
                         onSwitchProfile = app::switchProfile,
                         viewModel = chat,
                         // Not while a page or the chat's menu covers it: typing there mustn't land in the composer.
@@ -919,7 +980,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         messages = chatState.messages,
         onDismiss = { menuOpen = false },
         onRenamed = chat::showTitle,
-        onDeleted = app::newChat,
+        onDeleted = leaveDeleted,
         onUsage = chat::openUsage,
         onProcesses = chat::openProcesses,
         onCheckpoints = chat::openCheckpoints,
@@ -928,6 +989,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         botChat = route.target.bot != null,
         onStartFresh = openBot?.let { bot -> { startOver = bot } },
         onOpenChat = app::openSession,
+        shownChats = shownChats,
     )
     StartOverDialog(startOver, onDismiss = { startOver = null }) { bot ->
         bots.startFresh(bot) { id -> app.openBotChat(bot, id) }

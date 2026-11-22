@@ -192,6 +192,10 @@
         <item quantity="other">%1$d em execução</item>
     </plurals>
     <string name="chat_processes_empty">Nada em execução. Servidores de desenvolvimento, builds e observadores que o agente inicia em segundo plano aparecem aqui.</string>
+    <string name="chat_processes_subagents">Subagentes</string>
+    <string name="chat_processes_subagents_unavailable">O status dos subagentes está indisponível.</string>
+    <string name="chat_processes_shell">Processos do terminal</string>
+    <string name="chat_processes_shell_empty">Nenhum processo do terminal em segundo plano.</string>
     <string name="chat_processes_finished">Encerrados</string>
     <string name="chat_process_hide_output">Ocultar saída</string>
     <string name="chat_process_show_output">Mostrar saída</string>
