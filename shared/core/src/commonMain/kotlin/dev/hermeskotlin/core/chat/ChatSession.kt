@@ -1383,7 +1383,9 @@ class ChatSession(
         if (message is ChatMessage.User) message.rowId?.let { return it }
         val known = rows.mapNotNullTo(HashSet()) { it.id }
         val since = currentRows()?.takeLastWhile { it.id !in known } ?: return null
-        val stored = since.indices.filter { since[it].role == "user" && !since[it].isHidden }
+        // Read as the chat shows them: a `user` row may be a note (a model switch, a finished process), not a prompt.
+        val prompts = historyToMessages(since).filterIsInstance<ChatMessage.User>().mapNotNullTo(HashSet()) { it.firstStoredRowId() }
+        val stored = since.indices.filter { since[it].id in prompts }
         val live = messages.withIndex().filter { it.value is ChatMessage.User && it.value.firstStoredRowId() == null }
         if (live.size != stored.size) return null
         val sent = live.count { it.index <= index }
@@ -1469,12 +1471,14 @@ class ChatSession(
 
     /**
      * The loaded rows with those stored since joined on, read without showing them; null when the newest page
-     * couldn't be read or no longer meets them.
+     * couldn't be read, no longer meets them, or (none loaded) may not start at the chat's first row.
      */
     private suspend fun currentRows(): List<SessionMessage>? {
         val id = _state.value.storedSessionId ?: return null
-        val page = (sessions.messages(gateway, id, limit = HISTORY_PAGE, profile = profile) as? ApiResult.Success)?.value?.messages
-        return page?.let { rows.afterNewestPage(it) }
+        val page = (sessions.messages(gateway, id, limit = HISTORY_PAGE_MAX, profile = profile) as? ApiResult.Success)?.value?.messages
+            ?: return null
+        if (rows.isEmpty() && page.size >= HISTORY_PAGE_MAX) return null
+        return rows.afterNewestPage(page, HISTORY_PAGE_MAX)
     }
 
     /** The id of the [keep]th of [rows] `session.branch` counts; null when there are fewer. */
