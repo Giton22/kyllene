@@ -985,8 +985,6 @@ internal fun ChatView(
             // and undo the fold; only the jump button and the pet follow the composer's real height.
             var composerShrink by remember { mutableIntStateOf(0) }
             val listInset = with(LocalDensity.current) { (dockHeight + composerShrink).toDp() }
-            // Frost the transcript by default, or the solid dock when the reader opts in.
-            val opaqueComposer = LocalAppSettings.current.opaqueComposer
             val hazeState = rememberHazeState()
             // Comments wait in the composer, so the selection menus offer them only while it shows.
             var focusComment by remember { mutableStateOf<Long?>(null) }
@@ -1093,7 +1091,7 @@ internal fun ChatView(
                 }
             }
             Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { paneHeight = it.height; paneWidth = it.width }) {
-                Box(Modifier.fillMaxSize().then(if (opaqueComposer) Modifier else Modifier.hazeSource(hazeState))) {
+                Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
                     if (wallpaper != null) ChatWallpaper(wallpaper, LocalAppSettings.current.wallpaperStrength, Modifier.fillMaxSize())
                     if (state.historyLoaded && state.messages.isNotEmpty()) {
                         CompositionLocalProvider(
@@ -1209,57 +1207,50 @@ internal fun ChatView(
                         StatusPill(stringResource(Res.string.chat_loading_older))
                     }
                 }
-                Box(
+                Column(
                     Modifier
                         .then(if (isDesktop) Modifier.align(Alignment.TopCenter).offset { IntOffset(0, dockTop.roundToInt()) } else Modifier.align(Alignment.BottomCenter))
                         .widthIn(max = READING_WIDTH)
                         .fillMaxWidth()
                         .onSizeChanged { dockHeight = it.height },
                 ) {
-                    if (opaqueComposer) {
-                        Box(
-                            Modifier.matchParentSize().hazeSource(hazeState)
-                                .background(Theme[colors][background].copy(alpha = 1f)),
-                        )
-                    }
-                    Column {
-                        Dock(
-                            hazeState = hazeState,
-                            actions = actions,
-                            placeholder = placeholder,
-                            state = state,
-                            picker = picker,
-                            connected = connected,
-                            attachments = attachments,
-                            attachmentError = attachmentError,
-                            voiceChat = voiceChat,
-                            dictation = dictation,
-                            readAloud = readAloud,
-                            suggestions = suggestions,
-                            suggestedReply = suggestedReply,
-                            mentions = mentions,
-                            onMention = onMention,
-                            refs = refs,
-                            onRef = onRef,
-                            notice = notice,
-                            editing = editing != null,
-                            comments = comments,
-                            focusComment = focusComment,
-                            onCommentFocused = { focusComment = null },
-                            composerFocus = composerFocus,
-                            composerFold = composerFold,
-                            onComposerShrink = { composerShrink = it },
-                            onListsHeight = { listsHeight = it },
-                            onOpenModels = onOpenModels,
-                            onAttach = onAttach,
-                            onDictate = onDictate,
-                            onVoiceChat = onVoiceChat,
-                            onOpenControl = onOpenControl,
-                            voiceFull = voiceFull,
-                            onExpandVoice = { voiceFolded = false },
-                            onPasteFiles = { canAttach && keysEnabled && attachmentPicker?.pasteAttachments() == true },
-                        )
-                    }
+                    Dock(
+                        hazeState = hazeState,
+                        opaqueComposer = LocalAppSettings.current.opaqueComposer && composerShown && !centred && toFoot >= 1f,
+                        actions = actions,
+                        placeholder = placeholder,
+                        state = state,
+                        picker = picker,
+                        connected = connected,
+                        attachments = attachments,
+                        attachmentError = attachmentError,
+                        voiceChat = voiceChat,
+                        dictation = dictation,
+                        readAloud = readAloud,
+                        suggestions = suggestions,
+                        suggestedReply = suggestedReply,
+                        mentions = mentions,
+                        onMention = onMention,
+                        refs = refs,
+                        onRef = onRef,
+                        notice = notice,
+                        editing = editing != null,
+                        comments = comments,
+                        focusComment = focusComment,
+                        onCommentFocused = { focusComment = null },
+                        composerFocus = composerFocus,
+                        composerFold = composerFold,
+                        onComposerShrink = { composerShrink = it },
+                        onListsHeight = { listsHeight = it },
+                        onOpenModels = onOpenModels,
+                        onAttach = onAttach,
+                        onDictate = onDictate,
+                        onVoiceChat = onVoiceChat,
+                        onOpenControl = onOpenControl,
+                        voiceFull = voiceFull,
+                        onExpandVoice = { voiceFolded = false },
+                        onPasteFiles = { canAttach && keysEnabled && attachmentPicker?.pasteAttachments() == true },
+                    )
                 }
                 // The pet sits on the composer's top edge, over the conversation rather than in the dock's height.
                 if (sprite != null && LocalAppSettings.current.showPet && state.inputRequests.isEmpty()) {
@@ -1336,10 +1327,25 @@ private fun DropOverlay() {
     }
 }
 
+/** Covers a plan or composer including its outer padding, which meets the other panel when they are adjacent. */
+@Composable
+private fun ComposerBackdrop(hazeState: HazeState?, content: @Composable () -> Unit) {
+    Box {
+        if (hazeState != null) {
+            Box(
+                Modifier.matchParentSize().hazeSource(hazeState)
+                    .background(Theme[colors][background].copy(alpha = 1f)),
+            )
+        }
+        content()
+    }
+}
+
 /** What floats at the bottom of the chat: banners, the live status, and the composer or the agent's question. */
 @Composable
 private fun ColumnScope.Dock(
     hazeState: HazeState,
+    opaqueComposer: Boolean,
     actions: ChatActions,
     placeholder: String,
     state: ChatState,
@@ -1412,7 +1418,14 @@ private fun ColumnScope.Dock(
             canStop = connected && state.running,
         )
     }
-    if (!state.running) TodoPanel(state.todos, live = state.todosLive, hazeState = hazeState)
+    // The plan and composer frost their own backing. Transient panels still frost the transcript.
+    val opaqueHaze = rememberHazeState().takeIf { opaqueComposer }
+    val panelHaze = opaqueHaze ?: hazeState
+    if (!state.running) {
+        ComposerBackdrop(opaqueHaze) {
+            TodoPanel(state.todos, live = state.todosLive, hazeState = panelHaze)
+        }
+    }
     // The chat's automation sits here whether or not a turn runs: the goal works on its own between turns.
     SessionControlStrip(state.control, hazeState, onOpen = onOpenControl)
 
@@ -1513,52 +1526,54 @@ private fun ColumnScope.Dock(
                 icon = Lucide.Pencil,
             )
         }
-        Composer(
-            editing = editing,
-            hazeState = hazeState,
-            actions = actions,
-            placeholder = placeholder,
-            state = state,
-            picker = picker,
-            connected = connected,
-            attachments = attachments,
-            dictation = dictation,
-            comments = comments,
-            focusComment = focusComment,
-            onCommentFocused = onCommentFocused,
-            focus = composerFocus,
-            fold = composerFold,
-            onShrink = onComposerShrink,
-            onOpenModels = onOpenModels,
-            onAttach = onAttach,
-            onDictate = onDictate,
-            onVoiceChat = onVoiceChat,
-            onKey = { event ->
-                // A bot named so far comes before "A file" / "A folder", which any short @ word offers too.
-                val listed = when {
-                    listsAway -> 0
-                    slashShown -> suggestions.size
-                    suggestions.isNotEmpty() -> 0
-                    mentions.isNotEmpty() -> mentions.size
-                    else -> refs.size
-                }
-                val step = suggestionStep(event)
-                val at = if (slashShown) marked else marked.coerceAtLeast(0)
-                when {
-                    isPasteKey(event) -> !editing && onPasteFiles()
-                    isDesktop && listed > 0 && event.key == Key.Escape && event.type == KeyEventType.KeyDown ->
-                        true.also { dismissedAt = actions.composer.text.toString() }
-                    listed > 0 && step != null -> true.also { marked = moveHighlight(marked, step, listed) }
-                    !isPickKey(event) || listed == 0 -> false
-                    // Enter takes a `/` suggestion only once one is marked; Tab takes the first too.
-                    slashShown -> (marked in suggestions.indices || event.key == Key.Tab).also {
-                        if (it) actions.pickSuggestion(suggestions[at.coerceIn(suggestions.indices)])
+        ComposerBackdrop(opaqueHaze) {
+            Composer(
+                editing = editing,
+                hazeState = panelHaze,
+                actions = actions,
+                placeholder = placeholder,
+                state = state,
+                picker = picker,
+                connected = connected,
+                attachments = attachments,
+                dictation = dictation,
+                comments = comments,
+                focusComment = focusComment,
+                onCommentFocused = onCommentFocused,
+                focus = composerFocus,
+                fold = composerFold,
+                onShrink = onComposerShrink,
+                onOpenModels = onOpenModels,
+                onAttach = onAttach,
+                onDictate = onDictate,
+                onVoiceChat = onVoiceChat,
+                onKey = { event ->
+                    // A bot named so far comes before "A file" / "A folder", which any short @ word offers too.
+                    val listed = when {
+                        listsAway -> 0
+                        slashShown -> suggestions.size
+                        suggestions.isNotEmpty() -> 0
+                        mentions.isNotEmpty() -> mentions.size
+                        else -> refs.size
                     }
-                    mentions.isNotEmpty() -> true.also { onMention(mentions[at.coerceIn(mentions.indices)]) }
-                    else -> true.also { onRef(refs[at.coerceIn(refs.indices)]) }
-                }
-            },
-        )
+                    val step = suggestionStep(event)
+                    val at = if (slashShown) marked else marked.coerceAtLeast(0)
+                    when {
+                        isPasteKey(event) -> !editing && onPasteFiles()
+                        isDesktop && listed > 0 && event.key == Key.Escape && event.type == KeyEventType.KeyDown ->
+                            true.also { dismissedAt = actions.composer.text.toString() }
+                        listed > 0 && step != null -> true.also { marked = moveHighlight(marked, step, listed) }
+                        !isPickKey(event) || listed == 0 -> false
+                        // Enter takes a `/` suggestion only once one is marked; Tab takes the first too.
+                        slashShown -> (marked in suggestions.indices || event.key == Key.Tab).also {
+                            if (it) actions.pickSuggestion(suggestions[at.coerceIn(suggestions.indices)])
+                        }
+                        mentions.isNotEmpty() -> true.also { onMention(mentions[at.coerceIn(mentions.indices)]) }
+                        else -> true.also { onRef(refs[at.coerceIn(refs.indices)]) }
+                    }
+                },
+            )
+        }
     }
 }
 
