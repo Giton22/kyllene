@@ -153,8 +153,13 @@ class AttentionTracker(
         scope.launch {
             connection.events.collect { event ->
                 when (event.type) {
-                    "request.cancel", "approval.cancelled" -> {
-                        val id = (event.payload as? JsonObject).string("id") ?: (event.payload as? JsonObject).string("request_id")
+                    "clarify.request", "approval.request" -> {
+                        val runtimeId = event.sessionId ?: return@collect
+                        val parsed = InputRequest.parseEvent(event.type, event.payload as? JsonObject) ?: return@collect
+                        requests.update { it + (parsed.id to OpenRequest(runtimeId, parsed, clock())) }
+                    }
+                    "request.cancel", "approval.cancelled", "clarify.settled", "approval.settled", "approval.responded" -> {
+                        val id = InputRequest.settledId(event.type, event.payload as? JsonObject)
                         if (id != null) requests.update { it - id }
                     }
                     "message.start" -> event.sessionId?.let { runtimeId -> turns.update { it + (runtimeId to Turn(true, clock())) } }

@@ -23,6 +23,7 @@ import dev.hermeskotlin.core.settings.CallTarget
 import dev.hermeskotlin.wearlink.DefaultCallTarget
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.voice.AudioApi
+import dev.hermeskotlin.core.voice.hasWordsToSay
 import dev.hermeskotlin.core.voice.speakableText
 import dev.hermeskotlin.core.voice.speechChunks
 import dev.hermeskotlin.wearlink.HistoryPage
@@ -52,6 +53,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
@@ -105,6 +107,7 @@ class WatchRelay(
     private val bots: BotsApi,
     private val botChats: BotChats,
     private val settings: SettingsStore,
+    private val words: WatchCallWords = WatchCallWords.English,
 ) {
     private val scope = CoroutineScope(appScope.coroutineContext + SupervisorJob(appScope.coroutineContext[Job]))
 
@@ -119,6 +122,9 @@ class WatchRelay(
     private val calls = AtomicInt(0)
     private val lists = AtomicInt(0)
 
+    /** Turns sent into the watch's chat from the phone ([phoneTurnStarts]), counted apart from a watch's ask. */
+    private val phoneTurns = AtomicInt(0)
+
     /** A live call is on, from the watch or answered on the phone: nothing rings over it. */
     val onCall: Boolean get() = calls.load() > 0
     private var asking: Boolean
@@ -128,14 +134,16 @@ class WatchRelay(
             refreshBusy()
         }
 
-    /** Busy while asking, calling or listing; re-check writes made on another thread. */
+    /** Busy while asking, calling or listing, or in a turn sent from the phone; re-check writes made on another thread. */
     private fun refreshBusy() {
         while (true) {
-            val wanted = askingNow.load() || calls.load() > 0 || lists.load() > 0
+            val wanted = wantsBusy()
             _busy.value = wanted
-            if (wanted == (askingNow.load() || calls.load() > 0 || lists.load() > 0)) return
+            if (wanted == wantsBusy()) return
         }
     }
+
+    private fun wantsBusy() = askingNow.load() || calls.load() > 0 || lists.load() > 0 || phoneTurns.load() > 0
 
     /** What each profile of the current gateway said of its live voice, and when: the watch's chat and the ringer ask for different ones. */
     private class LiveVoice(val on: Boolean, val at: Long)
@@ -192,6 +200,41 @@ class WatchRelay(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * A turn is about to be sent into the watch's chat [storedId] from the phone (a reply typed in its notification).
+     * No watch asked for it, so none is told how it ends: busy from now until [phoneTurnEnds], as for a watch's turn,
+     * and the chat is kept out of the phone's watching before the send, so only the caller tells it.
+     */
+    suspend fun phoneTurnStarts(storedId: String) {
+        phoneTurns.incrementAndFetch()
+        refreshBusy()
+        turnLock.withLock {
+            releaseLater?.cancel()
+            holdChat(storedId)
+        }
+    }
+
+    /**
+     * Waits out the turn [phoneTurnStarts] announced in [session], once its send went or didn't ([sent]); always
+     * called after it. The turn's reply, or null when there's none to tell: nothing was sent, it left none, or the
+     * watch moved its chat elsewhere meanwhile and this session closed under the turn.
+     */
+    suspend fun phoneTurnEnds(session: ChatSession, sent: Boolean): ChatMessage.Assistant? {
+        try {
+            if (!sent) return null
+            withTimeoutOrNull(TURN_START_MS) { session.state.first { it.running } }
+            // A closed session never says its turn ended.
+            val closed = combine(session.state, _session) { state, current ->
+                if (current !== session) true else if (!state.running) false else null
+            }.filterNotNull().first()
+            return if (closed) null else replyAfter(session.state.value)
+        } finally {
+            phoneTurns.updateAndFetch { (it - 1).coerceAtLeast(0) }
+            refreshBusy()
+            withContext(NonCancellable) { turnLock.withLock { releaseHeldChatLater() } }
         }
     }
 
@@ -307,11 +350,11 @@ class WatchRelay(
     suspend fun chatForCall(chatId: String?, botProfile: String? = null, defaultRequestId: String? = null, node: String? = null, scope: WatchScope? = null): CallChat {
         val saved = gateways.current()
         if (saved == null || !auth.hasStoredSession(saved.gatewayUrl) || connection.state.value is ConnectionState.SessionExpired) {
-            return CallChat.Failed(SIGNED_OUT)
+            return failCall(WatchCallLine.SignedOut)
         }
         val gateway = saved.gatewayUrl
         if (scope != null && (scope.gateway != gateway.value || botProfile != null && scope.profile != botProfile)) {
-            return CallChat.Failed("Conversation changed. Choose it again on your watch.")
+            return failCall(WatchCallLine.ConversationChanged)
         }
         val default = turnLock.withLock {
             if (defaultRequestId == null) null else defaults[node]?.takeIf { it.id == defaultRequestId }
@@ -319,32 +362,39 @@ class WatchRelay(
         if (defaultRequestId != null && (default == null || !defaultCallCurrent(node.orEmpty(), defaultRequestId) ||
                 default.resolved.chatId != chatId || default.resolved.botProfile != botProfile ||
                 scope != null && scope != default.resolved.scope)) {
-            return CallChat.Failed("Default Call Target changed. Tap Call again.")
+            return failCall(WatchCallLine.TargetChanged)
         }
         val profile = if (default != null) default.profile else if (scope != null) scope.profile else botProfile ?: profiles.get(gateway)
         connection.start(gateway)
         if (withTimeoutOrNull(CONNECT_MS) { connection.state.first { it is ConnectionState.Connected } } == null) {
             connection.retry()
-            return CallChat.Failed("Kyllene can't reach your gateway right now.")
+            return failCall(WatchCallLine.Unreachable)
         }
         val session = turnLock.withLock {
             // Another call on, from the phone or the watch: one chat is held at a time, and taking it would cut that
             // call off mid-word. (Each call is counted before it gets here, this one too.)
-            if (calls.load() > 1) return CallChat.Failed(ON_ANOTHER_CALL)
-            if (default != null && !defaultCurrent(default)) return CallChat.Failed("Default Call Target changed. Tap Call again.")
+            if (calls.load() > 1) return failCall(WatchCallLine.OnAnotherCall)
+            if (default != null && !defaultCurrent(default)) return failCall(WatchCallLine.TargetChanged)
             val storedId = try { if (botProfile == null) chatId else openBot(botProfile) } catch (e: CancellationException) {
                 throw e
+            } catch (e: CallRefused) {
+                return failCall(e.line)
             } catch (e: Exception) {
-                return CallChat.Failed(e.message ?: "Couldn't open the bot's conversation.")
+                return CallChat.Failed(e.message ?: words.say(WatchCallLine.BotChatFailed))
             }
             // A call takes over from an ask still being answered: one voice at a time.
             turn?.cancelAndJoin()
             sessionFor(gateway, profile, storedId)
         }
         withTimeoutOrNull(CONNECT_MS) { session.state.first { it.historyLoaded } }
-        if (default != null && !defaultCurrent(default)) return CallChat.Failed("Default Call Target changed. Tap Call again.")
+        if (default != null && !defaultCurrent(default)) return failCall(WatchCallLine.TargetChanged)
         return CallChat.Ready(session, gateway, profile)
     }
+
+    private suspend fun failCall(line: WatchCallLine) = CallChat.Failed(words.say(line))
+
+    /** Why a call (or its Default Call Target) can't go ahead: said in the app's language once caught, else in English. */
+    private class CallRefused(val line: WatchCallLine) : Exception(line.english)
 
     private data class DefaultResolution(val id: String, val gateway: GatewayUrl, val target: CallTarget,
         val profile: String?, val resolved: DefaultCallTarget)
@@ -373,28 +423,28 @@ class WatchRelay(
         scope.launch {
             val result = try {
                 withTimeout(CONNECT_MS) {
-                    val saved = gateways.current() ?: error(SIGNED_OUT)
-                    check(auth.hasStoredSession(saved.gatewayUrl)) { SIGNED_OUT }
+                    val saved = gateways.current() ?: throw CallRefused(WatchCallLine.SignedOut)
+                    if (!auth.hasStoredSession(saved.gatewayUrl)) throw CallRefused(WatchCallLine.SignedOut)
                     val prefs = settings.settings.filterNotNull().first()
                     val target = prefs.callTargets[saved.url] ?: CallTarget()
-                    require(target.valid) { "Invalid Default Call Target. Choose it again on your phone." }
+                    if (!target.valid) throw CallRefused(WatchCallLine.TargetInvalid)
                     val profile = defaultProfile(target, saved.gatewayUrl)
                     connection.start(saved.gatewayUrl)
                     connection.state.first { it is ConnectionState.Connected }
                     val bot = target.profile?.let { name -> bots.roster().bots.firstOrNull { it.name == name }
-                        ?: error("That bot no longer exists. Choose another target on your phone.") }
+                        ?: throw CallRefused(WatchCallLine.TargetBotGone) }
                     val chatId = if (bot != null) botChats.open(bot) else target.sessionId
-                    if (chatId != null) check(sessions.messages(saved.gatewayUrl, chatId, limit = 1, profile = profile) is ApiResult.Success) {
-                        "Couldn't open Default Call Target. Check it on your phone."
+                    if (chatId != null && sessions.messages(saved.gatewayUrl, chatId, limit = 1, profile = profile) !is ApiResult.Success) {
+                        throw CallRefused(WatchCallLine.TargetUnopened)
                     }
                     // Not live (or an older gateway that can't say): the watch asks there by voice instead.
                     val live = audio.voiceLiveStatus(saved.gatewayUrl, profile).let { it is ApiResult.Success && it.value.live }
                     val resolved = DefaultCallTarget(requestId, chatId, target.profile, bot?.label ?: target.label,
                         scope = WatchScope(saved.gatewayUrl.value, profile), live = live)
                     val value = DefaultResolution(requestId, saved.gatewayUrl, target, profile, resolved)
-                    check(defaultCurrent(value)) { "Default Call Target changed. Tap Call again." }
+                    if (!defaultCurrent(value)) throw CallRefused(WatchCallLine.TargetChanged)
                     turnLock.withLock {
-                        check(latestDefault.load()[node] == requestId) { "A newer call replaced this request." }
+                        if (latestDefault.load()[node] != requestId) throw CallRefused(WatchCallLine.TargetReplaced)
                         defaults[node] = value
                     }
                     resolved
@@ -403,9 +453,11 @@ class WatchRelay(
                 if (e !is kotlinx.coroutines.TimeoutCancellationException) throw e
                 // A connection that gave up stays down unless told to try again, as the other waits here do.
                 if (connection.state.value !is ConnectionState.Connected) connection.retry()
-                DefaultCallTarget(requestId, error = "Couldn't reach Default Call Target. Try again.")
+                DefaultCallTarget(requestId, error = words.say(WatchCallLine.TargetUnreached))
+            } catch (e: CallRefused) {
+                DefaultCallTarget(requestId, error = words.say(e.line))
             } catch (e: Exception) {
-                DefaultCallTarget(requestId, error = e.message ?: "Couldn't open Default Call Target.")
+                DefaultCallTarget(requestId, error = e.message ?: words.say(WatchCallLine.TargetFailed))
             } finally {
                 lists.updateAndFetch { (it - 1).coerceAtLeast(0) }
                 refreshBusy()
@@ -497,7 +549,7 @@ class WatchRelay(
     private suspend fun openBot(profile: String): String {
         val roster = bots.roster().bots
         botChats.note(roster)
-        val bot = roster.firstOrNull { it.name == profile } ?: error("This bot is no longer available. Choose another conversation.")
+        val bot = roster.firstOrNull { it.name == profile } ?: throw CallRefused(WatchCallLine.BotUnavailable)
         return botChats.open(bot)
     }
 
@@ -606,7 +658,8 @@ class WatchRelay(
             return tell(done.copy(phase = ReplyPhase.Failed, text = clipForWatch(reply.text), error = reply.error ?: "The turn failed."))
         }
         val replyText = reply?.text.orEmpty()
-        val spoken = if (ask.speak && reply?.outcome != TurnOutcome.Interrupted) speakableText(replyText) else ""
+        // Only punctuation left ("?!", say) has no words to voice and makes no pieces: nothing to read, not "coming".
+        val spoken = if (ask.speak && reply?.outcome != TurnOutcome.Interrupted) speakableText(replyText).takeIf(::hasWordsToSay).orEmpty() else ""
         tell(done.copy(phase = ReplyPhase.Done, text = clipForWatch(replyText), speech = if (spoken.isEmpty()) ReplySpeech.Off else ReplySpeech.Coming))
         if (spoken.isNotEmpty() && !speak(node, ask.id, spoken, gateway, profile)) {
             tell(last.copy(speech = ReplySpeech.Unavailable))
@@ -622,7 +675,9 @@ class WatchRelay(
         // (the turn cancelled), after the lease itself has gone out.
         val lease = scope.launch { audio.ttsLease(gateway, true, profile) }
         try {
-            val chunks = speechChunks(text)
+            // Pieces stay short here: each is made and sent over Bluetooth while the one before plays, and the watch
+            // stops waiting 20 s after a clip ends.
+            val chunks = speechChunks(text, maxChars = WATCH_SPEECH_CHARS)
             chunks.forEachIndexed { index, chunk ->
                 val clip = when (val result = audio.speak(gateway, chunk, profile)) {
                     is ApiResult.Success -> result.value
@@ -656,7 +711,7 @@ class WatchRelay(
         releaseLater = scope.launch {
             delay(RELEASE_AFTER_MS)
             turnLock.withLock {
-                if (heldChat == held && turn?.isActive != true && calls.load() == 0) {
+                if (heldChat == held && turn?.isActive != true && calls.load() == 0 && phoneTurns.load() == 0) {
                     host.releaseSideChat(held)
                     heldChat = null
                 }
@@ -691,8 +746,7 @@ class WatchRelay(
     }
 
     companion object {
-        const val SIGNED_OUT = "Sign in to Kyllene on your phone first."
-        const val ON_ANOTHER_CALL = "You're already on a call with Hermes. Hang up there first."
+        val SIGNED_OUT = WatchCallLine.SignedOut.english
         const val NOTHING_HEARD = "I didn't catch that."
         private const val CHAT_LIST_SIZE = 15
         private const val MAX_TITLE = 80
@@ -701,6 +755,9 @@ class WatchRelay(
         private const val UPDATE_EVERY_MS = 400L
         private const val RELEASE_AFTER_MS = 30_000L
         private const val LIVE_VOICE_CHECK_MS = 5 * 60_000L
+
+        /** The longest voice clip sent to the watch, as the phone read it before pieces grew. */
+        private const val WATCH_SPEECH_CHARS = 400
     }
 }
 

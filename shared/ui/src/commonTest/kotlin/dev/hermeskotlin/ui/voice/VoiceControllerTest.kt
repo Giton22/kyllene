@@ -16,8 +16,12 @@ import dev.hermeskotlin.core.voice.Recording
 import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.SpokenAudio
 import dev.hermeskotlin.core.voice.VoiceActivity
+import dev.hermeskotlin.core.voice.ReadAloudControls
+import dev.hermeskotlin.core.voice.ReadAloudKeepAlive
+import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
 import io.ktor.client.request.HttpRequestData
@@ -26,12 +30,16 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -40,9 +48,12 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import dev.hermeskotlin.ui.JvmOnly
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import dev.hermeskotlin.ui.resources.Res
+import dev.hermeskotlin.ui.resources.voice_error_call_on
+import dev.hermeskotlin.ui.resources.voice_error_ended_elsewhere
 import dev.hermeskotlin.ui.resources.voice_error_nothing_heard
 import org.jetbrains.compose.resources.getString
 
@@ -94,9 +105,14 @@ class VoiceControllerTest {
         leased: CompletableDeferred<Unit>? = null,
         /** How many transcriptions fail before they work again. */
         transcribeFailures: Int = 0,
+        /**
+         * Where the gateway answers. A test that steps the clock by hand gives its own scheduler, so the profile's
+         * settings, asked for before the first listen, are in by the time it looks; otherwise another thread.
+         */
+        dispatcher: CoroutineDispatcher? = null,
     ) = AudioApi(
         createHttpClient(
-            MockEngine { request ->
+            MockEngine(MockEngineConfig().apply { dispatcher?.let { this.dispatcher = it } }.also { it.addHandler { request ->
                 requests.add(request)
                 if (request.url.encodedPath == "/api/audio/tts-lease") leased?.complete(Unit)
                 val transcribes = requests.count { it.url.encodedPath == "/api/audio/transcribe" }
@@ -108,7 +124,7 @@ class VoiceControllerTest {
                     }
                     else -> respond("""{"ok":true}""", HttpStatusCode.OK, json)
                 }
-            },
+            } }),
             PersistentCookiesStorage(InMemoryKeyValueStore()),
         ),
     )
@@ -466,6 +482,12 @@ class VoiceControllerTest {
         val started = Channel<String>(Channel.UNLIMITED)
         val played = mutableListOf<String>()
         var cut = 0
+        /** The voice is held where it is now: the last [hold] was on. */
+        var held = false
+        override fun hold(on: Boolean): Boolean {
+            held = on
+            return true
+        }
         override suspend fun play(audio: SpokenAudio) {
             val clip = audio.bytes.decodeToString()
             started.send(clip)
@@ -579,6 +601,231 @@ class VoiceControllerTest {
         assertEquals(1, player.cut)
     }
 
+    /** The platform's hold on Read aloud: [grants] says whether it takes the hold, [onStop] and [onLost] are the controller's. */
+    private class ReadingKeeper(private val grants: Boolean = true) : ReadAloudKeepAlive {
+        /** The hold is up now: the last [hold] was granted and no [release] came after it. */
+        var held = false
+        /** What the platform's controls last showed. */
+        var paused = false
+        var controls: ReadAloudControls? = null
+        var onLost: (() -> Unit)? = null
+        override fun hold(controls: ReadAloudControls, onLost: () -> Unit): Boolean {
+            this.controls = controls
+            this.onLost = onLost
+            held = grants
+            return grants
+        }
+
+        override fun paused(paused: Boolean) {
+            this.paused = paused
+        }
+
+        override fun release() {
+            held = false
+        }
+    }
+
+    /** #416: a reply read aloud carries on with the screen locked, as long as the platform holds the app up. */
+    @Test
+    fun aReplyReadAloudCarriesOnOutOfSightWhenHeldUp() = runTest {
+        val player = HeldPlayer(holds = true)
+        val keeper = ReadingKeeper()
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        voice.readAloud("r1", "A long reply.", gateway, null)
+        player.started.receive()
+        voice.onBackground()
+        testScheduler.runCurrent()
+
+        assertTrue(keeper.held)
+        assertEquals(0, player.cut)
+        assertEquals(ReadAloudState("r1"), voice.reading.value)
+        voice.stopReading()
+        assertFalse(keeper.held)
+    }
+
+    @Test
+    fun aReplyReadAloudStopsOutOfSightWhenThePlatformRefusesTheHold() = runTest {
+        val player = HeldPlayer(holds = true)
+        val keeper = ReadingKeeper(grants = false)
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        voice.readAloud("r1", "A long reply.", gateway, null)
+        player.started.receive()
+        voice.onBackground()
+        testScheduler.runCurrent()
+
+        assertEquals(1, player.cut)
+        assertNull(voice.reading.value.key)
+    }
+
+    @Test
+    fun aReplyReadAloudStopsOutOfSightWithoutAKeepAlive() = runTest {
+        val player = HeldPlayer(holds = true)
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope)
+
+        voice.readAloud("r1", "A long reply.", gateway, null)
+        player.started.receive()
+        voice.onBackground()
+        testScheduler.runCurrent()
+
+        assertEquals(1, player.cut)
+        assertNull(voice.reading.value.key)
+    }
+
+    @Test
+    fun theNotificationsStopCutsTheReplyAndLetsTheHoldGo() = runTest {
+        val player = HeldPlayer(holds = true)
+        val keeper = ReadingKeeper()
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        voice.readAloud("r1", "A long reply.", gateway, null)
+        player.started.receive()
+        voice.onBackground()
+        keeper.controls!!.stop()
+        testScheduler.runCurrent()
+
+        assertEquals(1, player.cut)
+        assertNull(voice.reading.value.key)
+        assertFalse(keeper.held)
+    }
+
+    @Test
+    fun aHoldRefusedAfterTheAppWentAwayStopsTheReply() = runTest {
+        val player = HeldPlayer(holds = true)
+        val keeper = ReadingKeeper()
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        voice.readAloud("r1", "A long reply.", gateway, null)
+        player.started.receive()
+        voice.onBackground()
+        keeper.onLost!!.invoke()
+        testScheduler.runCurrent()
+
+        assertEquals(1, player.cut)
+        assertNull(voice.reading.value.key)
+    }
+
+    @Test
+    fun theHoldIsLetGoWhenTheReplyEndsButNotByTheOneItReplaced() = runTest {
+        val keeper = ReadingKeeper()
+        val player = HeldPlayer()
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        voice.readAloud("r1", "All green.", gateway, null)
+        voice.reading.first { it.key == null }
+        assertFalse(keeper.held)
+
+        // A second reply replacing the first: the first's end must not let go of the second's hold.
+        val holding = HeldPlayer(holds = true)
+        val other = VoiceController(voiced(mutableListOf()), FakeRecorder(), holding, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+        other.readAloud("r1", "The first reply.", gateway, null)
+        holding.started.receive()
+        other.readAloud("r2", "The second reply.", gateway, null)
+        holding.started.receive()
+        testScheduler.runCurrent()
+        assertEquals(ReadAloudState("r2"), other.reading.value)
+        assertTrue(keeper.held)
+        other.stopReading()
+        assertFalse(keeper.held)
+    }
+
+    @Test
+    fun pauseHoldsTheVoiceAndTheControlsShowItUntilResume() = runTest {
+        val player = HeldPlayer(holds = true)
+        val keeper = ReadingKeeper()
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        voice.readAloud("r1", "A long reply.", gateway, null)
+        player.started.receive()
+        voice.pauseReading()
+
+        assertEquals(ReadAloudState("r1", paused = true), voice.reading.value)
+        assertTrue(player.held)
+        assertTrue(keeper.paused)
+        voice.resumeReading()
+        assertEquals(ReadAloudState("r1"), voice.reading.value)
+        assertFalse(player.held)
+        assertFalse(keeper.paused)
+        voice.stopReading()
+    }
+
+    @Test
+    fun theLockScreensPauseAndResumeWorkTheSameWay() = runTest {
+        val player = HeldPlayer(holds = true)
+        val keeper = ReadingKeeper()
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        voice.readAloud("r1", "A long reply.", gateway, null)
+        player.started.receive()
+        voice.onBackground()
+        keeper.controls!!.pause()
+        assertTrue(player.held)
+        assertTrue(voice.reading.value.paused)
+        // Out of sight and paused, it's still held up: the lock screen's Resume has something to resume.
+        assertTrue(keeper.held)
+        keeper.controls!!.resume()
+        assertFalse(player.held)
+        assertEquals(ReadAloudState("r1"), voice.reading.value)
+        voice.stopReading()
+    }
+
+    @Test
+    fun aReplyStoppedWhilePausedDoesntLeaveTheNextOneWaiting() = runTest {
+        val player = HeldPlayer(holds = true)
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope)
+
+        voice.readAloud("r1", "The first reply.", gateway, null)
+        player.started.receive()
+        voice.pauseReading()
+        voice.stopReading()
+
+        assertFalse(player.held)
+        assertEquals(ReadAloudState(), voice.reading.value)
+        voice.readAloud("r2", "The second reply.", gateway, null)
+        assertEquals("The second reply.", player.started.receive())
+        assertEquals(ReadAloudState("r2"), voice.reading.value)
+        voice.stopReading()
+    }
+
+    @Test
+    fun pausingWithNothingBeingReadDoesNothing() = runTest {
+        val player = HeldPlayer()
+        val voice = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope)
+
+        voice.pauseReading()
+
+        assertEquals(ReadAloudState(), voice.reading.value)
+        assertFalse(player.held)
+    }
+
+    /** The player is one for all: a reading paused on one screen or window mustn't hold another's silent. */
+    @Test
+    fun aReplyReadOnAnotherScreenStopsOneLeftPausedThereAndKeepsTheHold() = runTest {
+        val player = HeldPlayer(holds = true)
+        val keeper = ReadingKeeper()
+        val first = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+        val second = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope, readAloudKeepAlive = keeper)
+
+        first.readAloud("r1", "The first reply.", gateway, null)
+        player.started.receive()
+        first.pauseReading()
+        second.readAloud("r2", "The second reply.", gateway, null)
+        assertEquals("The second reply.", player.started.receive())
+        testScheduler.runCurrent()
+
+        assertEquals(ReadAloudState(), first.reading.value)
+        assertEquals(1, player.cut)
+        assertFalse(player.held)
+        assertEquals(ReadAloudState("r2"), second.reading.value)
+        assertTrue(keeper.held)
+        // The first screen let its hold go when it stopped; stopping it again doesn't take the second's.
+        first.stopReading()
+        assertTrue(keeper.held)
+        second.stopReading()
+        assertFalse(keeper.held)
+    }
+
     @Test
     fun aGatewayWithoutAVoiceSaysWhyAndShowsReadAloudAgain() = runTest {
         val player = HeldPlayer()
@@ -643,5 +890,273 @@ class VoiceControllerTest {
         player.started.receive()
         voice.onBackground()
         assertNull(voice.reading.value.key)
+    }
+
+    /** Another screen's chat has the microphone: dictation doesn't start under it, and says why. */
+    @JvmOnly
+    @Test
+    fun dictationWaitsOutAnotherScreensChat() = runTest {
+        val listening = ScriptedRecorder()
+        val call = VoiceController(audio("unused", Requests()), listening, FakePlayer(), backgroundScope, backgroundScope)
+        val recorder = FakeRecorder()
+        val voice = VoiceController(audio("unused", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        call.startChat(offlineSession(), gateway, null)
+        listening.waiting.await()
+        voice.startDictation(gateway, "work") { }
+
+        val shown = voice.dictation.first { it.error != null || it.active }
+        assertEquals(DictationState(error = getString(Res.string.voice_error_call_on)), shown)
+        assertEquals(0, recorder.recordings)
+        call.stopChat()
+    }
+
+    /** The one call service every screen's chat holds: up or not. */
+    private class SharedKeeper : VoiceKeepAlive {
+        var holding = false
+        override fun hold(onEnd: () -> Unit, onLost: () -> Unit): Boolean {
+            holding = true
+            return true
+        }
+
+        override fun release() {
+            holding = false
+        }
+    }
+
+    /** A chat ended by another screen's leaves the one call service up for the newer chat, which lets it go at its end. */
+    @Test
+    fun aChatEndedByAnotherScreensLeavesItTheCallService() = runTest {
+        val keeper = SharedKeeper()
+        val first = ScriptedRecorder()
+        val second = ScriptedRecorder()
+        val one = VoiceController(audio("unused", Requests()), first, FakePlayer(), backgroundScope, backgroundScope, keepAlive = keeper)
+        val two = VoiceController(audio("unused", Requests()), second, FakePlayer(), backgroundScope, backgroundScope, keepAlive = keeper)
+
+        one.startChat(offlineSession(), gateway, null)
+        first.waiting.await()
+        two.startChat(offlineSession(), gateway, null)
+        one.chat.first { it.phase == VoicePhase.Off }
+        second.waiting.await()
+        testScheduler.runCurrent()
+        assertTrue(keeper.holding)
+
+        two.stopChat()
+        two.chat.first { it.phase == VoicePhase.Off }
+        testScheduler.runCurrent()
+        assertFalse(keeper.holding)
+    }
+
+    /** Listens until cancelled, then takes [stopMs] to let the microphone go. */
+    private class SlowToStopRecorder(private val stopMs: Long) : VoiceRecorder {
+        val listening = CompletableDeferred<Unit>()
+        override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording {
+            listening.complete(Unit)
+            try {
+                awaitCancellation()
+            } finally {
+                withContext(NonCancellable) { delay(stopMs) }
+            }
+        }
+
+        override fun finish() = Unit
+    }
+
+    /** End while a new chat waits for the last one to let go: the chat is Off, not left on Connecting. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun endingAChatWhileItWaitsForTheLastOnePutsItOff() = runTest {
+        val slow = SlowToStopRecorder(stopMs = 1_000)
+        val one = VoiceController(audio("unused", Requests()), slow, FakePlayer(), backgroundScope, backgroundScope)
+        val two = VoiceController(audio("unused", Requests()), ScriptedRecorder(), FakePlayer(), backgroundScope, backgroundScope)
+
+        one.startChat(offlineSession(), gateway, null)
+        slow.listening.await()
+        two.startChat(offlineSession(), gateway, null)
+        testScheduler.runCurrent()
+        // Still waiting: the first one takes a second to let the microphone go.
+        assertEquals(VoicePhase.Connecting, two.chat.value.phase)
+        two.stopChat()
+        testScheduler.runCurrent()
+
+        assertEquals(VoicePhase.Off, two.chat.value.phase)
+        testScheduler.advanceTimeBy(2_000)
+        testScheduler.runCurrent()
+        assertEquals(VoicePhase.Off, one.chat.value.phase)
+        assertEquals(VoicePhase.Off, two.chat.value.phase)
+    }
+
+    /** The first listen holds on until cancelled and takes [stopMs] to let go; every one after it fails at once. */
+    private class SlowThenBrokenRecorder(private val stopMs: Long) : VoiceRecorder {
+        val listening = CompletableDeferred<Unit>()
+        private var recordings = 0
+        override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording {
+            if (recordings++ > 0) error("No microphone.")
+            listening.complete(Unit)
+            try {
+                awaitCancellation()
+            } finally {
+                withContext(NonCancellable) { delay(stopMs) }
+            }
+        }
+
+        override fun finish() = Unit
+    }
+
+    /**
+     * End, then Start again on the same screen while the first chat is slow to let go: the second one ending on its
+     * own lets the call service go, as nothing is on any more, and the first one's end later doesn't change that.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun aChatStartedAgainThatEndsFirstStillLetsTheCallServiceGo() = runTest {
+        val keeper = SharedKeeper()
+        val recorder = SlowThenBrokenRecorder(stopMs = 10_000)
+        val api = audio("unused", Requests(), dispatcher = StandardTestDispatcher(testScheduler))
+        val voice = VoiceController(api, recorder, FakePlayer(), backgroundScope, backgroundScope, keepAlive = keeper)
+
+        voice.startChat(offlineSession(), gateway, null)
+        recorder.listening.await()
+        voice.stopChat()
+        voice.startChat(offlineSession(), gateway, null)
+        assertTrue(keeper.holding)
+        // Past the wait, its microphone fails and it ends, well before the first one lets go.
+        testScheduler.advanceTimeBy(3_000)
+        testScheduler.runCurrent()
+        assertEquals(VoicePhase.Off, voice.chat.value.phase)
+        assertFalse(keeper.holding)
+
+        testScheduler.advanceTimeBy(8_000)
+        testScheduler.runCurrent()
+        assertFalse(keeper.holding)
+    }
+
+    /** A chat stuck in ending doesn't keep dictation from starting once nothing is on. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun aChatStuckEndingDoesntHoldDictationUp() = runTest {
+        val slow = SlowToStopRecorder(stopMs = 60_000)
+        val call = VoiceController(audio("unused", Requests()), slow, FakePlayer(), backgroundScope, backgroundScope)
+        val recorder = FakeRecorder()
+        val voice = VoiceController(audio("deploy the site", Requests()), recorder, FakePlayer(), backgroundScope, backgroundScope)
+
+        call.startChat(offlineSession(), gateway, null)
+        slow.listening.await()
+        call.stopChat()
+        testScheduler.runCurrent()
+        val text = CompletableDeferred<String>()
+        voice.startDictation(gateway, "work") { text.complete(it) }
+
+        assertEquals("deploy the site", text.await())
+        assertEquals(1, recorder.recordings)
+        // Let it end, so it isn't left over for the next test.
+        testScheduler.advanceTimeBy(60_000)
+        testScheduler.runCurrent()
+        assertEquals(VoicePhase.Off, call.chat.value.phase)
+    }
+
+    /** The one call service every screen's chat holds, with each hold and release in order. */
+    private class LoggingKeeper : VoiceKeepAlive {
+        val log = mutableListOf<String>()
+        override fun hold(onEnd: () -> Unit, onLost: () -> Unit): Boolean {
+            log += "hold"
+            return true
+        }
+
+        override fun release() {
+            log += "release"
+        }
+    }
+
+    /**
+     * On the main thread (Android's immediate dispatch), another screen's chat can end inside the new one's start: the
+     * call service stays up across the handover, rather than being let go and held again.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun theCallServiceStaysUpThroughAHandoverThatEndsTheOtherChatAtOnce() = runTest(UnconfinedTestDispatcher()) {
+        val keeper = LoggingKeeper()
+        val first = ScriptedRecorder()
+        val one = VoiceController(audio("unused", Requests()), first, FakePlayer(), backgroundScope, backgroundScope, keepAlive = keeper)
+        val two = VoiceController(audio("unused", Requests()), ScriptedRecorder(), FakePlayer(), backgroundScope, backgroundScope, keepAlive = keeper)
+
+        one.startChat(offlineSession(), gateway, null)
+        first.waiting.await()
+        two.startChat(offlineSession(), gateway, null)
+        one.chat.first { it.phase == VoicePhase.Off }
+
+        assertEquals(listOf("hold", "hold"), keeper.log)
+        two.stopChat()
+    }
+
+    /** A chat started on another screen takes the microphone and the speaker from this one's dictation and Read aloud. */
+    @Test
+    fun aChatStartedOnAnotherScreenStopsDictationAndReadAloudHere() = runTest {
+        val player = HeldPlayer(holds = true)
+        val reader = VoiceController(voiced(mutableListOf()), FakeRecorder(), player, backgroundScope, backgroundScope)
+        val dictatingMic = ScriptedRecorder()
+        val dictating = VoiceController(audio("unused", Requests()), dictatingMic, FakePlayer(), backgroundScope, backgroundScope)
+        val call = VoiceController(audio("unused", Requests()), ScriptedRecorder(), FakePlayer(), backgroundScope, backgroundScope)
+
+        reader.readAloud("r1", "A long reply.", gateway, null)
+        player.started.receive()
+        dictating.startDictation(gateway, "work") { }
+        dictatingMic.waiting.await()
+        call.startChat(offlineSession(), gateway, null)
+        testScheduler.runCurrent()
+
+        assertNull(reader.reading.value.key)
+        assertFalse(dictating.dictation.value.active)
+        // Nor does Read aloud start under it: the chat's microphone would take the reading for someone talking.
+        reader.readAloud("r2", "Another reply.", gateway, null)
+        assertNull(reader.reading.value.key)
+        call.stopChat()
+    }
+
+    /** A chat ended by one started on another screen says so, rather than looking hung up. */
+    @JvmOnly
+    @Test
+    fun aChatEndedByAnotherScreensSaysWhy() = runTest {
+        val first = ScriptedRecorder()
+        val one = VoiceController(audio("unused", Requests()), first, FakePlayer(), backgroundScope, backgroundScope)
+        val two = VoiceController(audio("unused", Requests()), ScriptedRecorder(), FakePlayer(), backgroundScope, backgroundScope)
+
+        one.startChat(offlineSession(), gateway, null)
+        first.waiting.await()
+        two.startChat(offlineSession(), gateway, null)
+
+        val ended = one.chat.first { it.phase == VoicePhase.Off && it.error != null }
+        assertEquals(getString(Res.string.voice_error_ended_elsewhere), ended.error)
+        two.stopChat()
+    }
+
+    /** A chat stuck in ending is waited on once: a chat after that doesn't sit on Connecting for it again. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun aChatStuckEndingIsWaitedOnOnlyOnce() = runTest {
+        val onClock = StandardTestDispatcher(testScheduler)
+        val slow = SlowToStopRecorder(stopMs = 60_000)
+        val stuck = VoiceController(audio("unused", Requests(), dispatcher = onClock), slow, FakePlayer(), backgroundScope, backgroundScope)
+        val second = ScriptedRecorder()
+        val two = VoiceController(audio("unused", Requests(), dispatcher = onClock), second, FakePlayer(), backgroundScope, backgroundScope)
+        val third = ScriptedRecorder()
+        val three = VoiceController(audio("unused", Requests(), dispatcher = onClock), third, FakePlayer(), backgroundScope, backgroundScope)
+
+        stuck.startChat(offlineSession(), gateway, null)
+        slow.listening.await()
+        two.startChat(offlineSession(), gateway, null)
+        // Past the wait, it goes on without the stuck one.
+        testScheduler.advanceTimeBy(2_500)
+        testScheduler.runCurrent()
+        assertTrue(second.waiting.isCompleted)
+        two.stopChat()
+        testScheduler.runCurrent()
+
+        three.startChat(offlineSession(), gateway, null)
+        testScheduler.runCurrent()
+        assertTrue(third.waiting.isCompleted, "the next chat waited on the stuck one again")
+        three.stopChat()
+        testScheduler.advanceTimeBy(60_000)
+        testScheduler.runCurrent()
     }
 }

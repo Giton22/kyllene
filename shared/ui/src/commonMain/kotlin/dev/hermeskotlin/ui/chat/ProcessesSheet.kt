@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +67,7 @@ import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.core.chat.BackgroundProcess
 import dev.hermeskotlin.core.chat.ChatSession
+import dev.hermeskotlin.core.chat.SubagentRow
 import dev.hermeskotlin.designsystem.accentText
 import dev.hermeskotlin.designsystem.body
 import dev.hermeskotlin.designsystem.bodySmall
@@ -95,10 +97,12 @@ import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.designsystem.well
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -113,7 +117,17 @@ data class ProcessesState(
     /** The processes being stopped right now. */
     val stopping: Set<String> = emptySet(),
     val message: String? = null,
-)
+    /** The subagents running now; null until the first answer arrives. */
+    val subagents: List<SubagentRow>? = null,
+    val subagentsUnavailable: Boolean = false,
+) {
+    /** A poll's answer. One that didn't come keeps the last list, and only says unavailable when there is none. */
+    internal fun withProcesses(answer: List<BackgroundProcess>?): ProcessesState =
+        if (answer == null) copy(unavailable = processes == null) else copy(processes = answer, unavailable = false)
+
+    internal fun withSubagents(answer: List<SubagentRow>?): ProcessesState =
+        if (answer == null) copy(subagentsUnavailable = subagents == null) else copy(subagents = answer, subagentsUnavailable = false)
+}
 
 /**
  * The open chat's background processes, polled while the sheet is open, as Desktop's status stack
@@ -125,17 +139,29 @@ class ProcessesController(private val scope: CoroutineScope) {
     val state: StateFlow<ProcessesState> = _state.asStateFlow()
 
     private var polling: Job? = null
+    private var shownChat: ChatSession? = null
 
-    fun start(chat: ChatSession?) {
-        polling?.cancel()
+    fun start(chats: StateFlow<ChatSession?>) {
+        stop()
         _state.value = ProcessesState()
         polling = scope.launch {
-            while (isActive) {
-                val processes = chat?.processes()
-                _state.update {
-                    if (processes == null) it.copy(unavailable = it.processes == null) else it.copy(processes = processes, unavailable = false)
+            chats.collectLatest { chat ->
+                shownChat = chat
+                _state.value = ProcessesState()
+                coroutineScope {
+                    launch {
+                        while (isActive) {
+                            val processes = chat?.processes()
+                            if (chats.value === chat) _state.update { it.withProcesses(processes) }
+                            delay(POLL_MILLIS)
+                        }
+                    }
+                    while (isActive) {
+                        val subagents = chat?.activeSubagents()
+                        if (chats.value === chat) _state.update { it.withSubagents(subagents) }
+                        delay(POLL_MILLIS)
+                    }
                 }
-                delay(POLL_MILLIS)
             }
         }
     }
@@ -143,14 +169,21 @@ class ProcessesController(private val scope: CoroutineScope) {
     fun stop() {
         polling?.cancel()
         polling = null
+        shownChat = null
     }
 
-    fun kill(chat: ChatSession?, process: BackgroundProcess) {
-        chat ?: return
+    fun kill(chats: StateFlow<ChatSession?>, process: BackgroundProcess) {
+        val chat = chats.value ?: return
+        val owner = polling ?: return
+        val state = _state.value
+        if (shownChat !== chat || process.id in state.stopping ||
+            state.processes?.any { it.id == process.id && it.running } != true
+        ) return
         _state.update { it.copy(stopping = it.stopping + process.id, message = null) }
         scope.launch {
             val outcome = chat.killProcess(process.id)
             val processes = chat.processes()
+            if (polling !== owner || chats.value !== chat) return@launch
             _state.update {
                 it.copy(
                     processes = processes ?: it.processes,
@@ -174,7 +207,10 @@ fun ProcessesSheet(
     onKill: (BackgroundProcess) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    LaunchedEffect(visible) { if (visible) onStart() else controller.stop() }
+    DisposableEffect(visible, controller) {
+        if (visible) onStart()
+        onDispose { controller.stop() }
+    }
     ProcessesSheetView(visible, controller.state.collectAsStateWithLifecycle().value, onKill, onDismiss)
 }
 
@@ -192,26 +228,47 @@ internal fun ProcessesSheetView(
         val processes = state.processes
         val running = processes?.filter { it.running }.orEmpty()
         val finished = processes?.filterNot { it.running }.orEmpty()
+        val subagents = state.subagents.orEmpty()
+        val active = running.size + subagents.sumOf { it.count() }
+        // A first answer is still out, and what has come is empty: no claim yet that nothing runs.
+        val waiting = ((processes == null && !state.unavailable) || (state.subagents == null && !state.subagentsUnavailable)) &&
+            processes.isNullOrEmpty() && subagents.isEmpty()
         Header(
             when {
-                processes == null -> stringResource(Res.string.chat_processes_subtitle)
-                running.isEmpty() -> stringResource(Res.string.chat_processes_none_running)
-                else -> pluralStringResource(Res.plurals.chat_processes_running, running.size, running.size)
+                active > 0 -> pluralStringResource(Res.plurals.chat_processes_running, active, active)
+                processes != null && state.subagents != null -> stringResource(Res.string.chat_processes_none_running)
+                else -> stringResource(Res.string.chat_processes_subtitle)
             },
-            live = running.isNotEmpty(),
+            live = active > 0,
         )
         when {
-            processes == null && state.unavailable ->
-                Note(stringResource(Res.string.chat_available_after_first_reply))
-            processes == null -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Spinner() }
-            processes.isEmpty() ->
-                Note(stringResource(Res.string.chat_processes_empty))
+            waiting -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Spinner() }
             else -> ScrollbarBox { listState -> LazyColumn(
                 Modifier.fillMaxWidth().heightIn(max = 560.dp),
                 state = listState,
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                if (subagents.isNotEmpty()) {
+                    item("subagents") { SectionLabel(stringResource(Res.string.chat_processes_subagents)) }
+                    items(subagents, key = { "subagent:${it.key}" }) { SubagentCard(it) }
+                }
+                // A chat that isn't attached yet gets neither list, and the one note below says why.
+                if (state.subagentsUnavailable && processes != null) {
+                    item("subagents-unavailable") { Note(stringResource(Res.string.chat_processes_subagents_unavailable)) }
+                }
+                // Finished ones have their own label.
+                if (subagents.isNotEmpty() && running.isNotEmpty()) {
+                    item("shell-processes") { SectionLabel(stringResource(Res.string.chat_processes_shell)) }
+                }
+                when {
+                    processes == null -> if (state.unavailable) {
+                        item("processes-unavailable") { Note(stringResource(Res.string.chat_available_after_first_reply)) }
+                    }
+                    processes.isNotEmpty() -> Unit
+                    state.subagents?.isEmpty() == true -> item("empty") { Note(stringResource(Res.string.chat_processes_empty)) }
+                    else -> item("empty-processes") { Note(stringResource(Res.string.chat_processes_shell_empty)) }
+                }
                 items(running, key = { it.id }) { process ->
                     RunningCard(
                         process,
@@ -223,18 +280,7 @@ internal fun ProcessesSheetView(
                 }
                 if (finished.isNotEmpty()) {
                     item(key = "finished") {
-                        val finishedLabel = stringResource(Res.string.chat_processes_finished)
-                        Text(
-                            finishedLabel.uppercase(),
-                            style = Theme[typography][eyebrow],
-                            color = Theme[colors][textTertiary],
-                            modifier = Modifier
-                                .padding(start = 4.dp, top = 4.dp)
-                                .semantics {
-                                    heading()
-                                    contentDescription = finishedLabel
-                                },
-                        )
+                        SectionLabel(stringResource(Res.string.chat_processes_finished))
                     }
                     items(finished, key = { it.id }) { process ->
                         FinishedRow(
@@ -248,6 +294,22 @@ internal fun ProcessesSheetView(
         }
         state.message?.let { Note(it) }
     }
+}
+
+/** A subagent and those it started in turn. */
+private fun SubagentRow.count(): Int = 1 + children.sumOf { it.count() }
+
+@Composable
+private fun SectionLabel(label: String) {
+    Text(
+        label.uppercase(),
+        style = Theme[typography][eyebrow],
+        color = Theme[colors][textTertiary],
+        modifier = Modifier.padding(start = 4.dp, top = 4.dp).semantics {
+            heading()
+            contentDescription = label
+        },
+    )
 }
 
 /** The sheet's title, and how many are running beside a live dot. */
