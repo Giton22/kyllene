@@ -281,9 +281,12 @@ class VoiceController(
                     return@launch
                 }
                 ringing?.cancelAndJoin()
-                if (incomingSystemCallId == null) {
-                    converseChained(session, gateway, profile, pauseMs, opener, talkOver)
+                // Chained voice owns its own audio. Only continue if Telecom still has the answered call to hand off.
+                if (incomingSystemCallId != null && keepAlive?.handOffIncomingCallToApp(incomingSystemCallId) != true) {
+                    talkOver.cancel()
+                    return@launch
                 }
+                converseChained(session, gateway, profile, pauseMs, opener, talkOver)
             } finally {
                 ringing?.cancel()
 

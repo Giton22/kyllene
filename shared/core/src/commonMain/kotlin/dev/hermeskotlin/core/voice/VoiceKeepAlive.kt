@@ -16,6 +16,9 @@ interface VoiceKeepAlive {
 
     fun attachIncomingLiveCall(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? = null
 
+    /** Ends the matching answered system call so it can continue in-app. False if the call is gone. */
+    fun handOffIncomingCallToApp(id: String): Boolean = false
+
     /** Readiness independent of the app's opt-in, so settings can explain what's still needed. */
     fun systemCallingStatus(): SystemCallingStatus = SystemCallingStatus.Unavailable
 

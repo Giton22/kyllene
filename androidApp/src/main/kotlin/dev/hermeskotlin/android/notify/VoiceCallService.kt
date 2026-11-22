@@ -99,6 +99,8 @@ class VoiceCallKeeper(private val context: Context, settings: SettingsStore) : V
     override fun attachIncomingLiveCall(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? =
         if (holding) telecom.attachIncoming(id, onMute, onEnd) else null
 
+    override fun handOffIncomingCallToApp(id: String): Boolean = telecom.handOffIncomingCallToApp(id)
+
     private var onEnd: (() -> Unit)? = null
     private var onLost: (() -> Unit)? = null
     private val _held = MutableStateFlow(false)

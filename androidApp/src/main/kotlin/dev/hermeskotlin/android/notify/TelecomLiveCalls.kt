@@ -100,7 +100,16 @@ internal class TelecomLiveCalls(private val context: Context, private val settin
     }
 
     fun attachIncoming(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? =
-        pending?.takeIf { it.incomingId == id && it.accepted }?.apply { attach(onMute, onEnd) }
+        answeredIncoming(id)?.apply { attach(onMute, onEnd) }
+
+    fun handOffIncomingCallToApp(id: String): Boolean {
+        val call = answeredIncoming(id) ?: return false
+        call.close()
+        return true
+    }
+
+    private fun answeredIncoming(id: String): ManagedCall? =
+        pending?.takeIf { it.incomingId == id && it.accepted }
 
     fun stopRinging(id: String) {
         pending?.takeIf { it.incomingId == id && !it.accepted }?.close()

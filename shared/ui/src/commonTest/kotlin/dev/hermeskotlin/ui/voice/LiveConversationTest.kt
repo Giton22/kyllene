@@ -291,6 +291,47 @@ class LiveConversationTest {
         assertTrue(closed)
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun answeredIncomingCallFallsBackToChainedOnlyIfTheSystemCallStillExists() = runTest {
+        val client = http("chained", mutableListOf(), StandardTestDispatcher(testScheduler))
+        val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> Socket() }, backgroundScope)
+        val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
+        val handedOff = mutableListOf<String>()
+        val keeper = object : VoiceKeepAlive {
+            override fun hold(onEnd: () -> Unit, onLost: () -> Unit) = true
+            override fun release() = Unit
+            override fun handOffIncomingCallToApp(id: String): Boolean {
+                handedOff += id
+                return id == "answered"
+            }
+        }
+        var recordings = 0
+        val recorder = object : VoiceRecorder {
+            override suspend fun record(activity: VoiceActivity, onLevel: (Float) -> Unit, onSpeech: () -> Unit): Recording {
+                recordings++
+                awaitCancellation()
+            }
+            override fun finish() = Unit
+        }
+        val voice = VoiceController(AudioApi(client), recorder, Silent, backgroundScope, backgroundScope, keepAlive = keeper) {
+            error("Chained voice must not create a live call")
+        }
+
+        voice.startChat(session, gateway, null, incomingSystemCallId = "ended")
+        runCurrent()
+        assertEquals(VoicePhase.Off, voice.chat.value.phase)
+        assertEquals(0, recordings)
+
+        voice.startChat(session, gateway, null, incomingSystemCallId = "answered")
+        runCurrent()
+        assertEquals(VoicePhase.Listening, voice.chat.value.phase)
+        assertFalse(voice.chat.value.live)
+        assertEquals(listOf("ended", "answered"), handedOff)
+        assertEquals(1, recordings)
+        voice.stopChat()
+    }
+
     /** One call at a time, app-wide: a live call started on another screen ends this one, and connects after it closed. */
     @Test
     fun aLiveCallOnAnotherScreenEndsThisOneAndConnectsAfterIt() = runTest {
