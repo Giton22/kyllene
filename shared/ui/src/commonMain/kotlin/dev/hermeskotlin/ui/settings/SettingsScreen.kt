@@ -594,6 +594,15 @@ internal fun SettingsView(
                     )
                 }
 
+                Section(stringResource(Res.string.settings_section_accessibility)) {
+                    SwitchRow(
+                        title = stringResource(Res.string.settings_opaque_composer),
+                        detail = stringResource(Res.string.settings_opaque_composer_detail),
+                        checked = settings.opaqueComposer,
+                        onCheckedChange = { on -> onUpdate { it.copy(opaqueComposer = on) } },
+                    )
+                }
+
                 Section(stringResource(Res.string.settings_section_chat)) {
                     Field(
                         stringResource(Res.string.settings_running_send),

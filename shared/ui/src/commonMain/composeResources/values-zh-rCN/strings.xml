@@ -28,6 +28,9 @@
     <string name="common_download">下载</string>
     <string name="common_open_release">打开发布页</string>
     <string name="settings_section_appearance">外观</string>
+    <string name="settings_section_accessibility">无障碍</string>
+    <string name="settings_opaque_composer">不透明的输入区</string>
+    <string name="settings_opaque_composer_detail">为聊天输入区添加不透明背景，让内容更易阅读。</string>
     <string name="settings_section_chat">对话</string>
     <string name="settings_section_voice">语音</string>
     <string name="settings_section_notifications">通知</string>

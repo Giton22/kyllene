@@ -985,7 +985,8 @@ internal fun ChatView(
             // and undo the fold; only the jump button and the pet follow the composer's real height.
             var composerShrink by remember { mutableIntStateOf(0) }
             val listInset = with(LocalDensity.current) { (dockHeight + composerShrink).toDp() }
-            // What scrolls under the composer is captured here and frosted behind it.
+            // Frost the transcript by default, or the solid dock when the reader opts in.
+            val opaqueComposer = LocalAppSettings.current.opaqueComposer
             val hazeState = rememberHazeState()
             // Comments wait in the composer, so the selection menus offer them only while it shows.
             var focusComment by remember { mutableStateOf<Long?>(null) }
@@ -1092,7 +1093,7 @@ internal fun ChatView(
                 }
             }
             Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { paneHeight = it.height; paneWidth = it.width }) {
-                Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
+                Box(Modifier.fillMaxSize().then(if (opaqueComposer) Modifier else Modifier.hazeSource(hazeState))) {
                     if (wallpaper != null) ChatWallpaper(wallpaper, LocalAppSettings.current.wallpaperStrength, Modifier.fillMaxSize())
                     if (state.historyLoaded && state.messages.isNotEmpty()) {
                         CompositionLocalProvider(
@@ -1208,49 +1209,57 @@ internal fun ChatView(
                         StatusPill(stringResource(Res.string.chat_loading_older))
                     }
                 }
-                Column(
+                Box(
                     Modifier
                         .then(if (isDesktop) Modifier.align(Alignment.TopCenter).offset { IntOffset(0, dockTop.roundToInt()) } else Modifier.align(Alignment.BottomCenter))
                         .widthIn(max = READING_WIDTH)
                         .fillMaxWidth()
                         .onSizeChanged { dockHeight = it.height },
                 ) {
-                    Dock(
-                        hazeState = hazeState,
-                        actions = actions,
-                        placeholder = placeholder,
-                        state = state,
-                        picker = picker,
-                        connected = connected,
-                        attachments = attachments,
-                        attachmentError = attachmentError,
-                        voiceChat = voiceChat,
-                        dictation = dictation,
-                        readAloud = readAloud,
-                        suggestions = suggestions,
-                        suggestedReply = suggestedReply,
-                        mentions = mentions,
-                        onMention = onMention,
-                        refs = refs,
-                        onRef = onRef,
-                        notice = notice,
-                        editing = editing != null,
-                        comments = comments,
-                        focusComment = focusComment,
-                        onCommentFocused = { focusComment = null },
-                        composerFocus = composerFocus,
-                        composerFold = composerFold,
-                        onComposerShrink = { composerShrink = it },
-                        onListsHeight = { listsHeight = it },
-                        onOpenModels = onOpenModels,
-                        onAttach = onAttach,
-                        onDictate = onDictate,
-                        onVoiceChat = onVoiceChat,
-                        onOpenControl = onOpenControl,
-                        voiceFull = voiceFull,
-                        onExpandVoice = { voiceFolded = false },
-                        onPasteFiles = { canAttach && keysEnabled && attachmentPicker?.pasteAttachments() == true },
-                    )
+                    if (opaqueComposer) {
+                        Box(
+                            Modifier.matchParentSize().hazeSource(hazeState)
+                                .background(Theme[colors][background].copy(alpha = 1f)),
+                        )
+                    }
+                    Column {
+                        Dock(
+                            hazeState = hazeState,
+                            actions = actions,
+                            placeholder = placeholder,
+                            state = state,
+                            picker = picker,
+                            connected = connected,
+                            attachments = attachments,
+                            attachmentError = attachmentError,
+                            voiceChat = voiceChat,
+                            dictation = dictation,
+                            readAloud = readAloud,
+                            suggestions = suggestions,
+                            suggestedReply = suggestedReply,
+                            mentions = mentions,
+                            onMention = onMention,
+                            refs = refs,
+                            onRef = onRef,
+                            notice = notice,
+                            editing = editing != null,
+                            comments = comments,
+                            focusComment = focusComment,
+                            onCommentFocused = { focusComment = null },
+                            composerFocus = composerFocus,
+                            composerFold = composerFold,
+                            onComposerShrink = { composerShrink = it },
+                            onListsHeight = { listsHeight = it },
+                            onOpenModels = onOpenModels,
+                            onAttach = onAttach,
+                            onDictate = onDictate,
+                            onVoiceChat = onVoiceChat,
+                            onOpenControl = onOpenControl,
+                            voiceFull = voiceFull,
+                            onExpandVoice = { voiceFolded = false },
+                            onPasteFiles = { canAttach && keysEnabled && attachmentPicker?.pasteAttachments() == true },
+                        )
+                    }
                 }
                 // The pet sits on the composer's top edge, over the conversation rather than in the dock's height.
                 if (sprite != null && LocalAppSettings.current.showPet && state.inputRequests.isEmpty()) {
