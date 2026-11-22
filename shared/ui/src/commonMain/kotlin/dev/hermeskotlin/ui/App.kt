@@ -883,7 +883,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                                 menuOpen = true
                             }
                         },
-                        onOpenChat = { id, title -> app.openSession(id, title ?: untitled) },
+                        onOpenChat = app::openSession,
                         onSwitchProfile = app::switchProfile,
                         viewModel = chat,
                         // Not while a page or the chat's menu covers it: typing there mustn't land in the composer.

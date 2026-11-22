@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -2335,6 +2336,8 @@ class ChatSessionTest {
 
         assertEquals("stored-2" to "Greeting #2", chat.branch(null))
         assertEquals("rt1", transport.sent.value.first { it.isCall("session.branch_whole") }.param("session_id"))
+        // Only the session authority branches with a mutation.
+        assertTrue(transport.sent.value.none { it.isCall("session.mutate") })
     }
 
     @Test
@@ -2395,6 +2398,209 @@ class ChatSessionTest {
         // Up to "First": the routine rows after it stay out.
         chat.branchFrom("row-2")
         assertEquals("2", transport.sent.value.last { it.isCall("session.branch") }.param("count"))
+    }
+
+    /**
+     * A chat resumed on the session authority (the gateway-hosted Webapp listener) at revision 4 and execution
+     * generation 2, whose `session.mutate` calls [mutate] answers.
+     */
+    private suspend fun authorityChat(scope: CoroutineScope, mutate: (FakeGateway.Call) -> String?): Pair<ChatSession, FakeTransport> {
+        val (connection, transport) = setup(
+            scope,
+            mapOf("session.resume" to """{"session_id":"stored-1","running":false,"revision":4,"execution_generation":2}"""),
+            ready = AUTHORITY_READY,
+        )
+        val canned = gateway.answer
+        gateway.answer = { call -> if (call.method == "session.mutate") mutate(call) else canned(call) }
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), scope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "stored-1" && it.historyLoaded }
+        return chat to transport
+    }
+
+    private fun FakeGateway.Call.branched(child: String = "local-2") =
+        reply("""{"session_id":"stored-1","revision":5,"execution_generation":2,"operation":"branch","branched_session_id":"$child","copied_messages":2}""")
+
+    private fun FakeGateway.Call.fenceRefusal(revision: Int, generation: Int) =
+        """{"jsonrpc":"2.0","id":$id,"error":{"code":4001,"message":"revision_conflict","data":{"reason":"revision_conflict","revision":$revision,"execution_generation":$generation}}}"""
+
+    private fun JsonObject.mutatePayload() = this["params"]!!.jsonObject["payload"]!!.jsonObject
+
+    @Test
+    fun theSessionAuthorityBranchesTheWholeChatWithAMutation() = runTest {
+        // It has no session.branch (#467): Desktop branches with a fenced `session.mutate` (gateway/session_mutations.py).
+        val (chat, transport) = authorityChat(backgroundScope) { it.branched() }
+
+        assertEquals("local-2" to null, chat.branch(null))
+
+        val mutate = transport.sent.value.single { it.isCall("session.mutate") }
+        assertEquals("stored-1", mutate.param("session_id"))
+        assertEquals("branch", mutate.param("operation"))
+        assertEquals("4", mutate.param("expected_revision"))
+        assertEquals("2", mutate.param("expected_generation"))
+        assertNotNull(mutate.param("request_id"))
+        assertEquals(JsonObject(emptyMap()), mutate.mutatePayload())
+        assertTrue(transport.sent.value.none { it.isCall("session.branch") || it.isCall("session.branch_whole") })
+        assertEquals("Branched into a new chat.", chat.state.value.messages.last().textOf())
+    }
+
+    @Test
+    fun theSessionAuthorityBranchesFromAMessageThroughItsNewestRow() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
+            {"id":2,"role":"user","content":"one","timestamp":10},
+            {"id":3,"role":"assistant","content":"Checking.","timestamp":11,"tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},
+            {"id":4,"role":"tool","tool_call_id":"c1","content":"ok","timestamp":12},
+            {"id":5,"role":"assistant","content":"Done.","timestamp":13},
+            {"id":6,"role":"user","content":"two","timestamp":20},{"id":7,"role":"assistant","content":"Second","timestamp":21}]}"""
+        val (chat, transport) = authorityChat(backgroundScope) { it.branched() }
+
+        // A reply split by its tool call: through its last step.
+        assertEquals("local-2" to null, chat.branchFrom("row-3"))
+        assertEquals("5", transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString())
+        // A prompt: through the prompt.
+        chat.branchFrom("row-2")
+        assertEquals("2", transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString())
+        // `/branch 1`: the instruction and "one", as session.branch's count of 2 keeps.
+        chat.branch(1)
+        assertEquals("2", transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString())
+        assertTrue(transport.sent.value.none { it.isCall("session.branch") })
+    }
+
+    @Test
+    fun aNewChatsLiveTurnBranchesThroughItsStoredRows() = runTest {
+        // A new chat shows its turn from the live stream; its rows are stored but were never read.
+        storedSessions["local-1"] = """{"session_id":"local-1","messages":[
+            {"id":21,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
+            {"id":22,"role":"user","content":"hi"},{"id":23,"role":"assistant","content":"Done."}]}"""
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"local-1","stored_session_id":"local-1","revision":0,"execution_generation":0,"info":{}}""",
+                "prompt.submit" to """{"status":"queued"}""",
+                "session.mutate" to """{"session_id":"local-1","operation":"branch","revision":2,"branched_session_id":"local-2","copied_messages":2}""",
+            ),
+            ready = AUTHORITY_READY,
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        assertTrue(chat.send("hi"))
+        transport.push(event("message.start", "local-1"))
+        transport.push(event("message.complete", "local-1", """{"text":"Done.","status":"complete"}"""))
+        chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Assistant } }
+
+        assertEquals("local-2" to null, chat.branchFrom(chat.state.value.messages.last { it is ChatMessage.Assistant }.key))
+        assertEquals("23", transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString())
+        // Its prompt, which the authority's submit names no row for: the newest prompt shown, not its reply.
+        chat.branchFrom(chat.state.value.messages.first { it is ChatMessage.User }.key)
+        assertEquals("22", transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString())
+    }
+
+    @Test
+    fun anEarlierLiveTurnBranchesThroughItsOwnRows() = runTest {
+        // Two turns sent in one view: neither is in the loaded rows, and the first isn't the newest stored row.
+        storedSessions["local-1"] = """{"session_id":"local-1","messages":[
+            {"id":21,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
+            {"id":22,"role":"user","content":"one"},
+            {"id":23,"role":"assistant","content":"Checking.","tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},
+            {"id":24,"role":"tool","tool_call_id":"c1","content":"ok"},{"id":25,"role":"assistant","content":"First"},
+            {"id":26,"role":"user","content":"Model switched.","display_kind":"model_switch"},
+            {"id":27,"role":"user","content":"two"},{"id":28,"role":"assistant","content":"Second"}]}"""
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"local-1","stored_session_id":"local-1","revision":0,"execution_generation":0,"info":{}}""",
+                "prompt.submit" to """{"status":"queued"}""",
+                "session.mutate" to """{"session_id":"local-1","operation":"branch","revision":2,"branched_session_id":"local-2","copied_messages":2}""",
+            ),
+            ready = AUTHORITY_READY,
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        for (reply in listOf("First", "Second")) {
+            assertTrue(chat.send(if (reply == "First") "one" else "two"))
+            transport.push(event("message.start", "local-1"))
+            transport.push(event("message.complete", "local-1", """{"text":"$reply","status":"complete"}"""))
+            chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Assistant && it.text == reply } }
+        }
+        val through = { transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString() }
+        val messages = chat.state.value.messages
+
+        // The first reply: up to the row before the second prompt's, which a `user` row that is a note isn't.
+        assertEquals("local-2" to null, chat.branchFrom(messages.first { it is ChatMessage.Assistant }.key))
+        assertEquals("26", through())
+        chat.branchFrom(messages.first { it is ChatMessage.User }.key)
+        assertEquals("22", through())
+        chat.branchFrom(messages.last { it is ChatMessage.User }.key)
+        assertEquals("27", through())
+        // `/branch 1` counts on the rows as stored now: the instruction and "one".
+        chat.branch(1)
+        assertEquals("22", through())
+    }
+
+    @Test
+    fun aChatOpenedWithoutATitleTakesTheOneItsResumeNames() = runTest {
+        // A branch on the session authority: `session.mutate` names the new chat, not its title.
+        val (connection, _) = setup(
+            backgroundScope,
+            mapOf("session.resume" to """{"session_id":"stored-1","running":false,"info":{"title":"Greeting #2"}}"""),
+            ready = AUTHORITY_READY,
+        )
+        val untitled = ChatSession(url, "stored-1", null, connection, SessionsApi(client()), backgroundScope)
+        untitled.start()
+        assertEquals("Greeting #2", untitled.state.first { it.runtimeSessionId == "stored-1" }.title)
+
+        // The title it was opened with stays.
+        val titled = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        titled.start()
+        assertEquals("Greeting", titled.state.first { it.runtimeSessionId == "stored-1" }.title)
+    }
+
+    @Test
+    fun aBranchPresentsTheRevisionTheGatewayLastAnnounced() = runTest {
+        val (chat, transport) = authorityChat(backgroundScope) { it.branched() }
+
+        transport.push(event("session.info", "stored-1", """{"session_id":"stored-1","revision":7}"""))
+        transport.push(event("session.updated", "stored-1", """{"session_id":"local-9","revision":12}"""))
+        transport.push(event("session.updated", "stored-1", """{"session_id":"stored-1","revision":6}"""))
+        // Applied in order, so once this one shows the others have been.
+        transport.push(event("session.info", "stored-1", """{"title":"Renamed"}"""))
+        chat.state.first { it.title == "Renamed" }
+        chat.branch(null)
+
+        // Another chat's receipt and an older one of this chat's leave it at 7.
+        assertEquals("7", transport.sent.value.single { it.isCall("session.mutate") }.param("expected_revision"))
+    }
+
+    @Test
+    fun aStaleBranchIsSentOnceMoreWithTheFencesTheRefusalGives() = runTest {
+        var calls = 0
+        val (chat, transport) = authorityChat(backgroundScope) { call ->
+            if (++calls == 1) call.fenceRefusal(revision = 9, generation = 3) else call.branched()
+        }
+
+        assertEquals("local-2" to null, chat.branch(null))
+
+        val (first, second) = transport.sent.value.filter { it.isCall("session.mutate") }
+        assertEquals("4", first.param("expected_revision"))
+        assertEquals("9", second.param("expected_revision"))
+        assertEquals("3", second.param("expected_generation"))
+        assertTrue(first.param("request_id") != second.param("request_id"))
+    }
+
+    @Test
+    fun aBranchStaleTwiceSaysTheChatChanged() = runTest {
+        var revision = 8
+        val (chat, transport) = authorityChat(backgroundScope) { call -> call.fenceRefusal(revision = ++revision, generation = 2) }
+
+        assertNull(chat.branch(null))
+
+        assertEquals(2, transport.sent.value.count { it.isCall("session.mutate") })
+        val shown = chat.state.value.messages.last() as ChatMessage.Command
+        assertTrue(shown.failed)
+        assertEquals("The chat changed on the gateway while branching. Try again.", shown.output)
     }
 
     private val threeTurns = """{"session_id":"stored-1","messages":[
