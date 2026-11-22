@@ -196,6 +196,9 @@ fun delegationPrompt(fragments: List<LiveFragment>): DelegationPrompt {
  * One call per instance.
  */
 interface LiveCall {
+    /** Called before connecting when Telecom owns the audio route. */
+    fun useSystemAudioRouting() = Unit
+
     /**
      * Opens the microphone, makes a WebRTC offer and hands it to [answer], which returns the vendor's answer.
      * Returns once the answer is applied; the call is then connecting.

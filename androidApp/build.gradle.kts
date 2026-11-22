@@ -115,6 +115,7 @@ dependencies {
     implementation(projects.shared.ui)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.telecom)
     // Links in replies open in a Custom Tab; App lock asks through BiometricPrompt (needs a FragmentActivity).
     implementation(libs.androidx.browser)
     implementation(libs.androidx.biometric)

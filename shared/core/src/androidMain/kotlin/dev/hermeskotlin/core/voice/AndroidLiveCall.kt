@@ -3,6 +3,7 @@ package dev.hermeskotlin.core.voice
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.AudioAttributes
 import android.os.Build
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
@@ -45,6 +46,12 @@ class AndroidLiveCall(context: Context) : LiveCall {
     private var audioSource: org.webrtc.AudioSource? = null
     private var previousMode = AudioManager.MODE_NORMAL
     private var routed = false
+    private var systemRouting = false
+    private var muted = false
+
+    override fun useSystemAudioRouting() {
+        systemRouting = true
+    }
 
     @Volatile private var closed = false
     @Volatile private var micLevel = 0f
@@ -53,10 +60,16 @@ class AndroidLiveCall(context: Context) : LiveCall {
 
     override suspend fun connect(answer: suspend (offerSdp: String) -> String) {
         initialize(appContext)
-        routeAudio()
+        if (!systemRouting) routeAudio()
         // WebRTC's own echo canceller rather than the phone's: with the voice on the speaker, many phones'
         // cancellers go half-duplex and all but mute the microphone while it talks, so you can't cut in.
         val adm = JavaAudioDeviceModule.builder(appContext)
+            .apply {
+                if (systemRouting) setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build())
+            }
             .setUseHardwareAcousticEchoCanceler(false)
             .setUseHardwareNoiseSuppressor(false)
             .setSamplesReadyCallback { samples -> micLevel = level(samples.data) }
@@ -101,6 +114,7 @@ class AndroidLiveCall(context: Context) : LiveCall {
         )
         audioSource = source
         val track = factory.createAudioTrack("mic", source)
+        track.setEnabled(!muted)
         audioTrack = track
         peer.addTrack(track, listOf("mic"))
 
@@ -154,6 +168,7 @@ class AndroidLiveCall(context: Context) : LiveCall {
     override fun micLevel(): Float = micLevel
 
     override fun setMuted(muted: Boolean) {
+        this.muted = muted
         audioTrack?.setEnabled(!muted)
         if (muted) micLevel = 0f
     }

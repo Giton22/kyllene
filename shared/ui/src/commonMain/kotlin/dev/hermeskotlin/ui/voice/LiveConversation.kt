@@ -56,6 +56,7 @@ internal class LiveConversation(
     private val opener: String? = null,
     /** The session has answered or failed; finishing transport setup alone is not a result. */
     private val onConnectionResult: suspend () -> Unit = {},
+    private val onReady: suspend () -> Unit = {},
 ) {
     private val transcript = ArrayList<LiveFragment>()
     private var eventSeq = 0
@@ -122,7 +123,10 @@ internal class LiveConversation(
         val poll = launch {
             while (isActive) {
                 val speaking = call.speaking()
-                if (speaking) onConnectionResult()
+                if (speaking) {
+                    onReady()
+                    onConnectionResult()
+                }
                 state.update {
                     it.copy(
                         phase = when {
@@ -143,7 +147,10 @@ internal class LiveConversation(
             for (raw in call.events) {
                 when (val event = parseLiveEvent(raw)) {
                     is LiveEvent.Transcript -> {
-                        if (event.fragment.speaker == LiveFragment.Speaker.Assistant) onConnectionResult()
+                        if (event.fragment.speaker == LiveFragment.Speaker.Assistant) {
+                            onReady()
+                            onConnectionResult()
+                        }
                         transcript += event.fragment
                         if (transcript.size > MAX_FRAGMENTS) transcript.subList(0, transcript.size - KEPT_FRAGMENTS).clear()
                         caption(event.fragment)
@@ -220,6 +227,7 @@ internal class LiveConversation(
                         break
                     }
                     LiveEvent.Started -> {
+                        onReady()
                         onConnectionResult()
                         started.complete(Unit)
                     }

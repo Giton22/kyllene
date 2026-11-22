@@ -12,5 +12,14 @@ interface VoiceKeepAlive {
      */
     fun hold(onEnd: () -> Unit, onLost: () -> Unit = {}): Boolean
 
+    suspend fun registerLiveCall(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? = null
+
+    fun attachIncomingLiveCall(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? = null
+
     fun release()
+}
+
+interface LiveSystemCall {
+    suspend fun activate()
+    fun close()
 }

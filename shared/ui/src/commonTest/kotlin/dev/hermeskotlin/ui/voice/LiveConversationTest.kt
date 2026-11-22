@@ -19,6 +19,7 @@ import dev.hermeskotlin.core.voice.Recording
 import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.SpokenAudio
 import dev.hermeskotlin.core.voice.VoiceActivity
+import dev.hermeskotlin.core.voice.LiveSystemCall
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import kotlinx.coroutines.CoroutineDispatcher
@@ -198,6 +199,96 @@ class LiveConversationTest {
         voice.startChat(session, gateway, "work")
         voice.chat.first { it.live && it.phase == VoicePhase.Listening }
         voice.stopChat()
+    }
+
+    @Test
+    fun systemMuteAndHangupUseTheSameLiveSessionAsCaptions() = runTest {
+        val client = http("gpt-live", mutableListOf())
+        val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> Socket() }, backgroundScope)
+        connection.start(gateway)
+        connection.state.first { it is ConnectionState.Connected }
+        val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
+        session.start()
+        val call = FakeCall()
+        lateinit var mute: (Boolean) -> Unit
+        lateinit var end: () -> Unit
+        var active = false
+        var released = false
+        val keeper = object : VoiceKeepAlive {
+            override fun hold(onEnd: () -> Unit, onLost: () -> Unit) = true
+            override fun release() = Unit
+            override suspend fun registerLiveCall(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall {
+                assertEquals("Fixture", name)
+                mute = onMute
+                end = onEnd
+                return object : LiveSystemCall {
+                    override suspend fun activate() { active = true }
+                    override fun close() { released = true }
+                }
+            }
+        }
+        val voice = VoiceController(AudioApi(client), NoRecorder, Silent, backgroundScope, backgroundScope, keepAlive = keeper) { call }
+        voice.startChat(session, gateway, "work", callName = "Fixture")
+        voice.chat.first { it.live && it.phase == VoicePhase.Listening }
+        call.receive("""{"type":"error","error":{"message":"A test error"}}""")
+        runCurrent()
+        assertFalse(active)
+        call.receive("""{"type":"session.started"}""")
+        runCurrent()
+        assertTrue(active)
+        mute(true)
+        voice.toggleMute()
+        assertTrue(voice.chat.value.muted)
+        call.receive("""{"type":"session.output_transcript.delta","delta":"Still here."}""")
+        assertTrue(voice.chat.first { it.caption == "Still here." }.muted)
+        mute(false)
+        call.receive("""{"type":"session.input_transcript.delta","delta":"I am back."}""")
+        assertFalse(voice.chat.first { it.caption == "I am back." }.muted)
+        end()
+        runCurrent()
+        assertTrue(call.closed)
+        assertTrue(released)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun answeredIncomingCallUsesItsExistingSystemConnection() = runTest {
+        val client = http("gpt-live", mutableListOf())
+        val connection = GatewayConnection(AuthApi(client, PersistentCookiesStorage(InMemoryKeyValueStore())), { _, _ -> Socket() }, backgroundScope)
+        connection.start(gateway)
+        connection.state.first { it is ConnectionState.Connected }
+        val session = ChatSession(gateway, null, null, connection, SessionsApi(client), backgroundScope)
+        session.start()
+        val call = FakeCall()
+        lateinit var disconnect: () -> Unit
+        var activated = false
+        var closed = false
+        val keeper = object : VoiceKeepAlive {
+            override fun hold(onEnd: () -> Unit, onLost: () -> Unit) = true
+            override fun release() = Unit
+            override suspend fun registerLiveCall(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall =
+                error("Answering an existing call must not place an outgoing call")
+
+            override fun attachIncomingLiveCall(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall {
+                assertEquals("incoming-1", id)
+                disconnect = onEnd
+                return object : LiveSystemCall {
+                    override suspend fun activate() { activated = true }
+                    override fun close() { closed = true }
+                }
+            }
+        }
+        val voice = VoiceController(AudioApi(client), NoRecorder, Silent, backgroundScope, backgroundScope, keepAlive = keeper) { call }
+        voice.startChat(session, gateway, null, opener = CallReason("A question"), incomingSystemCallId = "incoming-1")
+        voice.chat.first { it.live && it.phase == VoicePhase.Listening }
+        assertFalse(activated)
+        call.receive("""{"type":"session.started"}""")
+        runCurrent()
+        assertTrue(activated)
+        disconnect()
+        runCurrent()
+        assertTrue(call.closed)
+        assertTrue(closed)
     }
 
     /** One call at a time, app-wide: a live call started on another screen ends this one, and connects after it closed. */

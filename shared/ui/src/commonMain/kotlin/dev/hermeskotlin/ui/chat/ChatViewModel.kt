@@ -741,7 +741,7 @@ class ChatViewModel(
         val chat = session.value ?: return
         val target = target ?: return
         val pause = (settings.settings.value ?: AppSettings()).voicePause
-        voice.startChat(chat, target.gateway.gatewayUrl, target.profile, pause.millis, ringback = ringback)
+        voice.startChat(chat, target.gateway.gatewayUrl, target.profile, pause.millis, ringback = ringback, callName = target.bot?.label)
     }
 
     /** Starts dictating into the composer, or finishes the dictation in progress. */

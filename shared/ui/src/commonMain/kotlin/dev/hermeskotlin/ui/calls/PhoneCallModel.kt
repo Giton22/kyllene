@@ -48,6 +48,7 @@ data class PickedUpCall(
     val caller: String,
     val request: InputRequest?,
     val agent: AgentCall? = null,
+    val systemCallId: String? = null,
 )
 
 /**
@@ -113,7 +114,10 @@ class PhoneCallModel(
             // On the line: the agent hears it was answered, and the voice opens with why it called.
             call.agent?.end(CallOutcome.Answered)
             val pause = (settings.settings.value ?: AppSettings()).voicePause
-            voice.startChat(chat.session, chat.gateway, chat.profile, pause.millis, opener = call.agent?.reason)
+            voice.startChat(
+                chat.session, chat.gateway, chat.profile, pause.millis,
+                opener = call.agent?.reason, incomingSystemCallId = call.systemCallId,
+            )
             // A new chat gets its id with the first request: it's held from then on.
             if (call.storedSessionId == null) {
                 launch { relay.callChat(chat.session.state.mapNotNull { it.storedSessionId }.first()) }
