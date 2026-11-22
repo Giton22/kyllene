@@ -40,6 +40,7 @@ import dev.hermeskotlin.ui.voice.VoiceChatState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
 class OpaqueComposerRenderingTest {
@@ -63,6 +64,9 @@ class OpaqueComposerRenderingTest {
         assertEquals(page, edgePixel(rowCenter("Draft")))
 
         runOnIdle { showCommands.value = true }
+        assertTrue(rowBottom("/help") < rowTop("Last plan 1/1"))
+        val openGap = (rowBottom("Last plan 1/1") + rowTop("Draft")) / 2
+        assertEquals(page, edgePixel(openGap))
         assertNotEquals(page, edgePixel(rowCenter("/help")))
         assertEquals(page, edgePixel(rowCenter("Last plan 1/1")))
         assertEquals(page, edgePixel(rowCenter("Draft")))

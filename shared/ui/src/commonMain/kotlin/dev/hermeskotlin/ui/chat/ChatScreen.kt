@@ -926,8 +926,10 @@ internal fun ChatView(
             // up over the greeting like a menu and the box being typed in doesn't move.
             // The lists' own height, measured as they open and fade out, is taken off: a composer that grows (lines,
             // attachments) stays centred as a whole.
-            var listsHeight by remember { mutableIntStateOf(0) }
-            val restingDock = (dockHeight - listsHeight).coerceAtLeast(0)
+            val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
+            var slashListHeight by remember(composerShown) { mutableIntStateOf(0) }
+            var referenceListsHeight by remember(composerShown) { mutableIntStateOf(0) }
+            val restingDock = (dockHeight - slashListHeight - referenceListsHeight).coerceAtLeast(0)
             val restingTop = (paneHeight - restingDock) * (1f + CENTRED_DOCK_BIAS) / 2f
             val dockTop = lerp(restingTop + restingDock - dockHeight, (paneHeight - dockHeight).toFloat(), toFoot).coerceAtLeast(0f)
             // Room under the greeting: down to the resting composer's top wherever it sits.
@@ -988,7 +990,6 @@ internal fun ChatView(
             val hazeState = rememberHazeState()
             // Comments wait in the composer, so the selection menus offer them only while it shows.
             var focusComment by remember { mutableStateOf<Long?>(null) }
-            val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
             // Type on the voice screen ends the call; the composer takes the keyboard once it's back.
             // Once the call is over the wish is spent either way: a question waiting in the composer's place
             // mustn't hand the keyboard over minutes later when it's answered.
@@ -1241,7 +1242,9 @@ internal fun ChatView(
                         composerFocus = composerFocus,
                         composerFold = composerFold,
                         onComposerShrink = { composerShrink = it },
-                        onListsHeight = { listsHeight = it },
+                        composerShown = composerShown,
+                        onSlashListHeight = { slashListHeight = it },
+                        onReferenceListsHeight = { referenceListsHeight = it },
                         onOpenModels = onOpenModels,
                         onAttach = onAttach,
                         onDictate = onDictate,
@@ -1370,8 +1373,10 @@ private fun ColumnScope.Dock(
     composerFocus: FocusRequester,
     composerFold: ComposerFold,
     onComposerShrink: (Int) -> Unit,
-    /** How tall the `/` and `@` lists over the composer stand, as they open and fade out. */
-    onListsHeight: (Int) -> Unit = {},
+    composerShown: Boolean,
+    /** How tall the `/` list stands, as it opens and fades out. */
+    onSlashListHeight: (Int) -> Unit,
+    onReferenceListsHeight: (Int) -> Unit,
     onOpenModels: () -> Unit,
     onAttach: () -> Unit,
     onDictate: () -> Unit,
@@ -1405,6 +1410,30 @@ private fun ColumnScope.Dock(
     dictation.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissDictationError) }
     readAloud.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissReadAloudError) }
     AnimatedVisibility(visible = notice != null) { NoticeLine(notice.orEmpty()) }
+    // Escape puts a desktop's open list away, as a menu's does, until the typing changes; the chat's own Escape
+    // (stopping a task) waits for the next press.
+    var dismissedAt by remember(composerShown) { mutableStateOf<String?>(null) }
+    val typedNow = actions.composer.text.toString()
+    val listsAway = dismissedAt != null && dismissedAt == typedNow
+    if (dismissedAt != null && !listsAway) dismissedAt = null
+    val slashShown = suggestions.isNotEmpty() && connected && !listsAway
+    // The suggestion Up and Down have marked on the desktop, reset as the list changes with the typing. The `/`
+    // list starts with none, so Enter still sends what's typed; the `@` lists start on the first, which Enter takes.
+    val markedState = remember(composerShown, suggestions, mentions, refs) { mutableIntStateOf(-1) }
+    var marked by markedState
+    // The pointer marks the row it's on, on the desktop. One lambda per list, so a row's pointer handler, which
+    // keeps the one it started with, writes the mark the list shows.
+    val onMark: ((Int) -> Unit)? = if (isDesktop) remember(markedState) { { i: Int -> markedState.intValue = i } } else null
+    if (composerShown) {
+        Column(Modifier.onSizeChanged { onSlashListHeight(it.height) }) {
+            AnimatedVisibility(visible = slashShown, enter = fadeIn(), exit = fadeOut()) {
+                // Kept through the fade-out, so the list doesn't empty before it leaves.
+                var shown by remember { mutableStateOf(suggestions) }
+                if (suggestions.isNotEmpty()) shown = suggestions
+                SlashSuggestions(shown, hazeState, marked = marked, onPick = actions::pickSuggestion, onMark = onMark)
+            }
+        }
+    }
     // One place says what's happening: the current action, with the status text and plan folded beneath.
     AnimatedVisibility(visible = state.running, enter = fadeIn(), exit = fadeOut()) {
         ProgressPanel(
@@ -1446,62 +1475,42 @@ private fun ColumnScope.Dock(
             )
         }
     } else {
-        // Escape puts a desktop's open list away, as a menu's does, until the typing changes; the chat's own Escape
-        // (stopping a task) waits for the next press.
-        var dismissedAt by remember { mutableStateOf<String?>(null) }
-        val typedNow = actions.composer.text.toString()
-        val listsAway = dismissedAt != null && dismissedAt == typedNow
-        if (dismissedAt != null && !listsAway) dismissedAt = null
-        val slashShown = suggestions.isNotEmpty() && connected && !listsAway
-        // The suggestion Up and Down have marked on the desktop, reset as the list changes with the typing. The `/`
-        // list starts with none, so Enter still sends what's typed; the `@` lists start on the first, which Enter takes.
-        val markedState = remember(suggestions, mentions, refs) { mutableIntStateOf(-1) }
-        var marked by markedState
-        // The pointer marks the row it's on, on the desktop. One lambda per list, so a row's pointer handler, which
-        // keeps the one it started with, writes the mark the list shows.
-        val onMark: ((Int) -> Unit)? = if (isDesktop) remember(markedState) { { i: Int -> markedState.intValue = i } } else null
-        Column(Modifier.onSizeChanged { onListsHeight(it.height) }) {
-        AnimatedVisibility(visible = slashShown, enter = fadeIn(), exit = fadeOut()) {
-            // Kept through the fade-out, so the list doesn't empty before it leaves.
-            var shown by remember { mutableStateOf(suggestions) }
-            if (suggestions.isNotEmpty()) shown = suggestions
-            SlashSuggestions(shown, hazeState, marked = marked, onPick = actions::pickSuggestion, onMark = onMark)
-        }
-        AnimatedVisibility(visible = mentions.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
-            var shown by remember { mutableStateOf(mentions) }
-            if (mentions.isNotEmpty()) shown = mentions
-            MentionSuggestions(
-                remember(shown) { shown.map { MentionChoice(it.label, it.handle, it) } },
-                hazeState,
-                onPick = { choice -> choice.bot?.let(onMention) },
-                marked = if (isDesktop) marked.coerceAtLeast(0) else -1,
-                onMark = onMark,
-            )
-        }
-        // `@file:` and `@folder:` references: the kinds while `@` is typed, then the gateway's files and folders.
-        AnimatedVisibility(visible = refs.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
-            var shown by remember { mutableStateOf(refs) }
-            if (refs.isNotEmpty()) shown = refs
-            val fileLabel = stringResource(Res.string.chat_ref_file)
-            val folderLabel = stringResource(Res.string.chat_ref_folder)
-            MentionSuggestions(
-                remember(shown, fileLabel, folderLabel) {
-                    shown.map { ref ->
-                        val label = when (ref.kind) {
-                            PathRefKind.File -> fileLabel
-                            PathRefKind.Folder -> folderLabel
-                            null -> ref.label
+        Column(Modifier.onSizeChanged { onReferenceListsHeight(it.height) }) {
+            AnimatedVisibility(visible = mentions.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
+                var shown by remember { mutableStateOf(mentions) }
+                if (mentions.isNotEmpty()) shown = mentions
+                MentionSuggestions(
+                    remember(shown) { shown.map { MentionChoice(it.label, it.handle, it) } },
+                    hazeState,
+                    onPick = { choice -> choice.bot?.let(onMention) },
+                    marked = if (isDesktop) marked.coerceAtLeast(0) else -1,
+                    onMark = onMark,
+                )
+            }
+            // `@file:` and `@folder:` references: the kinds while `@` is typed, then the gateway's files and folders.
+            AnimatedVisibility(visible = refs.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
+                var shown by remember { mutableStateOf(refs) }
+                if (refs.isNotEmpty()) shown = refs
+                val fileLabel = stringResource(Res.string.chat_ref_file)
+                val folderLabel = stringResource(Res.string.chat_ref_folder)
+                MentionSuggestions(
+                    remember(shown, fileLabel, folderLabel) {
+                        shown.map { ref ->
+                            val label = when (ref.kind) {
+                                PathRefKind.File -> fileLabel
+                                PathRefKind.Folder -> folderLabel
+                                null -> ref.label
+                            }
+                            MentionChoice(label, ref.shown, null, ref.icon)
                         }
-                        MentionChoice(label, ref.shown, null, ref.icon)
-                    }
-                },
-                hazeState,
-                onPick = { choice -> shown.firstOrNull { it.shown == choice.handle }?.let(onRef) },
-                // While bots are listed too, the keys walk theirs: only one list shows a mark.
-                marked = if (isDesktop && mentions.isEmpty()) marked.coerceAtLeast(0) else -1,
-                onMark = onMark.takeIf { mentions.isEmpty() },
-            )
-        }
+                    },
+                    hazeState,
+                    onPick = { choice -> shown.firstOrNull { it.shown == choice.handle }?.let(onRef) },
+                    // While bots are listed too, the keys walk theirs: only one list shows a mark.
+                    marked = if (isDesktop && mentions.isEmpty()) marked.coerceAtLeast(0) else -1,
+                    onMark = onMark.takeIf { mentions.isEmpty() },
+                )
+            }
         }
         // Over an empty composer only: once the user types, their own words are the next message.
         val replyShown = suggestedReply != null && connected && !state.running && !editing && actions.composer.text.isEmpty()
