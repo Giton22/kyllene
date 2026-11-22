@@ -98,4 +98,16 @@
     <string name="wear_assistant_set">A Kyllene válaszol a gombra</string>
     <string name="wear_assistant_refused">Nincs beállítva. Koppints az újrapróbáláshoz</string>
     <string name="wear_assistant_unset">A Kyllene beállítása asszisztensként</string>
+    <string name="wear_history_view">Csevegés megtekintése</string>
+    <string name="wear_history_title">Beszélgetés</string>
+    <string name="wear_history_earlier">Korábbi üzenetek</string>
+    <string name="wear_history_loading">Betöltés…</string>
+    <string name="wear_history_refresh">Frissítés</string>
+    <string name="wear_history_prompt">Frissíts a beszélgetés betöltéséhez.</string>
+    <string name="wear_history_empty_page">Ezen az oldalon nincs olvasható üzenet.</string>
+    <string name="wear_history_empty">Még nincsenek mentett üzenetek.</string>
+    <string name="wear_history_you">Te</string>
+    <string name="wear_history_read">Válasz felolvasása</string>
+    <string name="wear_history_update">A beszélgetések olvasásához frissítsd a Kyllene-t a telefonodon.</string>
+    <string name="wear_history_timeout">A telefon nem válaszolt. Próbáld újra.</string>
 </resources>

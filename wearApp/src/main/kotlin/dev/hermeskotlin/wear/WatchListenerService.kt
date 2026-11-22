@@ -6,6 +6,7 @@ import com.google.android.gms.wearable.ChannelClient
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
+import dev.hermeskotlin.wearlink.MAX_WATCH_HISTORY_BYTES
 import dev.hermeskotlin.wearlink.WearPaths
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +37,7 @@ class WatchListenerService : WearableListenerService() {
                     val output = ByteArrayOutputStream()
                     val buffer = ByteArray(8192)
                     var count = it.read(buffer)
-                    while (count >= 0 && output.size() + count <= 4_000_000) {
+                    while (count >= 0 && output.size() + count <= MAX_WATCH_HISTORY_BYTES) {
                         output.write(buffer, 0, count)
                         count = it.read(buffer)
                     }

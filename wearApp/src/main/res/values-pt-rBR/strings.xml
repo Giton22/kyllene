@@ -98,4 +98,16 @@
     <string name="wear_assistant_set">O Kyllene atende o botão</string>
     <string name="wear_assistant_refused">Não definido. Toque para tentar de novo</string>
     <string name="wear_assistant_unset">Definir o Kyllene como assistente</string>
+    <string name="wear_history_view">Ver conversa</string>
+    <string name="wear_history_title">Conversa</string>
+    <string name="wear_history_earlier">Mensagens anteriores</string>
+    <string name="wear_history_loading">Carregando…</string>
+    <string name="wear_history_refresh">Atualizar</string>
+    <string name="wear_history_prompt">Atualize para carregar a conversa.</string>
+    <string name="wear_history_empty_page">Não há mensagens legíveis nesta página.</string>
+    <string name="wear_history_empty">Ainda não há mensagens salvas.</string>
+    <string name="wear_history_you">Você</string>
+    <string name="wear_history_read">Ler a resposta em voz alta</string>
+    <string name="wear_history_update">Atualize o Kyllene no celular para ler conversas.</string>
+    <string name="wear_history_timeout">O celular não respondeu. Tente novamente.</string>
 </resources>

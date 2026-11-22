@@ -75,4 +75,21 @@ class HistoryPagerTest {
         assertEquals(null, pager.page)
     }
 
+    @Test
+    fun aRefreshKeepsTheTranscriptUntilAReplacementArrives() {
+        val pager = HistoryPager()
+        val first = request()
+        pager.begin(first)
+        pager.accept(HistoryPage(first, "saved", listOf(row("old")), 20))
+        val refresh = request("refresh")
+        pager.begin(refresh)
+        assertEquals(listOf(row("old")), pager.page!!.messages)
+        pager.accept(HistoryPage(refresh, error = "Offline"))
+        assertEquals(listOf(row("old")), pager.page!!.messages)
+        val retry = request("retry")
+        pager.begin(retry)
+        pager.accept(HistoryPage(retry, "saved", listOf(row("new"))))
+        assertEquals(listOf(row("new")), pager.page!!.messages)
+    }
+
 }

@@ -98,4 +98,16 @@
     <string name="wear_assistant_set">Kyllene répond au bouton</string>
     <string name="wear_assistant_refused">Non défini. Touchez pour réessayer</string>
     <string name="wear_assistant_unset">Définir Kyllene comme assistant</string>
+    <string name="wear_history_view">Voir le chat</string>
+    <string name="wear_history_title">Conversation</string>
+    <string name="wear_history_earlier">Messages précédents</string>
+    <string name="wear_history_loading">Chargement…</string>
+    <string name="wear_history_refresh">Actualiser</string>
+    <string name="wear_history_prompt">Actualisez pour charger la conversation.</string>
+    <string name="wear_history_empty_page">Aucun message lisible sur cette page.</string>
+    <string name="wear_history_empty">Aucun message enregistré pour le moment.</string>
+    <string name="wear_history_you">Vous</string>
+    <string name="wear_history_read">Lire la réponse à voix haute</string>
+    <string name="wear_history_update">Mettez Kyllene à jour sur votre téléphone pour lire les conversations.</string>
+    <string name="wear_history_timeout">Le téléphone n’a pas répondu. Réessayez.</string>
 </resources>

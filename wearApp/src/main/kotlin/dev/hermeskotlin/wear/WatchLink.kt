@@ -169,6 +169,12 @@ class WatchLink(
         if (historyPager.select(choice.scope, choice.id, choice.botProfile)) clearHistory()
     }
 
+    fun loadHistoryIfMissing() {
+        matchHistorySelection()
+        val page = _history.value
+        if (page == null || page.messages.isEmpty() && page.error != null) readHistory()
+    }
+
     /** Reloads the saved transcript; no ask, call or speech request is sent. */
     fun readHistory(older: Boolean = false) {
         matchHistorySelection()
@@ -179,8 +185,8 @@ class WatchLink(
         historyJob = scope.launch(main) {
             _historyLoading.value = true
             try {
-                if (!synchronizeProfile()) {
-                    _history.value = _history.value?.copy(error = "Couldn't reach your phone. Try Refresh.")
+                if (!profileChecked && !synchronizeProfile()) {
+                    _history.value = _history.value?.copy(error = notConnected)
                     return@launch
                 }
                 val choice = store.chat.value
@@ -191,14 +197,14 @@ class WatchLink(
                 historyPager.begin(request)
                 _history.value = historyPager.page
                 if (!historySupported) {
-                    receiveHistory(HistoryPage(request, error = "Update Kyllene on your phone to read conversations."))
+                    receiveHistory(HistoryPage(request, error = say(R.string.wear_history_update)))
                     return@launch
                 }
                 val problem = send(WearPaths.HISTORY, WearJson.encode(request)) { historyPager.loading && store.chat.value == choice }
                 if (problem != null) receiveHistory(HistoryPage(request, error = problem))
                 else {
                     delay(30_000)
-                    receiveHistory(HistoryPage(request, error = "The phone didn't answer. Try again."))
+                    receiveHistory(HistoryPage(request, error = say(R.string.wear_history_timeout)))
                 }
             } finally {
                 if (historyOperation == operation) _historyLoading.value = false
@@ -255,17 +261,28 @@ class WatchLink(
         val waiting = CompletableDeferred<Boolean>()
         statusRequest = id to waiting
         latestStatus = id
-        profileChecked = false
-        try {
-            val chat = store.chat.value
-            if (send(WearPaths.STATUS, WearJson.encode(PhoneStatusRequest(chat.botProfile, id, chat.scope, store.accent.value?.revision))) { statusRequest?.first == id } != null) {
-                _chats.value = null
-                return@withContext false
+        scope.launch(main) {
+            try {
+                val chat = store.chat.value
+                val problem = send(WearPaths.STATUS, WearJson.encode(
+                    PhoneStatusRequest(chat.botProfile, id, chat.scope, store.accent.value?.revision),
+                )) { statusRequest?.first == id }
+                if (problem != null) {
+                    if (statusRequest?.first == id) {
+                        profileChecked = false
+                        _chats.value = null
+                    }
+                } else if (withTimeoutOrNull(20_000) { waiting.await() } == null && statusRequest?.first == id) {
+                    profileChecked = false
+                    _phone.value = PhoneState.NoHerald
+                    _chats.value = null
+                }
+            } finally {
+                if (statusRequest?.first == id) statusRequest = null
+                waiting.complete(false)
             }
-            withTimeoutOrNull(20_000) { waiting.await() } ?: false.also { _phone.value = PhoneState.NoHerald; _chats.value = null }
-        } finally {
-            if (statusRequest?.first == id) { waiting.complete(false); statusRequest = null }
         }
+        waiting.await()
     }
 
     private fun resetProfile(next: WatchScope?) {

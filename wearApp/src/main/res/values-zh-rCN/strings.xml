@@ -98,4 +98,16 @@
     <string name="wear_assistant_set">按键由 Kyllene 响应</string>
     <string name="wear_assistant_refused">未设置。点按重试</string>
     <string name="wear_assistant_unset">将 Kyllene 设为助理</string>
+    <string name="wear_history_view">查看聊天</string>
+    <string name="wear_history_title">对话</string>
+    <string name="wear_history_earlier">较早的消息</string>
+    <string name="wear_history_loading">正在加载…</string>
+    <string name="wear_history_refresh">刷新</string>
+    <string name="wear_history_prompt">刷新以加载对话。</string>
+    <string name="wear_history_empty_page">此页没有可阅读的消息。</string>
+    <string name="wear_history_empty">还没有保存的消息。</string>
+    <string name="wear_history_you">你</string>
+    <string name="wear_history_read">朗读回复</string>
+    <string name="wear_history_update">请更新手机上的 Kyllene 以阅读对话。</string>
+    <string name="wear_history_timeout">手机未响应，请重试。</string>
 </resources>

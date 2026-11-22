@@ -2,6 +2,9 @@ package dev.hermeskotlin.wearlink
 
 import kotlinx.serialization.Serializable
 
+/** Encoded history above this size needs a small, request-scoped error instead of a channel. */
+const val MAX_WATCH_HISTORY_BYTES = 4_000_000
+
 /** A read-only request for stored messages, owned independently of the phone's browsing profile. */
 @Serializable
 data class HistoryRequest(
@@ -37,7 +40,7 @@ class HistoryPager {
         pending = request
         loading = true
         val previous = page?.request
-        if (request.offset == 0 || previous == null || request.scope != previous.scope ||
+        if (previous == null || request.scope != previous.scope ||
             request.browserScope != previous.browserScope || request.chatId != previous.chatId || request.botProfile != previous.botProfile) {
             page = HistoryPage(request)
         }
@@ -49,8 +52,9 @@ class HistoryPager {
         loading = false
         val previous = page
         page = when {
-            response.request.offset == 0 || previous == null -> response
+            previous == null -> response
             response.error != null -> previous.copy(error = response.error)
+            response.request.offset == 0 -> response
             response.chatId != previous.chatId -> HistoryPage(response.request, error = "The conversation changed. Refresh to read it again.")
             else -> response.copy(messages = (response.messages + previous.messages).distinctBy { it.id })
         }

@@ -98,4 +98,16 @@
     <string name="wear_assistant_set">Kyllene antwortet auf die Taste</string>
     <string name="wear_assistant_refused">Nicht gesetzt. Tippe für einen neuen Versuch</string>
     <string name="wear_assistant_unset">Kyllene als Assistent festlegen</string>
+    <string name="wear_history_view">Chat ansehen</string>
+    <string name="wear_history_title">Unterhaltung</string>
+    <string name="wear_history_earlier">Frühere Nachrichten</string>
+    <string name="wear_history_loading">Wird geladen…</string>
+    <string name="wear_history_refresh">Aktualisieren</string>
+    <string name="wear_history_prompt">Aktualisiere, um die Unterhaltung zu laden.</string>
+    <string name="wear_history_empty_page">Auf dieser Seite sind keine lesbaren Nachrichten.</string>
+    <string name="wear_history_empty">Noch keine gespeicherten Nachrichten.</string>
+    <string name="wear_history_you">Du</string>
+    <string name="wear_history_read">Antwort vorlesen</string>
+    <string name="wear_history_update">Aktualisiere Kyllene auf deinem Telefon, um Unterhaltungen zu lesen.</string>
+    <string name="wear_history_timeout">Das Telefon hat nicht geantwortet. Versuche es erneut.</string>
 </resources>
