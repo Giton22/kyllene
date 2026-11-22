@@ -1343,7 +1343,8 @@ class ChatSession(
             if (!loadAllHistory()) return null
             withHiddenRows(it)
         }
-        return branchKeeping(keep, keep?.let(::lastCountedRowId))
+        // Past the loaded rows (turns of ours since they were read): the newest stored row.
+        return branchKeeping(keep) { keep?.let { lastCountedRowId(it) ?: newestPage()?.lastOrNull()?.id } }
     }
 
     /**
@@ -1361,9 +1362,28 @@ class ChatSession(
         // Up to the row the next message starts at; the last message keeps every row.
         val next = messages.drop(index + 1).firstNotNullOfOrNull { message -> message.firstStoredRowId() }
         val end = next?.let { id -> rows.indexOfFirst { it.id == id } }?.takeIf { it >= 0 } ?: rows.size
-        // The session authority cuts at a row id: the newest row the message reaches, once it has one.
-        val through = rows.take(end).lastOrNull()?.id?.takeIf { messages[index].firstStoredRowId() != null }
-        return branchKeeping(rows.take(end).count { it.countsInBranch }, through)
+        val message = messages[index]
+        // The session authority cuts at a row id: the newest stored row the message reaches.
+        return branchKeeping(rows.take(end).count { it.countsInBranch }) {
+            if (message.firstStoredRowId() != null) {
+                rows.take(end).lastOrNull()?.id
+            } else {
+                liveRowId(message, laterPrompt = messages.drop(index + 1).any { it is ChatMessage.User })
+            }
+        }
+    }
+
+    /**
+     * The newest stored row of a message shown from the live stream, which the loaded rows may not have yet (they
+     * are read on opening, not after each turn of ours): its prompt's own row, or else read from the newest page.
+     * Null when it can't be placed: a message before a later turn, without a row of its own.
+     */
+    private suspend fun liveRowId(message: ChatMessage, laterPrompt: Boolean): Long? {
+        if (message is ChatMessage.User) message.rowId?.let { return it }
+        if (laterPrompt) return null
+        val page = newestPage() ?: return null
+        // A prompt without its row yet: the newest prompt shown, not its reply after it.
+        return if (message is ChatMessage.User) page.lastOrNull { it.role == "user" && !it.isHidden }?.id else page.lastOrNull()?.id
     }
 
     /** The stored row a message starts at: a folded group is keyed by its newest row, but starts at its first. */
@@ -1372,14 +1392,15 @@ class ChatSession(
 
     /**
      * A new chat with the first [keep] rows `session.branch` counts, or the whole chat when null. The session
-     * authority has no `session.branch`: there it is a `session.mutate` branch up to and with row [through].
+     * authority has no `session.branch`: there it is a `session.mutate` branch up to and with the row [through]
+     * finds, asked only there.
      */
-    private suspend fun branchKeeping(keep: Int?, through: Long?): Pair<String, String?>? {
+    private suspend fun branchKeeping(keep: Int?, through: suspend () -> Long?): Pair<String, String?>? {
         var branched: Pair<String, String?>? = null
         runOnGateway("/branch") { client, runtimeId ->
             val result = if (client.sessionAuthority) {
-                if (keep != null && through == null) throw RpcException(0, NOT_SAVED_YET)
-                mutateBranch(client, runtimeId, through.takeIf { keep != null })
+                val row = if (keep == null) null else through() ?: throw RpcException(0, BRANCH_ROW_UNKNOWN)
+                mutateBranch(client, runtimeId, row)
             } else {
                 val params = buildJsonObject {
                     put("session_id", runtimeId)
@@ -1440,13 +1461,19 @@ class ChatSession(
         }
     }
 
-    /** The id of the [keep]th row `session.branch` counts, or of the last row when there are fewer. */
+    /** The newest page of stored rows, read without showing it; null when it couldn't be read. */
+    private suspend fun newestPage(): List<SessionMessage>? {
+        val id = _state.value.storedSessionId ?: return null
+        return (sessions.messages(gateway, id, limit = HISTORY_PAGE, profile = profile) as? ApiResult.Success)?.value?.messages
+    }
+
+    /** The id of the [keep]th loaded row `session.branch` counts; null when there are fewer. */
     private fun lastCountedRowId(keep: Int): Long? {
         var counted = 0
         for (row in rows) {
             if (row.countsInBranch && ++counted == keep) return row.id
         }
-        return rows.lastOrNull()?.id
+        return null
     }
 
     /**
@@ -2560,7 +2587,7 @@ class ChatSession(
         /** `session.mutate` refusals for a stale `expected_revision` or `expected_generation`; they carry the current ones. */
         val FENCE_REFUSALS = setOf("revision_conflict", "stale_generation")
 
-        const val NOT_SAVED_YET = "This message isn't saved yet. Wait for the reply to finish, then branch from it again."
+        const val BRANCH_ROW_UNKNOWN = "Couldn't find this message in the saved chat. Open the chat again, then branch from it."
 
         const val CHANGED_WHILE_BRANCHING = "The chat changed on the gateway while branching. Try again."
 

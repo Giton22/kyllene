@@ -2468,6 +2468,36 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aNewChatsLiveTurnBranchesThroughItsStoredRows() = runTest {
+        // A new chat shows its turn from the live stream; its rows are stored but were never read.
+        storedSessions["local-1"] = """{"session_id":"local-1","messages":[
+            {"id":21,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
+            {"id":22,"role":"user","content":"hi"},{"id":23,"role":"assistant","content":"Done."}]}"""
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf(
+                "session.create" to """{"session_id":"local-1","stored_session_id":"local-1","revision":0,"execution_generation":0,"info":{}}""",
+                "prompt.submit" to """{"status":"queued"}""",
+                "session.mutate" to """{"session_id":"local-1","operation":"branch","revision":2,"branched_session_id":"local-2","copied_messages":2}""",
+            ),
+            ready = AUTHORITY_READY,
+        )
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        assertTrue(chat.send("hi"))
+        transport.push(event("message.start", "local-1"))
+        transport.push(event("message.complete", "local-1", """{"text":"Done.","status":"complete"}"""))
+        chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Assistant } }
+
+        assertEquals("local-2" to null, chat.branchFrom(chat.state.value.messages.last { it is ChatMessage.Assistant }.key))
+        assertEquals("23", transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString())
+        // Its prompt, which the authority's submit names no row for: the newest prompt shown, not its reply.
+        chat.branchFrom(chat.state.value.messages.first { it is ChatMessage.User }.key)
+        assertEquals("22", transport.sent.value.last { it.isCall("session.mutate") }.mutatePayload()["through_message_id"].toString())
+    }
+
+    @Test
     fun aBranchPresentsTheRevisionTheGatewayLastAnnounced() = runTest {
         val (chat, transport) = authorityChat(backgroundScope) { it.branched() }
 
