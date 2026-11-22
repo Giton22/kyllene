@@ -905,7 +905,7 @@ internal fun ChatView(
             TopBar(
                 title = title,
                 titleFace = titleFace,
-                status = chatStatus(state, connected, connectionLabel, place),
+                status = if (!isDesktop && linkStatus != null) null else chatStatus(state, connected, connectionLabel, place),
                 onOpenSidebar = onOpenSidebar,
                 onNewChat = onNewChat,
                 onOpenMenu = onOpenMenu,
@@ -988,6 +988,7 @@ internal fun ChatView(
             var composerShrink by remember { mutableIntStateOf(0) }
             val listInset = with(LocalDensity.current) { (dockHeight + composerShrink).toDp() }
             val hazeState = rememberHazeState()
+            val controlHaze = if (isDesktop) null else rememberHazeState()
             // Comments wait in the composer, so the selection menus offer them only while it shows.
             var focusComment by remember { mutableStateOf<Long?>(null) }
             // Type on the voice screen ends the call; the composer takes the keyboard once it's back.
@@ -1126,6 +1127,7 @@ internal fun ChatView(
                                     savedCopy = state.savedCopyAt != null,
                                     bottomInset = listInset,
                                     controlsInset = dockInset,
+                                    controlHaze = controlHaze,
                                     fold = composerFold,
                                     actions = actions,
                                     connected = connected,
@@ -1168,9 +1170,14 @@ internal fun ChatView(
                         }
                     }
                 }
-                // Over the top of the conversation: the link being made again, and an older page on its way.
                 var lastLinkStatus by remember { mutableStateOf("") }
                 if (linkStatus != null) lastLinkStatus = linkStatus
+                val reconnectBanner: @Composable () -> Unit = {
+                    androidx.compose.animation.AnimatedVisibility(visible = linkStatus != null, enter = fadeIn(), exit = fadeOut()) {
+                        OfflineBanner(place, lastLinkStatus, controlHaze, onRetryConnection)
+                    }
+                }
+                // Over the top of the conversation: other chats, the desktop link status and older pages.
                 Column(
                     Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1192,9 +1199,7 @@ internal fun ChatView(
                             )
                         }
                     }
-                    AnimatedVisibility(visible = linkStatus != null, enter = fadeIn(), exit = fadeOut()) {
-                        OfflineBanner(place, lastLinkStatus, onRetry = onRetryConnection)
-                    }
+                    if (isDesktop) reconnectBanner()
                     // A chat read from the device's copy says so, and how old it is, once the gateway is known to be away;
                     // while it's only being asked, the copy is replaced without a word.
                     var lastSavedAt by remember { mutableStateOf(0L) }
@@ -1218,6 +1223,8 @@ internal fun ChatView(
                     Dock(
                         hazeState = hazeState,
                         opaqueComposer = LocalAppSettings.current.opaqueComposer && composerShown && !centred && toFoot >= 1f,
+                        reconnectBanner = reconnectBanner.takeUnless { isDesktop },
+                        reconnectingInBanner = !isDesktop && linkStatus != null,
                         actions = actions,
                         placeholder = placeholder,
                         state = state,
@@ -1349,6 +1356,8 @@ private fun ComposerBackdrop(hazeState: HazeState?, content: @Composable () -> U
 private fun ColumnScope.Dock(
     hazeState: HazeState,
     opaqueComposer: Boolean,
+    reconnectBanner: (@Composable () -> Unit)?,
+    reconnectingInBanner: Boolean,
     actions: ChatActions,
     placeholder: String,
     state: ChatState,
@@ -1434,6 +1443,7 @@ private fun ColumnScope.Dock(
             }
         }
     }
+    reconnectBanner?.invoke()
     // One place says what's happening: the current action, with the status text and plan folded beneath.
     AnimatedVisibility(visible = state.running, enter = fadeIn(), exit = fadeOut()) {
         ProgressPanel(
@@ -1539,6 +1549,7 @@ private fun ColumnScope.Dock(
             Composer(
                 editing = editing,
                 hazeState = panelHaze,
+                reconnectingInBanner = reconnectingInBanner,
                 actions = actions,
                 placeholder = placeholder,
                 state = state,
@@ -1940,6 +1951,7 @@ private fun Messages(
     bottomInset: Dp,
     /** How high the dock really stands, for what floats just above it. */
     controlsInset: Dp,
+    controlHaze: HazeState?,
     /** Folds the composer by how near the reader is to the end. */
     fold: ComposerFold,
     actions: ChatActions,
@@ -2152,7 +2164,8 @@ private fun Messages(
         val side = 16.dp + ((maxWidth - READING_WIDTH) / 2).coerceAtLeast(0.dp)
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().nestedScroll(readBack),
+            modifier = Modifier.fillMaxSize().nestedScroll(readBack)
+                .then(if (controlHaze != null) Modifier.hazeSource(controlHaze) else Modifier),
             contentPadding = PaddingValues(start = side, end = side, top = 12.dp, bottom = 12.dp + bottomInset),
             verticalArrangement = Arrangement.spacedBy(if (isDesktop) 16.dp else 20.dp, Alignment.Bottom),
         ) {
@@ -2265,46 +2278,49 @@ private fun Messages(
             visible = awayFromBottom,
             enter = fadeIn() + scaleIn(),
             exit = fadeOut() + scaleOut(),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp + controlsInset),
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(bottom = 12.dp + controlsInset - if (controlHaze != null) TranscriptControlRim else 0.dp),
         ) {
             val shape = RoundedCornerShape(Theme[radii][radiusMedium])
             // A pointer-sized button on the desktop, named on a rest over it.
             val size = if (isDesktop) 34.dp else 40.dp
             val jumpLabel = stringResource(Res.string.chat_jump_latest)
-            Tooltip(if (isDesktop && !newBelow) jumpLabel else "") { UnstyledButton(
-                onClick = {
-                    readerNavigated = true
-                    scope.launch {
-                        listState.animateToEnd()
-                        pinned = true
-                    }
-                },
-                modifier = Modifier
-                    .heightIn(min = size)
-                    .handCursor()
-                    .widthIn(min = size)
-                    .clip(shape)
-                    .background(if (newBelow) Theme[colors][accent] else Theme[colors][surfaceElevated])
-                    .border(1.dp, if (newBelow) Theme[colors][accent] else Theme[colors][strokeStrong], shape)
-                    .animateContentSize(),
-                indication = rememberHoverIndication(Theme[colors][textColor]),
-            ) {
-                // Says "New reply" when something arrived below, not only by the arrow.
-                val tint = if (newBelow) Theme[colors][onAccent] else Theme[colors][textColor]
-                Row(
-                    Modifier.padding(horizontal = if (newBelow) 14.dp else 11.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            TranscriptControlBackdrop(shape, controlHaze) {
+                Tooltip(if (isDesktop && !newBelow) jumpLabel else "") { UnstyledButton(
+                    onClick = {
+                        readerNavigated = true
+                        scope.launch {
+                            listState.animateToEnd()
+                            pinned = true
+                        }
+                    },
+                    modifier = Modifier
+                        .heightIn(min = size)
+                        .handCursor()
+                        .widthIn(min = size)
+                        .clip(shape)
+                        .background(if (newBelow) Theme[colors][accent] else Theme[colors][surfaceElevated])
+                        .border(1.dp, if (newBelow) Theme[colors][accent] else Theme[colors][strokeStrong], shape)
+                        .animateContentSize(),
+                    indication = rememberHoverIndication(Theme[colors][textColor]),
                 ) {
-                    UnstyledIcon(
-                        Lucide.ArrowDown,
-                        contentDescription = if (newBelow) null else jumpLabel,
-                        tint = tint,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    if (newBelow) Text(stringResource(Res.string.chat_new_reply), style = Theme[typography][label], color = tint)
-                }
-            } }
+                    // Says "New reply" when something arrived below, not only by the arrow.
+                    val tint = if (newBelow) Theme[colors][onAccent] else Theme[colors][textColor]
+                    Row(
+                        Modifier.padding(horizontal = if (newBelow) 14.dp else 11.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        UnstyledIcon(
+                            Lucide.ArrowDown,
+                            contentDescription = if (newBelow) null else jumpLabel,
+                            tint = tint,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        if (newBelow) Text(stringResource(Res.string.chat_new_reply), style = Theme[typography][label], color = tint)
+                    }
+                } }
+            }
         }
     }
 }
@@ -2475,31 +2491,39 @@ private const val UNREACHABLE = "Can't reach gateway"
 
 /** The banner over the chat while the gateway can't be reached: where, what's being done about it, and Retry now. */
 @Composable
-internal fun OfflineBanner(place: String?, status: String, onRetry: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp)
-            // The tint laid on the chat's page colour: the red wash it had on a plain page, but nothing under it shows through.
-            .background(Theme[colors][dangerSoft].compositeOver(Theme[colors][background]), RoundedCornerShape(Theme[radii][radiusMedium]))
-            .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
-            .semantics(mergeDescendants = true) {},
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        UnstyledIcon(Lucide.WifiOff, contentDescription = null, tint = Theme[colors][danger], modifier = Modifier.size(16.dp))
-        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-            // Announced once as it appears: the line under it changes with every attempt, and isn't.
-            Text(
-                stringResource(Res.string.chat_offline_title, offlineTitle(place)),
-                style = Theme[typography][bodySmall].copy(fontWeight = FontWeight.Medium),
-                color = Theme[colors][textColor],
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            )
-            val line = stringResource(Res.string.chat_offline_draft_kept, status)
-            CopyableOnDesktop { Text(line, style = Theme[typography][caption], color = Theme[colors][textSecondary]) }
+internal fun OfflineBanner(
+    place: String?,
+    status: String,
+    controlHaze: HazeState? = null,
+    onRetry: () -> Unit,
+) {
+    val shape = RoundedCornerShape(Theme[radii][radiusMedium])
+    val rim = if (controlHaze == null) 0.dp else TranscriptControlRim
+    TranscriptControlBackdrop(shape, controlHaze, Modifier.fillMaxWidth().padding(horizontal = 14.dp - rim)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                // Keep the banner itself opaque even as the nearby transcript softly fades out around it.
+                .background(Theme[colors][dangerSoft].compositeOver(Theme[colors][background]), shape)
+                .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+                .semantics(mergeDescendants = true) {},
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            UnstyledIcon(Lucide.WifiOff, contentDescription = null, tint = Theme[colors][danger], modifier = Modifier.size(16.dp))
+            Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                // Announced once as it appears: the line under it changes with every attempt, and isn't.
+                Text(
+                    stringResource(Res.string.chat_offline_title, offlineTitle(place)),
+                    style = Theme[typography][bodySmall].copy(fontWeight = FontWeight.Medium),
+                    color = Theme[colors][textColor],
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                val line = stringResource(Res.string.chat_offline_draft_kept, status)
+                CopyableOnDesktop { Text(line, style = Theme[typography][caption], color = Theme[colors][textSecondary]) }
+            }
+            RetryChip(stringResource(Res.string.chat_retry_now), onClick = onRetry)
         }
-        RetryChip(stringResource(Res.string.chat_retry_now), onClick = onRetry)
     }
 }
 
@@ -3999,6 +4023,7 @@ internal fun ComposerTextInput(
 @Composable
 private fun Composer(
     hazeState: HazeState,
+    reconnectingInBanner: Boolean,
     actions: ChatActions,
     placeholder: String,
     state: ChatState,
@@ -4093,7 +4118,7 @@ private fun Composer(
                         placeholder = {
                             Text(
                                 when {
-                                    !connected -> stringResource(Res.string.chat_composer_reconnecting)
+                                    !connected && !reconnectingInBanner -> stringResource(Res.string.chat_composer_reconnecting)
                                     comments.isNotEmpty() -> stringResource(Res.string.chat_composer_anything_else)
                                     // Mid-task a message joins the running task, by Queue or Steer.
                                     state.running -> stringResource(Res.string.chat_composer_add_to_task)
@@ -4156,7 +4181,7 @@ private fun Composer(
             {
                 FoldedComposer(
                     placeholder = when {
-                        !connected -> stringResource(Res.string.chat_composer_reconnecting)
+                        !connected && !reconnectingInBanner -> stringResource(Res.string.chat_composer_reconnecting)
                         state.running -> stringResource(Res.string.chat_composer_add_to_task)
                         else -> placeholder
                     },
