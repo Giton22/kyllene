@@ -29,6 +29,8 @@ import dev.hermeskotlin.core.models.ReasoningEffort
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +47,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
@@ -118,6 +121,13 @@ class ChatSession(
      */
     @kotlin.concurrent.Volatile
     private var executionGeneration: Long? = null
+
+    /**
+     * The session authority's `revision` for the attached session (from `session.resume`, `session.create`,
+     * `session.info` and `session.updated`), which a `session.mutate` presents as `expected_revision`.
+     */
+    @kotlin.concurrent.Volatile
+    private var revision: Long? = null
 
     /**
      * Prompts this client submitted whose turn hasn't started yet. A `message.start` beyond them is a
@@ -1333,7 +1343,7 @@ class ChatSession(
             if (!loadAllHistory()) return null
             withHiddenRows(it)
         }
-        return branchKeeping(keep)
+        return branchKeeping(keep, keep?.let(::lastCountedRowId))
     }
 
     /**
@@ -1349,34 +1359,94 @@ class ChatSession(
         val index = messages.indexOfFirst { it.key == key }
         if (index < 0) return null
         // Up to the row the next message starts at; the last message keeps every row.
-        val next = messages.drop(index + 1).firstNotNullOfOrNull { message ->
-            // A folded group is keyed by its newest row; it starts at its first.
-            storedRowId(((message as? ChatMessage.Event)?.event as? TranscriptEvent.SystemMessages)?.firstKey ?: message.key)
-        }
+        val next = messages.drop(index + 1).firstNotNullOfOrNull { message -> message.firstStoredRowId() }
         val end = next?.let { id -> rows.indexOfFirst { it.id == id } }?.takeIf { it >= 0 } ?: rows.size
-        return branchKeeping(rows.take(end).count { it.countsInBranch })
+        // The session authority cuts at a row id: the newest row the message reaches, once it has one.
+        val through = rows.take(end).lastOrNull()?.id?.takeIf { messages[index].firstStoredRowId() != null }
+        return branchKeeping(rows.take(end).count { it.countsInBranch }, through)
     }
 
-    private suspend fun branchKeeping(keep: Int?): Pair<String, String?>? {
+    /** The stored row a message starts at: a folded group is keyed by its newest row, but starts at its first. */
+    private fun ChatMessage.firstStoredRowId(): Long? =
+        storedRowId(((this as? ChatMessage.Event)?.event as? TranscriptEvent.SystemMessages)?.firstKey ?: key)
+
+    /**
+     * A new chat with the first [keep] rows `session.branch` counts, or the whole chat when null. The session
+     * authority has no `session.branch`: there it is a `session.mutate` branch up to and with row [through].
+     */
+    private suspend fun branchKeeping(keep: Int?, through: Long?): Pair<String, String?>? {
         var branched: Pair<String, String?>? = null
         runOnGateway("/branch") { client, runtimeId ->
-            val params = buildJsonObject {
-                put("session_id", runtimeId)
-                keep?.let { put("count", it) }
+            val result = if (client.sessionAuthority) {
+                if (keep != null && through == null) throw RpcException(0, NOT_SAVED_YET)
+                mutateBranch(client, runtimeId, through.takeIf { keep != null })
+            } else {
+                val params = buildJsonObject {
+                    put("session_id", runtimeId)
+                    keep?.let { put("count", it) }
+                }
+                try {
+                    client.request(if (keep == null) "session.branch_whole" else "session.branch", params) as? JsonObject
+                } catch (e: RpcException) {
+                    // Gateways older than branch_whole only have session.branch.
+                    if (e.code != METHOD_NOT_FOUND) throw e
+                    client.request("session.branch", params) as? JsonObject
+                }
             }
-            val result = try {
-                client.request(if (keep == null) "session.branch_whole" else "session.branch", params) as? JsonObject
-            } catch (e: RpcException) {
-                // Gateways older than branch_whole only have session.branch.
-                if (e.code != METHOD_NOT_FOUND) throw e
-                client.request("session.branch", params) as? JsonObject
-            }
-            val stored = result.string("stored_session_id") ?: throw RpcException(0, "The gateway didn't say where the branch went.")
+            // The session authority names the new chat `branched_session_id` and leaves its title to the chat list.
+            val stored = result.string("stored_session_id") ?: result.string("branched_session_id")
+                ?: throw RpcException(0, "The gateway didn't say where the branch went.")
             val title = result.string("title")?.takeIf { it.isNotBlank() }
             branched = stored to title
             "Branched into ${title?.let { "“$it”" } ?: "a new chat"}."
         }
         return branched
+    }
+
+    /**
+     * A `branch` through `session.mutate` on the session authority (gateway/session_mutations.py), as Hermes Desktop
+     * sends it: fenced by the session's revision and execution generation. A refusal for stale ones carries the
+     * current ones, so it goes once more with those; a second refusal is the error.
+     */
+    @OptIn(ExperimentalUuidApi::class)
+    private suspend fun mutateBranch(client: JsonRpcClient, runtimeId: String, through: Long?): JsonObject? {
+        suspend fun send(expectedRevision: Long, expectedGeneration: Long) = client.request(
+            "session.mutate",
+            buildJsonObject {
+                put("session_id", runtimeId)
+                // Nothing is stored for a refused request, so each attempt is its own.
+                put("request_id", Uuid.random().toString())
+                put("expected_revision", expectedRevision)
+                put("expected_generation", expectedGeneration)
+                put("operation", "branch")
+                putJsonObject("payload") { through?.let { put("through_message_id", it) } }
+            },
+        ) as? JsonObject
+        return try {
+            // Unknown only if the gateway sent neither; its refusal then says what they are.
+            send(revision ?: 0, executionGeneration ?: 0)
+        } catch (e: RpcException) {
+            val fresh = e.data.long("revision")
+            val generation = e.data.long("execution_generation")
+            if (e.reason !in FENCE_REFUSALS || fresh == null || generation == null) throw e
+            revision = fresh
+            executionGeneration = generation
+            try {
+                send(fresh, generation)
+            } catch (again: RpcException) {
+                if (again.reason !in FENCE_REFUSALS) throw again
+                throw RpcException(again.code, CHANGED_WHILE_BRANCHING, again.reason, again.data)
+            }
+        }
+    }
+
+    /** The id of the [keep]th row `session.branch` counts, or of the last row when there are fewer. */
+    private fun lastCountedRowId(keep: Int): Long? {
+        var counted = 0
+        for (row in rows) {
+            if (row.countsInBranch && ++counted == keep) return row.id
+        }
+        return rows.lastOrNull()?.id
     }
 
     /**
@@ -1959,6 +2029,12 @@ class ChatSession(
     private fun apply(event: GatewayEvent) {
         event.seq?.let { lastSeq = it }
         (event.payload as? JsonObject).long("execution_generation")?.let { executionGeneration = it }
+        if (event.type == "session.info" || event.type == "session.updated") {
+            val payload = event.payload as? JsonObject
+            // A receipt names its session; only ever forward, as a replayed older one must not rewind it.
+            val ours = payload.string("session_id")?.let { it == _state.value.runtimeSessionId } ?: true
+            payload.long("revision")?.takeIf { ours }?.let { seen -> revision = maxOf(revision ?: seen, seen) }
+        }
         val now = nowSeconds()
         val noticesBefore = _state.value.notices
         // Cleared before the turn's end lands, so no rows laid out meanwhile still take it as running.
@@ -2279,6 +2355,7 @@ class ChatSession(
         ) as? JsonObject ?: error("Empty session.resume reply")
         val runtimeId = result.string("session_id") ?: error("session.resume returned no session_id")
         executionGeneration = result.long("execution_generation")
+        revision = result.long("revision")
         val running = result.boolean("running") == true
         // A turn already running when we attach is someone else's; reconcile with the stored rows when it ends.
         if (running && ownTurnsPending == 0) foreignTurn = true
@@ -2391,6 +2468,7 @@ class ChatSession(
         ) as? JsonObject ?: error("Empty session.create reply")
         val runtimeId = result.string("session_id") ?: error("session.create returned no session_id")
         executionGeneration = result.long("execution_generation")
+        revision = result.long("revision")
         // The session authority stores every new chat's row on create, so a send after a lost link resumes it.
         if (client.sessionAuthority || !instruction.isNullOrBlank()) rowExists = true
         streamMutex.withLock {
@@ -2478,6 +2556,13 @@ class ChatSession(
 
         /** JSON-RPC "method not found": the gateway predates a call. */
         const val METHOD_NOT_FOUND = -32601
+
+        /** `session.mutate` refusals for a stale `expected_revision` or `expected_generation`; they carry the current ones. */
+        val FENCE_REFUSALS = setOf("revision_conflict", "stale_generation")
+
+        const val NOT_SAVED_YET = "This message isn't saved yet. Wait for the reply to finish, then branch from it again."
+
+        const val CHANGED_WHILE_BRANCHING = "The chat changed on the gateway while branching. Try again."
 
         /** A REST read of a session the gateway no longer has. */
         const val HTTP_NOT_FOUND = 404
