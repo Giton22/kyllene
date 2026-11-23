@@ -22,7 +22,6 @@ import org.webrtc.SessionDescription
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.min
@@ -39,9 +38,14 @@ class AndroidLiveCall(context: Context) : LiveCall {
     private val incoming = Channel<String>(Channel.UNLIMITED)
     override val events: ReceiveChannel<String> = incoming
 
-    private val lock = Any()
-    private val closed = AtomicBoolean(false)
+    /**
+     * Keeps [close] from freeing WebRTC's objects under a call into them. It is never held across such a call,
+     * and WebRTC's callbacks never wait on it: most calls block on WebRTC's signaling thread, which is the
+     * thread that delivers the callbacks, so a lock taken on both sides stops the two for good.
+     */
+    private val gate = CallGate()
 
+    // Written inside the gate and read by close() once nobody is inside, so they need no lock of their own.
     private var adm: JavaAudioDeviceModule? = null
     private var factory: PeerConnectionFactory? = null
     private var peer: PeerConnection? = null
@@ -55,38 +59,30 @@ class AndroidLiveCall(context: Context) : LiveCall {
     @Volatile private var loudAt = 0L
     @Volatile private var statsPending = false
 
+    /** A step of [connect]: not started once the call is closed, and finished before [close] frees anything. */
+    private inline fun <T> step(block: () -> T): T = gate.use({ throw CancellationException("Call closed") }, block)
+
     override suspend fun connect(answer: suspend (offerSdp: String) -> String) {
-        if (closed.get()) throw CancellationException("Call closed")
+        if (gate.closed) throw CancellationException("Call closed")
         initialize(appContext)
-        synchronized(lock) {
-            if (closed.get()) throw CancellationException("Call closed")
-            routeAudio()
-        }
+        step { routeAudio() }
         // WebRTC's own echo canceller rather than the phone's: with the voice on the speaker, many phones'
         // cancellers go half-duplex and all but mute the microphone while it talks, so you can't cut in.
-        val adm = JavaAudioDeviceModule.builder(appContext)
-            .setUseHardwareAcousticEchoCanceler(false)
-            .setUseHardwareNoiseSuppressor(false)
-            .setSamplesReadyCallback { samples -> micLevel = level(samples.data) }
-            .createAudioDeviceModule()
-        synchronized(lock) {
-            if (closed.get()) {
-                adm.release()
-                throw CancellationException("Call closed")
-            }
-            this.adm = adm
+        val adm = step {
+            JavaAudioDeviceModule.builder(appContext)
+                .setUseHardwareAcousticEchoCanceler(false)
+                .setUseHardwareNoiseSuppressor(false)
+                .setSamplesReadyCallback { samples -> micLevel = level(samples.data) }
+                .createAudioDeviceModule()
+                .also { this.adm = it }
         }
-        val factory = synchronized(lock) {
-            if (closed.get()) throw CancellationException("Call closed")
-            PeerConnectionFactory.builder().setAudioDeviceModule(adm).createPeerConnectionFactory().also {
-                this.factory = it
-            }
+        val factory = step {
+            PeerConnectionFactory.builder().setAudioDeviceModule(adm).createPeerConnectionFactory().also { this.factory = it }
         }
 
         val gathered = CompletableDeferred<Unit>()
         val config = PeerConnection.RTCConfiguration(emptyList()).apply { sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN }
-        val peer = synchronized(lock) {
-            if (closed.get()) throw CancellationException("Call closed")
+        val peer = step {
             (factory.createPeerConnection(
                 config,
                 object : PeerConnection.Observer {
@@ -112,8 +108,7 @@ class AndroidLiveCall(context: Context) : LiveCall {
             ) ?: error("Couldn't set up the call.")).also { this.peer = it }
         }
 
-        synchronized(lock) {
-            if (closed.get()) throw CancellationException("Call closed")
+        step {
             val source = factory.createAudioSource(
                 MediaConstraints().apply {
                     for (name in listOf("googEchoCancellation", "googNoiseSuppression", "googAutoGainControl", "googHighpassFilter")) {
@@ -135,10 +130,10 @@ class AndroidLiveCall(context: Context) : LiveCall {
                     incoming.trySend(bytes.decodeToString())
                 }
 
+                // On WebRTC's own thread: nothing here may wait on the gate. close() takes the observer off
+                // before it frees the channel, and a channel freed all the same counts as closed.
                 override fun onStateChange() {
-                    val isClosed = synchronized(lock) {
-                        closed.get() || this@AndroidLiveCall.channel?.state() == DataChannel.State.CLOSED
-                    }
+                    val isClosed = gate.closed || runCatching { channel.state() == DataChannel.State.CLOSED }.getOrDefault(true)
                     if (isClosed) incoming.close()
                 }
 
@@ -146,49 +141,29 @@ class AndroidLiveCall(context: Context) : LiveCall {
             })
         }
 
-        val offer = createSdp { observer ->
-            synchronized(lock) {
-                if (closed.get()) throw CancellationException("Call closed")
-                peer.createOffer(observer, MediaConstraints())
-            }
-        }
-        applySdp { observer ->
-            synchronized(lock) {
-                if (closed.get()) throw CancellationException("Call closed")
-                peer.setLocalDescription(observer, offer)
-            }
-        }
+        val offer = createSdp { observer -> step { peer.createOffer(observer, MediaConstraints()) } }
+        applySdp { observer -> step { peer.setLocalDescription(observer, offer) } }
         // The vendor answers with whatever candidates are in the offer, so a slow gathering only waits so long.
         withTimeoutOrNull(ICE_GATHER_MS) { gathered.await() }
-        val local = synchronized(lock) {
-            if (closed.get()) throw CancellationException("Call closed")
-            peer.localDescription?.description ?: error("Couldn't make the call offer.")
-        }
+        val local = step { peer.localDescription?.description ?: error("Couldn't make the call offer.") }
         val remote = answer(local)
-        applySdp { observer ->
-            synchronized(lock) {
-                if (closed.get()) throw CancellationException("Call closed")
-                peer.setRemoteDescription(observer, SessionDescription(SessionDescription.Type.ANSWER, remote))
-            }
-        }
+        applySdp { observer -> step { peer.setRemoteDescription(observer, SessionDescription(SessionDescription.Type.ANSWER, remote)) } }
     }
 
-    override fun send(event: String): Boolean = synchronized(lock) {
-        if (closed.get()) return false
-        val ch = channel ?: return false
-        if (ch.state() != DataChannel.State.OPEN) return false
-        ch.send(DataChannel.Buffer(ByteBuffer.wrap(event.encodeToByteArray()), false))
+    override fun send(event: String): Boolean = gate.use({ false }) {
+        val ch = channel
+        ch != null && ch.state() == DataChannel.State.OPEN && ch.send(DataChannel.Buffer(ByteBuffer.wrap(event.encodeToByteArray()), false))
     }
 
     /** The voice's output level from the call's stats, with a short hangover so pauses between words count. */
     override fun speaking(): Boolean {
-        synchronized(lock) {
+        gate.use({}) {
             val currentPeer = peer
-            if (currentPeer != null && !closed.get() && !statsPending) {
+            if (currentPeer != null && !statsPending) {
                 statsPending = true
                 currentPeer.getStats { report ->
                     statsPending = false
-                    if (closed.get()) return@getStats
+                    if (gate.closed) return@getStats
                     val level = report.statsMap.values
                         .firstOrNull { it.type == "inbound-rtp" && it.members["kind"] == "audio" }
                         ?.members?.get("audioLevel") as? Double
@@ -201,16 +176,15 @@ class AndroidLiveCall(context: Context) : LiveCall {
 
     override fun micLevel(): Float = micLevel
 
-    override fun setMuted(muted: Boolean) = synchronized(lock) {
-        if (closed.get()) return
+    override fun setMuted(muted: Boolean) = gate.use({}) {
         audioTrack?.setEnabled(!muted)
         if (muted) micLevel = 0f
     }
 
     override fun close() {
-        if (!closed.compareAndSet(false, true)) return
         incoming.close()
-        synchronized(lock) {
+        // Runs once, after every call into WebRTC has returned, and with no lock held.
+        gate.close {
             val ch = channel
             val p = peer
             val src = audioSource
