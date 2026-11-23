@@ -1,6 +1,6 @@
 package dev.hermeskotlin.ui.assistant
 
-import dev.hermeskotlin.ui.imeVisible
+import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,7 +10,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -506,11 +505,8 @@ private fun Composer(
     val hasText = actions.composer.text.isNotBlank()
     val shape = RoundedCornerShape(Theme[radii][radiusXLarge])
     var focused by remember { mutableStateOf(false) }
-    // As in the chat: Back hides the keyboard but leaves the field focused, which lights the edge and brings the
-    // keyboard back on the next relayout. Put away means done typing.
-    val keyboardUp = imeVisible
-    val focusManager = LocalFocusManager.current
-    LaunchedEffect(keyboardUp) { if (!keyboardUp && focused) focusManager.clearFocus() }
+    // As in the chat: a focused field also lights the edge.
+    ReleaseFocusWhenKeyboardPutAway(focused)
     val tray: (@Composable () -> Unit)? = when {
         circled != null -> { { CircledChip(circled, onCircleAgain = actions::startCircling, onRemove = actions::dropCircled) } }
         !chat.hasConversation && screen.missed -> { { ScreenUnavailable(onOpenScreenSettings) } }
