@@ -973,6 +973,7 @@ class AppViewModelTest {
         signedIn(home)
         val app = viewModel()
         assertNull(app.awaitChat(home).target.cwd)
+        callSettings.settings.filterNotNull().first()
 
         // Started from a project in the list: that's the one the next new chat starts in.
         app.newChat(cwd = "/srv/site")
@@ -1155,5 +1156,50 @@ class AppViewModelTest {
         app.switchProfile("work", fresh = true)
         val work = (app.route.first { it is Route.Chat && it.target.profile == "work" } as Route.Chat).target
         assertNull(work.storedSessionId)
+    }
+
+    @Test
+    fun aPendingNewChatWaitingForSettingsDoesNotOverwriteLaterNavigation() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        gateways.save(home)
+        signedIn(home)
+        store.put("settings.v1", """{"lastProjects":{"${home.gatewayUrl.value}":"/srv/site"}}""")
+        val loaded = CompletableDeferred<Unit>()
+        val app = viewModel(slowSettings(loaded))
+        runCurrent()
+        app.awaitChat(home)
+
+        app.newChat(ComposeDraft(text = "Shared"))
+        runCurrent()
+        app.openSession("s1", "Other chat")
+        runCurrent()
+        loaded.complete(Unit)
+        runCurrent()
+
+        assertEquals("s1", app.target().storedSessionId)
+        assertNull(app.target().draft)
+    }
+
+    @Test
+    fun aPendingBotLinkIsCancelledWhenTheUserNavigatesAway() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        gateways.save(home)
+        signedIn(home)
+        botTransport = BotTransport()
+        val app = viewModel()
+        runCurrent()
+        app.awaitChat(home)
+
+        // Follow a bot link without a stored session id while the socket has not connected yet.
+        links.openBot("sample_bot", "Sample bot", storedSessionId = null)
+        runCurrent()
+        // Navigate somewhere else before the socket connects.
+        app.openSession("s9", "Stay here")
+        runCurrent()
+        botTransport!!.ready()
+        runCurrent()
+
+        assertEquals("s9", app.target().storedSessionId)
+        assertNull(app.target().bot)
     }
 }

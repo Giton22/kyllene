@@ -11,16 +11,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.getString
 import java.io.File
 
+private val ShareScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
 @Composable
 actual fun rememberMediaActions(): MediaActions {
     val context = LocalContext.current
-    return remember(context) { AndroidMediaActions(context) }
+    return remember(context) { AndroidMediaActions(context.applicationContext) }
 }
 
 private class AndroidMediaActions(private val context: Context) : MediaActions {
@@ -59,18 +64,42 @@ private class AndroidMediaActions(private val context: Context) : MediaActions {
     }
 
     override fun share(bytes: ByteArray, name: String) {
-        // A fresh folder per share keeps the original file name, which the receiving app shows.
-        val dir = File(context.cacheDir, "$SHARE_DIR/${System.currentTimeMillis()}").apply { mkdirs() }
-        val file = File(dir, name.replace('/', '_')).apply { writeBytes(bytes) }
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.attachments", file)
-        val send = Intent(Intent.ACTION_SEND)
-            .setType(mimeTypeOf(name))
-            .putExtra(Intent.EXTRA_STREAM, uri)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        ShareScope.launch {
+            runCatching {
+                val shareRoot = File(context.cacheDir, SHARE_DIR)
+                cleanOldShares(shareRoot)
+                val safeName = sanitizeShareFileName(name)
+                // A fresh folder per share keeps the original file name, which the receiving app shows.
+                val dir = File(shareRoot, System.currentTimeMillis().toString()).apply { mkdirs() }
+                val file = File(dir, safeName)
+                if (file.canonicalFile.parentFile != dir.canonicalFile) return@runCatching
+                file.writeBytes(bytes)
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.attachments", file)
+                val send = Intent(Intent.ACTION_SEND)
+                    .setType(mimeTypeOf(safeName))
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val chooser = Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                withContext(Dispatchers.Main) {
+                    context.startActivity(chooser)
+                }
+            }
+        }
+    }
+
+    private fun cleanOldShares(shareRoot: File) {
+        val entries = shareRoot.listFiles() ?: return
+        val cutoff = System.currentTimeMillis() - SHARE_MAX_AGE_MS
+        val recent = entries.filter { it.lastModified() >= cutoff }.sortedByDescending { it.lastModified() }
+        val keep = recent.take(MAX_SHARED_FOLDERS).toSet()
+        for (entry in entries) {
+            if (entry !in keep) entry.deleteRecursively()
+        }
     }
 
     private companion object {
         const val SHARE_DIR = "shared"
+        const val SHARE_MAX_AGE_MS = 15 * 60_000L
+        const val MAX_SHARED_FOLDERS = 5
     }
 }

@@ -35,6 +35,8 @@ actual fun rememberDecodedImage(bytes: ByteArray, maxEdge: Int): DecodedImage {
     val cached = remember(bytes, maxEdge) { DecodedCache.peek(bytes, maxEdge) }
     if (cached != null) return DecodedImage(cached, decoding = false)
     return produceState(DecodedImage(null, decoding = true), bytes, maxEdge) {
+        // produceState keeps its last value across new keys: a different picture starts at the spinner again.
+        value = DecodedImage(null, decoding = true)
         value = DecodedImage(withContext(Dispatchers.Default) { DecodedCache.decode(bytes, maxEdge) }, decoding = false)
     }.value
 }

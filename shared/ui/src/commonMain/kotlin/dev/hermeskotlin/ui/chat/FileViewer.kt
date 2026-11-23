@@ -379,17 +379,21 @@ internal fun FileViewerPage(
 
     fun withBytes(action: suspend (ByteArray) -> Unit) {
         if (busy || fetching) return
-        fetched?.let { bytes ->
-            scope.launch { action(bytes) }
-            return
-        }
         busy = true
+        val cached = fetched
         scope.launch {
-            when (val result = download(file)) {
-                is FileDownload.Ready -> action(result.bytes)
-                is FileDownload.Failed -> notice = Notice(getString(Res.string.chat_file_get_failed, file.name, fileProblemWords(result.problem)), error = true)
+            try {
+                if (cached != null) {
+                    action(cached)
+                } else {
+                    when (val result = download(file)) {
+                        is FileDownload.Ready -> action(result.bytes)
+                        is FileDownload.Failed -> notice = Notice(getString(Res.string.chat_file_get_failed, file.name, fileProblemWords(result.problem)), error = true)
+                    }
+                }
+            } finally {
+                busy = false
             }
-            busy = false
         }
     }
 

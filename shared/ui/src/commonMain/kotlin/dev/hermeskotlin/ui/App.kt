@@ -167,8 +167,6 @@ fun App(
 ) {
     // Nothing is drawn until the stored settings are read, so the first frame has the right theme.
     val settingsStore = koinInject<SettingsStore>()
-    // The words dates and times are built from, in the app's language, for code that runs outside composition.
-    TimeWords.current = rememberTimeWords()
     val settings = settingsStore.settings.collectAsStateWithLifecycle().value ?: return
     if (isDesktop) EndVoiceWithSession(onSessionEnded)
     val dark = isDark(settings)
@@ -195,7 +193,10 @@ fun App(
             took = { chat, screen -> AgentScreens.took(screen, chat, screensGot) },
         )
     }
-    ProvideAppLanguage(settings.language) { hermesTheme(palette)(schemeFor(settings, dark)) {
+    ProvideAppLanguage(settings.language) {
+        // The words dates and times are built from, in the app's language, for code that runs outside composition.
+        TimeWords.current = rememberTimeWords()
+        hermesTheme(palette)(schemeFor(settings, dark)) {
         val ground = Theme[colors][background]
         LaunchedEffect(ground) { onBackground(ground) }
         CompositionLocalProvider(

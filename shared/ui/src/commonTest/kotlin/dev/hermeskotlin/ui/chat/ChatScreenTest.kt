@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui.chat
 
 import androidx.compose.ui.unit.IntSize
+import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.ui.resources.*
 import dev.hermeskotlin.ui.voice.DictationState
@@ -72,5 +73,27 @@ class ChatScreenTest {
         assertNull(linkStatus(ConnectionState.Idle))
         assertNull(linkStatus(ConnectionState.SessionExpired))
         assertNull(linkStatus(ConnectionState.Failed("4403")))
+    }
+
+    @Test
+    fun findMatchesAndResolveFoundKeyHandleStreamingUpdatesWithoutZeroOfN() {
+        val streaming = listOf(
+            ChatMessage.User(key = "u1", text = "hello"),
+            ChatMessage.Assistant(key = "a1", text = "working...", streaming = true),
+        )
+        assertEquals(emptyList(), findMatches(streaming, "needle"))
+        assertNull(resolveFoundKey(emptyList(), null))
+
+        // Same list size and last key, updated streaming text now matches.
+        val updated = listOf(
+            ChatMessage.User(key = "u1", text = "hello"),
+            ChatMessage.Assistant(key = "a1", text = "found the needle!", streaming = true),
+        )
+        val matchedKeys = findMatches(updated, "needle").map { updated[it].key }
+        assertEquals(listOf("a1"), matchedKeys)
+        // A null or stale foundKey resolves to the newest match so the index is never -1 ("0 of N").
+        assertEquals("a1", resolveFoundKey(matchedKeys, null))
+        assertEquals("a1", resolveFoundKey(matchedKeys, "stale-key"))
+        assertEquals("a1", resolveFoundKey(listOf("a1", "a2"), "a1"))
     }
 }

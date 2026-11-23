@@ -18,12 +18,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -183,7 +185,7 @@ private fun ReplyImage(item: ReplyMedia) {
                 bitmap = bitmap,
                 contentDescription = item.name,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)).heightIn(max = 480.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).aspectRatio(bitmap.width.coerceAtLeast(1).toFloat() / bitmap.height.coerceAtLeast(1)),
             )
             failed || decoded?.decoding == false -> Row(
                 Modifier.padding(16.dp),
@@ -338,7 +340,7 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
                     .fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.55f))
                     .clearOfWindowControls()
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {

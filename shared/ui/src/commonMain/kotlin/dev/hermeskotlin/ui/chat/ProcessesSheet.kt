@@ -243,7 +243,7 @@ internal fun ProcessesSheetView(
         )
         when {
             waiting -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Spinner() }
-            else -> ScrollbarBox { listState -> LazyColumn(
+            else -> ScrollbarBox(Modifier.weight(1f, fill = false)) { listState -> LazyColumn(
                 Modifier.fillMaxWidth().heightIn(max = 560.dp),
                 state = listState,
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),

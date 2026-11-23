@@ -434,7 +434,7 @@ internal fun SessionControlSheetView(
         val current = shown ?: return@BottomSheet
         SheetHeader(stringResource(Res.string.chat_control_title), stringResource(Res.string.chat_control_subtitle))
         Column(
-            Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScrollWithBar().padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 10.dp),
+            Modifier.weight(1f, fill = false).fillMaxWidth().heightIn(max = 560.dp).verticalScrollWithBar().padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             current.goal?.let { GoalSection(it, use24Hour, busy, onAction, onConfirm = { confirm = it }) }

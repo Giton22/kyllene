@@ -131,6 +131,7 @@ class ChatViewModelTest {
 
     private fun viewModel(drafts: DraftStore = DraftStore(InMemoryKeyValueStore()), fileReads: MutableList<Pair<String, String?>>? = null,
         seenStore: SeenStore? = null,
+        openTransport: () -> RpcTransport = { ReadyGateway(sent) },
         readState: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData? = { null },
     ): Pair<ChatViewModel, ChatHost> {
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
@@ -147,7 +148,7 @@ class ChatViewModelTest {
             else respond("{}", HttpStatusCode.OK, json)
         }
         val client = createHttpClient(MockEngine(engine), cookies)
-        connection = GatewayConnection(AuthApi(client, cookies), { _, _ -> ReadyGateway(sent) }, scope)
+        connection = GatewayConnection(AuthApi(client, cookies), { _, _ -> openTransport() }, scope)
         val sessions = SessionsApi(client)
         val chatHost = ChatHost(connection, sessions, scope)
         val vm = ChatViewModel(
@@ -895,6 +896,164 @@ class ChatViewModelTest {
         pending.complete(Unit)
         runCurrent()
         assertEquals(again, vm.readPosition.value?.target)
+    }
+
+    @Test
+    fun mediaCacheIsKeyedByGatewayAndClearedOnGatewaySwitch() = runTest(dispatcher) {
+        val other = SavedGateway("https://other.example.test")
+        var fetches = 0
+        val (vm, _) = viewModel(readState = { request ->
+            if (request.url.encodedPath == "/api/files/download") {
+                fetches++
+                respond("from-${request.url.host}", HttpStatusCode.OK)
+            } else null
+        })
+
+        vm.open(ChatTarget(gateway, "s1", "First"))
+        assertEquals("from-hermes.example.ts.net", assertNotNull(vm.loadMedia("/tmp/photo.png")).decodeToString())
+        assertEquals(1, fetches)
+        // Same gateway hits cache.
+        assertEquals("from-hermes.example.ts.net", assertNotNull(vm.loadMedia("/tmp/photo.png")).decodeToString())
+        assertEquals(1, fetches)
+
+        // Switching gateway must not serve the previous gateway's bytes for the same path.
+        vm.open(ChatTarget(other, "s1", "Second"))
+        assertEquals("from-other.example.test", assertNotNull(vm.loadMedia("/tmp/photo.png")).decodeToString())
+        assertEquals(2, fetches)
+
+        // Returning to the first gateway fetches fresh because switching cleared the cache.
+        vm.open(ChatTarget(gateway, "s1", "First"))
+        assertEquals("from-hermes.example.ts.net", assertNotNull(vm.loadMedia("/tmp/photo.png")).decodeToString())
+        assertEquals(3, fetches)
+    }
+
+    @Test
+    fun openingAnotherChatWhileDisconnectedCancelsPendingModelLoad() = runTest(dispatcher) {
+        val modelsGate = CompletableDeferred<Unit>()
+        val gated = object : RpcTransport {
+            private val inbound = Channel<String>(Channel.UNLIMITED).apply {
+                trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
+            }
+            override val incoming: Flow<String> = inbound.receiveAsFlow()
+            override suspend fun send(text: String) {
+                val obj = Json.parseToJsonElement(text).jsonObject
+                val id = obj["id"] ?: return
+                val method = obj["method"]?.toString()?.trim('"')
+                if (method == "model.options") {
+                    modelsGate.await()
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{"current_model":"stale-model","providers":[]}}""")
+                } else {
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{}}""")
+                }
+            }
+            override suspend fun close(code: Short, reason: String) { inbound.close() }
+        }
+        val (vm, _) = viewModel(openTransport = { gated })
+        connection.start(gateway.gatewayUrl)
+        connection.state.first { it is ConnectionState.Connected }
+        vm.open(ChatTarget(gateway, "s1", "First"))
+        runCurrent()
+        assertTrue(vm.picker.value.loading)
+
+        connection.stop()
+        vm.open(ChatTarget(gateway, "s2", "Second"))
+        modelsGate.complete(Unit)
+        runCurrent()
+
+        assertNull(vm.picker.value.catalog)
+        assertTrue(!vm.picker.value.loading)
+    }
+
+    @Test
+    fun lateSendFailureDoesNotMutateAnotherChatsComposer() = runTest(dispatcher) {
+        val submitGate = CompletableDeferred<Unit>()
+        val gated = object : RpcTransport {
+            private val inbound = Channel<String>(Channel.UNLIMITED).apply {
+                trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
+            }
+            override val incoming: Flow<String> = inbound.receiveAsFlow()
+            override suspend fun send(text: String) {
+                val obj = Json.parseToJsonElement(text).jsonObject
+                val id = obj["id"] ?: return
+                val method = obj["method"]?.toString()?.trim('"')
+                if (method == "session.create") {
+                    submitGate.await()
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"error":{"code":-32000,"message":"boom"}}""")
+                } else {
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{}}""")
+                }
+            }
+            override suspend fun close(code: Short, reason: String) { inbound.close() }
+        }
+        val (vm, _) = viewModel(openTransport = { gated })
+        connection.start(gateway.gatewayUrl)
+        connection.state.first { it is ConnectionState.Connected }
+        vm.open(ChatTarget(gateway, null, null, nonce = 1))
+        vm.composer.setTextAndPlaceCursorAtEnd("from chat A")
+        vm.addAttachments(listOf(attachment("a1")))
+        vm.send(null)
+
+        // Switch to chat B before chat A's failed submit returns.
+        vm.open(ChatTarget(gateway, "s2", "Chat B"))
+        vm.composer.setTextAndPlaceCursorAtEnd("chat B draft")
+        submitGate.complete(Unit)
+        runCurrent()
+
+        assertEquals("chat B draft", vm.composer.text.toString())
+        assertTrue(vm.attachments.value.isEmpty())
+    }
+
+    @Test
+    fun rapidBranchFromFiresOnlyOneRpcAndDropsResultAfterChatSwitch() = runTest(dispatcher) {
+        val branchGate = CompletableDeferred<Unit>()
+        var branchCalls = 0
+        val gated = object : RpcTransport {
+            private val inbound = Channel<String>(Channel.UNLIMITED).apply {
+                trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
+            }
+            override val incoming: Flow<String> = inbound.receiveAsFlow()
+            override suspend fun send(text: String) {
+                val obj = Json.parseToJsonElement(text).jsonObject
+                val id = obj["id"] ?: return
+                val method = obj["method"]?.toString()?.trim('"')
+                if (method == "session.branch" || method == "session.branch_whole") {
+                    branchCalls++
+                    branchGate.await()
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{"stored_session_id":"b1","title":"Branched"}}""")
+                } else if (method == "session.resume") {
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{"session_id":"rt-1","running":false}}""")
+                } else {
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{}}""")
+                }
+            }
+            override suspend fun close(code: Short, reason: String) { inbound.close() }
+        }
+        val (vm, _) = viewModel(
+            openTransport = { gated },
+            readState = { request ->
+                if (request.url.encodedPath.endsWith("/messages")) {
+                    respond("""{"session_id":"s1","messages":[{"id":1,"role":"user","content":"Hi","timestamp":1000}]}""", HttpStatusCode.OK, json)
+                } else null
+            },
+        )
+        val requests = mutableListOf<ChatRequest>()
+        backgroundScope.launch(dispatcher) { vm.requests.collect { requests += it } }
+        connection.start(gateway.gatewayUrl)
+        connection.state.first { it is ConnectionState.Connected }
+        vm.open(ChatTarget(gateway, "s1", "Chat A"))
+        runCurrent()
+        val key = vm.state.value.messages.first().key
+
+        vm.branchFrom(key)
+        vm.branchFrom(key)
+        runCurrent()
+        assertEquals(1, branchCalls)
+
+        // Switching chats before branch finishes drops the OpenChat navigation request.
+        vm.open(ChatTarget(gateway, "s2", "Chat B"))
+        branchGate.complete(Unit)
+        runCurrent()
+        assertTrue(requests.none { it is ChatRequest.OpenChat })
     }
 
 }

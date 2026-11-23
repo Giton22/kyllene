@@ -167,6 +167,9 @@ class AppViewModel(
 
     private var callJob: Job? = null
     private var callGeneration = 0L
+    private var navGeneration = 0L
+    private var botLinkJob: Job? = null
+    private var pendingNewChatJob: Job? = null
     private val _callError = MutableStateFlow<CallError?>(null)
     val callError: StateFlow<CallError?> = _callError.asStateFlow()
     private val _openingCall = MutableStateFlow(false)
@@ -178,6 +181,15 @@ class AppViewModel(
         callJob?.cancel()
         _openingCall.value = false
         dismissCallError()
+    }
+
+    /** Cancels any deferred bot-link or new-chat navigation so a stale lookup cannot overwrite the current route. */
+    private fun cancelPendingNavigation() {
+        navGeneration++
+        botLinkJob?.cancel()
+        botLinkJob = null
+        pendingNewChatJob?.cancel()
+        pendingNewChatJob = null
     }
 
     init {
@@ -207,6 +219,7 @@ class AppViewModel(
                 .collect { link ->
                     links.consume(link)
                     cancelPendingCall()
+                    cancelPendingNavigation()
                     if (link.draft?.start == DraftStart.VoiceChat) {
                         openDefaultCall()
                         return@collect
@@ -278,6 +291,7 @@ class AppViewModel(
     /** An address entered on [Route.Connect]: a saved gateway that still holds a session opens right away. */
     fun onGatewayChosen(gateway: SavedGateway) {
         cancelPendingCall()
+        cancelPendingNavigation()
         viewModelScope.launch {
             val saved = gateways.all().find(gateway.url)
             if (saved != null && auth.hasStoredSession(saved.gatewayUrl)) open(saved)
@@ -288,6 +302,7 @@ class AppViewModel(
     /** Saves [gateway] (adding it, if new) as the current one and opens its chats. */
     fun onSignedIn(gateway: SavedGateway) {
         cancelPendingCall()
+        cancelPendingNavigation()
         viewModelScope.launch {
             if (signedInGateway()?.url != gateway.url) host.close()
             val saved = gateways.save(gateway)
@@ -304,12 +319,14 @@ class AppViewModel(
     /** Leaves for [Route.Connect] to enter another gateway; the current one stays saved and signed in. */
     fun addGateway() {
         cancelPendingCall()
+        cancelPendingNavigation()
         viewModelScope.launch { _route.value = Route.Connect(canCancel = gateways.current() != null) }
     }
 
     /** Back from adding a gateway to the current one. */
     fun cancelAddGateway() {
         cancelPendingCall()
+        cancelPendingNavigation()
         viewModelScope.launch {
             // A pick for the address abandoned would otherwise shadow saved gateways on its host until restart.
             certs.clear()
@@ -326,6 +343,7 @@ class AppViewModel(
         if (host.session.value !== source || host.ownerVersion.value != source.ownerVersion ||
             source.gateway != target.gateway.gatewayUrl || source.profile != target.profile) return false
         cancelPendingCall()
+        cancelPendingNavigation()
         certs.clear()
         _route.value = Route.Chat(target)
         return true
@@ -338,6 +356,7 @@ class AppViewModel(
     fun switchGateway(gateway: SavedGateway, fresh: Boolean = false) {
         cancelPendingCall()
         if (gateway.url == signedInGateway()?.url) return
+        cancelPendingNavigation()
         viewModelScope.launch { open(gateway, fresh) }
     }
 
@@ -361,7 +380,10 @@ class AppViewModel(
 
     /** Signs out of [gateway] and forgets it; removing the current one moves to the primary (or to [Route.Connect]). */
     fun removeGateway(gateway: SavedGateway) {
-        if (gateway.url == currentGateway()?.url) cancelPendingCall()
+        if (gateway.url == currentGateway()?.url) {
+            cancelPendingCall()
+            cancelPendingNavigation()
+        }
         viewModelScope.launch {
             // First, so the chats go even if what follows waits on an unreachable gateway and the app is closed.
             cache?.forgetGateway(gateway.gatewayUrl)
@@ -396,6 +418,7 @@ class AppViewModel(
     /** Opens a stored chat; [readUpTo] is how far it had been read, when it has new messages since. */
     fun openSession(sessionId: String, title: String, readUpTo: Double? = null) {
         cancelPendingCall()
+        cancelPendingNavigation()
         val gateway = signedInGateway() ?: return
         _route.value = Route.Chat(ChatTarget(gateway, sessionId, title, profile = currentProfile(), readUpTo = readUpTo))
     }
@@ -406,6 +429,7 @@ class AppViewModel(
      */
     fun newChat(draft: ComposeDraft? = null, cwd: String? = null, picked: Boolean = cwd != null) {
         cancelPendingCall()
+        cancelPendingNavigation()
         val gateway = signedInGateway() ?: return
         val profile = currentProfile()
         // [picked]: started in a project on purpose (the list's, Home included). The next new chat starts there too.
@@ -413,8 +437,10 @@ class AppViewModel(
         if (!picked && settings.settings.value == null) {
             // Opened from a share or a shortcut at launch, before the settings are read: wait for them, so the chat
             // starts in the last project. Moved once open, a draft that sends itself would already be on its way.
-            viewModelScope.launch {
+            val generation = navGeneration
+            pendingNewChatJob = viewModelScope.launch {
                 val read = settings.settings.filterNotNull().first()
+                if (navGeneration != generation || signedInGateway()?.url != gateway.url || currentProfile() != profile) return@launch
                 _route.value = Route.Chat(freshChat(gateway, profile, read).copy(draft = draft))
             }
             return
@@ -432,6 +458,7 @@ class AppViewModel(
         if (target.storedSessionId != null || target.bot != null || !unstarted()) return
         rememberProject(target.gateway, target.profile, cwd)
         if (target.cwd == cwd) return
+        cancelPendingNavigation()
         // The draft it opened with is in the composer already; given again, it would be put there twice.
         _route.value = Route.Chat(target.copy(cwd = cwd, draft = null))
     }
@@ -478,6 +505,7 @@ class AppViewModel(
         val gateway = signedInGateway()?.takeIf { it.gatewayUrl.value == chat.gatewayUrl } ?: return false
         // As every other way into a chat: a call still being looked up goes, spinner and all.
         cancelPendingCall()
+        cancelPendingNavigation()
         val profile = reportChatProfile(chat.profile, currentProfile(), launch)
         val open = (_route.value as? Route.Chat)?.target
         val stored = chat.storedSessionId
@@ -493,6 +521,7 @@ class AppViewModel(
     /** Opens [bot]'s conversation [storedSessionId] that isn't its Bot Chat, in the bot's profile. */
     fun openBotSession(bot: Bot, storedSessionId: String, title: String) {
         cancelPendingCall()
+        cancelPendingNavigation()
         val gateway = signedInGateway() ?: return
         _route.value = Route.Chat(ChatTarget(gateway, storedSessionId, title, profile = bot.name))
     }
@@ -500,6 +529,7 @@ class AppViewModel(
     /** A new throwaway chat with [bot], apart from its permanent one. */
     fun newBotChat(bot: Bot) {
         cancelPendingCall()
+        cancelPendingNavigation()
         val gateway = signedInGateway() ?: return
         _route.value = Route.Chat(newChatTarget(gateway, bot.name))
     }
@@ -510,6 +540,7 @@ class AppViewModel(
      */
     fun openBotChat(bot: Bot, storedSessionId: String, readUpTo: Double? = null) {
         cancelPendingCall()
+        cancelPendingNavigation()
         val gateway = signedInGateway() ?: return
         _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot.name, bot.label).copy(readUpTo = readUpTo))
     }
@@ -520,20 +551,33 @@ class AppViewModel(
      * [draft] (a share to the bot) goes into its composer, after what the user had typed there.
      */
     private fun openBotLink(bot: String, label: String?, storedSessionId: String?, draft: ComposeDraft? = null, readUpTo: Double? = null) {
+        cancelPendingNavigation()
         val gateway = signedInGateway() ?: return
         val name = label?.takeIf { it.isNotBlank() } ?: Bot(name = bot).label
         if (storedSessionId != null) {
             _route.value = Route.Chat(botChatTarget(gateway, storedSessionId, bot, name, draft).copy(readUpTo = readUpTo).also(::followBotChat))
             return
         }
-        viewModelScope.launch {
+        val generation = navGeneration
+        botLinkJob = viewModelScope.launch {
             connection.state.first { it is ConnectionState.Connected }
-            val id = runCatching { botChats.open(Bot(name = bot)) }.getOrNull()
+            if (navGeneration != generation || signedInGateway()?.url != gateway.url) return@launch
+            val id = try {
+                botChats.open(Bot(name = bot))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            }
+            if (navGeneration != generation || signedInGateway()?.url != gateway.url) return@launch
             when {
                 id != null -> _route.value = Route.Chat(botChatTarget(gateway, id, bot, name, draft))
                 // A share to a bot that's gone (an old shortcut) isn't lost: it waits in a new chat instead,
                 // which says so, since a send from there goes to the profile's own assistant, not the bot.
-                draft != null -> newChat(draft.withNotice(getString(Res.string.app_share_bot_gone, name)))
+                draft != null -> {
+                    botLinkJob = null
+                    newChat(draft.withNotice(getString(Res.string.app_share_bot_gone, name)))
+                }
             }
         }
     }
@@ -572,6 +616,7 @@ class AppViewModel(
         cancelPendingCall()
         val gateway = signedInGateway() ?: return
         if (profile == currentProfile()) return
+        cancelPendingNavigation()
         viewModelScope.launch {
             profiles.set(gateway.gatewayUrl, profile)
             host.invalidateOwner()
@@ -582,6 +627,7 @@ class AppViewModel(
     /** The dashboard rejected our cookies (socket or REST): back to sign-in with a notice. */
     fun onSessionExpired() {
         cancelPendingCall()
+        cancelPendingNavigation()
         val gateway = signedInGateway() ?: return
         connection.stop()
         host.close()
@@ -591,6 +637,7 @@ class AppViewModel(
     /** Signs out of the current gateway; it stays saved, so signing in again (or switching away) is one step. */
     fun signOut() {
         cancelPendingCall()
+        cancelPendingNavigation()
         val gateway = currentGateway() ?: return
         viewModelScope.launch {
             // First, so the chats go even if what follows waits on an unreachable gateway and the app is closed.

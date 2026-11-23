@@ -164,7 +164,7 @@ class CheckpointsController(private val scope: CoroutineScope) {
     }
 
     fun restore(chat: ChatSession?, checkpoint: Checkpoint) {
-        if (chat == null || chat !== shown) return
+        if (chat == null || chat !== shown || _state.value.restoring != null) return
         folderVersion++
         _state.update { it.copy(restoring = checkpoint.hash, message = null) }
         scope.launch {
@@ -215,6 +215,8 @@ internal fun CheckpointsSheetView(
 ) {
     var expanded by remember { mutableStateOf(initiallyExpanded) }
     var confirm by remember { mutableStateOf<Checkpoint?>(null) }
+    // A confirmation belongs to this showing while idle: closing the sheet or starting a turn dismisses it.
+    LaunchedEffect(visible, running) { if (!visible || running) confirm = null }
     val use24Hour = uses24HourClock()
     BottomSheet(visible = visible, onDismiss = onDismiss) {
         val list = state.list
@@ -237,7 +239,7 @@ internal fun CheckpointsSheetView(
             list == null -> Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Spinner() }
             !list.enabled -> Note(stringResource(Res.string.chat_checkpoints_off))
             list.checkpoints.isEmpty() -> Note(stringResource(Res.string.chat_checkpoints_none))
-            else -> ScrollbarBox { listState -> LazyColumn(
+            else -> ScrollbarBox(Modifier.weight(1f, fill = false)) { listState -> LazyColumn(
                 Modifier.fillMaxWidth().heightIn(max = 560.dp),
                 state = listState,
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),

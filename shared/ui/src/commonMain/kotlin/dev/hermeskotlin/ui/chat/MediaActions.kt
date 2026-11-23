@@ -24,6 +24,31 @@ class SaveOutcome(val text: String, val saved: Boolean)
 @Composable
 expect fun rememberMediaActions(): MediaActions
 
+/**
+ * Strips path separators, traversal segments, control characters, and leading or trailing dots from a
+ * shared file's name so it can safely live inside a temporary share directory.
+ */
+internal fun sanitizeShareFileName(name: String): String {
+    val noControls = buildString(name.length) {
+        for (ch in name) {
+            if (ch.code >= 0x20 && ch.code != 0x7F) append(ch)
+        }
+    }
+    val base = noControls.replace('\\', '/').trimEnd('/').substringAfterLast('/')
+    val flat = buildString(base.length) {
+        for (ch in base) {
+            when (ch) {
+                '/', '\\', ':', '*', '?', '"', '<', '>', '|' -> append('_')
+                else -> append(ch)
+            }
+        }
+    }
+    var noTraversal = flat
+    while (".." in noTraversal) noTraversal = noTraversal.replace("..", "_")
+    val trimmed = noTraversal.trim().trimStart('.').trimEnd('.', ' ')
+    return trimmed.takeIf { it.isNotBlank() && it.any { c -> c != '_' } } ?: "file"
+}
+
 /** A MIME type from a file name, for saving and sharing. */
 internal fun mimeTypeOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
     "png" -> "image/png"

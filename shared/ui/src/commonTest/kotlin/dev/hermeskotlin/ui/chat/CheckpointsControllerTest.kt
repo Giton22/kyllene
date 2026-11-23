@@ -91,4 +91,17 @@ class CheckpointsControllerTest {
         assertNull(controller.state.value.diffs[checkpoint.hash])
         assertTrue(checkpoint.hash in controller.state.value.diffs)
     }
+
+    @Test
+    fun concurrentRestoreCallsAreIgnoredWhileOneIsInFlight() = runTest(StandardTestDispatcher()) {
+        val a = chat("a")
+        val second = Checkpoint("1122334455", "2026-10-09T10:00:00Z", "")
+        val controller = CheckpointsController(this)
+        controller.load(a)
+
+        controller.restore(a, checkpoint)
+        controller.restore(a, second)
+
+        assertEquals(checkpoint.hash, controller.state.value.restoring)
+    }
 }

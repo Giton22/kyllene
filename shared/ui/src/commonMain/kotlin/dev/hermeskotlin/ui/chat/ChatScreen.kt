@@ -458,15 +458,17 @@ fun ChatScreen(
     val hasControl = state.control != null
     LaunchedEffect(hasControl) { if (!hasControl) controlOpen = false }
     var viewing by remember { mutableStateOf<ViewerImage?>(null) }
-    var previewing by remember { mutableStateOf<GatewayFile?>(null) }
+    var previewing by remember(target.gateway.url, target.profile, target.storedSessionId, target.nonce) {
+        mutableStateOf<Pair<GatewayFile, ChatTarget>?>(null)
+    }
     // On a wide desktop window a file opens in a rail beside the chat, as Hermes Desktop's right panel, which
     // Ctrl+J puts away and brings back; a picture still opens in the picture viewer.
     var railShown by remember { mutableStateOf(true) }
-    LaunchedEffect(previewing) { if (previewing != null) railShown = true }
+    LaunchedEffect(previewing?.first) { if (previewing != null) railShown = true }
     // The chat's own width, not the window's: with the sidebar folded away there's room for the rail sooner.
     var paneWidth by remember { mutableStateOf(0.dp) }
     val wide = paneWidth >= RAIL_MIN_PANE
-    val docked = previewing?.let { isDesktop && wide && it.kind != GatewayFileKind.Image } == true
+    val docked = previewing?.first?.let { isDesktop && wide && it.kind != GatewayFileKind.Image } == true
     val railFile = previewing.takeIf { docked && railShown }
     // Over a sheet or a viewer, typing and shortcuts are the dialog's, not the chat's behind it.
     val processesShown = processesOpen && ownsTranscript
@@ -650,7 +652,7 @@ fun ChatScreen(
         onOpenControl = viewModel::openControl,
         onViewImage = { viewing = it },
         // The same file again, after Ctrl+J put the rail away, still has to bring it back.
-        onOpenFile = { previewing = it; railShown = true },
+        onOpenFile = { previewing = it to (transcript.owner ?: target); railShown = true },
         onNotice = { notice = it },
         wallpaper = rememberChatWallpaper(),
         place = target.gateway.label,
@@ -666,9 +668,15 @@ fun ChatScreen(
         focusComposer = focusComposer,
         keysEnabled = keysEnabled && !dialogOpen,
         attachmentPicker = attachmentPicker.takeIf { isDesktop },
-        rail = railFile?.let { file ->
+        rail = railFile?.let { (file, owner) ->
             {
-                FileViewer(file, onDismiss = { previewing = null }, load = viewModel::previewFile, download = viewModel::downloadFile, docked = true)
+                FileViewer(
+                    file,
+                    onDismiss = { previewing = null },
+                    load = { viewModel.previewFile(it, owner) },
+                    download = { viewModel.downloadFile(it, owner) },
+                    docked = true,
+                )
             }
         },
     )
@@ -718,11 +726,12 @@ fun ChatScreen(
         onDismiss = { controlOpen = false },
     )
     // A linked picture opens in the picture viewer, like one the reply delivered. A file docked in the rail has it.
+    val modalFile = previewing.takeIf { !docked }
     GatewayFileViewer(
-        file = previewing.takeIf { !docked },
+        file = modalFile?.first,
         onDismiss = { previewing = null },
-        load = viewModel::previewFile,
-        download = viewModel::downloadFile,
+        load = { modalFile?.second?.let { owner -> viewModel.previewFile(it, owner) } ?: FileLoad.Failed(FileProblem.NotConnected) },
+        download = { modalFile?.second?.let { owner -> viewModel.downloadFile(it, owner) } ?: FileDownload.Failed(FileProblem.NotConnected) },
     )
     viewing?.let { image ->
         CompositionLocalProvider(LocalMediaLoader provides viewModel::loadMedia) {
@@ -950,14 +959,16 @@ internal fun ChatView(
             val showReasoning = LocalAppSettings.current.showReasoning
             val listed = remember(state.messages, showReasoning) { state.messages.withoutBlankReplies(showReasoning) }
             // The matched messages by key, so older history loading above them keeps the one shown; worked out only
-            // while the bar is open, not on every streamed word.
-            val matches = remember(listed.size, listed.lastOrNull()?.key, findText, findOpen) {
+            // while the bar is open, and updated as replies stream in.
+            val matches = remember(listed, findText, findOpen) {
                 if (findOpen) findMatches(listed, findText).map { listed[it].key } else emptyList()
             }
-            var foundKey by remember { mutableStateOf<String?>(null) }
-            LaunchedEffect(findText, findOpen) { foundKey = matches.lastOrNull() }
-            val match = matches.indexOf(foundKey)
-            val found = foundKey.takeIf { findOpen && match >= 0 }
+            var foundKey by remember(conversationKey) { mutableStateOf<String?>(null) }
+            LaunchedEffect(findText, findOpen, conversationKey) { foundKey = matches.lastOrNull() }
+            LaunchedEffect(matches, findOpen) { if (findOpen) foundKey = resolveFoundKey(matches, foundKey) }
+            val activeKey = if (findOpen) resolveFoundKey(matches, foundKey) else null
+            val match = if (activeKey != null) matches.indexOf(activeKey) else -1
+            val found = activeKey.takeIf { match >= 0 }
             LaunchedEffect(found) {
                 val index = listed.indexOfFirst { it.key == found }
                 if (index >= 0) {
@@ -1409,7 +1420,7 @@ private fun ColumnScope.Dock(
 
     if (state.inputRequests.isNotEmpty()) {
         // The task's Stop is on the live task card above.
-        InputRequestPanel(state.inputRequests, connected, onAnswer = actions::answer, onStop = null)
+        InputRequestPanel(state.inputRequests, connected, onAnswer = actions::answer, onStop = null, error = state.error)
     } else if (voiceChat.phase != VoicePhase.Off) {
         // Full screen, the voice screen has these; the panel would only animate unseen beneath it.
         if (!voiceFull) {
@@ -2936,6 +2947,9 @@ internal fun AssistantReply(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val canMenu = isDesktop && !message.streaming && text.isNotBlank()
+    val actionable = !message.streaming && text.isNotBlank()
+    // A reply of only code or files has nothing to say.
+    val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
     // Said by the menu and the icons alike; read here, as the menu is built outside composition.
     val copyLabel = stringResource(Res.string.chat_copy)
     val regenerateLabel = stringResource(Res.string.chat_regenerate)
@@ -2953,7 +2967,8 @@ internal fun AssistantReply(
                 if (reading) RowMenuItem(if (readingPaused) resumeReadingLabel else pauseReadingLabel, if (readingPaused) Lucide.Play else Lucide.Pause, run = if (readingPaused) onResumeReading else onPauseReading)
                 else null,
                 if (reading) RowMenuItem(stopReadingLabel, Lucide.Square, run = onStopReading)
-                else onReadAloud?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
+                else if (speakable) onReadAloud?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } }
+                else null,
             )
         }
     }
@@ -3010,15 +3025,12 @@ internal fun AssistantReply(
             }
         }
         val usage = message.usage?.takeIf { settings.showUsage && !message.streaming }
-        val actionable = !message.streaming && text.isNotBlank()
-        // A reply of only code or files has nothing to say.
-        val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
         if (isDesktop && (actionable || usage != null)) {
             // A desktop reads a reply's tools from its own start, as desktop chat apps line them up, and shows
             // them on the newest reply and under the pointer: older replies read without a row of icons each. They
-            // only fade, so nothing moves as the pointer passes; one with the keyboard in it stays shown.
+            // only fade, so nothing moves as the pointer passes; one with the keyboard in it or being read aloud stays shown.
             var keysInside by remember { mutableStateOf(false) }
-            val shown = last || hovered || keysInside
+            val shown = last || hovered || keysInside || reading
             val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
             Row(
                 Modifier.trimEndTop(end = 0.dp, top = 4.dp).offset(x = (-10).dp).alpha(alpha).onFocusChanged { keysInside = it.hasFocus },
@@ -3030,6 +3042,14 @@ internal fun AssistantReply(
                     CopyButton(text, Modifier.size(32.dp))
                     onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, Modifier) }
                     onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, Modifier) }
+                    when {
+                        reading -> {
+                            if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, Modifier)
+                            else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, Modifier)
+                            ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, Modifier)
+                        }
+                        speakable && onReadAloud != null -> ReplyAction(Lucide.Volume2, readAloudLabel, { onReadAloud(text) }, Modifier)
+                    }
                 }
                 usage?.let {
                     val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(it.input), compactCount(it.output))
@@ -4094,28 +4114,39 @@ private fun Composer(
                         AttachButton(onClick = onAttach, enabled = attachments.size < OutgoingAttachment.MAX_COUNT)
                         // Queue and Steer need the room mid-task, so the model pill folds to its sparkle meanwhile.
                         val segments = state.running && hasText && !editing && !command
-                        Box(Modifier.weight(1f).padding(start = 2.dp), contentAlignment = Alignment.CenterStart) {
-                            ModelPill(state, picker, onClick = onOpenModels, compact = segments)
-                        }
-                        if (showMic(dictation)) Snug { DictationButton(dictation, onClick = onDictate, enabled = connected) }
-                        // Voice chat waits for the task to end, so while one runs its place goes to the ways to send.
-                        if (hasSpeechPlayback && !state.running) Snug { VoiceChatButton(onClick = onVoiceChat, enabled = connected && !dictation.active) }
-                        // Stop is on the live task card above; a message typed meanwhile is queued or steers the task.
-                        if (state.running && hasText && !editing) {
-                            if (command) {
-                                // A command runs at once; there's nothing to choose.
-                                Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = connected) }
-                            } else {
+                        if (segments) {
+                            Box(Modifier.padding(start = 2.dp), contentAlignment = Alignment.CenterStart) {
+                                ModelPill(state, picker, onClick = onOpenModels, compact = true)
+                            }
+                            Row(
+                                Modifier.weight(1f),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (showMic(dictation)) Snug { DictationButton(dictation, onClick = onDictate, enabled = connected) }
                                 RunningSendSegments(
                                     mode = runningMode,
                                     attachments = attachments.isNotEmpty(),
                                     enabled = connected,
                                     onSend = actions::send,
+                                    modifier = Modifier.weight(1f, fill = false),
                                 )
                             }
                         } else {
-                            // While a task runs this only waits: nothing typed yet, or an edit, which goes once it ends.
-                            Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = connected && hasText && !state.running) }
+                            Box(Modifier.weight(1f).padding(start = 2.dp), contentAlignment = Alignment.CenterStart) {
+                                ModelPill(state, picker, onClick = onOpenModels, compact = false)
+                            }
+                            if (showMic(dictation)) Snug { DictationButton(dictation, onClick = onDictate, enabled = connected) }
+                            // Voice chat waits for the task to end, so while one runs its place goes to the ways to send.
+                            if (hasSpeechPlayback && !state.running) Snug { VoiceChatButton(onClick = onVoiceChat, enabled = connected && !dictation.active) }
+                            // Stop is on the live task card above; a message typed meanwhile is queued or steers the task.
+                            if (state.running && hasText && !editing) {
+                                // A command runs at once; there's nothing to choose.
+                                Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = connected) }
+                            } else {
+                                // While a task runs this only waits: nothing typed yet, or an edit, which goes once it ends.
+                                Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = connected && hasText && !state.running) }
+                            }
                         }
                     }
                 }
@@ -4269,7 +4300,13 @@ internal fun runningSegments(mode: RunningSend): List<RunningSend> =
  * offers the way that isn't shown.
  */
 @Composable
-private fun RunningSendSegments(mode: RunningSend, attachments: Boolean, enabled: Boolean, onSend: (RunningSend) -> Unit) {
+private fun RunningSendSegments(
+    mode: RunningSend,
+    attachments: Boolean,
+    enabled: Boolean,
+    onSend: (RunningSend) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val haptics = LocalHapticFeedback.current
     var menuOpen by remember { mutableStateOf(false) }
     val shown = runningSegments(mode)
@@ -4280,89 +4317,116 @@ private fun RunningSendSegments(mode: RunningSend, attachments: Boolean, enabled
     val sendLabel = stringResource(Res.string.chat_send)
     val otherWaysLabel = stringResource(Res.string.chat_send_other_ways)
     val noFilesState = stringResource(Res.string.chat_send_no_files)
-    DropdownMenu(
-        expanded = menuOpen,
-        onExpandedChange = { menuOpen = it },
-        // The composer sits at the bottom of the screen; the choices open upward, over the chat.
-        above = true,
-        items = {
-            others.forEach { choice ->
-                MenuAction(labels.getValue(choice), choice.icon, onClick = {
-                    menuOpen = false
-                    onSend(choice)
-                })
-            }
-        },
-    ) {
-        // The pill is drawn 38dp tall behind the halves; each half takes taps over the full touch height.
-        val track = Theme[colors][surface3]
-        Row(
-            Modifier
-                .heightIn(min = MinTouchTarget)
-                .height(IntrinsicSize.Min)
-                .alpha(if (enabled) 1f else 0.45f)
-                .drawBehind {
-                    // Grows with large text so the filled half stays inside it.
-                    val h = maxOf(38.dp.toPx(), size.height - 10.dp.toPx())
-                    drawRoundRect(track, topLeft = Offset(0f, (size.height - h) / 2), size = Size(size.width, h), cornerRadius = CornerRadius(h / 2))
+    val segmentGap = if (isDesktop) 4.dp else 2.dp
+    val segmentPadding = if (isDesktop) 10.dp else 8.dp
+    val iconGap = if (isDesktop) 5.dp else 4.dp
+    Box(modifier) {
+        DropdownMenu(
+            expanded = menuOpen,
+            onExpandedChange = { menuOpen = it },
+            // The composer sits at the bottom of the screen; the choices open upward, over the chat.
+            above = true,
+            items = {
+                others.forEach { choice ->
+                    MenuAction(labels.getValue(choice), choice.icon, onClick = {
+                        menuOpen = false
+                        onSend(choice)
+                    })
                 }
-                .padding(horizontal = 3.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            },
         ) {
-            shown.forEach { way ->
-                val on = way == mode
-                val usable = enabled && !(way == RunningSend.Steer && attachments)
-                val tint = Theme[colors][if (on) onUserBubble else textTertiary]
-                val interaction = remember { MutableInteractionSource() }
-                Box(
-                    Modifier
-                        .fillMaxHeight()
-                        .handCursor(usable)
-                        .combinedClickable(
-                            enabled = usable,
-                            onClick = { onSend(way) },
-                            onLongClick = if (others.isEmpty()) null else {
-                                {
-                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    menuOpen = true
-                                }
-                            },
-                            onClickLabel = sendLabel,
-                            onLongClickLabel = otherWaysLabel,
-                            interactionSource = interaction,
-                            indication = null,
-                        )
-                        // A mouse finds the other ways with a right-click, as it can't feel a long press.
-                        .then(if (isDesktop && others.isNotEmpty()) Modifier.onSecondaryPress { menuOpen = true } else Modifier)
-                        .semantics {
-                            contentDescription = "${labels.getValue(way)}: ${summaries.getValue(way)}"
-                            role = Role.Button
-                            // The filled half is the setting's way; a steer can't carry files.
-                            selected = on
-                            if (enabled && !usable) stateDescription = noFilesState
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Row(
-                        Modifier
-                            .clearAndSetSemantics {}
-                            .alpha(if (usable || !enabled) 1f else 0.45f)
-                            .heightIn(min = 32.dp)
-                            .clip(CircleShape)
-                            .then(if (on) Modifier.background(Theme[colors][userBubble], CircleShape) else Modifier)
-                            .indication(interaction, rememberHoverIndication(tint))
-                            .padding(horizontal = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        UnstyledIcon(way.icon, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
-                        Text(
-                            labels.getValue(way),
-                            style = Theme[typography][label].copy(fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium),
-                            color = tint,
-                            maxLines = 1,
-                        )
+            // The pill is drawn 38dp tall behind the halves; each half takes taps over the full touch height.
+            val track = Theme[colors][surface3]
+            Layout(
+                modifier = Modifier
+                    .heightIn(min = MinTouchTarget)
+                    .alpha(if (enabled) 1f else 0.45f)
+                    .drawBehind {
+                        // Grows with large text so the filled half stays inside it.
+                        val h = maxOf(38.dp.toPx(), size.height - 10.dp.toPx())
+                        drawRoundRect(track, topLeft = Offset(0f, (size.height - h) / 2), size = Size(size.width, h), cornerRadius = CornerRadius(h / 2))
+                    }
+                    .padding(horizontal = 3.dp),
+                content = {
+                    shown.forEach { way ->
+                        val on = way == mode
+                        val usable = enabled && !(way == RunningSend.Steer && attachments)
+                        val tint = Theme[colors][if (on) onUserBubble else textTertiary]
+                        val interaction = remember { MutableInteractionSource() }
+                        Box(
+                            Modifier
+                                .heightIn(min = MinTouchTarget)
+                                .handCursor(usable)
+                                .combinedClickable(
+                                    enabled = usable,
+                                    onClick = { onSend(way) },
+                                    onLongClick = if (others.isEmpty()) null else {
+                                        {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            menuOpen = true
+                                        }
+                                    },
+                                    onClickLabel = sendLabel,
+                                    onLongClickLabel = otherWaysLabel,
+                                    interactionSource = interaction,
+                                    indication = null,
+                                )
+                                // A mouse finds the other ways with a right-click, as it can't feel a long press.
+                                .then(if (isDesktop && others.isNotEmpty()) Modifier.onSecondaryPress { menuOpen = true } else Modifier)
+                                .semantics {
+                                    contentDescription = "${labels.getValue(way)}: ${summaries.getValue(way)}"
+                                    role = Role.Button
+                                    // The filled half is the setting's way; a steer can't carry files.
+                                    selected = on
+                                    if (enabled && !usable) stateDescription = noFilesState
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Row(
+                                Modifier
+                                    .clearAndSetSemantics {}
+                                    .alpha(if (usable || !enabled) 1f else 0.45f)
+                                    .heightIn(min = 32.dp)
+                                    .clip(CircleShape)
+                                    .then(if (on) Modifier.background(Theme[colors][userBubble], CircleShape) else Modifier)
+                                    .indication(interaction, rememberHoverIndication(tint))
+                                    .padding(horizontal = segmentPadding),
+                                horizontalArrangement = Arrangement.spacedBy(iconGap),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                UnstyledIcon(way.icon, contentDescription = null, tint = tint, modifier = Modifier.size(13.dp))
+                                Text(
+                                    labels.getValue(way),
+                                    style = Theme[typography][label].copy(fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium),
+                                    color = tint,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                },
+            ) { measurables, constraints ->
+                val gap = segmentGap.roundToPx()
+                val totalGaps = gap * (measurables.size - 1).coerceAtLeast(0)
+                val available = (constraints.maxWidth - totalGaps).coerceAtLeast(0)
+                val desired = measurables.map { it.maxIntrinsicWidth(constraints.maxHeight) }
+                val totalDesired = desired.sum()
+                val placeables = measurables.mapIndexed { index, measurable ->
+                    val maxW = if (totalDesired <= available || totalDesired == 0) {
+                        available
+                    } else {
+                        (available.toLong() * desired[index] / totalDesired).toInt().coerceAtLeast(0)
+                    }
+                    measurable.measure(constraints.copy(minWidth = 0, maxWidth = maxW, minHeight = 0))
+                }
+                val width = (placeables.sumOf { it.width } + totalGaps).coerceIn(constraints.minWidth, constraints.maxWidth)
+                val height = (placeables.maxOfOrNull { it.height } ?: 0).coerceIn(constraints.minHeight, constraints.maxHeight)
+                layout(width, height) {
+                    var x = 0
+                    placeables.forEach { placeable ->
+                        placeable.placeRelative(x, (height - placeable.height) / 2)
+                        x += placeable.width + gap
                     }
                 }
             }

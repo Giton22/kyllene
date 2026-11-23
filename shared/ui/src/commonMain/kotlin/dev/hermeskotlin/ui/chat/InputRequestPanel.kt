@@ -15,7 +15,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import com.composeunstyled.UnstyledButton
 import dev.hermeskotlin.designsystem.rememberHoverIndication
@@ -145,6 +148,8 @@ internal fun InputRequestPanel(
     connected: Boolean,
     onAnswer: (InputRequest, JsonObject) -> Unit,
     onStop: (() -> Unit)? = null,
+    /** Shown by the chat when an answer RPC fails so a stayed-open request can be retried. */
+    error: String? = null,
 ) {
     val request = requests.firstOrNull() ?: return
     // A floating card ringed in the request's own soft tint: amber for what needs care, the accent for a question.
@@ -170,11 +175,21 @@ internal fun InputRequestPanel(
             val more = (requests.size - 1).takeIf { it > 0 }?.let { stringResource(Res.string.chat_requests_more, it) }
             // Keyed, so nothing carries over to the next request: a password shown with the eye stays hidden.
             key(request.id) {
+                var submitting by remember { mutableStateOf(false) }
+                // A dropped connection or failed RPC leaves the request open, so let the user try again.
+                LaunchedEffect(connected, error) { if (!connected || error != null) submitting = false }
+                val submit: (JsonObject) -> Unit = { payload ->
+                    if (!submitting) {
+                        submitting = true
+                        onAnswer(request, payload)
+                    }
+                }
+                val canAnswer = connected && !submitting
                 when (request) {
-                    is InputRequest.Approval -> ApprovalContent(request, more, connected, onStop.takeIf { connected }) { onAnswer(request, it) }
-                    is InputRequest.Clarify -> ClarifyContent(request, more, connected, onStop.takeIf { connected }) { onAnswer(request, it) }
-                    is InputRequest.Secret -> SecretContent(request, more, connected, onStop.takeIf { connected }) { onAnswer(request, it) }
-                    is InputRequest.VaultSaveLogin -> SaveLoginContent(request, more, connected, onStop.takeIf { connected }) { onAnswer(request, it) }
+                    is InputRequest.Approval -> ApprovalContent(request, more, canAnswer, onStop.takeIf { connected }, submit)
+                    is InputRequest.Clarify -> ClarifyContent(request, more, connected, submitting, onStop.takeIf { connected }, submit)
+                    is InputRequest.Secret -> SecretContent(request, more, canAnswer, onStop.takeIf { connected }, submit)
+                    is InputRequest.VaultSaveLogin -> SaveLoginContent(request, more, canAnswer, onStop.takeIf { connected }, submit)
                 }
             }
         }
@@ -456,7 +471,14 @@ private fun ApprovalContent(request: InputRequest.Approval, more: String?, conne
 }
 
 @Composable
-private fun ClarifyContent(request: InputRequest.Clarify, more: String?, connected: Boolean, onStop: (() -> Unit)?, answer: (JsonObject) -> Unit) {
+private fun ClarifyContent(
+    request: InputRequest.Clarify,
+    more: String?,
+    connected: Boolean,
+    submitting: Boolean,
+    onStop: (() -> Unit)?,
+    answer: (JsonObject) -> Unit,
+) {
     val questions = request.questions
     var index by remember(request.id) { mutableStateOf(0) }
     val picked = remember(request.id) { questions.map { mutableStateListOf<String>() } }
@@ -477,7 +499,7 @@ private fun ClarifyContent(request: InputRequest.Clarify, more: String?, connect
     if (question.choices.isNotEmpty()) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             question.choices.forEach { choice ->
-                ChoiceRow(choice, question, selected = choice in picked[index]) {
+                ChoiceRow(choice, question, selected = choice in picked[index], enabled = !submitting) {
                     val selection = picked[index]
                     when {
                         question.multiSelect && choice in selection -> selection.remove(choice)
@@ -492,7 +514,7 @@ private fun ClarifyContent(request: InputRequest.Clarify, more: String?, connect
             }
         }
     }
-    val canGoOn = (connected || !last) && answerOf(index).isNotEmpty()
+    val canGoOn = !submitting && (connected || !last) && answerOf(index).isNotEmpty()
     val goOn: () -> Unit = { if (last) answer(InputAnswers.clarify(request, questions.indices.map(::answerOf))) else index++ }
     // On the desktop the answer is typed straight away, each question in turn; Enter goes on as Send or
     // Next does, Shift+Enter starts a new line.
@@ -512,7 +534,7 @@ private fun ClarifyContent(request: InputRequest.Clarify, more: String?, connect
             stringResource(if (index > 0) Res.string.common_back else Res.string.chat_skip),
             onClick = { if (index > 0) index-- else answer(InputAnswers.clarifyCancel.takeIf { request.batch } ?: InputAnswers.clarify(request, listOf(emptyList()))) },
             variant = ButtonVariant.Outline,
-            enabled = connected || index > 0,
+            enabled = !submitting && (connected || index > 0),
             modifier = Modifier.weight(1f),
         )
         Button(
@@ -525,7 +547,7 @@ private fun ClarifyContent(request: InputRequest.Clarify, more: String?, connect
 }
 
 @Composable
-private fun ChoiceRow(choice: String, question: ClarifyQuestion, selected: Boolean, onClick: () -> Unit) {
+private fun ChoiceRow(choice: String, question: ClarifyQuestion, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
     val icon = when {
         question.multiSelect -> if (selected) Lucide.SquareCheck else Lucide.Square
@@ -536,8 +558,15 @@ private fun ChoiceRow(choice: String, question: ClarifyQuestion, selected: Boole
             .fillMaxWidth()
             .clip(shape)
             .background(if (selected) Theme[colors][accentSoft] else Theme[colors][input], shape)
-            .handCursor()
-            .clickable(role = if (question.multiSelect) Role.Checkbox else Role.RadioButton, onClick = onClick)
+            .handCursor(enabled)
+            .clickable(enabled = enabled, role = if (question.multiSelect) Role.Checkbox else Role.RadioButton, onClick = onClick)
+            .semantics {
+                if (question.multiSelect) {
+                    toggleableState = ToggleableState(selected)
+                } else {
+                    this.selected = selected
+                }
+            }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,

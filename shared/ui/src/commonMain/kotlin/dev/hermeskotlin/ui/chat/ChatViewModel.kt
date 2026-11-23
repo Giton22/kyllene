@@ -393,6 +393,10 @@ class ChatViewModel(
 
     private val session = MutableStateFlow<ChatSession?>(null)
     private val widgetSession = MutableStateFlow<Pair<ChatSession, ChatTarget>?>(null)
+    private val mediaCache = mutableMapOf<String, ByteArray>()
+    private var startingFreshFor: ChatSession? = null
+    private var branchingFor: ChatSession? = null
+    private val answering = mutableSetOf<Pair<ChatSession, String>>()
 
     /** An external return uses the target actually bound to this source, including its draft and bot identity. */
     fun targetFor(source: ChatSession): ChatTarget? = target.takeIf { session.value === source }
@@ -405,7 +409,12 @@ class ChatViewModel(
             }
         }
         // Off the gateway the chat hears of no new turns, while the lists may read them on reconnecting first.
-        viewModelScope.launch { connectionState.collect { if (it !is ConnectionState.Connected) releaseCaughtUp() } }
+        viewModelScope.launch {
+            connectionState.collect {
+                if (it !is ConnectionState.Connected) releaseCaughtUp()
+                if (it is ConnectionState.SessionExpired || it is ConnectionState.Idle) mediaCache.clear()
+            }
+        }
         // A chat opened under the checkpoints sheet shows its own checkpoints, not the last chat's.
         viewModelScope.launch { session.collect { checkpoints.follow(it) } }
         viewModelScope.launch { session.collect { control.follow(it) } }
@@ -652,12 +661,14 @@ class ChatViewModel(
             // back in needs a fresh session, not the stopped one this view model still holds. A voice chat
             // went with the stopped one (the host closed under it, as on adding the gateway already open).
             if (session.value !== host.session.value) {
+                mediaCache.clear()
                 voice.stopAll()
                 bind(target)
             }
             return
         }
         if (moveNewChat(target)) return
+        if (this.target?.gateway?.gatewayUrl != target.gateway.gatewayUrl) mediaCache.clear()
         markLooked()
         // An edit belongs to its chat; what was typed before it is that chat's draft.
         cancelEdit()
@@ -676,7 +687,9 @@ class ChatViewModel(
         if (target.storedSessionId == null) viewModelScope.launch { lastChats.set(target.gateway.gatewayUrl, null, target.profile) }
         bind(target)
         // The catalog marks the previous chat's model; a new chat must show the profile default instead.
-        _picker.update { it.copy(catalog = null, confirm = null) }
+        loadJob?.cancel()
+        loadJob = null
+        _picker.update { it.copy(catalog = null, loading = false, error = null, confirm = null) }
         if (connectionState.value is ConnectionState.Connected) {
             loadModels()
             pets.bind(target.profile)
@@ -860,6 +873,7 @@ class ChatViewModel(
         target?.bot?.let { bot -> return setBotModel(chat, bot, model, confirmed) }
         viewModelScope.launch {
             val result = chat.setModel(model.id, model.provider, confirmed)
+            if (session.value !== chat) return@launch
             if (result is ModelSwitch.NeedsConfirmation) _picker.update { it.copy(confirm = PendingSwitch(model, result.message)) }
         }
     }
@@ -869,10 +883,12 @@ class ChatViewModel(
             try {
                 val warning = bots.setModel(bot.name, model.id, model.provider, confirmed)
                 if (warning != null) {
-                    _picker.update { it.copy(confirm = PendingSwitch(model, warning)) }
+                    if (session.value === chat) _picker.update { it.copy(confirm = PendingSwitch(model, warning)) }
                 } else {
                     chat.showModel(model.id, model.provider)
-                    _picker.update { it.copy(catalog = it.catalog?.copy(currentModel = model.id, currentProvider = model.provider)) }
+                    if (session.value === chat) {
+                        _picker.update { it.copy(catalog = it.catalog?.copy(currentModel = model.id, currentProvider = model.provider)) }
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -894,27 +910,28 @@ class ChatViewModel(
         viewModelScope.launch { chat.setFast(on) }
     }
 
-    private val mediaCache = mutableMapOf<String, ByteArray>()
-
     override suspend fun loadLinkPreview(url: String): LinkPreview? = linkPreviews?.load(url)
 
     /**
      * The bytes behind a picture or file the chat shows: a gateway path (`@image:` in a stored prompt,
-     * `MEDIA:` in a reply), a web URL or a `data:` URL. Cached per source; null when it can't be had.
+     * `MEDIA:` in a reply), a web URL or a `data:` URL. Cached per gateway and source; null when it can't be had.
      */
     @OptIn(ExperimentalEncodingApi::class)
     override suspend fun loadMedia(source: String): ByteArray? {
-        mediaCache[source]?.let { return it }
+        val gateway = target?.gateway?.gatewayUrl
+        val key = "${gateway?.value.orEmpty()}\u0000$source"
+        mediaCache[key]?.let { return it }
         val result = when {
             source.startsWith("data:") -> runCatching { Base64.decode(source.substringAfter("base64,")) }.getOrNull()
             source.startsWith("http://") || source.startsWith("https://") -> (media.remote(source) as? ApiResult.Success)?.value
             else -> {
-                val gateway = target?.gateway?.gatewayUrl ?: return null
+                if (gateway == null) return null
                 (media.file(gateway, source.removePrefix("file://")) as? ApiResult.Success)?.value
             }
         } ?: return null
+        if (target?.gateway?.gatewayUrl != gateway) return result
         if (mediaCache.size >= MAX_CACHED_MEDIA) mediaCache.remove(mediaCache.keys.first())
-        mediaCache[source] = result
+        mediaCache[key] = result
         return result
     }
 
@@ -973,6 +990,7 @@ class ChatViewModel(
             val comment = newComment(++lastCommentId, source, anchor, note = EXPLAIN_NOTE)
             viewModelScope.launch {
                 if (chat.submit(formatReview(listOf(comment), ""), emptyList(), queue = false) == SendOutcome.NotSent) {
+                    if (session.value !== chat) return@launch
                     _comments.update { listOf(comment) + it }
                 }
             }
@@ -1057,14 +1075,23 @@ class ChatViewModel(
      */
     fun startThreadFresh(command: String = "/new") {
         val chat = session.value ?: return
-        viewModelScope.launch { startThreadFresh(chat, command) }
+        if (startingFreshFor === chat) return
+        startingFreshFor = chat
+        viewModelScope.launch {
+            try {
+                runStartThreadFresh(chat, command)
+            } finally {
+                if (startingFreshFor === chat) startingFreshFor = null
+            }
+        }
     }
 
-    private suspend fun startThreadFresh(chat: ChatSession, command: String) {
+    private suspend fun runStartThreadFresh(chat: ChatSession, command: String) {
         val repo = threads ?: return
         val thread = openThread() ?: return
         try {
             val fresh = repo.startFresh(thread)
+            if (session.value !== chat) return
             _requests.send(ChatRequest.OpenChat(fresh.sessionId, fresh.title))
         } catch (e: CancellationException) {
             throw e
@@ -1075,31 +1102,45 @@ class ChatViewModel(
 
     /** A command typed in the composer: answered here when this app has its own control for it, else run on the gateway. */
     private fun runCommand(chat: ChatSession, command: SlashCommand) {
+        val owner = target
         viewModelScope.launch {
             val arg = command.arg
             suspend fun onGateway() = chat.runCommand(command)?.let { text ->
-                if (composer.text.isEmpty()) composer.setTextAndPlaceCursorAtEnd(text)
+                if (session.value === chat && composer.text.isEmpty()) composer.setTextAndPlaceCursorAtEnd(text)
             }
-            when (val route = SlashRoute.of(command.name, catalog())) {
+            val catalog = catalog()
+            if (session.value !== chat) return@launch
+            when (val route = SlashRoute.of(command.name, catalog)) {
                 // A bot keeps one chat forever, so a fresh start there is a fresh context, as on Desktop.
                 SlashRoute.NewChat -> when {
-                    target?.bot != null -> chat.compress(arg)
+                    owner?.bot != null -> chat.compress(arg)
                     // A thread keeps its place: its chat is filed away and a new one takes over.
-                    openThread() != null -> startThreadFresh(chat, "/${command.name}")
-                    else -> _requests.send(ChatRequest.NewChat)
+                    openThread() != null -> if (startingFreshFor !== chat) {
+                        startingFreshFor = chat
+                        try {
+                            runStartThreadFresh(chat, "/${command.name}")
+                        } finally {
+                            if (startingFreshFor === chat) startingFreshFor = null
+                        }
+                    }
+                    else -> if (session.value === chat) _requests.send(ChatRequest.NewChat)
                 }
                 // Like Desktop: bare opens the picker, `/model <name>` is for the gateway to parse.
-                SlashRoute.PickModel -> if (arg.isEmpty()) _requests.send(ChatRequest.PickModel) else onGateway()
-                SlashRoute.BrowseSessions -> if (arg.isEmpty()) _requests.send(ChatRequest.BrowseSessions) else resume(chat, arg)
+                SlashRoute.PickModel -> if (arg.isEmpty()) {
+                    if (session.value === chat) _requests.send(ChatRequest.PickModel)
+                } else onGateway()
+                SlashRoute.BrowseSessions -> if (arg.isEmpty()) {
+                    if (session.value === chat) _requests.send(ChatRequest.BrowseSessions)
+                } else resume(chat, owner, arg)
                 SlashRoute.Stop -> chat.stopEverything()
-                SlashRoute.Help -> chat.showCommandOutput("/help", helpText(catalog()))
+                SlashRoute.Help -> chat.showCommandOutput("/help", helpText(catalog))
                 SlashRoute.Compress -> chat.compress(arg)
                 SlashRoute.Status -> chat.status()
                 SlashRoute.Aside -> chat.askAside(arg)
                 SlashRoute.Background -> chat.runInBackground(arg)
                 SlashRoute.Steer -> if (arg.isEmpty()) {
                     chat.showCommandOutput("/steer", getString(Res.string.chat_cmd_steer_usage))
-                } else if (chat.steer(arg) == SendOutcome.NotSent) {
+                } else if (chat.steer(arg) == SendOutcome.NotSent && session.value === chat) {
                     giveBack("/steer $arg")
                 }
                 SlashRoute.Reasoning -> when (chat.reasoning(arg)) {
@@ -1112,26 +1153,36 @@ class ChatViewModel(
                 SlashRoute.Title -> when {
                     arg.isEmpty() -> onGateway()
                     // Its title is what makes it the bot's chat; renamed, the bot would start a new one.
-                    target?.bot != null -> chat.showCommandOutput("/title", getString(Res.string.chat_cmd_title_bot), failed = true)
+                    owner?.bot != null -> chat.showCommandOutput("/title", getString(Res.string.chat_cmd_title_bot), failed = true)
                     else -> chat.retitle(arg)
                 }
                 SlashRoute.Branch -> {
                     val count = arg.toIntOrNull()
                     if (arg.isNotEmpty() && (count == null || count < 1)) {
                         chat.showCommandOutput("/branch", getString(Res.string.chat_cmd_branch_usage), failed = true)
-                    } else {
-                        chat.branch(count)?.let { (id, title) -> _requests.send(ChatRequest.OpenChat(id, title)) }
+                    } else if (branchingFor !== chat) {
+                        branchingFor = chat
+                        try {
+                            val branched = chat.branch(count)
+                            if (session.value === chat) branched?.let { (id, title) -> _requests.send(ChatRequest.OpenChat(id, title)) }
+                        } finally {
+                            if (branchingFor === chat) branchingFor = null
+                        }
                     }
                 }
-                SlashRoute.Profile -> profile(chat, arg)
+                SlashRoute.Profile -> profile(chat, owner, arg)
                 SlashRoute.Handoff -> chat.handoff(arg)
                 SlashRoute.Skin -> skin(chat, arg)
-                SlashRoute.Journey -> _requests.send(ChatRequest.OpenJourney)
+                SlashRoute.Journey -> if (session.value === chat) _requests.send(ChatRequest.OpenJourney)
                 SlashRoute.Pet -> pet(chat, arg)
-                SlashRoute.Voice -> if (arg.lowercase() in setOf("off", "stop")) voice.stopChat() else _requests.send(ChatRequest.StartVoice)
+                SlashRoute.Voice -> if (arg.lowercase() in setOf("off", "stop")) voice.stopChat() else if (session.value === chat) _requests.send(ChatRequest.StartVoice)
                 // `/usage reset` and the like are the gateway's to run.
-                SlashRoute.Usage -> if (arg.isEmpty()) _requests.send(ChatRequest.OpenUsage) else onGateway()
-                SlashRoute.Rollback -> if (arg.isEmpty()) _requests.send(ChatRequest.OpenCheckpoints) else onGateway()
+                SlashRoute.Usage -> if (arg.isEmpty()) {
+                    if (session.value === chat) _requests.send(ChatRequest.OpenUsage)
+                } else onGateway()
+                SlashRoute.Rollback -> if (arg.isEmpty()) {
+                    if (session.value === chat) _requests.send(ChatRequest.OpenCheckpoints)
+                } else onGateway()
                 is SlashRoute.Unavailable -> chat.showCommandOutput("/${command.name}", route.message, failed = true)
                 SlashRoute.Gateway -> onGateway()
             }
@@ -1166,7 +1217,7 @@ class ChatViewModel(
     /** `/pet [name|off]`: bare opens the gallery; a name adopts that pet; `off` puts it away. */
     private suspend fun pet(chat: ChatSession, arg: String) {
         when (arg.lowercase()) {
-            "", "list", "gallery", "browse", "all" -> _requests.send(ChatRequest.OpenPets)
+            "", "list", "gallery", "browse", "all" -> if (session.value === chat) _requests.send(ChatRequest.OpenPets)
             "off", "hide", "disable", "none" -> try {
                 pets.hide()
                 chat.showCommandOutput("/pet", getString(Res.string.chat_cmd_pet_hidden))
@@ -1192,18 +1243,21 @@ class ChatViewModel(
     }
 
     /** `/resume <words>`: opens the best match among this profile's chats. */
-    private suspend fun resume(chat: ChatSession, query: String) {
-        val target = target ?: return
+    private suspend fun resume(chat: ChatSession, owner: ChatTarget?, query: String) {
+        val target = owner ?: return
         when (val result = sessions.search(target.gateway.gatewayUrl, query, limit = 1, profile = target.profile)) {
-            is ApiResult.Success -> result.value.firstOrNull()?.let { _requests.send(ChatRequest.OpenChat(it.id, it.displayTitle)) }
-                ?: chat.showCommandOutput("/resume", getString(Res.string.chat_cmd_resume_none, query), failed = true)
+            is ApiResult.Success -> {
+                if (session.value !== chat) return
+                result.value.firstOrNull()?.let { _requests.send(ChatRequest.OpenChat(it.id, it.displayTitle)) }
+                    ?: chat.showCommandOutput("/resume", getString(Res.string.chat_cmd_resume_none, query), failed = true)
+            }
             else -> chat.showCommandOutput("/resume", result.errorMessage ?: getString(Res.string.chat_cmd_resume_failed), failed = true)
         }
     }
 
     /** `/profile [name]`: names the current profile, or switches to another (its chats, memory and model). */
-    private suspend fun profile(chat: ChatSession, name: String) {
-        val target = target ?: return
+    private suspend fun profile(chat: ChatSession, owner: ChatTarget?, name: String) {
+        val target = owner ?: return
         val roster = (profiles.roster(target.gateway.gatewayUrl) as? ApiResult.Success)?.value
             ?: return chat.showCommandOutput("/profile", getString(Res.string.chat_cmd_profile_failed), failed = true)
         val current = roster.profiles.find { it.name == (target.profile ?: roster.launch) }
@@ -1223,6 +1277,7 @@ class ChatViewModel(
                 failed = true,
             )
         if (match == current) return chat.showCommandOutput("/profile", getString(Res.string.chat_cmd_profile_already, match.label))
+        if (session.value !== chat) return
         _requests.send(ChatRequest.SwitchProfile(match.name.takeIf { it != roster.launch }))
     }
 
@@ -1267,11 +1322,13 @@ class ChatViewModel(
                 RunningSend.Queue -> chat.submit(outgoing, attachments, queue = true)
                 RunningSend.StopAndSend -> {
                     val result = chat.stopAndSubmit(outgoing, attachments)
+                    if (session.value !== chat) return@launch
                     // The stop drops what was queued behind the task; hand it back rather than lose it.
                     result.dropped.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }?.let { giveBack(it.joinToString("\n\n")) }
                     result.outcome
                 }
             }
+            if (session.value !== chat) return@launch
             // Give everything back if it never reached the gateway, so nothing typed or picked is lost. One
             // that may have arrived keeps its bubble to resend from instead, so it isn't in two places.
             if (outcome == SendOutcome.NotSent) {
@@ -1293,6 +1350,7 @@ class ChatViewModel(
                 // Stopping someone's run from a box in another app is too much; it waits its turn instead.
                 RunningSend.Queue, RunningSend.StopAndSend -> chat.submit(text, emptyList(), queue = true)
             }
+            if (session.value !== chat) return@launch
             if (outcome == SendOutcome.NotSent) giveBack(text)
         }
     }
@@ -1302,7 +1360,7 @@ class ChatViewModel(
         viewModelScope.launch {
             // Stop drops what was queued behind the task; hand it back rather than lose it.
             val dropped = chat.interrupt().filter { it.isNotBlank() }
-            if (dropped.isEmpty()) return@launch
+            if (session.value !== chat || dropped.isEmpty()) return@launch
             val typed = composer.text.toString()
             composer.setTextAndPlaceCursorAtEnd(listOf(takeComments(dropped), typed).filter { it.isNotBlank() }.joinToString("\n\n"))
         }
@@ -1316,7 +1374,9 @@ class ChatViewModel(
         if (state.messages.lastOrNull { it is ChatMessage.User }?.key != key) return
         val undo = SlashCommand.parse("/undo") ?: return
         viewModelScope.launch {
-            val text = takeComments(listOf(chat.runCommand(undo) ?: return@launch))
+            val raw = chat.runCommand(undo) ?: return@launch
+            if (session.value !== chat) return@launch
+            val text = takeComments(listOf(raw))
             // Whatever was being typed stays, after the prompt that comes back.
             val typed = composer.text.toString()
             if (text.isBlank()) return@launch
@@ -1326,10 +1386,18 @@ class ChatViewModel(
 
     override fun branchFrom(key: String) {
         val chat = session.value ?: return
+        if (branchingFor === chat) return
         if (!state.value.canChangeChat(connectionState.value is ConnectionState.Connected)) return
         if (state.value.messages.none { it.key == key }) return
+        branchingFor = chat
         viewModelScope.launch {
-            chat.branchFrom(key)?.let { (id, title) -> _requests.send(ChatRequest.OpenChat(id, title)) }
+            try {
+                val branched = chat.branchFrom(key)
+                if (session.value !== chat) return@launch
+                branched?.let { (id, title) -> _requests.send(ChatRequest.OpenChat(id, title)) }
+            } finally {
+                if (branchingFor === chat) branchingFor = null
+            }
         }
     }
 
@@ -1382,6 +1450,7 @@ class ChatViewModel(
         cancelEdit()
         viewModelScope.launch {
             if (chat.rewind(key, outgoing) != SendOutcome.NotSent) return@launch
+            if (session.value !== chat) return@launch
             // The prompt is back where it was if the gateway turned the edit down; carry on editing it.
             _comments.update { comments + it }
             if (state.value.messages.any { it.key == key }) {
@@ -1404,7 +1473,15 @@ class ChatViewModel(
 
     override fun answer(request: InputRequest, result: JsonObject) {
         val chat = session.value ?: return
-        viewModelScope.launch { chat.answer(request, result) }
+        val key = chat to request.id
+        if (!answering.add(key)) return
+        viewModelScope.launch {
+            try {
+                chat.answer(request, result)
+            } finally {
+                answering.remove(key)
+            }
+        }
     }
 
     override fun checkDelivery(key: String) {
@@ -1416,7 +1493,9 @@ class ChatViewModel(
         val chat = session.value ?: return
         viewModelScope.launch {
             // Not sent again after all: the text waits in the composer like any failed send.
-            chat.resend(key)?.let(::giveBack)
+            val failed = chat.resend(key)
+            if (session.value !== chat) return@launch
+            failed?.let(::giveBack)
         }
     }
 

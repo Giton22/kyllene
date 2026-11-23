@@ -384,8 +384,8 @@ private fun ColumnScope.ModelList(
     // A new search or scope starts at the top, where its best matches are.
     LaunchedEffect(needle, scope) { list.scrollToItem(0) }
     val repeatedNames = remember(sections) { sections.flatMap { it.models }.groupingBy { it.name }.eachCount().filterValues { it > 1 }.keys }
-    // A desktop's popover can have less room than the list wants: the list gives way, not what's above it.
-    ScrollbarBox(list, Modifier.fillMaxWidth().then(if (isDesktop) Modifier.weight(1f, fill = false) else Modifier).padding(top = 4.dp)) {
+    // A popover, short landscape window or open keyboard can leave less room than the list wants: the list gives way, not what's above it.
+    ScrollbarBox(list, Modifier.fillMaxWidth().weight(1f, fill = false).padding(top = 4.dp)) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp).arrowFocus(), state = list) {
             sections.forEachIndexed { index, section ->
                 section.title?.let { title -> item(key = "h$index") { SectionLabel(sectionTitle(title)) } }

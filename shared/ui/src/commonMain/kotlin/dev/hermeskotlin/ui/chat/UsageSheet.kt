@@ -107,21 +107,28 @@ class UsageController(private val sessions: SessionsApi, private val scope: Coro
     val state: StateFlow<UsageSheetState> = _state.asStateFlow()
 
     private var chat: ChatSession? = null
+    private var loadJob: Job? = null
     private var refresh: Job? = null
+    private var loadGeneration = 0L
 
     fun load(gateway: GatewayUrl, sessionId: String?, profile: String?, chat: ChatSession?) {
         this.chat = chat
+        val generation = ++loadGeneration
+        loadJob?.cancel()
         refresh?.cancel()
         _state.value = UsageSheetState(loading = true)
-        scope.launch {
+        loadJob = scope.launch {
             val limits = async { chat?.accountLimits().orEmpty() }
             val breakdown = async { chat?.contextBreakdown()?.takeUnless { it.isEmpty } }
             // A new chat has no stored row until its first prompt.
             val totals = sessionId?.let { sessions.totals(gateway, it, profile) }
+            val resolvedLimits = limits.await()
+            val resolvedBreakdown = breakdown.await()
+            if (generation != loadGeneration || this@UsageController.chat !== chat) return@launch
             _state.value = UsageSheetState(
                 totals = (totals as? ApiResult.Success)?.value,
-                limits = limits.await(),
-                breakdown = breakdown.await(),
+                limits = resolvedLimits,
+                breakdown = resolvedBreakdown,
                 // Empty when the gateway gave no reason; the sheet then says it in the app's words.
                 error = totals?.takeIf { it !is ApiResult.Success }?.let { it.errorMessage.orEmpty() },
             )
@@ -131,10 +138,12 @@ class UsageController(private val sessions: SessionsApi, private val scope: Coro
     /** Fetches the context split again, as a turn moves on, so an open sheet doesn't show an old one. */
     fun refreshBreakdown() {
         val chat = chat ?: return
+        val generation = loadGeneration
         if (_state.value.loading) return
         refresh?.cancel()
         refresh = scope.launch {
             val breakdown = chat.contextBreakdown()?.takeUnless { it.isEmpty } ?: return@launch
+            if (generation != loadGeneration || this@UsageController.chat !== chat) return@launch
             _state.update { if (it.loading) it else it.copy(breakdown = breakdown) }
         }
     }
@@ -172,7 +181,7 @@ internal fun UsageSheetView(visible: Boolean, state: UsageSheetState, live: Sess
                     state.error?.let { Text(it.ifEmpty { stringResource(Res.string.chat_usage_load_failed) }, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary]) }
                     when {
                         state.breakdown != null -> ContextSplit(state.breakdown)
-                        else -> live?.takeIf { it.contextMax != null && it.contextUsed != null }?.let { Context(it) }
+                        else -> live?.takeIf { (it.contextMax ?: 0L) > 0L && it.contextUsed != null }?.let { Context(it) }
                     }
                     if (state.limits.isNotEmpty()) Limits(state.limits)
                     if (state.totals == null && state.error == null && live == null && state.limits.isEmpty()) {
@@ -325,12 +334,16 @@ private fun ContextHeader(amount: String, spoken: String) {
     }
 }
 
+/** Share of the context window filled, in `0f..1f`; zero when [max] is non-positive so `0 / 0` never produces `NaN`. */
+internal fun contextFraction(used: Long, max: Long): Float =
+    if (max > 0L) (used.toFloat() / max).coerceIn(0f, 1f) else 0f
+
 /** How full the model's context window is now; compression frees it up. */
 @Composable
 private fun Context(live: SessionUsage) {
     val used = live.contextUsed ?: return
-    val max = live.contextMax ?: return
-    val fraction = (used.toFloat() / max).coerceIn(0f, 1f)
+    val max = live.contextMax?.takeIf { it > 0L } ?: return
+    val fraction = contextFraction(used, max)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         val percent = live.contextPercent ?: (fraction * 100).toInt()
         ContextHeader(
