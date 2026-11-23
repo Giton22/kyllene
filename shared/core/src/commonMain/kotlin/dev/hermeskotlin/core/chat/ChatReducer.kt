@@ -96,7 +96,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
             copy(messages = messages + ChatMessage.Notice("notice-$keySeq", text), keySeq = keySeq + 1)
         } ?: this
         // The turn has ended, so a notice about the agent being built is stale even if its clear never came.
-        "message.complete" -> complete(payload, now).withoutAgentNotices()
+        "message.complete" -> complete(payload, now).withPromptRow(payload?.get("persisted_turn") as? JsonObject).withoutAgentNotices()
         "notification.show" -> showNotice(payload)
         "notification.clear" -> withoutNotice(payload.string("key"))
         "status.update" -> copy(status = payload.string("text")?.takeIf { it.isNotBlank() })
@@ -247,6 +247,18 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
         }
     }
     return endTurn(updated, finalUsage).copy(keySeq = keySeq + 1)
+}
+
+/**
+ * Gives the prompt a finished turn ran the row it was stored at (`message.complete` `persisted_turn`), so it can be
+ * regenerated or edited. Only the session authority names the prompt there, by its `submission_id`: its
+ * `prompt.submit` answers before the row is written, so the reply has no `user_row_id`.
+ */
+private fun ChatState.withPromptRow(persisted: JsonObject?): ChatState {
+    val submission = persisted.string("submission_id") ?: return this
+    val row = persisted.long("user_row_id") ?: return this
+    if (messages.none { it is ChatMessage.User && it.submissionId == submission && it.rowId == null }) return this
+    return copy(messages = messages.map { if (it is ChatMessage.User && it.submissionId == submission && it.rowId == null) it.copy(rowId = row) else it })
 }
 
 private fun ChatState.endTurn(messages: List<ChatMessage>, finalUsage: SessionUsage?) = copy(

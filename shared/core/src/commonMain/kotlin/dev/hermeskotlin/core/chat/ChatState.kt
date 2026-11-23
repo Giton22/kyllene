@@ -109,6 +109,8 @@ sealed interface ChatMessage {
         val timestamp: Double? = null,
         /** A large attachment going up over HTTP before the prompt is sent; null once it's up. */
         val upload: UploadProgress? = null,
+        /** The `submission_id` it went out with on the session authority, which names it when its turn reports its row. */
+        val submissionId: String? = null,
     ) : ChatMessage
 
     /** One reply: streamed text, reasoning and the tools it ran. [streaming] until `message.complete`. */
