@@ -15,6 +15,8 @@ class ScreenContext(
     val screenshot: ByteArray?,
     /** Only the part the user circled: [screenshot] is that crop and [lines] the text inside it. */
     val circled: Boolean = false,
+    /** True while the circled region's image crop is still being cut. */
+    val cropping: Boolean = false,
 ) {
     val isEmpty: Boolean get() = lines.isEmpty() && screenshot == null
 

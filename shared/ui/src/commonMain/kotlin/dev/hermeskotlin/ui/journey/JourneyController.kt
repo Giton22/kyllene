@@ -8,6 +8,7 @@ import dev.hermeskotlin.core.journey.JourneyNodeDetail
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,16 +31,26 @@ class JourneyController(private val api: JourneyApi, private val scope: Coroutin
 
     private var gateway: GatewayUrl? = null
     private var profile: String? = null
+    private var loadJob: Job? = null
 
     fun load(gateway: GatewayUrl, profile: String?) {
         if (gateway != this.gateway || profile != this.profile) _state.value = JourneyState()
         this.gateway = gateway
         this.profile = profile
+        loadJob?.cancel()
         _state.update { it.copy(loading = true, error = null) }
-        scope.launch {
+        loadJob = scope.launch {
             when (val result = api.graph(gateway, profile)) {
-                is ApiResult.Success -> _state.update { it.copy(graph = result.value, loading = false) }
-                else -> _state.update { it.copy(loading = false, error = result.errorMessage ?: getString(Res.string.journey_error)) }
+                is ApiResult.Success -> {
+                    if (this@JourneyController.gateway == gateway && this@JourneyController.profile == profile) {
+                        _state.update { it.copy(graph = result.value, loading = false) }
+                    }
+                }
+                else -> {
+                    if (this@JourneyController.gateway == gateway && this@JourneyController.profile == profile) {
+                        _state.update { it.copy(loading = false, error = result.errorMessage ?: getString(Res.string.journey_error)) }
+                    }
+                }
             }
         }
     }

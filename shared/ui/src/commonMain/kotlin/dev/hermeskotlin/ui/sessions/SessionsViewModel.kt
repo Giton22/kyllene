@@ -258,6 +258,8 @@ class SessionsViewModel(
     /** The profile whose sessions are listed; null is the gateway's launch profile. */
     private var profile: String? = null
     private var loadJob: Job? = null
+    private var userJob: Job? = null
+    private var creatingProject = false
 
     /** When the rows showing were saved on the device (epoch ms); null once the gateway's list replaced them. */
     private var savedShownAt: Long? = null
@@ -297,9 +299,9 @@ class SessionsViewModel(
         val newGateway = this.gateway != gateway
         this.gateway = gateway
         this.profile = profile
-        bound.value = gateway.gatewayUrl to profile
         threadsRepo.bind(gateway.gatewayUrl, profile)
         _state.value = SessionsUiState()
+        bound.value = gateway.gatewayUrl to profile
         savedShownAt = null
         // The last list's projects mean nothing here; ask afresh.
         projectsJob?.cancel()
@@ -311,10 +313,13 @@ class SessionsViewModel(
         _binding.value = ListBinding(gateway, profile)
         load(refresh = false)
         if (newGateway) {
+            userJob?.cancel()
             _user.value = null
             _roster.value = null
-            viewModelScope.launch {
-                (auth.me(gateway.gatewayUrl) as? ApiResult.Success)?.let { _user.value = it.value }
+            val url = gateway.gatewayUrl
+            userJob = viewModelScope.launch {
+                val me = (auth.me(url) as? ApiResult.Success)?.value ?: return@launch
+                if (this@SessionsViewModel.gateway?.gatewayUrl == url) _user.value = me
             }
             refreshProfiles()
         }
@@ -366,15 +371,21 @@ class SessionsViewModel(
      * gateway's reason it wasn't (a folder another project has, say), so a form can stay open on the error.
      */
     fun createProject(name: String, folder: String?, onDone: (error: Said?) -> Unit) {
+        if (creatingProject) return
+        creatingProject = true
         val scope = bound.value
         viewModelScope.launch {
-            var id: String? = null
-            val error = projectCall { id = projectsApi.create(scope?.second, name, folder) }
-            onDone(error)
-            if (error == null && bound.value == scope) {
-                // Saving a folder as a project gives it a new id, so the picked chip would drop without this.
-                selectAfterLoad = id
-                loadProjects(force = true)
+            try {
+                var id: String? = null
+                val error = projectCall(scope) { id = projectsApi.create(scope?.second, name, folder) }
+                onDone(error)
+                if (error == null && bound.value == scope) {
+                    // Saving a folder as a project gives it a new id, so the picked chip would drop without this.
+                    selectAfterLoad = id
+                    loadProjects(force = true)
+                }
+            } finally {
+                creatingProject = false
             }
         }
     }
@@ -385,10 +396,11 @@ class SessionsViewModel(
         val label = name.trim()
         _state.update { it.withProjectLabel(project.id, label) }
         viewModelScope.launch {
-            val error = projectCall { projectsApi.rename(scope?.second, project.id, name) }
+            val error = projectCall(scope) { projectsApi.rename(scope?.second, project.id, name) }
+            if (bound.value != scope) return@launch
             // Put the old name back here: the tree below isn't asked while the gateway is away.
             if (error != null) _state.update { it.withProjectLabel(project.id, project.label, unless = label).copy(message = error) }
-            if (bound.value == scope) loadProjects(force = true)
+            loadProjects(force = true)
         }
     }
 
@@ -396,7 +408,8 @@ class SessionsViewModel(
     fun deleteProject(project: Project) {
         val scope = bound.value
         viewModelScope.launch {
-            val error = projectCall { projectsApi.delete(scope?.second, project.id) }
+            val error = projectCall(scope) { projectsApi.delete(scope?.second, project.id) }
+            if (bound.value != scope) return@launch
             if (error != null) {
                 _state.update { it.copy(message = error) }
                 return@launch
@@ -409,7 +422,7 @@ class SessionsViewModel(
                     projectSessions = state.projectSessions.takeUnless { wasOpen },
                 )
             }
-            if (bound.value == scope) loadProjects(force = true)
+            loadProjects(force = true)
         }
     }
 
@@ -431,7 +444,7 @@ class SessionsViewModel(
     }
 
     /** Runs a project change; null when it went through, else what to tell the user. */
-    private suspend fun projectCall(block: suspend () -> Unit): Said? = try {
+    private suspend fun projectCall(scope: Pair<GatewayUrl, String?>?, block: suspend () -> Unit): Said? = try {
         block()
         null
     } catch (e: CancellationException) {
@@ -439,8 +452,10 @@ class SessionsViewModel(
     } catch (e: RpcException) {
         if (e.code == METHOD_NOT_FOUND) {
             // The tree answers but changes don't: stop offering them.
-            projectChangesMissing = true
-            _state.update { it.copy(canMakeProjects = false) }
+            if (bound.value == scope) {
+                projectChangesMissing = true
+                _state.update { it.copy(canMakeProjects = false) }
+            }
             said(Res.string.sessions_gateway_cant_change_projects)
         } else {
             saidOr(e.message, said(Res.string.sessions_project_change_failed))
@@ -569,11 +584,14 @@ class SessionsViewModel(
     fun loadMore() {
         val current = _state.value
         val url = gateway?.gatewayUrl ?: return
+        val profile = profile
+        val scope = url to profile
         if (!current.canLoadMore || current.loadingMore || loadJob?.isActive == true) return
         _state.update { it.copy(loadingMore = true) }
         loadJob = viewModelScope.launch {
             val result = api.list(url, offset = current.sessions.size, filter = current.filter, profile = profile)
             _state.update { state ->
+                if (bound.value != scope || state.filter != current.filter) return@update state
                 when (result) {
                     is ApiResult.Success -> {
                         val known = state.sessions.mapTo(HashSet()) { it.id }
@@ -744,7 +762,9 @@ class SessionsViewModel(
     ) {
         val url = gateway?.gatewayUrl ?: return
         val profile = profile
+        val scope = url to profile
         val before = _state.value
+        val filter = before.filter
         _state.update {
             it.copy(
                 sessions = apply(it.sessions),
@@ -758,8 +778,9 @@ class SessionsViewModel(
                 onSuccess()
             } else {
                 _state.update {
+                    if (bound.value != scope) return@update it
                     it.copy(
-                        sessions = before.sessions,
+                        sessions = if (it.filter == filter) before.sessions else it.sessions,
                         searchResults = before.searchResults,
                         projectSessions = before.projectSessions.takeIf { _ -> it.project?.id == before.project?.id } ?: it.projectSessions,
                         message = result.errorMessage.verbatim(),
@@ -802,7 +823,7 @@ class SessionsViewModel(
                 if (connection.state.value is ConnectionState.Connected) viewModelScope.launch { threadsRepo.refresh(force = refresh) }
             }
             _state.update { state ->
-                if (state.filter != filter) return@update state
+                if (state.filter != filter || bound.value != url to profile) return@update state
                 if (result is ApiResult.Success) savedShownAt = null
                 when (result) {
                     is ApiResult.Success -> state.copy(
@@ -860,18 +881,23 @@ class SessionsViewModel(
     @OptIn(FlowPreview::class)
     private fun observeSearch() {
         viewModelScope.launch {
-            snapshotFlow { query.text.toString().trim() }
-                .distinctUntilChanged()
-                .map { it.takeIf { q -> q.length >= MIN_QUERY } }
-                .debounce { if (it == null) 0 else 300 }
-                .collectLatest { q ->
-                    val url = gateway?.gatewayUrl
+            combine(
+                snapshotFlow { query.text.toString().trim() }
+                    .distinctUntilChanged()
+                    .map { it.takeIf { q -> q.length >= MIN_QUERY } }
+                    .debounce { if (it == null) 0 else 300 },
+                bound,
+            ) { q, scope -> q to scope }
+                .collectLatest { (q, scope) ->
+                    val url = scope?.first
+                    val profile = scope?.second
                     if (q == null || url == null) {
                         _state.update { it.copy(searchResults = null, searchedFor = null, searching = false) }
                         return@collectLatest
                     }
                     _state.update { it.copy(searching = true) }
                     val result = api.search(url, q, profile = profile)
+                    if (bound.value != scope) return@collectLatest
                     _state.update {
                         when (result) {
                             is ApiResult.Success -> it.copy(searchResults = result.value, searchedFor = q, searching = false)

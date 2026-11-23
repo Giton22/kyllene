@@ -20,14 +20,20 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.Cookie
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Url
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class AssistantPanelModelTest {
 
@@ -58,10 +64,11 @@ class AssistantPanelModelTest {
         override suspend fun play(audio: SpokenAudio) = Unit
     }
 
-    private fun TestScope.model(): AssistantPanelModel {
+    private fun TestScope.model(cropper: ScreenCropper = ScreenCropper { null }): AssistantPanelModel {
         val connection = GatewayConnection(auth, openSocket = { _, _ -> error("no socket in tests") }, scope = backgroundScope)
         return AssistantPanelModel(
             gateways, auth, ProfileStore(store), connection, SessionsApi(client), AudioApi(client), Silent, Silent, backgroundScope,
+            cropper = cropper,
         )
     }
 
@@ -100,6 +107,26 @@ class AssistantPanelModelTest {
         model.begin(expectText = false, expectScreenshot = false)
 
         assertEquals(first, model.session.value)
+        model.close()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun circledClearsCroppingWhenCropReturnsNull() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val gate = CompletableDeferred<ByteArray?>()
+        val model = model(cropper = ScreenCropper { gate.await() })
+        model.phase.first { it == AssistantPhase.Ready }
+
+        model.circled(ScreenRegion(0f, 0f, 100f, 100f))
+        assertTrue(assertNotNull(model.circledPart.value).cropping)
+
+        gate.complete(null)
+        runCurrent()
+        val settled = assertNotNull(model.circledPart.value)
+        assertFalse(settled.cropping)
+        assertNull(settled.screenshot)
         model.close()
     }
 }

@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.signin
 
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import dev.hermeskotlin.core.auth.AuthApi
 import dev.hermeskotlin.core.auth.BrowserSignIn
 import dev.hermeskotlin.core.auth.LoopbackListener
@@ -23,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
@@ -30,6 +32,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -51,6 +54,7 @@ class SignInViewModelTest {
 
     /** The browser's answer for the sign-in in progress; completed by the test. */
     private var callback = CompletableDeferred<Map<String, String>>()
+    private var loginGate: CompletableDeferred<Unit>? = null
     private var opened: Url? = null
     private var listenersClosed = 0
 
@@ -70,6 +74,10 @@ class SignInViewModelTest {
         config.dispatcher = dispatcher
         config.addHandler { request ->
             when {
+                request.url.encodedPath == "/auth/password-login" -> {
+                    loginGate?.await()
+                    respond("""{"ok":true}""", HttpStatusCode.OK, json)
+                }
                 request.url.host == offline.gatewayUrl.host -> respondError(HttpStatusCode.BadGateway)
                 request.url.encodedPath == "/auth/native/token" -> respond(
                     """{"access_token":"AT","refresh_token":"RT","expires_at":1900000000,"provider":"self-hosted"}""",
@@ -144,5 +152,37 @@ class SignInViewModelTest {
         vm.cancelBrowser()
         assertFalse(vm.state.value.signingIn)
         assertEquals(1, listenersClosed)
+    }
+
+    @Test
+    fun browserOpenExceptionResetsSigningInAndReportsError() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.load(sso)
+        vm.signInWithBrowser(sso) { throw IllegalStateException("No browser installed") }
+
+        assertFalse(vm.state.value.signingIn)
+        assertFalse(vm.state.value.waitingForBrowser)
+        val err = assertIs<SignInError.Gateway>(vm.state.value.error)
+        assertTrue("No browser installed" in err.message)
+    }
+
+    @Test
+    fun switchingGatewaysCancelsInFlightPasswordSignInAndKeepsNewPassword() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>().also { loginGate = it }
+        val vm = viewModel()
+        vm.load(password)
+        vm.username.setTextAndPlaceCursorAtEnd("alice")
+        vm.password.setTextAndPlaceCursorAtEnd("old-secret")
+        vm.signIn(password)
+        assertTrue(vm.state.value.signingIn)
+
+        vm.load(sso)
+        vm.password.setTextAndPlaceCursorAtEnd("new-secret")
+        gate.complete(Unit)
+        runCurrent()
+
+        assertFalse(vm.state.value.signingIn)
+        assertNull(vm.state.value.signedInUrl)
+        assertEquals("new-secret", vm.password.text.toString())
     }
 }

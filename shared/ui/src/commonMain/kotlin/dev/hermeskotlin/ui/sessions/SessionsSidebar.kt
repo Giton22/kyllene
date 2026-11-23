@@ -420,12 +420,6 @@ fun SessionsSidebar(
     // A tapped Inbox notification, passed on by the app once it opened the drawer: the Inbox, at that run. The
     // page takes the key and opens the run itself.
     var inboxOpenKey by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(inboxLink) {
-        val link = inboxLink ?: return@LaunchedEffect
-        inboxOpen = true
-        inboxOpenKey = link.key
-        onInboxLinkTaken(link)
-    }
     // The badge is this gateway's Inbox: the store is bound here too, so it counts before the Inbox is opened.
     val inboxStore = koinInject<InboxStore>()
     val chatHost = koinInject<ChatHost>()
@@ -507,6 +501,13 @@ fun SessionsSidebar(
         configOpen = false
         pluginsOpen = false
         insightsOpen = false
+    }
+    LaunchedEffect(inboxLink) {
+        val link = inboxLink ?: return@LaunchedEffect
+        closePages()
+        inboxOpen = true
+        inboxOpenKey = link.key
+        onInboxLinkTaken(link)
     }
     val pageOpen = scheduledOpen || inboxOpen || routinesOf != null || capabilitiesOpen || configOpen || pluginsOpen || insightsOpen
 
@@ -744,7 +745,7 @@ fun SessionsSidebar(
                 val icon = navIcon(page)
                 val label = stringResource(navLabel(page))
                 when (page) {
-                    SidebarPage.Inbox -> NavLink(icon, label, badge = inboxUnread) { inboxOpen = true }
+                    SidebarPage.Inbox -> NavLink(icon, label, badge = inboxUnread) { closePages(); inboxOpen = true }
                     SidebarPage.Scheduled -> NavLink(icon, label, selected = pageInMain && scheduledOpen) { closePages(); scheduledOpen = true }
                     SidebarPage.Insights -> NavLink(icon, label, selected = pageInMain && insightsOpen) { closePages(); insightsOpen = true }
                     SidebarPage.Capabilities -> NavLink(icon, label, selected = pageInMain && capabilitiesOpen) { closePages(); capabilitiesOpen = true }
@@ -864,6 +865,7 @@ fun SessionsSidebar(
                                     override fun delete(bot: Bot) = bots.delete(bot) { onBotDeleted(bot) }
                                     override fun checkAgain(bot: Bot) = bots.checkAgain(bot)
                                     override fun routines(bot: Bot) {
+                                        closePages()
                                         routinesOf = bot
                                     }
                                 }

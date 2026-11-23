@@ -112,12 +112,14 @@ class ConnectViewModel(
         val gatewayUrl = try {
             GatewayUrl.parse(url.text.toString())
         } catch (e: InvalidGatewayUrlException) {
+            probeJob?.cancel()
             _state.value = ConnectUiState(urlError = e)
             return
         }
         val clientId = accessClientId.text.trim().toString()
         val clientSecret = accessClientSecret.text.trim().toString()
         if (clientId.isEmpty() != clientSecret.isEmpty()) {
+            probeJob?.cancel()
             _state.value = ConnectUiState(accessError = AccessTokenProblem.HalfFilled)
             return
         }
@@ -141,7 +143,7 @@ class ConnectViewModel(
 
     /** Typing invalidates the previous result, and looks up what the new address already has picked or saved. */
     fun onUrlEdited() {
-        if (_state.value.result != null || _state.value.urlError != null || _state.value.accessError != null) {
+        if (_state.value.testing || _state.value.result != null || _state.value.urlError != null || _state.value.accessError != null) {
             probeJob?.cancel()
             _state.value = ConnectUiState()
         }

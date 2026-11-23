@@ -68,6 +68,8 @@ import dev.hermeskotlin.designsystem.radiusLarge
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
 import dev.hermeskotlin.designsystem.surface2
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import dev.hermeskotlin.designsystem.stroke
@@ -142,11 +144,19 @@ fun PetView(sprite: PetSprite, state: PetState, onClick: () -> Unit, modifier: M
     // Desktop's size (frame × scale), kept within what a phone's composer can carry.
     val height = (sprite.frameH * sprite.scale).coerceIn(48.0, 96.0)
     val width = height * sprite.frameW / sprite.frameH
+    val petLabel = stringResource(Res.string.pet_title)
     Canvas(
         modifier
             .size(width.dp, height.dp)
             .handCursor()
-            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                role = Role.Button,
+                onClickLabel = petLabel,
+                onClick = onClick,
+            )
+            .semantics { contentDescription = petLabel },
     ) {
         drawImage(
             sheet,

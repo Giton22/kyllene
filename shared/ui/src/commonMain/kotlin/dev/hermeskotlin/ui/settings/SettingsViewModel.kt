@@ -34,7 +34,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** Who is signed in where, for the Settings account and about sections. */
-data class GatewayInfo(val userLabel: String? = null, val version: String? = null)
+data class GatewayInfo(
+    val userLabel: String? = null,
+    val version: String? = null,
+    val checkingVersion: Boolean = false,
+)
 
 /** Where the Next Prompt plugin, which Suggested replies needs, stands on the gateway. */
 sealed interface SuggestionsPlugin {
@@ -87,12 +91,15 @@ class SettingsViewModel(
 
     /** Tests server access, sign-in and the live connection one after another. */
     fun runConnectionCheck() {
-        val url = bound?.gatewayUrl ?: return
+        val target = bound ?: return
+        val url = target.gatewayUrl
         checkJob?.cancel()
         _check.value = ConnectionCheckState(running = true)
         checkJob = viewModelScope.launch {
-            val report = connectionCheck.run(url) { partial -> _check.value = ConnectionCheckState(partial.results, running = true) }
-            _check.value = ConnectionCheckState(report.results, running = false)
+            val report = connectionCheck.run(url) { partial ->
+                if (bound == target) _check.value = ConnectionCheckState(partial.results, running = true)
+            }
+            if (bound == target) _check.value = ConnectionCheckState(report.results, running = false)
         }
     }
 
@@ -104,6 +111,8 @@ class SettingsViewModel(
 
     private var bound: SavedGateway? = null
     private var boundProfile: String? = null
+    private var meJob: Job? = null
+    private var probeJob: Job? = null
 
     private val _suggestions = MutableStateFlow<SuggestionsPlugin>(SuggestionsPlugin.Checking)
 
@@ -119,14 +128,18 @@ class SettingsViewModel(
         boundProfile = profile
         checkSuggestions()
         if (sameGateway) return
-        _gateway.value = GatewayInfo()
-        viewModelScope.launch {
+        meJob?.cancel()
+        probeJob?.cancel()
+        checkJob?.cancel()
+        _check.value = ConnectionCheckState()
+        _gateway.value = GatewayInfo(checkingVersion = true)
+        meJob = viewModelScope.launch {
             val me = auth.me(gateway.gatewayUrl) as? ApiResult.Success ?: return@launch
-            _gateway.update { it.copy(userLabel = me.value.label) }
+            if (bound == gateway) _gateway.update { it.copy(userLabel = me.value.label) }
         }
-        viewModelScope.launch {
-            val status = probe.probe(gateway.gatewayUrl) as? ProbeResult.Reachable ?: return@launch
-            _gateway.update { it.copy(version = status.status.version) }
+        probeJob = viewModelScope.launch {
+            val version = (probe.probe(gateway.gatewayUrl) as? ProbeResult.Reachable)?.status?.version
+            if (bound == gateway) _gateway.update { it.copy(version = version, checkingVersion = false) }
         }
     }
 

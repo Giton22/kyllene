@@ -183,7 +183,7 @@ private fun HubLists(state: SkillsHubUiState, actions: SkillsHubActions) {
         results != null -> {
             val found = results.items
             when {
-                found == null && results.error != null -> HubError(results.error, actions::refresh)
+                found == null && results.error != null -> HubError(results.error, actions::retrySearch)
                 found == null -> ListSkeleton()
                 else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = HubPadding) {
                     if (state.timedOut.isNotEmpty()) item(key = "timeout") { Hint(stringResource(Res.string.sessions_hub_timed_out, state.timedOut.joinToString())) }

@@ -107,20 +107,26 @@ internal fun IncomingCallView(caller: String, why: String, onAnswer: () -> Unit,
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(start = 48.dp, end = 48.dp, bottom = 72.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            CallButton(stringResource(Res.string.call_decline), Lucide.PhoneOff, Theme[colors][danger], onDecline)
-            CallButton(stringResource(Res.string.call_answer), Lucide.Phone, Theme[colors][accent], onAnswer)
+            CallButton(stringResource(Res.string.call_decline), Lucide.PhoneOff, Theme[colors][danger], onDecline, iconTint = Color.White)
+            CallButton(stringResource(Res.string.call_answer), Lucide.Phone, Theme[colors][accent], onAnswer, iconTint = Theme[colors][onAccent])
         }
     }
 }
 
 @Composable
-private fun CallButton(name: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
+private fun CallButton(
+    name: String,
+    icon: ImageVector,
+    color: Color,
+    onClick: () -> Unit,
+    iconTint: Color = Color.White,
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.size(72.dp).clip(CircleShape).background(color).clickable(role = Role.Button, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
-            UnstyledIcon(icon, contentDescription = name, tint = Theme[colors][onAccent], modifier = Modifier.size(30.dp))
+            UnstyledIcon(icon, contentDescription = name, tint = iconTint, modifier = Modifier.size(30.dp))
         }
         Spacer(Modifier.height(10.dp))
         Text(name, style = Theme[typography][label], color = Theme[colors][text])
@@ -210,9 +216,10 @@ internal fun InCallView(state: PhoneCallState, seconds: Long, onMute: () -> Unit
                     if (voice.muted) Lucide.MicOff else Lucide.Mic,
                     if (voice.muted) Theme[colors][accent] else Theme[colors][surface3],
                     onMute,
+                    iconTint = if (voice.muted) Theme[colors][onAccent] else Theme[colors][text],
                 )
             }
-            CallButton(stringResource(Res.string.voice_end), Lucide.PhoneOff, Theme[colors][danger], onEnd)
+            CallButton(stringResource(Res.string.voice_end), Lucide.PhoneOff, Theme[colors][danger], onEnd, iconTint = Color.White)
         }
     }
 }

@@ -14,6 +14,7 @@ import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.rooms.Room
 import dev.hermeskotlin.core.rooms.RoomLine
+import dev.hermeskotlin.core.rooms.RoomPendingAction
 import dev.hermeskotlin.core.rooms.RoomSeenStore
 import dev.hermeskotlin.core.rooms.RoomsApi
 import dev.hermeskotlin.core.rpc.RpcTransport
@@ -52,6 +53,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -1148,5 +1150,79 @@ class RoomsViewModelTest {
         assertEquals(2, ids.size)
         assertEquals(ids[0], ids[1])
         assertEquals(ids[0], made?.roomId)
+    }
+
+    @Test
+    fun approveRetryAndStopIgnoreDuplicatesAndDropLateErrorsAfterSwitch() = runTest(dispatcher) {
+        val approveGate = CompletableDeferred<Unit>()
+        val retryGate = CompletableDeferred<Unit>()
+        val stopGate = CompletableDeferred<Unit>()
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { method, params ->
+            when (method) {
+                "groups.approve" -> { approveGate.await(); "!Approval failed" }
+                "groups.retry" -> { retryGate.await(); "!Retry failed" }
+                "groups.stop" -> { stopGate.await(); "!Stop failed" }
+                else -> quietRoom(method, params) ?: "{}"
+            }
+        }
+        val vm = viewModel(socket)
+        vm.bind(gateway.gatewayUrl)
+        vm.open(roomA)
+        try {
+            vm.opened.first { it?.loading == false }
+            val approval = RoomPendingAction(kind = "approval", memberId = "ops", taskId = "t1", executionGeneration = 1, requestId = "r1")
+            val retryAction = RoomPendingAction(kind = "retry", memberId = "ops", taskId = "t2")
+
+            vm.approve(approval, "once")
+            vm.approve(approval, "once")
+            vm.retry(retryAction)
+            vm.retry(retryAction)
+            vm.stop()
+            vm.stop()
+
+            assertEquals(1, socket.sent("groups.approve").size)
+            assertEquals(1, socket.sent("groups.retry").size)
+            assertEquals(1, socket.sent("groups.stop").size)
+            assertTrue(vm.opened.value!!.stopping)
+            assertEquals(2, vm.opened.value!!.busyActions.size)
+
+            // Switch to room B before any of room A's requests finish: late failures stay out of room B.
+            vm.open(roomB)
+            vm.opened.first { it?.room?.roomId == "b" && !it.loading }
+            approveGate.complete(Unit)
+            retryGate.complete(Unit)
+            stopGate.complete(Unit)
+            runCurrent()
+
+            assertNull(vm.opened.value!!.notice)
+            assertFalse(vm.opened.value!!.stopping)
+            assertTrue(vm.opened.value!!.busyActions.isEmpty())
+        } finally {
+            vm.close()
+        }
+    }
+
+    @Test
+    fun lateDeleteAndRenameFromPreviousGatewayAreDropped() = runTest(dispatcher) {
+        val deleteGate = CompletableDeferred<Unit>()
+        val renameGate = CompletableDeferred<Unit>()
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { method, params ->
+            when (method) {
+                "groups.disband" -> { deleteGate.await(); "!Disband failed" }
+                "groups.rename" -> { renameGate.await(); """{"room":{"room_id":"a","name":"Stale","members":[]}}""" }
+                else -> quietRoom(method, params) ?: "{}"
+            }
+        }
+        val vm = viewModel(socket)
+        vm.bind(gateway.gatewayUrl)
+        vm.deleteRoom(roomA)
+        vm.renameRoom(roomA, "Renamed")
+
+        vm.bind(SavedGateway("https://other.example").gatewayUrl)
+        deleteGate.complete(Unit)
+        renameGate.complete(Unit)
+        runCurrent()
+
+        assertNull(vm.state.value.actionNotice)
     }
 }

@@ -23,12 +23,14 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -48,6 +50,9 @@ class ScheduledViewModelTest {
     private val created = mutableListOf<String>()
     /** Holds a create until completed, so a test can act while the save is in flight. */
     private var createGate: CompletableDeferred<Unit>? = null
+    private var deleteGate: CompletableDeferred<Unit>? = null
+    private var jobsGate: CompletableDeferred<Unit>? = null
+    private val deleted = mutableListOf<String>()
     private var createStatus = HttpStatusCode.OK
     private var createdQuery: String? = null
     private var createdBody: String? = null
@@ -58,6 +63,11 @@ class ScheduledViewModelTest {
         config.dispatcher = dispatcher
         config.addHandler { request ->
             when {
+                request.method == HttpMethod.Delete && request.url.encodedPath.startsWith("/api/cron/jobs/") -> {
+                    deleted += request.url.encodedPath
+                    deleteGate?.await()
+                    respond("""{"ok":true}""", HttpStatusCode.OK, json)
+                }
                 request.method == HttpMethod.Post && request.url.encodedPath == "/api/cron/jobs" -> {
                     createGate?.await()
                     created += request.url.encodedPath
@@ -69,7 +79,10 @@ class ScheduledViewModelTest {
                         respond("""{"detail":"Gateway is busy"}""", createStatus, json)
                     }
                 }
-                request.url.encodedPath == "/api/cron/jobs" -> respond(jobsBody, HttpStatusCode.OK, json)
+                request.url.encodedPath == "/api/cron/jobs" -> {
+                    if (request.url.host == gateway.gatewayUrl.host) jobsGate?.await()
+                    respond(jobsBody, HttpStatusCode.OK, json)
+                }
                 request.url.encodedPath.endsWith("/runs") -> respond("""{"runs":[]}""", HttpStatusCode.OK, json)
                 else -> respond("""{"targets":[]}""", HttpStatusCode.OK, json)
             }
@@ -208,5 +221,47 @@ class ScheduledViewModelTest {
         val message = assertIs<Said.Line>(vm.state.first { it.message != null }.message)
         assertEquals(Res.string.sessions_job_save_failed, message.res)
         assertTrue("Gateway is busy" in message.detail.orEmpty(), message.toString())
+    }
+
+    @Test
+    fun deleteJobIgnoresSecondTapWhileBusyAndDropsLateResultAfterRebind() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>().also { deleteGate = it }
+        val vm = viewModel()
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.openJob("a1")
+
+        vm.deleteJob()
+        vm.deleteJob()
+        assertEquals(1, deleted.size)
+        assertTrue(vm.state.value.busy)
+
+        val other = SavedGateway("https://other.example.ts.net")
+        vm.bind(other)
+        vm.awaitLoaded()
+        gate.complete(Unit)
+        runCurrent()
+
+        assertFalse(vm.state.value.busy)
+        assertNull(vm.state.value.message)
+        assertEquals(listOf("a1"), vm.state.value.jobs.map { it.id })
+    }
+
+    @Test
+    fun refreshDropsLateResultFromPreviousGateway() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>().also { jobsGate = it }
+        val vm = viewModel()
+        vm.bind(gateway)
+
+        val other = SavedGateway("https://other.example.ts.net")
+        jobsBody = """[{"id":"b2","name":"Other","prompt":"Other","schedule":{"kind":"cron","expr":"0 9 * * *"}}]"""
+        vm.bind(other)
+        vm.awaitLoaded()
+
+        jobsBody = """[{"id":"stale","name":"Stale","prompt":"Old","schedule":{"kind":"cron","expr":"0 9 * * *"}}]"""
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(listOf("b2"), vm.state.value.jobs.map { it.id })
     }
 }

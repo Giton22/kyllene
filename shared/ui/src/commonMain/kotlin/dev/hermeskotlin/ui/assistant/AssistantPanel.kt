@@ -689,10 +689,10 @@ private fun CircledChip(part: ScreenContext, onCircleAgain: () -> Unit, onRemove
         val crop = part.screenshot?.let { rememberImageBitmap(it, maxEdge = 320) }
         Box(Modifier.heightIn(max = 56.dp).width(96.dp), contentAlignment = Alignment.Center) {
             // Whole, not cropped again: a wide strip should still read as the strip that was circled.
-            if (crop != null) {
-                Image(crop, contentDescription = stringResource(Res.string.assistant_what_you_circled), contentScale = ContentScale.Fit, modifier = Modifier.clip(RoundedCornerShape(Theme[radii][radiusMedium])))
-            } else {
-                Spinner(Modifier.size(16.dp))
+            when {
+                crop != null -> Image(crop, contentDescription = stringResource(Res.string.assistant_what_you_circled), contentScale = ContentScale.Fit, modifier = Modifier.clip(RoundedCornerShape(Theme[radii][radiusMedium])))
+                part.cropping -> Spinner(Modifier.size(16.dp))
+                else -> UnstyledIcon(Lucide.ScanText, contentDescription = null, tint = Theme[colors][textSecondary], modifier = Modifier.size(18.dp))
             }
         }
         Column(Modifier.weight(1f, fill = false)) {

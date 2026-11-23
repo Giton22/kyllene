@@ -10,6 +10,7 @@ import dev.hermeskotlin.core.gateway.GatewayProbe
 import dev.hermeskotlin.core.gateway.ProbeResult
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.ApiResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,6 +59,7 @@ class SignInViewModel(
 
     private var loadedUrl: String? = null
     private var methodsKnown = false
+    private var signInJob: Job? = null
     private var browserJob: Job? = null
 
     /**
@@ -68,6 +70,8 @@ class SignInViewModel(
         if (loadedUrl != gateway.url) {
             loadedUrl = gateway.url
             methodsKnown = false
+            signInJob?.cancel()
+            signInJob = null
             browserJob?.cancel()
             browserJob = null
             _state.value = SignInUiState()
@@ -92,10 +96,11 @@ class SignInViewModel(
         }
         if (_state.value.signingIn) return
 
+        signInJob?.cancel()
         _state.update { it.copy(signingIn = true, error = null) }
-        viewModelScope.launch {
+        signInJob = viewModelScope.launch {
             val result = auth.signIn(gateway.gatewayUrl, gateway.provider, user, pass)
-            if (result is ApiResult.Success) password.clearText()
+            if (result is ApiResult.Success && loadedUrl == gateway.url) password.clearText()
             finish(gateway, result, wrongCredentials = SignInError.WrongCredentials)
         }
     }
@@ -105,8 +110,22 @@ class SignInViewModel(
         if (_state.value.signingIn) return
         _state.update { it.copy(signingIn = true, waitingForBrowser = true, error = null) }
         browserJob = viewModelScope.launch {
-            // The gateway picks the provider, or asks in the page when it has several.
-            finish(gateway, browserSignIn.signIn(gateway.gatewayUrl, provider = null, openBrowser), wrongCredentials = SignInError.Rejected)
+            try {
+                // The gateway picks the provider, or asks in the page when it has several.
+                finish(gateway, browserSignIn.signIn(gateway.gatewayUrl, provider = null, openBrowser), wrongCredentials = SignInError.Rejected)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                finish(
+                    gateway,
+                    ApiResult.Failed(status = 0, message = e.message?.takeIf { it.isNotBlank() } ?: "Couldn't open browser."),
+                    wrongCredentials = SignInError.Rejected,
+                )
+            } finally {
+                if (loadedUrl == gateway.url) {
+                    _state.update { it.copy(signingIn = false, waitingForBrowser = false) }
+                }
+            }
         }
     }
 

@@ -48,6 +48,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -89,8 +90,11 @@ import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.Button
+import dev.hermeskotlin.designsystem.components.ButtonSize
+import dev.hermeskotlin.designsystem.components.ButtonVariant
 import dev.hermeskotlin.designsystem.components.SectionLabel
 import dev.hermeskotlin.designsystem.components.TextField
+import dev.hermeskotlin.designsystem.danger
 import dev.hermeskotlin.designsystem.radii
 import dev.hermeskotlin.designsystem.radiusMedium
 import dev.hermeskotlin.designsystem.stroke
@@ -148,21 +152,27 @@ fun BotEditor(
     val title = rememberTextFieldState(meta.title.orEmpty())
     val description = rememberTextFieldState()
     val soul = rememberTextFieldState()
-    var details by remember { mutableStateOf<BotDetails?>(null) }
+    var detailsLoad by remember(bot) { mutableStateOf<DetailsLoad>(DetailsLoad.Loading) }
+    var retryCount by remember(bot) { mutableIntStateOf(0) }
     // The look the bot has now, so picking what it already wears changes nothing.
     val current = remember(bot) { bot?.let(::botLook) }
     var shape by remember { mutableStateOf(current?.shape) }
     var color by remember { mutableStateOf(current?.color) }
     var typedName by remember { mutableStateOf("") }
     LaunchedEffect(name) { snapshotFlow { name.text.toString() }.collect { typedName = it } }
-    LaunchedEffect(bot) {
+    LaunchedEffect(bot, retryCount) {
         if (bot == null) return@LaunchedEffect
-        loadDetails()?.let { loaded ->
-            details = loaded
+        detailsLoad = DetailsLoad.Loading
+        val loaded = loadDetails()
+        if (loaded != null) {
+            detailsLoad = DetailsLoad.Loaded(loaded)
             description.setTextAndPlaceCursorAtEnd(loaded.description)
             soul.setTextAndPlaceCursorAtEnd(loaded.soul)
+        } else {
+            detailsLoad = DetailsLoad.Failed
         }
     }
+    val detailsReady = bot == null || detailsLoad is DetailsLoad.Loaded
     val (slug, autoTitle) = remember(typedName) { botIdentity(typedName, "") }
     val profile = bot?.name ?: slug
     val problem = if (bot == null && typedName.isNotBlank()) BotDraft(slug).problem(taken) else null
@@ -243,6 +253,7 @@ fun BotEditor(
                     description,
                     label = stringResource(Res.string.bots_description),
                     placeholder = stringResource(Res.string.bots_description_placeholder),
+                    enabled = detailsReady && busy == null,
                     singleLine = false,
                     maxLines = 5,
                 )
@@ -251,6 +262,7 @@ fun BotEditor(
                     label = stringResource(Res.string.bots_persona),
                     placeholder = if (bot == null) stringResource(Res.string.bots_persona_placeholder) else null,
                     supportingText = stringResource(Res.string.bots_persona_detail),
+                    enabled = detailsReady && busy == null,
                     singleLine = false,
                     maxLines = 12,
                 )
@@ -328,7 +340,7 @@ fun BotEditor(
                                     put("imageKind", JsonPrimitive("shape"))
                                 }
                             }
-                            val loaded = details
+                            val loaded = (detailsLoad as? DetailsLoad.Loaded)?.details
                             onSave(
                                 description.text.toString().trim().takeIf { loaded != null && it != loaded.description.trim() },
                                 soul.text.toString().trim().takeIf { loaded != null && it.isNotEmpty() && it != loaded.soul.trim() },
@@ -340,14 +352,46 @@ fun BotEditor(
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                if (bot != null && details == null) {
-                    Text(stringResource(Res.string.bots_reading_details, bot.label), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+                if (bot != null) {
+                    when (detailsLoad) {
+                        DetailsLoad.Loading -> Text(
+                            stringResource(Res.string.bots_reading_details, bot.label),
+                            style = Theme[typography][caption],
+                            color = Theme[colors][textTertiary],
+                        )
+                        DetailsLoad.Failed -> Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                stringResource(Res.string.sessions_couldnt_load),
+                                style = Theme[typography][caption],
+                                color = Theme[colors][danger],
+                                modifier = Modifier.weight(1f),
+                            )
+                            Button(
+                                stringResource(Res.string.bots_try_again),
+                                onClick = { retryCount++ },
+                                variant = ButtonVariant.Secondary,
+                                size = ButtonSize.Small,
+                            )
+                        }
+                        is DetailsLoad.Loaded -> Unit
+                    }
                 }
             }
         }
         // The desktop's scrollbar, at the window's edge as a page's is.
         VerticalScrollbar(scroll, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(vertical = 2.dp, horizontal = 1.dp))
     }
+}
+
+/** Whether an edited bot's description and persona are loading, ready, or failed to load. */
+private sealed interface DetailsLoad {
+    data object Loading : DetailsLoad
+    data class Loaded(val details: BotDetails) : DetailsLoad
+    data object Failed : DetailsLoad
 }
 
 /** A face's shape, as its tooltip names it. */

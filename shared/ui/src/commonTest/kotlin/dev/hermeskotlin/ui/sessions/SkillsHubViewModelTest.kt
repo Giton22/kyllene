@@ -44,6 +44,7 @@ class SkillsHubViewModelTest {
         var sources = """{"sources":[],"featured":[{"name":"pdf","identifier":"skills-sh/acme/pdf"}],"installed":{}}"""
         var official = """{"skills":[{"name":"ascii-art","identifier":"official/creative/ascii-art","source":"official"}]}"""
         var search = """{"results":[{"name":"pdf","identifier":"skills-sh/acme/pdf"}],"timed_out":[]}"""
+        var searchStatus = HttpStatusCode.OK
         var scan = """{"name":"pdf","verdict":"safe","policy":"allow"}"""
         var scanStatus = HttpStatusCode.OK
         var previewStatus = HttpStatusCode.OK
@@ -63,7 +64,7 @@ class SkillsHubViewModelTest {
                         respond(sources, sourcesStatus, json)
                     }
                     path.endsWith("hub/official") -> respond(official, HttpStatusCode.OK, json)
-                    path.endsWith("hub/search") -> respond(search, HttpStatusCode.OK, json)
+                    path.endsWith("hub/search") -> respond(search, searchStatus, json)
                     path.endsWith("hub/scan") -> {
                         gate(request.url.parameters["identifier"].orEmpty())
                         respond(scan, scanStatus, json)
@@ -558,6 +559,25 @@ class SkillsHubViewModelTest {
         hold.complete(Unit)
         assertNull(vm.state.value.detail)
         assertNotNull(vm.state.value.message)
+    }
+
+    @Test
+    fun retrySearchRetriesTheActiveFailedSearchImmediately() = runTest(dispatcher) {
+        val rig = rig().apply { searchStatus = HttpStatusCode.BadGateway }
+        val vm = vm(rig)
+        vm.bound(null)
+        vm.query.edit { append("pdf") }
+        vm.search("pdf")
+        advanceTimeBy(401)
+        assertNotNull(vm.state.value.results?.error)
+        assertEquals(1, rig.count("hub/search"))
+
+        rig.searchStatus = HttpStatusCode.OK
+        vm.retrySearch()
+
+        assertEquals(2, rig.count("hub/search"))
+        assertNull(vm.state.value.results?.error)
+        assertEquals(listOf("pdf"), vm.state.value.results?.items?.map { it.name })
     }
 }
 

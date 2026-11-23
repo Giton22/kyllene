@@ -55,6 +55,7 @@ data class SkillsHubUiState(
 interface SkillsHubActions {
     fun refresh()
     fun search(query: String)
+    fun retrySearch() {}
     fun open(skill: HubSkill)
     fun closeDetail()
     fun install(skill: HubSkill)
@@ -82,6 +83,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
     private var searchJob: Job? = null
     private var loadJob: Job? = null
     private var pending: HubSkill? = null
+    private var lastQuery: String = ""
     private var hubOpen = false
 
     /**
@@ -99,6 +101,7 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
         binding = newBinding()
         searchJob = null
         pending = null
+        lastQuery = ""
         query.clearText()
         _state.value = SkillsHubUiState()
     }
@@ -154,15 +157,28 @@ class SkillsHubViewModel(private val api: SkillsHubApi) : ViewModel(), SkillsHub
     }
 
     override fun search(query: String) {
-        searchJob?.cancel()
         val q = query.trim()
+        lastQuery = q
         if (q.isEmpty()) {
+            searchJob?.cancel()
             _state.update { it.copy(results = null, timedOut = emptyList()) }
             return
         }
+        runSearch(q, pauseMs = SEARCH_PAUSE_MS)
+    }
+
+    /** Retries the active search query immediately, without waiting for the typing pause. */
+    override fun retrySearch() {
+        val q = query.text.toString().ifBlank { lastQuery }.trim()
+        if (q.isEmpty()) return
+        runSearch(q, pauseMs = 0L)
+    }
+
+    private fun runSearch(q: String, pauseMs: Long) {
+        searchJob?.cancel()
         val url = gateway?.gatewayUrl ?: return
         searchJob = viewModelScope.launch(binding) {
-            delay(SEARCH_PAUSE_MS)
+            if (pauseMs > 0) delay(pauseMs)
             _state.update { it.copy(results = Loadable(items = it.results?.items, loading = true)) }
             val seen = localChanges
             when (val r = api.search(url, profile, q)) {

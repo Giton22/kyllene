@@ -367,8 +367,8 @@ private fun AccessTokenFields(access: AccessToken, error: AccessTokenProblem?, o
     Column(Modifier.padding(start = 4.dp, end = 4.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Hint(stringResource(Res.string.connect_access_hint))
         if (access.saved) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(Status.Ok, stringResource(Res.string.connect_access_saved))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(Status.Ok, stringResource(Res.string.connect_access_saved), Modifier.weight(1f))
                 Button(
                     text = stringResource(Res.string.connect_forget),
                     onClick = access.onForget,
@@ -402,8 +402,8 @@ private fun ClientCertFields(cert: ClientCert, demanded: Boolean, onPick: () -> 
     Column(Modifier.padding(start = 4.dp, end = 4.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Hint(stringResource(if (demanded) Res.string.connect_cert_demanded else Res.string.connect_cert_hint))
         if (cert.alias != null) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(Status.Ok, cert.alias)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(Status.Ok, cert.alias, Modifier.weight(1f))
                 Button(
                     text = stringResource(if (isDesktop) Res.string.client_cert_clear_selection else Res.string.connect_forget),
                     onClick = cert.onClear,

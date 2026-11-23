@@ -36,6 +36,9 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.http.isSuccess
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.runtime.snapshots.Snapshot
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -50,6 +53,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
@@ -59,6 +63,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import dev.hermeskotlin.ui.resources.*
 
@@ -93,6 +98,10 @@ class SessionsViewModelTest {
         seen: SeenStore = SeenStore(InMemoryKeyValueStore()) { 0.0 },
         /** The list's rows, as JSON. */
         rows: String = """{"id":"a","title":"Alpha","pinned":true},{"id":"b","title":"Beta"}""",
+        /** Optional gate before answering DELETE, search, or /api/auth/me. */
+        onDelete: suspend () -> Unit = {},
+        onSearch: suspend (String) -> Pair<HttpStatusCode, String>? = { null },
+        onMe: suspend (String) -> String? = { null },
     ): SessionsViewModel {
         // On the test dispatcher, so no request is still finishing on another thread when a test ends
         // (and resuming onto Dispatchers.Main while the next test sets it).
@@ -100,6 +109,11 @@ class SessionsViewModelTest {
         config.dispatcher = dispatcher
         config.addHandler { request ->
             when {
+                request.url.encodedPath == "/api/sessions/search" -> {
+                    val custom = onSearch(request.url.host)
+                    if (custom != null) respond(custom.second, custom.first, json)
+                    else respond("""{"results":[]}""", HttpStatusCode.OK, json)
+                }
                 request.url.encodedPath == "/api/sessions" -> respond(
                     """{"sessions":[$rows],"total":$total}""",
                     if (listFails()) HttpStatusCode.InternalServerError else listStatus, json,
@@ -114,12 +128,15 @@ class SessionsViewModelTest {
                     madeFolders += request.body.toByteArray().decodeToString()
                     respond("""{"ok":true}""", HttpStatusCode.OK, json)
                 }
-                request.method == HttpMethod.Delete -> respond("""{"detail":"Store is busy"}""", deleteStatus, json)
+                request.method == HttpMethod.Delete -> {
+                    onDelete()
+                    respond("""{"detail":"Store is busy"}""", deleteStatus, json)
+                }
                 request.method == HttpMethod.Patch -> {
                     patches += request.body.toByteArray().decodeToString()
                     respond(if (patchStatus.isSuccess()) "{}" else """{"detail":"Store is busy"}""", patchStatus, json)
                 }
-                else -> respond("""{"display_name":"Me"}""", HttpStatusCode.OK, json)
+                else -> respond(onMe(request.url.host) ?: """{"display_name":"Me"}""", HttpStatusCode.OK, json)
             }
         }
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
@@ -718,5 +735,114 @@ class SessionsViewModelTest {
         vm.consumeSessionExpired()
 
         assertFalse(vm.state.value.sessionExpired)
+    }
+
+    @Test
+    fun failedMutationAfterSwitchingProfileDoesNotRollBackNewProfile() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val vm = viewModel(deleteStatus = HttpStatusCode.Unauthorized, onDelete = { gate.await() })
+        vm.bind(gateway, profile = "first")
+        val alpha = vm.awaitLoaded().sessions.first { it.id == "a" }
+
+        vm.delete(alpha)
+        vm.bind(gateway, profile = "second")
+        vm.awaitLoaded()
+        gate.complete(Unit)
+        runCurrent()
+
+        assertNull(vm.state.value.message)
+        assertFalse(vm.state.value.sessionExpired)
+    }
+
+    @Test
+    fun failedMutationAfterSwitchingFilterDoesNotOverwriteNewFilterSessions() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val vm = viewModel(deleteStatus = HttpStatusCode.ServiceUnavailable, onDelete = { gate.await() })
+        vm.bind(gateway)
+        val alpha = vm.awaitLoaded().sessions.first { it.id == "a" }
+
+        vm.delete(alpha)
+        vm.setFilter(SessionListFilter.Archived)
+        vm.awaitLoaded()
+        // Delete in Recent failed after we moved to Archived: message shows, but Archived sessions aren't replaced by Recent's.
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(SessionListFilter.Archived, vm.state.value.filter)
+        assertNotNull(vm.state.value.message)
+    }
+
+    @Test
+    fun secondCreateProjectWhileOneIsInFlightIsIgnored() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val creates = mutableListOf<String>()
+        val socket = object : RpcTransport {
+            private val inbound = Channel<String>(Channel.UNLIMITED).apply {
+                trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{}}}""")
+            }
+            override val incoming: Flow<String> = inbound.receiveAsFlow()
+            override suspend fun send(text: String) {
+                val msg = Json.parseToJsonElement(text).jsonObject
+                val id = msg["id"] ?: return
+                val method = msg["method"]?.jsonPrimitive?.content ?: return
+                if (method == "projects.create") {
+                    creates += method
+                    gate.await()
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{"project":{"id":"p1","name":"One"}}}""")
+                } else {
+                    inbound.send("""{"jsonrpc":"2.0","id":$id,"result":{}}""")
+                }
+            }
+            override suspend fun close(code: Short, reason: String) { inbound.close() }
+        }
+        val vm = viewModel(socket = socket)
+        vm.bind(gateway)
+        vm.awaitLoaded()
+
+        vm.createProject("One", "/srv/one") {}
+        vm.createProject("One", "/srv/one") {}
+        assertEquals(1, creates.size)
+        gate.complete(Unit)
+        runCurrent()
+    }
+
+    @Test
+    fun lateAuthMeAndSearchFromPreviousGatewayAreDropped() = runTest(dispatcher) {
+        val meGate = CompletableDeferred<Unit>()
+        val searchGate = CompletableDeferred<Unit>()
+        val other = SavedGateway("https://other.example.ts.net")
+        val vm = viewModel(
+            onMe = { host ->
+                if (host == gateway.gatewayUrl.host) {
+                    meGate.await()
+                    """{"display_name":"OldUser"}"""
+                } else {
+                    """{"display_name":"NewUser"}"""
+                }
+            },
+            onSearch = { host ->
+                if (host == gateway.gatewayUrl.host) {
+                    searchGate.await()
+                    HttpStatusCode.Unauthorized to """{"detail":"expired"}"""
+                } else {
+                    HttpStatusCode.OK to """{"results":[{"id":"new1","title":"Fresh"}]}"""
+                }
+            },
+        )
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.query.setTextAndPlaceCursorAtEnd("alpha")
+        Snapshot.sendApplyNotifications()
+        advanceTimeBy(301)
+
+        vm.bind(other)
+        vm.awaitLoaded()
+        meGate.complete(Unit)
+        searchGate.complete(Unit)
+        runCurrent()
+
+        assertEquals("NewUser", vm.user.value?.label)
+        assertFalse(vm.state.value.sessionExpired)
+        assertEquals(listOf("new1"), vm.state.value.searchResults?.map { it.id })
     }
 }

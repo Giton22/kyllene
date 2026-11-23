@@ -27,6 +27,7 @@ import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -110,13 +111,13 @@ internal fun SwipeRow(
         else -> null
     }
     val armed = abs(offset) >= threshold
-    val (fillToken, onFillToken) = when (action?.kind) {
-        SwipeKind.Pin -> accent to onAccent
-        SwipeKind.Delete -> danger to onAccent
-        else -> inverse to onInverse
+    val (armedFill, armedTint) = when (action?.kind) {
+        SwipeKind.Pin -> Theme[colors][accent] to Theme[colors][onAccent]
+        SwipeKind.Delete -> Theme[colors][danger] to Color.White
+        else -> Theme[colors][inverse] to Theme[colors][onInverse]
     }
-    val fill by animateColorAsState(if (armed) Theme[colors][fillToken] else Theme[colors][surface2])
-    val tint by animateColorAsState(if (armed) Theme[colors][onFillToken] else Theme[colors][textTertiary])
+    val fill by animateColorAsState(if (armed) armedFill else Theme[colors][surface2])
+    val tint by animateColorAsState(if (armed) armedTint else Theme[colors][textTertiary])
 
     // On the row's own clickable node, which is the one a screen reader lands on and lists actions for.
     val actions = Modifier.semantics {

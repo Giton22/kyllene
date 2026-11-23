@@ -253,6 +253,7 @@ class AssistantPanelModel(
         _includeScreen.value = false
         _circling.value = false
         _circledPart.value = null
+        circledFull?.second?.cancel()
         circledFull = null
         val callUp = _screen.value.callUp + 1
         _screen.value = ScreenCapture(pending = listOf(expectText, expectScreenshot).count { it }, callUp = callUp)
@@ -363,7 +364,8 @@ class AssistantPanelModel(
         val capture = _screen.value
         val lines = capture.items.inside(region).map { it.text }
         // Held at once with its text; the picture follows when cut, unless the user moved on meanwhile.
-        val held = ScreenContext(capture.app, lines, null, circled = true)
+        circledFull?.second?.cancel()
+        val held = ScreenContext(capture.app, lines, null, circled = true, cropping = true)
         _circledPart.value = held
         val full = scope.async {
             // A failed cut still leaves the text: the question then goes without a picture, not at all.
@@ -374,7 +376,7 @@ class AssistantPanelModel(
             } catch (_: Exception) {
                 null
             }
-            val part = ScreenContext(capture.app, lines, crop, circled = true)
+            val part = ScreenContext(capture.app, lines, crop, circled = true, cropping = false)
             _circledPart.update { if (it === held) part else it }
             part
         }
@@ -383,6 +385,7 @@ class AssistantPanelModel(
 
     fun dropCircled() {
         _circledPart.value = null
+        circledFull?.second?.cancel()
         circledFull = null
     }
 

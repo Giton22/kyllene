@@ -21,6 +21,9 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CapabilitiesViewModelTest {
@@ -60,5 +63,40 @@ class CapabilitiesViewModelTest {
         oldAnswered.await()
 
         assertEquals(listOf("new-skill"), vm.state.value.skills.items?.map { it.name })
+    }
+
+    @Test
+    fun failedRefreshPreservesAnOptimisticToggleMadeInFlight() = runTest(dispatcher) {
+        val refreshGate = CompletableDeferred<Unit>()
+        var calls = 0
+        val config = MockEngineConfig()
+        config.dispatcher = dispatcher
+        config.addHandler { request ->
+            when {
+                request.url.encodedPath.endsWith("/toggle") -> respond("""{"ok":true}""", HttpStatusCode.OK, json)
+                else -> {
+                    if (calls++ == 0) {
+                        respond("""[{"name":"alpha","enabled":true}]""", HttpStatusCode.OK, json)
+                    } else {
+                        refreshGate.await()
+                        respond("""{"detail":"Gateway down"}""", HttpStatusCode.ServiceUnavailable, json)
+                    }
+                }
+            }
+        }
+        val vm = CapabilitiesViewModel(CapabilitiesApi(createHttpClient(MockEngine(config))))
+        vm.bind(gateway, null)
+        val skill = vm.state.first { it.skills.items != null }.skills.items!!.single()
+        assertTrue(skill.enabled)
+
+        // Refresh starts while enabled=true, then user toggles it off before refresh fails.
+        vm.refresh()
+        vm.setSkillEnabled(skill, enabled = false)
+        assertFalse(vm.state.value.skills.items!!.single().enabled)
+
+        refreshGate.complete(Unit)
+        val after = vm.state.first { !it.skills.loading }
+        assertNotNull(after.skills.error)
+        assertFalse(after.skills.items!!.single().enabled)
     }
 }

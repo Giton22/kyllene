@@ -20,11 +20,13 @@ import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
@@ -51,12 +53,14 @@ class ConnectViewModelTest {
     private fun viewModel(
         certs: ClientCertAliases = ClientCertAliases(),
         gateways: GatewayRepository = GatewayRepository(InMemoryKeyValueStore()),
+        probeGate: CompletableDeferred<Unit>? = null,
     ): ConnectViewModel {
         // On the test dispatcher, so no request is still finishing on another thread when a test ends.
         val config = MockEngineConfig()
         config.dispatcher = dispatcher
         config.addHandler { request ->
             seen += request
+            probeGate?.await()
             respond(
                 """{"version":"0.42.0","auth_required":true,"auth_providers":["basic"]}""",
                 HttpStatusCode.OK,
@@ -287,5 +291,41 @@ class ConnectViewModelTest {
 
         vm.clearClientCert()
         assertNull(vm.certAlias.value)
+    }
+
+    @Test
+    fun editingUrlCancelsInFlightProbeAndClearsTesting() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val vm = viewModel(probeGate = gate)
+        vm.url.setTextAndPlaceCursorAtEnd("100.64.0.1:9119")
+        vm.testConnection()
+        assertTrue(vm.state.value.testing)
+
+        vm.url.setTextAndPlaceCursorAtEnd("100.64.0.2:9119")
+        vm.onUrlEdited()
+        assertFalse(vm.state.value.testing)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertNull(vm.state.value.result)
+        assertFalse(vm.state.value.testing)
+    }
+
+    @Test
+    fun validationErrorCancelsInFlightProbe() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val vm = viewModel(probeGate = gate)
+        vm.url.setTextAndPlaceCursorAtEnd("100.64.0.1:9119")
+        vm.testConnection()
+        assertTrue(vm.state.value.testing)
+
+        vm.url.setTextAndPlaceCursorAtEnd("ftp://bad")
+        vm.testConnection()
+        assertNotNull(vm.state.value.urlError)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertNull(vm.state.value.result)
+        assertNotNull(vm.state.value.urlError)
     }
 }

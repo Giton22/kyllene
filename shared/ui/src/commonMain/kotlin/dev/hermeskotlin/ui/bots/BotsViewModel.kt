@@ -222,6 +222,8 @@ class BotsViewModel(
         _avatars.value = emptyMap()
         avatarsAsked.clear()
         watched.clear()
+        modelsOf = null
+        _modelPicker.value = ModelPickerState()
         viewModelScope.launch {
             remembered = modes.get(url)
             _mode.value = remembered
@@ -309,20 +311,29 @@ class BotsViewModel(
      * archived), and a new empty one is opened. The bot keeps its memory, skills and settings.
      */
     fun startFresh(bot: Bot, onOpened: (storedSessionId: String) -> Unit) {
+        if (_state.value.opening != null) return
         val url = gateway.value ?: return
         val chat = bot.canonicalSession ?: return open(bot) { id, _ -> onOpened(id) }
         _state.update { it.copy(opening = bot.name, notice = null) }
         viewModelScope.launch {
-            // The row holding the title, and the live end of its lineage when compression moved it on.
-            val ids = listOfNotNull(chat.id, chat.resolvedId).distinct()
-            val failed = ids.map { sessions.setArchived(url, it, archived = true, profile = bot.name) }.firstOrNull { it !is ApiResult.Success }
-            if (failed != null) {
-                _state.update { it.copy(opening = null, notice = wordsThen(Res.string.bots_start_over_failed, failed.errorMessage, bot.label)) }
-                return@launch
+            var archived = false
+            try {
+                // The row holding the title, and the live end of its lineage when compression moved it on.
+                val ids = listOfNotNull(chat.id, chat.resolvedId).distinct()
+                val failed = ids.map { sessions.setArchived(url, it, archived = true, profile = bot.name) }.firstOrNull { it !is ApiResult.Success }
+                if (gateway.value != url) return@launch
+                if (failed != null) {
+                    _state.update { it.copy(notice = wordsThen(Res.string.bots_start_over_failed, failed.errorMessage, bot.label)) }
+                    return@launch
+                }
+                chats.forget(bot.name)
+                archived = true
+            } finally {
+                if (gateway.value == url) _state.update { it.copy(opening = null) }
             }
-            chats.forget(bot.name)
-            _state.update { it.copy(opening = null) }
-            open(bot.copy(canonicalSession = null)) { id, _ -> onOpened(id) }
+            if (archived && gateway.value == url) {
+                open(bot.copy(canonicalSession = null)) { id, _ -> onOpened(id) }
+            }
         }
     }
 
@@ -405,11 +416,13 @@ class BotsViewModel(
     fun setModel(bot: Bot, model: ModelOption, confirmed: Boolean = false, onSaved: () -> Unit = {}) {
         // One save at a time: a second pick while one is out would race it.
         if (_modelPicker.value.saving) return
+        val url = gateway.value
         // Said in the sheet, which covers the editor and the roster's notices alike.
         _modelPicker.update { it.copy(confirm = null, saving = true, saveError = null) }
         viewModelScope.launch {
             try {
                 val warning = api.setModel(bot.name, model.id, model.provider, confirmed)
+                if (gateway.value != url || modelsOf != bot.name) return@launch
                 if (warning != null) {
                     _modelPicker.update { it.copy(confirm = PendingSwitch(model, warning), saving = false) }
                     return@launch
@@ -427,6 +440,7 @@ class BotsViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (gateway.value != url || modelsOf != bot.name) return@launch
                 // The sheet is the chat's, which takes text: said here, in the app's language.
                 val said = getString(Res.string.bots_model_change_failed, bot.label)
                 val why = e.message?.trim()?.takeIf { it.isNotEmpty() }
@@ -529,16 +543,18 @@ class BotsViewModel(
             // Desktop's rooms ride the roster's default row, so they refresh without a call of their own.
             val desktopRooms = parseDesktopRooms(roster.bots.firstOrNull { it.isDefault || it.name == Bot.DEFAULT }?.uiMeta)
             _state.update { it.regroup(ordered).copy(loading = false, error = null, unsupported = false, unread = unread, desktopRooms = desktopRooms) }
-            loadAvatars(ordered)
+            loadAvatars(url, ordered)
             watch(ordered)
             health.checkOnce(ordered.map { it.name })
             readRoutines(url, ordered)
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
+            if (gateway.value != url) return
             val unsupported = UNKNOWN_METHOD.containsMatchIn(e.message)
             _state.update { it.copy(loading = false, unsupported = unsupported, error = e.message.takeUnless { unsupported }) }
         } catch (e: Exception) {
+            if (gateway.value != url) return
             _state.update { it.copy(loading = false, error = e.message.orEmpty()) }
         }
     }
@@ -576,13 +592,14 @@ class BotsViewModel(
         bot.name.takeIf { seenStore.seen(url, bot.name).first().isUnread(chat, resolvedId = bot.canonicalSession?.openId) }
     }.toSet()
 
-    private fun loadAvatars(bots: List<Bot>) {
+    private fun loadAvatars(url: GatewayUrl, bots: List<Bot>) {
         val wanted = bots.filter { it.hasAvatar && avatarsAsked.add(it.name) }
         // A picture taken away on another client: draw the shape again.
         _avatars.update { current -> current.filterKeys { name -> bots.any { it.name == name && it.hasAvatar } } }
         wanted.forEach { bot ->
             viewModelScope.launch {
                 val bytes = runCatching { api.avatar(bot.name) }.getOrNull()
+                if (gateway.value != url) return@launch
                 if (bytes == null) avatarsAsked.remove(bot.name) else _avatars.update { it + (bot.name to bytes) }
             }
         }

@@ -1064,12 +1064,14 @@ private fun <T> DropdownSheet(
 ) {
     BottomSheet(visible = visible, onDismiss = onDismiss) {
         SheetHeader(title, stringResource(Res.string.inbox_group))
-        options.forEach { option ->
-            SheetAction(
-                label(option),
-                if (option == selected) Lucide.Check else if (option == null) Lucide.FolderX else Lucide.Folder,
-                onClick = { onPick(option) },
-            )
+        Column(Modifier.weight(1f, fill = false).verticalScrollWithBar()) {
+            options.forEach { option ->
+                SheetAction(
+                    label(option),
+                    if (option == selected) Lucide.Check else if (option == null) Lucide.FolderX else Lucide.Folder,
+                    onClick = { onPick(option) },
+                )
+            }
         }
     }
 }

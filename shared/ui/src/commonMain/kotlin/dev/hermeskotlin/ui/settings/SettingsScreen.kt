@@ -169,6 +169,7 @@ import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.BottomSheet
 import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.designsystem.components.VerticalScrollbar
+import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
 import androidx.compose.foundation.layout.fillMaxHeight
 import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
@@ -357,7 +358,13 @@ internal fun ConnectionCheckSheet(
     onCheckAgain: () -> Unit,
 ) {
     BottomSheet(visible = visible, onDismiss = onDismiss) {
-        Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(
+            Modifier
+                .weight(1f, fill = false)
+                .verticalScrollWithBar()
+                .padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(stringResource(Res.string.common_check_connection), style = Theme[typography][title], color = Theme[colors][text], modifier = Modifier.semantics { heading() })
                 Text(stringResource(Res.string.settings_check_sheet_detail), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
@@ -712,8 +719,11 @@ internal fun SettingsView(
                 }
 
                 if (hasVoice) Section(stringResource(Res.string.settings_section_voice)) {
-                    CallTargetRow(settings.callTargets[gatewayUrl] ?: CallTarget(), botFaces, onChooseCallTarget)
-                    Divider()
+                    // Android launcher shortcut target; the desktop has no app drawer shortcut.
+                    if (!isDesktop) {
+                        CallTargetRow(settings.callTargets[gatewayUrl] ?: CallTarget(), botFaces, onChooseCallTarget)
+                        Divider()
+                    }
                     SwitchRow(
                         title = stringResource(Res.string.settings_dictation),
                         detail = stringResource(Res.string.settings_dictation_detail),
@@ -721,7 +731,8 @@ internal fun SettingsView(
                         onCheckedChange = { on -> onUpdate { it.copy(dictation = on) } },
                     )
                     Divider()
-                    if (settings.dictation) {
+                    // On-device speech recognition is phone-only; the desktop dictates through the gateway.
+                    if (settings.dictation && !isDesktop) {
                         Field(
                             stringResource(Res.string.settings_dictate_with),
                             detail = when (settings.dictationEngine) {
@@ -821,14 +832,16 @@ internal fun SettingsView(
                         onCheckedChange = { on -> onUpdate { it.copy(notifyReplies = on) } },
                         icon = Lucide.MessageCircle,
                     )
-                    Divider()
-                    SwitchRow(
-                        title = stringResource(Res.string.settings_notify_other_in_app),
-                        detail = stringResource(Res.string.settings_notify_other_in_app_detail),
-                        checked = settings.notifyOtherChatsInApp,
-                        onCheckedChange = { on -> onUpdate { it.copy(notifyOtherChatsInApp = on) } },
-                        icon = Lucide.BellRing,
-                    )
+                    if (!isDesktop) {
+                        Divider()
+                        SwitchRow(
+                            title = stringResource(Res.string.settings_notify_other_in_app),
+                            detail = stringResource(Res.string.settings_notify_other_in_app_detail),
+                            checked = settings.notifyOtherChatsInApp,
+                            onCheckedChange = { on -> onUpdate { it.copy(notifyOtherChatsInApp = on) } },
+                            icon = Lucide.BellRing,
+                        )
+                    }
                     Divider()
                     SwitchRow(
                         title = stringResource(Res.string.settings_alerts_other_chats),
@@ -945,8 +958,11 @@ internal fun SettingsView(
                     Divider()
                     InfoRow(
                         stringResource(Res.string.settings_gateway),
-                        info.version?.let { stringResource(Res.string.settings_hermes_version, it) }
-                            ?: stringResource(Res.string.common_checking),
+                        when {
+                            info.version != null -> stringResource(Res.string.settings_hermes_version, info.version)
+                            info.checkingVersion -> stringResource(Res.string.common_checking)
+                            else -> stringResource(Res.string.common_unknown)
+                        },
                     )
                     Divider()
                     val uriHandler = LocalUriHandler.current

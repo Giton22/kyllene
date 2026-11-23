@@ -102,7 +102,14 @@ data class OpenRoom(
     val loadingEarlier: Boolean = false,
     /** The members still to answer the user's newest message, in turn order ([waitingFor]). */
     val waiting: List<RoomMember> = emptyList(),
+    /** Pending action keys (`approve` / `retry`) whose request is in flight. */
+    val busyActions: Set<String> = emptySet(),
+    /** A stop request is in flight. */
+    val stopping: Boolean = false,
 )
+
+/** Stable key identifying a pending approval or retry action while its request is in flight. */
+internal fun RoomPendingAction.actionKey(): String = "$kind:${requestId ?: ""}:${taskId ?: ""}:${memberId ?: ""}:${executionGeneration ?: ""}"
 
 /**
  * Hosted rooms: the gateway's own group chats (`groups.*`). The sidebar lists them while it shows
@@ -466,14 +473,24 @@ class RoomsViewModel(
     /** Asks the open room to stop what it's doing. */
     override fun stop() {
         val open = _opened.value ?: return
+        if (open.stopping) return
+        val url = gateway.value
+        val roomId = open.room.roomId
+        _opened.update { it?.takeIf { cur -> cur.room.roomId == roomId }?.copy(stopping = true) ?: it }
         viewModelScope.launch {
             try {
-                api.stop(open.room.roomId, cancelId = newId("stop"))
-                readRoomSoon(open.room.roomId)
+                api.stop(roomId, cancelId = newId("stop"))
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) readRoomSoon(roomId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _opened.update { it?.copy(notice = wordsThen(Res.string.rooms_stop_failed, e.message)) }
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) {
+                    _opened.update { it?.takeIf { cur -> cur.room.roomId == roomId }?.copy(notice = wordsThen(Res.string.rooms_stop_failed, e.message)) ?: it }
+                }
+            } finally {
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) {
+                    _opened.update { it?.takeIf { cur -> cur.room.roomId == roomId }?.copy(stopping = false) ?: it }
+                }
             }
         }
     }
@@ -489,14 +506,25 @@ class RoomsViewModel(
             _opened.update { it?.copy(notice = words(Res.string.rooms_approval_incomplete)) }
             return
         }
+        val key = action.actionKey()
+        if (key in open.busyActions) return
+        val url = gateway.value
+        val roomId = open.room.roomId
+        _opened.update { if (it?.room?.roomId == roomId) it.copy(busyActions = it.busyActions + key) else it }
         viewModelScope.launch {
             try {
-                api.approve(open.room.roomId, memberId, taskId, generation, choice, requestId)
-                readRoomSoon(open.room.roomId)
+                api.approve(roomId, memberId, taskId, generation, choice, requestId)
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) readRoomSoon(roomId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _opened.update { it?.copy(notice = wordsThen(Res.string.rooms_approval_failed, e.message)) }
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) {
+                    _opened.update { if (it?.room?.roomId == roomId) it.copy(notice = wordsThen(Res.string.rooms_approval_failed, e.message)) else it }
+                }
+            } finally {
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) {
+                    _opened.update { if (it?.room?.roomId == roomId) it.copy(busyActions = it.busyActions - key) else it }
+                }
             }
         }
     }
@@ -509,14 +537,25 @@ class RoomsViewModel(
             _opened.update { it?.copy(notice = words(Res.string.rooms_retry_unknown)) }
             return
         }
+        val key = action.actionKey()
+        if (key in open.busyActions) return
+        val url = gateway.value
+        val roomId = open.room.roomId
+        _opened.update { if (it?.room?.roomId == roomId) it.copy(busyActions = it.busyActions + key) else it }
         viewModelScope.launch {
             try {
-                api.retry(open.room.roomId, taskId)
-                readRoomSoon(open.room.roomId)
+                api.retry(roomId, taskId)
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) readRoomSoon(roomId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _opened.update { it?.copy(notice = wordsThen(Res.string.rooms_retry_failed, e.message)) }
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) {
+                    _opened.update { if (it?.room?.roomId == roomId) it.copy(notice = wordsThen(Res.string.rooms_retry_failed, e.message)) else it }
+                }
+            } finally {
+                if (gateway.value == url && _opened.value?.room?.roomId == roomId) {
+                    _opened.update { if (it?.room?.roomId == roomId) it.copy(busyActions = it.busyActions - key) else it }
+                }
             }
         }
     }
@@ -526,10 +565,12 @@ class RoomsViewModel(
      * again after a lost answer is the same ask, so it can't fail on a room already gone.
      */
     override fun deleteRoom(room: Room) {
+        val url = gateway.value
         val cancelId = disbandIds.getOrPut(room.roomId) { newId("disband") }
         viewModelScope.launch {
             try {
                 api.disband(room.roomId, cancelId)
+                if (gateway.value != url) return@launch
                 disbandIds.remove(room.roomId)
                 unansweredFiles.remove(room.roomId)
                 if (unansweredSend?.roomId == room.roomId) unansweredSend = null
@@ -539,7 +580,7 @@ class RoomsViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                say(room.roomId, wordsThen(Res.string.rooms_delete_failed, e.message, room.shownName()))
+                if (gateway.value == url) say(room.roomId, wordsThen(Res.string.rooms_delete_failed, e.message, room.shownName()))
             }
         }
     }
@@ -548,9 +589,11 @@ class RoomsViewModel(
     override fun renameRoom(room: Room, name: String) {
         val newName = name.trim()
         if (newName.isEmpty() || newName == room.name) return
+        val url = gateway.value
         viewModelScope.launch {
             try {
                 val renamed = api.rename(room.roomId, newName, eventId = newId("rename"))
+                if (gateway.value != url) return@launch
                 listEdits++
                 _state.update { state -> state.copy(rooms = state.rooms.map { if (it.roomId == renamed.roomId) renamed else it }) }
                 _opened.update { open -> open?.takeIf { it.room.roomId == renamed.roomId }?.copy(room = renamed) ?: open }
@@ -558,7 +601,7 @@ class RoomsViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                say(room.roomId, wordsThen(Res.string.rooms_rename_failed, e.message, room.shownName()))
+                if (gateway.value == url) say(room.roomId, wordsThen(Res.string.rooms_rename_failed, e.message, room.shownName()))
             }
         }
     }
@@ -583,6 +626,7 @@ class RoomsViewModel(
      */
     fun createRoom(name: String, members: List<Bot>, onCreated: (Room) -> Unit) {
         if (_state.value.busy != null) return
+        val url = gateway.value
         val roster = members.map { bot ->
             RoomMemberInput(memberId = bot.name, profile = bot.name, handle = bot.name, displayName = bot.label)
         }
@@ -594,15 +638,16 @@ class RoomsViewModel(
         viewModelScope.launch {
             try {
                 val room = api.create(roomId = roomId, name = ask.first, members = roster)
+                if (gateway.value != url) return@launch
                 unansweredCreate = null
                 readRooms()
                 onCreated(room)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(notice = wordsThen(Res.string.rooms_create_failed, e.message)) }
+                if (gateway.value == url) _state.update { it.copy(notice = wordsThen(Res.string.rooms_create_failed, e.message)) }
             } finally {
-                _state.update { it.copy(busy = null) }
+                if (gateway.value == url) _state.update { it.copy(busy = null) }
             }
         }
     }
@@ -680,9 +725,10 @@ class RoomsViewModel(
     }
 
     private suspend fun readRoom(roomId: String): Unit = readMutex.withLock {
+        val url = gateway.value
         try {
             val state = api.state(roomId)
-            if (_opened.value?.room?.roomId != roomId) return
+            if (gateway.value != url || _opened.value?.room?.roomId != roomId) return
             // Never ask for more than the gateway serves in one page.
             val limit = logLimit
             // A first read starts a bounded way back from the end: a room's whole history can be long, and
@@ -696,7 +742,7 @@ class RoomsViewModel(
             var pages = 0
             do {
                 val page = api.log(roomId, sinceSeq = readThrough, limit = limit)
-                if (_opened.value?.room?.roomId != roomId) return
+                if (gateway.value != url || _opened.value?.room?.roomId != roomId) return
                 openEvents = mergeRoomEvents(openEvents, page.events)
                 val advanced = page.cursor > readThrough
                 readThrough = maxOf(readThrough, page.cursor)
@@ -724,6 +770,7 @@ class RoomsViewModel(
                     }
                 }
             }
+            if (gateway.value != url || _opened.value?.room?.roomId != roomId) return
             _opened.update { open ->
                 open?.copy(
                     room = state.room,
@@ -737,11 +784,12 @@ class RoomsViewModel(
                 )
             }
             // On screen, so read: the sidebar's dot and the next notification start after this.
-            gateway.value?.let { seen.markSeen(it, roomId, readThrough) }
+            url?.let { seen.markSeen(it, roomId, readThrough) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             // A late failure for a room that's no longer open leaves the one on screen alone.
+            if (gateway.value != url) return
             _opened.update { open ->
                 open?.takeIf { it.room.roomId == roomId }?.copy(loading = false, error = e.message?.let(Words::Raw) ?: words(Res.string.rooms_read_failed)) ?: open
             }

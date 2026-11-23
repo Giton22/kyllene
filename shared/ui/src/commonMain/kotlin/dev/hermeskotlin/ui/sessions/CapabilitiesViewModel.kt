@@ -79,9 +79,9 @@ class CapabilitiesViewModel(private val api: CapabilitiesApi) : ViewModel(), Cap
         val url = gateway?.gatewayUrl ?: return
         val profile = profile
         when (_state.value.tab) {
-            CapabilityTab.Skills -> load({ api.skills(url, profile) }) { s, l -> s.copy(skills = l) }
-            CapabilityTab.Tools -> load({ api.toolsets(url, profile) }) { s, l -> s.copy(toolsets = l) }
-            CapabilityTab.Mcp -> load({ api.mcpServers(url, profile) }) { s, l -> s.copy(servers = l) }
+            CapabilityTab.Skills -> load({ it.skills }, { api.skills(url, profile) }) { s, l -> s.copy(skills = l) }
+            CapabilityTab.Tools -> load({ it.toolsets }, { api.toolsets(url, profile) }) { s, l -> s.copy(toolsets = l) }
+            CapabilityTab.Mcp -> load({ it.servers }, { api.mcpServers(url, profile) }) { s, l -> s.copy(servers = l) }
         }
     }
 
@@ -131,18 +131,17 @@ class CapabilitiesViewModel(private val api: CapabilitiesApi) : ViewModel(), Cap
     }
 
     private fun <T> load(
+        get: (CapabilitiesUiState) -> Loadable<T>,
         call: suspend () -> ApiResult<List<T>>,
         put: (CapabilitiesUiState, Loadable<T>) -> CapabilitiesUiState,
     ) {
-        @Suppress("UNCHECKED_CAST")
-        val before = current(_state.value.tab) as Loadable<T>
-        _state.update { put(it, before.copy(loading = true)) }
+        _state.update { put(it, get(it).copy(loading = true)) }
         viewModelScope.launch(binding) {
             val result = call()
             _state.update { state ->
                 when (result) {
                     is ApiResult.Success -> put(state, Loadable(items = result.value))
-                    else -> put(state, before.copy(loading = false, error = result.errorMessage))
+                    else -> put(state, get(state).copy(loading = false, error = result.errorMessage))
                         .copy(sessionExpired = result == ApiResult.SessionExpired)
                 }
             }

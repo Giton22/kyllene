@@ -93,6 +93,7 @@ class ScheduledViewModel(
     val state: StateFlow<ScheduledUiState> = _state.asStateFlow()
 
     private var gateway: SavedGateway? = null
+    private var refreshJob: Job? = null
     private var runsJob: Job? = null
 
     /** The bot whose routines these are; null for every scheduled job. */
@@ -109,6 +110,8 @@ class ScheduledViewModel(
         if (this.gateway == gateway && this.owner == owner) return
         this.gateway = gateway
         this.owner = owner
+        refreshJob?.cancel()
+        runsJob?.cancel()
         editorGeneration++
         _state.value = ScheduledUiState()
         refresh()
@@ -118,9 +121,10 @@ class ScheduledViewModel(
     override fun refresh() {
         val url = gateway?.gatewayUrl ?: return
         val owner = owner
-        viewModelScope.launch {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             val result = api.jobs(url)
-            if (this@ScheduledViewModel.owner != owner) return@launch
+            if (this@ScheduledViewModel.gateway?.gatewayUrl != url || this@ScheduledViewModel.owner != owner) return@launch
             _state.update { state ->
                 when (result) {
                     is ApiResult.Success -> state.copy(
@@ -250,8 +254,8 @@ class ScheduledViewModel(
                 }
                 if (changes.isEmpty()) ApiResult.Success(existing) else api.update(url, existing.id, changes, existing.profile).withProfile(existing.profile)
             }
-            // Signed in to a different gateway since; this result belongs to the old one.
-            if (gateway != savedTo) return@launch
+            // Signed in to a different gateway or bot since; this result belongs to the old one.
+            if (gateway != savedTo || this@ScheduledViewModel.owner != owner) return@launch
             // The form was closed or reopened while saving: report the outcome, but leave the page alone.
             val formOpen = generation == editorGeneration
             _state.update { state ->
@@ -303,10 +307,13 @@ class ScheduledViewModel(
 
     override fun deleteJob() {
         val url = gateway?.gatewayUrl ?: return
+        val owner = owner
+        if (_state.value.busy) return
         val job = _state.value.openJob ?: return
         _state.update { it.copy(confirmingDelete = false, busy = true) }
         viewModelScope.launch {
             val result = api.delete(url, job.id, job.profile)
+            if (gateway?.gatewayUrl != url || this@ScheduledViewModel.owner != owner) return@launch
             _state.update { state ->
                 when (result) {
                     is ApiResult.Success -> state.copy(
@@ -338,6 +345,7 @@ class ScheduledViewModel(
         _state.update { it.copy(deliveryTargets = listOfNotNull(botChat) + it.deliveryTargets.filterNot { t -> t.id == Routines.BOT_CHAT_DELIVERY }) }
         viewModelScope.launch {
             val result = api.deliveryTargets(url, owner?.profile)
+            if (gateway?.gatewayUrl != url || this@ScheduledViewModel.owner != owner) return@launch
             if (result is ApiResult.Success && result.value.isNotEmpty()) {
                 // The gateway lists every bot's chat too (`bot-chat:<profile>`); this bot's own is the one above.
                 val others = result.value.filterNot { owner != null && it.id.equals("${Routines.BOT_CHAT_DELIVERY}:${owner.profile}", ignoreCase = true) }
@@ -349,11 +357,13 @@ class ScheduledViewModel(
     /** Calls a job action and swaps in the job record the server returns. */
     private fun act(failure: StringResource, success: StringResource? = null, call: suspend (GatewayUrl) -> ApiResult<CronJob>) {
         val url = gateway?.gatewayUrl ?: return
+        val owner = owner
         if (_state.value.busy) return
         val before = _state.value.openJob
         _state.update { it.copy(busy = true) }
         viewModelScope.launch {
             val result = call(url).withProfile(before?.profile)
+            if (gateway?.gatewayUrl != url || this@ScheduledViewModel.owner != owner) return@launch
             _state.update { state ->
                 when (result) {
                     is ApiResult.Success -> state.copy(
@@ -374,11 +384,13 @@ class ScheduledViewModel(
 
     private fun loadRuns(jobId: String) {
         val url = gateway?.gatewayUrl ?: return
+        val owner = owner
         val profile = _state.value.jobs.firstOrNull { it.id == jobId }?.profile
         runsJob?.cancel()
         _state.update { it.copy(runsLoading = it.runs.isEmpty()) }
         runsJob = viewModelScope.launch {
             val result = api.runs(url, jobId, profile = profile)
+            if (gateway?.gatewayUrl != url || this@ScheduledViewModel.owner != owner) return@launch
             _state.update { state ->
                 if (state.openJobId != jobId) return@update state
                 when (result) {

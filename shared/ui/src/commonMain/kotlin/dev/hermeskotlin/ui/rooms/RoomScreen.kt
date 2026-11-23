@@ -257,7 +257,9 @@ internal fun RoomView(
                 },
             )
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                Transcript(room, faces, onLoadEarlier = viewModel::loadEarlier, onOpenFile = onOpenFile)
+                key(room.room.roomId) {
+                    Transcript(room, faces, onLoadEarlier = viewModel::loadEarlier, onOpenFile = onOpenFile)
+                }
             }
             // A failed read in full, above whatever waits on the user; the loop keeps trying.
             room.error?.let { ListNotice(it.text()) }
@@ -526,6 +528,7 @@ private fun PendingActions(room: OpenRoom, onApprove: (RoomPendingAction, String
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         room.pendingActions.forEach { action ->
+            val busy = action.actionKey() in room.busyActions
             Surface(Modifier.fillMaxWidth(), elevated = true) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val who = room.room.member(action.memberId)?.label
@@ -539,8 +542,8 @@ private fun PendingActions(room: OpenRoom, onApprove: (RoomPendingAction, String
                             Text(it, style = Theme[typography][caption], color = Theme[colors][textSecondary])
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(stringResource(Res.string.common_deny), onClick = { onApprove(action, "deny") }, variant = ButtonVariant.Ghost, size = ButtonSize.Small)
-                            Button(stringResource(Res.string.rooms_approve_once), onClick = { onApprove(action, "once") }, variant = ButtonVariant.Primary, size = ButtonSize.Small)
+                            Button(stringResource(Res.string.common_deny), onClick = { onApprove(action, "deny") }, variant = ButtonVariant.Ghost, size = ButtonSize.Small, enabled = !busy)
+                            Button(stringResource(Res.string.rooms_approve_once), onClick = { onApprove(action, "once") }, variant = ButtonVariant.Primary, size = ButtonSize.Small, enabled = !busy)
                         }
                     } else {
                         Text(
@@ -548,7 +551,7 @@ private fun PendingActions(room: OpenRoom, onApprove: (RoomPendingAction, String
                             style = Theme[typography][bodySmall],
                             color = Theme[colors][warning],
                         )
-                        Button(stringResource(Res.string.rooms_retry), onClick = { onRetry(action) }, variant = ButtonVariant.Secondary, size = ButtonSize.Small)
+                        Button(stringResource(Res.string.rooms_retry), onClick = { onRetry(action) }, variant = ButtonVariant.Secondary, size = ButtonSize.Small, enabled = !busy)
                     }
                 }
             }
@@ -687,7 +690,7 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions, mentions: RoomM
             )
             if (room.working) {
                 if (hasText) SendButton(SendIcon.Send, onClick = viewModel::send, enabled = !room.sending)
-                SendButton(SendIcon.Stop, onClick = viewModel::stop, enabled = true)
+                SendButton(SendIcon.Stop, onClick = viewModel::stop, enabled = !room.stopping)
             } else {
                 SendButton(SendIcon.Send, onClick = viewModel::send, enabled = hasText && !room.sending)
             }
