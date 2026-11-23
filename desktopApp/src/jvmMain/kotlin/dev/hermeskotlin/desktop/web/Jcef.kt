@@ -26,7 +26,7 @@ internal object Jcef {
     /** Whether the runtime has it: a JCEF build of JetBrains Runtime (the installer's), not any other JDK. */
     val available: Boolean = ModuleLayer.boot().findModule("jcef").isPresent
 
-    @Volatile private var started: CompletableFuture<CefApp?>? = null
+    private val lifecycle = JcefLifecycle<CefApp>(::disposeApp)
 
     /** The `host:port` of each gateway Chromium may reach; fixed when it starts. */
     @Volatile var reachable: Set<String> = emptySet()
@@ -39,15 +39,11 @@ internal object Jcef {
      */
     suspend fun app(gateways: () -> List<String>): CefApp? {
         if (!available) return null
-        val future = started ?: synchronized(this) {
-            started ?: run {
-                val hosts = gateways().mapNotNull(::hostPort).toSet()
-                reachable = hosts
-                CompletableFuture.supplyAsync {
-                    runCatching { start(hosts) }.onFailure { System.err.println("Chromium didn't start: $it") }.getOrNull()
-                }.also { started = it }
-            }
-        }
+        val future = lifecycle.getOrStart {
+            val hosts = gateways().mapNotNull(::hostPort).toSet()
+            reachable = hosts
+            start(hosts)
+        } ?: return null
         return future.copy().await()
     }
 
@@ -55,22 +51,23 @@ internal object Jcef {
     fun reaches(url: String): Boolean = hostPort(url) in reachable
 
     /**
-     * Closes Chromium, if it ever started, before the app quits: its helper processes would otherwise outlive the
-     * app (holding its files while an update replaces them), and a page's session could stay in the jar on disk.
+     * Closes Chromium, if it ever started or is still starting, before the app quits: its helper processes would
+     * otherwise outlive the app (holding its files while an update replaces them), and a page's session could stay
+     * in the jar on disk.
      */
-    fun shutdown() {
-        val app = started?.takeIf { it.isDone }?.getNow(null) ?: return
-        runCatching {
-            CefCookieManager.getGlobalManager().apply {
-                deleteCookies("", "")
-                val flushed = CountDownLatch(1)
-                if (flushStore { flushed.countDown() }) flushed.await(2, TimeUnit.SECONDS)
-            }
-            app.dispose()
+    fun shutdown() = lifecycle.shutdown()
+
+    private fun disposeApp(app: CefApp) {
+        CefCookieManager.getGlobalManager().apply {
+            deleteCookies("", "")
+            val flushed = CountDownLatch(1)
+            if (flushStore { flushed.countDown() }) flushed.await(2, TimeUnit.SECONDS)
         }
+        app.dispose()
     }
 
-    private fun start(gateways: Set<String>): CefApp {
+    private fun start(gateways: Set<String>): CefApp? {
+        if (lifecycle.isShuttingDown) return null
         val config = JCefAppConfig.getInstance()
         val args = config.appArgs
         val settings = config.cefSettings.apply {
@@ -103,6 +100,58 @@ internal object Jcef {
     }
 }
 
+/**
+ * Coordinates lazy single-instance startup with shutdown, so closing the app while Chromium is still coming up
+ * waits briefly and still disposes it instead of leaving helper processes behind.
+ */
+internal class JcefLifecycle<T : Any>(
+    private val disposer: (T) -> Unit,
+    private val shutdownWaitMs: Long = SHUTDOWN_WAIT_MS,
+) {
+    @Volatile private var started: CompletableFuture<T?>? = null
+    @Volatile private var shuttingDown = false
+    private val disposeLock = Any()
+    private var disposed = false
+
+    val isShuttingDown: Boolean get() = shuttingDown
+
+    fun getOrStart(starter: () -> T?): CompletableFuture<T?>? {
+        if (shuttingDown) return null
+        return started ?: synchronized(this) {
+            if (shuttingDown) return null
+            started ?: CompletableFuture.supplyAsync {
+                if (shuttingDown) return@supplyAsync null
+                val created = runCatching { starter() }
+                    .onFailure { System.err.println("Chromium didn't start: $it") }
+                    .getOrNull()
+                if (created != null && shuttingDown) {
+                    disposeOnce(created)
+                    return@supplyAsync null
+                }
+                created
+            }.also { started = it }
+        }
+    }
+
+    fun shutdown() {
+        val future = synchronized(this) {
+            shuttingDown = true
+            started
+        } ?: return
+        future.whenComplete { app, _ -> if (app != null) disposeOnce(app) }
+        val app = runCatching { future.get(shutdownWaitMs, TimeUnit.MILLISECONDS) }.getOrNull()
+        if (app != null) disposeOnce(app)
+    }
+
+    private fun disposeOnce(app: T) {
+        synchronized(disposeLock) {
+            if (disposed) return
+            disposed = true
+            runCatching { disposer(app) }
+        }
+    }
+}
+
 /** `host:port` of [url], the port filled in from its scheme; null for anything but http(s). */
 internal fun hostPort(url: String): String? {
     val uri = parseUrl(url) ?: return null
@@ -126,3 +175,5 @@ internal fun parseUrl(url: String): URI? =
 private const val NOWHERE = "127.0.0.1:9"
 
 private const val START_TIMEOUT_S = 30L
+
+private const val SHUTDOWN_WAIT_MS = 5_000L

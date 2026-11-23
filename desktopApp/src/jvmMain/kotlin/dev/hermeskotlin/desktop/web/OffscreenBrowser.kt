@@ -47,6 +47,7 @@ import java.awt.event.KeyEvent
 import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
 import java.nio.ByteBuffer
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -79,6 +80,16 @@ internal class OffscreenBrowser(
     @Volatile private var view = Rectangle(0, 0, 1, 1)
     @Volatile private var scale = 1.0
     @Volatile private var origin = Point()
+    @Volatile private var lastUserGestureNanos: Long? = null
+
+    /** Records a pointer click or activating key forwarded to this browser, for popup gating. */
+    fun recordUserGesture(nowNanos: Long = System.nanoTime()) {
+        lastUserGestureNanos = nowNanos
+    }
+
+    /** Whether a user click or Enter/Space was forwarded to this browser recently. */
+    fun hasRecentUserGesture(nowNanos: Long = System.nanoTime()): Boolean =
+        isRecentUserGesture(lastUserGestureNanos, nowNanos)
 
     // Chromium paints on one thread of its own.
     private var frameBytes = ByteArray(0)
@@ -165,6 +176,22 @@ internal class OffscreenBrowser(
  */
 private const val WHEEL_NOTCH = 120
 
+/** How long after a pointer click or Enter/Space a popup (`window.open`, `target=_blank`) counts as the user's. */
+internal const val USER_GESTURE_WINDOW_MS = 1_000L
+
+internal fun isUserGestureKey(event: KeyEvent): Boolean =
+    (event.id == KeyEvent.KEY_PRESSED || event.id == KeyEvent.KEY_RELEASED) &&
+        (event.keyCode == KeyEvent.VK_ENTER || event.keyCode == KeyEvent.VK_SPACE)
+
+internal fun isRecentUserGesture(
+    lastGestureNanos: Long?,
+    nowNanos: Long = System.nanoTime(),
+    windowMs: Long = USER_GESTURE_WINDOW_MS,
+): Boolean {
+    val last = lastGestureNanos ?: return false
+    return (nowNanos - last) in 0L..TimeUnit.MILLISECONDS.toNanos(windowMs)
+}
+
 /**
  * Whether a key the page was given goes on to the app too: Escape (closing what's open) and the app's own shortcuts,
  * Ctrl or Cmd with anything but the keys text editing in the page needs. Without this, a clicked page would keep the
@@ -229,6 +256,7 @@ internal fun BrowserSurface(page: OffscreenBrowser, modifier: Modifier = Modifie
                             }
                             is MouseEvent -> {
                                 if (event.type == PointerEventType.Press) runCatching { focus.requestFocus() }
+                                if (event.type == PointerEventType.Press || event.type == PointerEventType.Release) page.recordUserGesture()
                                 page.browser.sendMouseEvent(
                                     MouseEvent(source, awt.id, awt.`when`, awt.modifiersEx, x, y, awt.xOnScreen, awt.yOnScreen,
                                         awt.clickCount, awt.isPopupTrigger, awt.button),
@@ -245,6 +273,7 @@ internal fun BrowserSurface(page: OffscreenBrowser, modifier: Modifier = Modifie
             .focusable()
             .onKeyEvent { event ->
                 val awt = event.awtEventOrNull ?: return@onKeyEvent false
+                if (isUserGestureKey(awt)) page.recordUserGesture()
                 page.browser.sendKeyEvent(awt)
                 !reachesApp(awt)
             },

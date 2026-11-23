@@ -10,11 +10,64 @@ import java.awt.image.BufferedImage
 import java.io.File
 import java.security.SecureRandom
 import java.util.Base64
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 
 /** An approval a notification's button answers: [request] in the chat [sessionId]. */
 internal data class NoticeAnswer(val sessionId: String?, val request: InputRequest.Approval, val choice: ApprovalChoice)
+
+/**
+ * Bounded, expiring store of pending toast approval tokens so dismissed or in-app answered approvals don't accumulate.
+ */
+internal class AnswerRegistry(
+    private val maxEntries: Int = MAX_ANSWERS,
+    private val ttlMs: Long = ANSWER_TTL_MS,
+    private val nowMs: () -> Long = System::currentTimeMillis,
+    private val random: SecureRandom = SecureRandom(),
+) {
+    private data class Entry(val answer: NoticeAnswer, val createdAtMs: Long)
+
+    private val entries = LinkedHashMap<String, Entry>()
+
+    @Synchronized
+    fun register(answer: NoticeAnswer): String {
+        val now = nowMs()
+        pruneLocked(now)
+        val token = ByteArray(16).also(random::nextBytes).joinToString("") { "%02x".format(it) }
+        entries[token] = Entry(answer, now)
+        while (entries.size > maxEntries) {
+            val oldest = entries.entries.iterator()
+            if (!oldest.hasNext()) break
+            oldest.next()
+            oldest.remove()
+        }
+        return token
+    }
+
+    @Synchronized
+    fun take(token: String): NoticeAnswer? {
+        pruneLocked(nowMs())
+        val taken = entries.remove(token)?.answer ?: return null
+        // The other button of the same notification is spent too.
+        entries.values.removeAll { it.answer.request.id == taken.request.id }
+        return taken
+    }
+
+    @Synchronized
+    fun size(): Int = entries.size
+
+    private fun pruneLocked(now: Long) {
+        val iterator = entries.entries.iterator()
+        while (iterator.hasNext()) {
+            if (now - iterator.next().value.createdAtMs > ttlMs) iterator.remove()
+        }
+    }
+
+    companion object {
+        const val MAX_ANSWERS = 100
+        val ANSWER_TTL_MS: Long = TimeUnit.HOURS.toMillis(24)
+    }
+}
 
 /**
  * Windows' own notifications for an installed Herald: they stay in the Action Center, name Herald with its icon, and
@@ -31,8 +84,7 @@ internal object WindowsToasts {
     /** Only an installed Herald on Windows: one run from a build has no Herald.exe for Windows to start. */
     val available: Boolean = launcher != null && System.getProperty("os.name").orEmpty().startsWith("Windows")
 
-    private val answers = ConcurrentHashMap<String, NoticeAnswer>()
-    private val random = SecureRandom()
+    private val answers = AnswerRegistry()
 
     /**
      * Registers the `herald://` scheme and Herald's name and [icon] for its notifications, for this user. Each launch
@@ -64,19 +116,7 @@ internal object WindowsToasts {
      */
     fun show(notice: DesktopNotice, approveLabel: String, denyLabel: String): Boolean {
         if (!available) return false
-        val open = notice.sessionId?.let { "${AppLink.DESKTOP_SCHEME}://session/${encode(it)}" } ?: "${AppLink.DESKTOP_SCHEME}://show"
-        val approval = notice.request as? InputRequest.Approval
-        val buttons = if (approval == null) {
-            ""
-        } else {
-            "<actions>" +
-                button(approveLabel, answerLink(NoticeAnswer(notice.sessionId, approval, ApprovalChoice.Once))) +
-                button(denyLabel, answerLink(NoticeAnswer(notice.sessionId, approval, ApprovalChoice.Deny))) +
-                "</actions>"
-        }
-        val xml = "<toast activationType=\"protocol\" launch=\"${attr(open)}\">" +
-            "<visual><binding template=\"ToastGeneric\"><text>${text(notice.title)}</text><text>${text(notice.body)}</text></binding></visual>" +
-            buttons + "</toast>"
+        val xml = buildToastXml(notice, approveLabel, denyLabel, ::answerLink)
         val script = """
             [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > ${'$'}null
             [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > ${'$'}null
@@ -98,27 +138,59 @@ internal object WindowsToasts {
     fun takeAnswer(link: String): NoticeAnswer? {
         val prefix = "${AppLink.DESKTOP_SCHEME}://answer/"
         if (!link.startsWith(prefix, ignoreCase = true)) return null
-        return answers.remove(link.substring(prefix.length).trimEnd('/'))?.also { taken ->
-            // The other button of the same notification is spent too.
-            answers.values.removeAll { it.request.id == taken.request.id }
-        }
+        return answers.take(link.substring(prefix.length).trimEnd('/'))
     }
 
-    private fun answerLink(answer: NoticeAnswer): String {
-        val token = ByteArray(16).also(random::nextBytes).joinToString("") { "%02x".format(it) }
-        answers[token] = answer
-        return "${AppLink.DESKTOP_SCHEME}://answer/$token"
-    }
-
-    private fun button(label: String, link: String) =
-        "<action content=\"${attr(label)}\" activationType=\"protocol\" arguments=\"${attr(link)}\"/>"
-
-    private fun text(value: String) = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    private fun attr(value: String) = text(value).replace("\"", "&quot;")
-
-    private fun encode(value: String) = java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
+    private fun answerLink(answer: NoticeAnswer): String =
+        "${AppLink.DESKTOP_SCHEME}://answer/${answers.register(answer)}"
 
     /** The name Windows files Herald's notifications under. */
     private const val APP_ID = "dev.hermeskotlin.herald"
 }
+
+internal fun buildToastXml(
+    notice: DesktopNotice,
+    approveLabel: String,
+    denyLabel: String,
+    linkFor: (NoticeAnswer) -> String,
+): String {
+    val open = notice.sessionId?.let { "${AppLink.DESKTOP_SCHEME}://session/${encodeUrlSegment(it)}" } ?: "${AppLink.DESKTOP_SCHEME}://show"
+    val approval = notice.request as? InputRequest.Approval
+    val buttons = if (approval == null) {
+        ""
+    } else {
+        "<actions>" +
+            toastButton(approveLabel, linkFor(NoticeAnswer(notice.sessionId, approval, ApprovalChoice.Once))) +
+            toastButton(denyLabel, linkFor(NoticeAnswer(notice.sessionId, approval, ApprovalChoice.Deny))) +
+            "</actions>"
+    }
+    return "<toast activationType=\"protocol\" launch=\"${escapeXmlAttr(open)}\">" +
+        "<visual><binding template=\"ToastGeneric\"><text>${escapeXmlText(notice.title)}</text><text>${escapeXmlText(notice.body)}</text></binding></visual>" +
+        buttons + "</toast>"
+}
+
+private fun toastButton(label: String, link: String) =
+    "<action content=\"${escapeXmlAttr(label)}\" activationType=\"protocol\" arguments=\"${escapeXmlAttr(link)}\"/>"
+
+/** Escapes XML text and strips XML 1.0 illegal control characters that would cause `XmlDocument.LoadXml` to reject the toast. */
+internal fun escapeXmlText(value: String): String = buildString(value.length) {
+    for (ch in value) {
+        when {
+            ch == '&' -> append("&amp;")
+            ch == '<' -> append("&lt;")
+            ch == '>' -> append("&gt;")
+            isIllegalXmlChar(ch) -> Unit
+            else -> append(ch)
+        }
+    }
+}
+
+internal fun escapeXmlAttr(value: String): String = escapeXmlText(value).replace("\"", "&quot;")
+
+private fun isIllegalXmlChar(ch: Char): Boolean {
+    val code = ch.code
+    return (code in 0x00..0x08) || code == 0x0B || code == 0x0C || (code in 0x0E..0x1F) ||
+        code == 0xFFFE || code == 0xFFFF
+}
+
+private fun encodeUrlSegment(value: String) = java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")

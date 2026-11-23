@@ -233,6 +233,23 @@ fun main(args: Array<String>) {
             linuxNotices?.post(notice, owner)
         }
 
+        // Chats opened in windows of their own, each with its own key so closing one keeps the others' state.
+        val chatWindows = remember { mutableStateListOf<PoppedChat>() }
+        var nextWindow by remember { mutableStateOf(0) }
+        val poppedHosts = remember { mutableMapOf<Int, ChatHost>() }
+
+        fun raisePoppedChat(sessionId: String): Boolean {
+            val open = findPoppedChatIndex(
+                windows = chatWindows,
+                sessionId = sessionId,
+                targetSessionId = { it.target.storedSessionId },
+                liveSessionId = { poppedHosts[it.key]?.session?.value?.state?.value?.storedSessionId },
+            )
+            if (open < 0) return false
+            chatWindows[open] = chatWindows[open].let { it.copy(raise = it.raise + 1, raiseGuard = null) }
+            return true
+        }
+
         /**
          * Follows a `herald://` link. A notification's Approve or Deny answers its approval where it waits, without
          * the window; one that can't be answered there any more (answered, or another chat open) opens its chat.
@@ -240,20 +257,25 @@ fun main(args: Array<String>) {
         fun follow(link: String) {
             val answer = WindowsToasts.takeAnswer(link)
             if (answer != null) {
-                val session = host.session.value?.takeIf { s ->
-                    s.state.value.storedSessionId == answer.sessionId && s.state.value.inputRequests.any { it.id == answer.request.id }
-                }
+                val session = findApprovalSession(
+                    sessions = sequenceOf(host.session.value) + poppedHosts.values.asSequence().map { it.session.value },
+                    answer = answer,
+                )
                 if (session != null) {
                     scope.launch { session.answer(answer.request, InputAnswers.approval(answer.choice)) }
                     return
                 }
+                val sessionId = answer.sessionId
+                if (sessionId != null && raisePoppedChat(sessionId)) return
                 show()
-                answer.sessionId?.let { links.open(it, title = null) }
+                sessionId?.let { links.open(it, title = null) }
                 return
             }
             if (handleQuickEntryLink(link) { quickOpen = true; quickRaise++ }) return
+            val parsed = AppLink.parse(link)
+            if (parsed is AppLink.Session && raisePoppedChat(parsed.id)) return
             show()
-            AppLink.parse(link)?.let(links::follow)
+            parsed?.let(links::follow)
         }
 
         LaunchedEffect(Unit) {
@@ -287,9 +309,6 @@ fun main(args: Array<String>) {
                 last = now
             }
         }
-        // Chats opened in windows of their own, each with its own key so closing one keeps the others' state.
-        val chatWindows = remember { mutableStateListOf<PoppedChat>() }
-        var nextWindow by remember { mutableStateOf(0) }
         // The taskbar button flashes (the Dock icon bounces once) until the user comes back.
         fun askForAttention() {
             if (!focused.value) runCatching {
@@ -332,7 +351,7 @@ fun main(args: Array<String>) {
             } else null
             val hotkey = if (settings.quickEntry) GlobalHotkey.register(onStatus = { status ->
                 SwingUtilities.invokeLater { if (!disposed) QuickEntryHotkey.status = status }
-            }) { SwingUtilities.invokeLater { if (!disposed) quickOpen = true } } else null
+            }) { SwingUtilities.invokeLater { if (!disposed) { quickOpen = true; quickRaise++ } } } else null
             // Off where Windows has none for us (another platform) is no news; held by another app, Settings says so.
             QuickEntryHotkey.taken = settings.quickEntry && hotkey == null && System.getProperty("os.name").orEmpty().startsWith("Windows")
             onDispose { disposed = true; hotkey?.unregister() }
@@ -347,8 +366,15 @@ fun main(args: Array<String>) {
                 // A Linux notice's own open shows the window it came from: this one, or its chat's own, which the
                 // main window mustn't then come forward over.
                 val linuxOwner = lastLinuxOwner?.takeIf { linuxNotices != null && it.current() }
-                if (linuxOwner != null) linuxOwner.open() else show()
-                if (linuxNotices == null) lastNotice?.sessionId?.let { links.open(it, lastNotice?.chatTitle) }
+                if (linuxOwner != null) {
+                    linuxOwner.open()
+                } else {
+                    val sessionId = if (linuxNotices == null) lastNotice?.sessionId else null
+                    if (sessionId == null || !raisePoppedChat(sessionId)) {
+                        show()
+                        sessionId?.let { links.open(it, lastNotice?.chatTitle) }
+                    }
+                }
                 lastNotice = null
                 lastLinuxOwner = null
             },
@@ -409,21 +435,22 @@ fun main(args: Array<String>) {
                 if (focused.value && connection.state.value is ConnectionState.Reconnecting) connection.retry()
             }
             val titleBar = DesktopTitleBar.rememberFor(window)
+            val screenTitleBar = titleBar?.forScreens()
+            val windowControls = screenTitleBar?.toWindowControls() ?: DesktopWindowControls.None
             val focusHeld = remember { mutableStateOf(false) }
             CompositionLocalProvider(
                 LocalShortcuts provides shortcuts,
                 LocalDesktopBack provides back,
                 LocalClipboard provides rememberPatientClipboard(),
                 LocalFocusHeld provides focusHeld,
+                LocalDesktopWindowControls provides windowControls,
             ) {
                 // Under the app's handlers, so a page open over the chat sees Ctrl+W first.
                 ShortcutHandler { shortcut ->
                     when (shortcut) {
                         is Shortcut.PopOut -> {
                             val id = shortcut.target.storedSessionId ?: return@ShortcutHandler false
-                            val open = chatWindows.indexOfFirst { it.target.storedSessionId == id }
-                            if (open >= 0) chatWindows[open] = chatWindows[open].let { it.copy(raise = it.raise + 1, raiseGuard = null) }
-                            else chatWindows += PoppedChat(shortcut.target, nextWindow++)
+                            if (!raisePoppedChat(id)) chatWindows += PoppedChat(shortcut.target, nextWindow++)
                             true
                         }
                         Shortcut.CloseWindow -> {
@@ -440,9 +467,12 @@ fun main(args: Array<String>) {
                             releasesRepo = System.getProperty("herald.releasesRepo"),
                             onDarkTheme = { titleBar?.dark(it) },
                             onBackground = { paintWindowBackground(window, it) },
-                            titleBar = titleBar?.forScreens(),
+                            titleBar = screenTitleBar,
                             // Signed out of a gateway, or left for another: its chats' windows close, calls and all.
-                            onSessionEnded = { url -> chatWindows.removeAll { it.target.gateway.url == url } },
+                            onSessionEnded = { url ->
+                                chatWindows.filter { it.target.gateway.url == url }.forEach { poppedHosts.remove(it.key) }
+                                chatWindows.removeAll { it.target.gateway.url == url }
+                            },
                         )
                     }
                 }
@@ -456,7 +486,14 @@ fun main(args: Array<String>) {
                     onShown = { next ->
                         val at = chatWindows.indexOfFirst { it.key == popped.key }
                         // A chat already in a window of its own comes forward there rather than open twice.
-                        val other = next.storedSessionId?.let { id -> chatWindows.indexOfFirst { it.target.storedSessionId == id } } ?: -1
+                        val other = next.storedSessionId?.let { id ->
+                            findPoppedChatIndex(
+                                windows = chatWindows,
+                                sessionId = id,
+                                targetSessionId = { it.target.storedSessionId },
+                                liveSessionId = { poppedHosts[it.key]?.session?.value?.state?.value?.storedSessionId },
+                            )
+                        } ?: -1
                         when {
                             other >= 0 -> chatWindows[other] = chatWindows[other].let { it.copy(raise = it.raise + 1, raiseGuard = null) }
                             at >= 0 -> chatWindows[at] = chatWindows[at].copy(target = next)
@@ -480,8 +517,15 @@ fun main(args: Array<String>) {
                             askForAttention()
                         }
                     },
-                    onClose = { chatWindows.removeAll { it.key == popped.key }; linuxNotices?.reconcile() },
+                    onClose = {
+                        poppedHosts.remove(popped.key)
+                        chatWindows.removeAll { it.key == popped.key }
+                        linuxNotices?.reconcile()
+                    },
                     onNoticeChange = { linuxNotices?.reconcile() },
+                    onHost = { poppedHost ->
+                        if (poppedHost != null) poppedHosts[popped.key] = poppedHost else poppedHosts.remove(popped.key)
+                    },
                     raise = popped.raise,
                     raiseGuard = popped.raiseGuard,
                 )

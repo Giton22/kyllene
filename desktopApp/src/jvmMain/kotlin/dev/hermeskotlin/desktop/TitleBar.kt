@@ -9,11 +9,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.composed
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
 import dev.hermeskotlin.ui.App
 import dev.hermeskotlin.ui.TitleBar
@@ -54,9 +62,10 @@ class DesktopTitleBar private constructor(private val bar: WindowDecorations.Cus
      */
     @Composable
     fun Content(icon: Painter? = null, title: String? = null) {
+        val (left, right) = rememberInsets()
         Row(
             Modifier.fillMaxWidth().height(TITLE_BAR_HEIGHT).draggable(bar)
-                .padding(start = bar.leftInset.dp + 14.dp, end = bar.rightInset.dp),
+                .padding(start = left.dp + 14.dp, end = right.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -72,18 +81,26 @@ class DesktopTitleBar private constructor(private val bar: WindowDecorations.Cus
      */
     @Composable
     fun forScreens(): TitleBar {
-        // The runtime measures the system's buttons once the window is up, and again when they change (another
-        // screen's scale, full screen on a Mac): looked at often until they're known, then every second.
-        var insets by remember { mutableStateOf(bar.leftInset to bar.rightInset) }
-        LaunchedEffect(Unit) {
+        val insets = rememberInsets()
+        return remember(insets) {
+            TitleBar(insets.first.dp, insets.second.dp, TITLE_BAR_HEIGHT, Modifier.draggable(bar, below = TITLE_BAR_HEIGHT))
+        }
+    }
+
+    /**
+     * The runtime measures the system's buttons once the window is up, and again when they change (another screen's
+     * scale, full screen on a Mac): looked at often until they're known, then every second.
+     */
+    @Composable
+    private fun rememberInsets(): Pair<Float, Float> {
+        var insets by remember(bar) { mutableStateOf(bar.leftInset to bar.rightInset) }
+        LaunchedEffect(bar) {
             while (true) {
                 delay(if (insets.first == 0f && insets.second == 0f) 100 else 1000)
                 insets = bar.leftInset to bar.rightInset
             }
         }
-        return remember(insets) {
-            TitleBar(insets.first.dp, insets.second.dp, TITLE_BAR_HEIGHT, Modifier.draggable(bar, below = TITLE_BAR_HEIGHT))
-        }
+        return insets
     }
 
     /**
@@ -131,4 +148,43 @@ class DesktopTitleBar private constructor(private val bar: WindowDecorations.Cus
             return titleBar
         }
     }
+}
+
+/** The window buttons over the screens, in unzoomed pixels: desktop-local counterpart of `WindowControls`. */
+@Immutable
+internal class DesktopWindowControls(val start: Int, val end: Int, val height: Int) {
+    companion object {
+        val None = DesktopWindowControls(0, 0, 0)
+    }
+}
+
+internal val LocalDesktopWindowControls = staticCompositionLocalOf { DesktopWindowControls.None }
+
+private val WINDOW_CONTROLS_GAP = 8.dp
+
+@Composable
+internal fun TitleBar.toWindowControls(): DesktopWindowControls = with(LocalDensity.current) {
+    DesktopWindowControls(
+        start = if (start > 0.dp) (start + WINDOW_CONTROLS_GAP).roundToPx() else 0,
+        end = if (end > 0.dp) (end + WINDOW_CONTROLS_GAP).roundToPx() else 0,
+        height = height.roundToPx(),
+    )
+}
+
+/** Pads a top-edge row in `desktopApp` clear of the OS window controls, matching `shared/ui`'s `clearOfWindowControls`. */
+internal fun Modifier.clearOfWindowControls(): Modifier = composed {
+    val controls = LocalDesktopWindowControls.current
+    if (controls.height == 0) return@composed this
+    val windowWidth = LocalWindowInfo.current.containerSize.width
+    var start by remember { mutableIntStateOf(0) }
+    var end by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    this
+        .onGloballyPositioned { coordinates ->
+            val bounds = coordinates.boundsInRoot()
+            val under = bounds.top < controls.height
+            start = if (under) (controls.start - bounds.left).toInt().coerceAtLeast(0) else 0
+            end = if (under) (bounds.right - (windowWidth - controls.end)).toInt().coerceAtLeast(0) else 0
+        }
+        .padding(start = with(density) { start.toDp() }, end = with(density) { end.toDp() })
 }

@@ -56,4 +56,25 @@ class GatewayCookieTest {
         assertFalse(sameOrigin(URI("https://hermes.example.com:8443/"), gateway))
         assertFalse(sameOrigin(URI("https://evil.example.com/"), gateway))
     }
+
+    @Test
+    fun cookieDeleteTargetsCoverDomainScopedAndSubPathCookies() {
+        val domainCookie = assertNotNull(parseSetCookie("CF_Authorization=tok; Domain=.example.com; Path=/; Secure"))
+        assertEquals(
+            CookieTarget("https://example.com/", "CF_Authorization"),
+            cookieDeleteTarget("https://hermes.example.com/plugins/kanban", domainCookie),
+        )
+
+        val subPathCookie = assertNotNull(parseSetCookie("session=abc; Path=/api; HttpOnly"))
+        assertEquals(
+            CookieTarget("https://hermes.example.com/api", "session"),
+            cookieDeleteTarget("https://hermes.example.com/plugins/kanban", subPathCookie),
+        )
+
+        val localCookie = assertNotNull(parseSetCookie("sid=1; Path=/api"))
+        assertEquals(
+            CookieTarget("http://127.0.0.1:9119/api", "sid"),
+            cookieDeleteTarget("http://127.0.0.1:9119/plugins/kanban", localCookie),
+        )
+    }
 }

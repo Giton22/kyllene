@@ -59,6 +59,7 @@ import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.Koin
 import org.koin.core.parameter.parametersOf
 import org.koin.core.qualifier.named
+import java.awt.Frame
 
 /**
  * One chat in a window of its own, as Hermes Desktop's session windows: compact, beside the main one, with the
@@ -78,6 +79,8 @@ fun ChatWindow(
     onPost: (DesktopNotice) -> Unit,
     onClose: () -> Unit,
     onNoticeChange: () -> Unit = {},
+    /** Registers this window's [ChatHost] while open, and clears it with null when disposed. */
+    onHost: (ChatHost?) -> Unit = {},
     /** Goes up each time the chat is asked for again, which brings this window forward. */
     raise: Int = 0,
     raiseGuard: (() -> Boolean)? = null,
@@ -117,12 +120,17 @@ fun ChatWindow(
         LaunchedEffect(Unit) { window.minimumSize = java.awt.Dimension(380, 420) }
         LaunchedEffect(raise) {
             if (raise > 0 && raiseGuard?.invoke() != false) {
+                if (window.extendedState and Frame.ICONIFIED != 0) window.extendedState = window.extendedState and Frame.ICONIFIED.inv()
                 window.toFront()
                 window.requestFocus()
                 if (raiseGuard?.invoke() != false) LinuxWindowActivation.request(window)
             }
         }
         val host = remember { ChatHost(koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get()) }
+        DisposableEffect(host) {
+            onHost(host)
+            onDispose { onHost(null) }
+        }
         val focused = remember { MutableStateFlow(false) }
         val windowFocused = LocalWindowInfo.current.isWindowFocused
         LaunchedEffect(windowFocused) { focused.value = windowFocused }

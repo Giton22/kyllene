@@ -56,6 +56,39 @@ class DesktopActionsTest {
             directory.deleteRecursively()
         }
     }
+
+    @Test fun approvalRoutingFindsSessionInPoppedOutChatWindow() {
+        data class FakeSession(val name: String, val storedId: String?, val requestIds: Set<String>)
+        val main = FakeSession("main", "s-main", setOf("r-main"))
+        val popped = FakeSession("popped", "s-popped", setOf("r-popped"))
+
+        val found = findMatchingApprovalSession(
+            sessions = sequenceOf(main, popped),
+            sessionId = "s-popped",
+            requestId = "r-popped",
+            storedSessionId = { it.storedId },
+            hasRequest = { s, id -> id in s.requestIds },
+        )
+        assertEquals(popped, found)
+
+        val missing = findMatchingApprovalSession(
+            sessions = sequenceOf(main, popped),
+            sessionId = "s-popped",
+            requestId = "r-main",
+            storedSessionId = { it.storedId },
+            hasRequest = { s, id -> id in s.requestIds },
+        )
+        assertEquals(null, missing)
+    }
+
+    @Test fun poppedChatLookupMatchesTargetOrLiveSessionId() {
+        data class FakeWindow(val targetId: String?, val liveId: String?)
+        val windows = listOf(FakeWindow("s-1", "s-1"), FakeWindow(null, "s-new"))
+
+        assertEquals(0, findPoppedChatIndex(windows, "s-1", { it.targetId }, { it.liveId }))
+        assertEquals(1, findPoppedChatIndex(windows, "s-new", { it.targetId }, { it.liveId }))
+        assertEquals(-1, findPoppedChatIndex(windows, "s-other", { it.targetId }, { it.liveId }))
+    }
 }
 
 /** A bounded owned JVM lets the process-lifetime lock and listener retire with their process. */

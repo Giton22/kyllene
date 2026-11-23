@@ -52,6 +52,19 @@ class ChromiumRulesTest {
         assertTrue(reachesApp(key(KeyEvent.VK_W, InputEvent.META_DOWN_MASK)))
     }
 
+    @Test
+    fun onlyActivatingKeysAndRecentGesturesCountForPopups() {
+        assertTrue(isUserGestureKey(key(KeyEvent.VK_ENTER)))
+        assertTrue(isUserGestureKey(key(KeyEvent.VK_SPACE)))
+        assertFalse(isUserGestureKey(key(KeyEvent.VK_A)))
+        assertFalse(isUserGestureKey(key(KeyEvent.VK_ESCAPE)))
+
+        assertFalse(isRecentUserGesture(null, nowNanos = 1_000_000_000L))
+        assertTrue(isRecentUserGesture(1_000_000_000L, nowNanos = 1_500_000_000L, windowMs = 1_000L))
+        assertTrue(isRecentUserGesture(1_000_000_000L, nowNanos = 2_000_000_000L, windowMs = 1_000L))
+        assertFalse(isRecentUserGesture(1_000_000_000L, nowNanos = 2_000_000_001L, windowMs = 1_000L))
+    }
+
     private fun key(code: Int, modifiers: Int = 0) =
         KeyEvent(Canvas(), KeyEvent.KEY_PRESSED, 0, modifiers, code, KeyEvent.CHAR_UNDEFINED)
 }

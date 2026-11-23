@@ -12,8 +12,10 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.PosixFilePermissions
 import java.time.Duration
 import kotlin.system.exitProcess
 
@@ -54,15 +56,26 @@ internal object DesktopUpdater : UpdateInstaller {
             .followRedirects(HttpClient.Redirect.NORMAL)
             .connectTimeout(Duration.ofSeconds(20))
             .build()
-        val name = url.substringAfterLast('/').substringBefore('?').ifBlank { "herald-update" }
-        val dir = File(System.getProperty("java.io.tmpdir"), "herald-update").apply { mkdirs() }
-        val part = File(dir, "$name.part")
-        val response = client.send(HttpRequest.newBuilder(URI(url)).GET().build(), HttpResponse.BodyHandlers.ofFile(part.toPath()))
+        val name = sanitizeUpdateFileName(url)
+        val dir = createUpdateDir()
+        val dirPath = dir.toPath().normalize()
+        val partPath = dirPath.resolve("$name.part").normalize()
+        val targetPath = dirPath.resolve(name).normalize()
+        check(partPath.parent == dirPath && targetPath.parent == dirPath) { "Invalid update file name" }
+        val part = partPath.toFile()
+        val response = try {
+            client.send(HttpRequest.newBuilder(URI(url)).GET().build(), HttpResponse.BodyHandlers.ofFile(partPath))
+        } catch (e: Exception) {
+            part.delete()
+            dir.delete()
+            throw e
+        }
         if (response.statusCode() !in 200..299) {
             part.delete()
+            dir.delete()
             error("HTTP ${response.statusCode()}")
         }
-        File(dir, name).also { Files.move(part.toPath(), it.toPath(), StandardCopyOption.REPLACE_EXISTING) }
+        targetPath.toFile().also { Files.move(partPath, it.toPath(), StandardCopyOption.REPLACE_EXISTING) }
     }
 
     /**
@@ -86,4 +99,33 @@ internal object DesktopUpdater : UpdateInstaller {
     }
 
     private val windows = System.getProperty("os.name").orEmpty().startsWith("Windows")
+}
+
+private const val ILLEGAL_FILENAME_CHARS = "/\\:*?\"<>|"
+
+/** Extracts a safe single filename from [url], stripping path separators, traversal segments and control chars. */
+internal fun sanitizeUpdateFileName(url: String): String {
+    val raw = url.substringBefore('#').substringBefore('?')
+        .substringAfterLast('/')
+        .substringAfterLast('\\')
+        .trim()
+    val cleaned = buildString(raw.length) {
+        for (ch in raw) {
+            if (ch.code >= 0x20 && ch !in ILLEGAL_FILENAME_CHARS) append(ch)
+        }
+    }.replace("..", "").trim('.', ' ')
+    return cleaned.ifBlank { "herald-update" }
+}
+
+/** Creates an unpredictable temporary directory for a downloaded installer, owner-only (0700) on POSIX. */
+internal fun createUpdateDir(): File {
+    val path = if ("posix" in FileSystems.getDefault().supportedFileAttributeViews()) {
+        Files.createTempDirectory(
+            "herald-update-",
+            PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")),
+        )
+    } else {
+        Files.createTempDirectory("herald-update-")
+    }
+    return path.toFile()
 }

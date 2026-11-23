@@ -42,8 +42,10 @@ import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.designsystem.text as textColor
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
+import dev.hermeskotlin.desktop.clearOfWindowControls
 import dev.hermeskotlin.desktop.resources.*
 import dev.hermeskotlin.ui.DesktopWeb
+import dev.hermeskotlin.ui.PlatformBackHandler
 import org.jetbrains.compose.resources.stringResource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -86,6 +88,7 @@ import java.awt.Desktop
 import java.net.URI
 import java.util.Date
 import java.util.Vector
+import java.util.concurrent.ConcurrentHashMap
 
 /** Widgets and plugin pages in the Chromium the JetBrains Runtime carries; see [Jcef]. */
 internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: GatewayRepository) : DesktopWeb {
@@ -136,6 +139,7 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
     @Composable
     override fun PluginPage(url: String, gateway: String, title: String, onClose: () -> Unit) {
         val close by rememberUpdatedState(onClose)
+        PlatformBackHandler(enabled = true) { close() }
         val app by produceState<CefApp?>(null) {
             value = app()?.takeIf { Jcef.reaches(url) }
             if (value == null) {
@@ -149,7 +153,7 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
         val cef = app
         Column(Modifier.fillMaxSize().background(Theme[colors][background])) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                Modifier.fillMaxWidth().clearOfWindowControls().padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -191,6 +195,7 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
         // phone, and never on a request anywhere else.
         var headers by remember(url) { mutableStateOf(emptyMap<String, String>()) }
         var lastRecovery by remember(url) { mutableLongStateOf(0L) }
+        val lentCookies = remember(url) { ConcurrentHashMap.newKeySet<CookieTarget>() }
         // A new client for another page: its handlers check against that page's gateway.
         val client = remember(cef, url) { cef.createClient() }
         val page = remember(client) { OffscreenBrowser(client, "about:blank", transparent = false) }
@@ -199,7 +204,9 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
             val session = unlessFailed { cookies.sessionFor(url, gateway) } ?: WebSession(emptyList(), emptyMap(), null)
             currentCoroutineContext().ensureActive()
             headers = session.headers
-            CefCookieManager.getGlobalManager().put(url, session.cookies, fresh)
+            CefCookieManager.getGlobalManager().put(url, session.cookies, fresh).forEach { cookie ->
+                lentCookies += cookieDeleteTarget(url, cookie)
+            }
             return session
         }
 
@@ -290,9 +297,10 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
                 }
             })
             client.addLifeSpanHandler(object : CefLifeSpanHandlerAdapter() {
-                // A link that opens a window opens in the system's browser.
+                // A link that opens a window opens in the system's browser only after a user click or Enter/Space:
+                // JCEF's onBeforePopup doesn't report userGesture, so a page can't pop tabs open on its own.
                 override fun onBeforePopup(browser: CefBrowser, frame: CefFrame, targetUrl: String?, targetFrameName: String?): Boolean {
-                    targetUrl?.let(::parseUrl)?.let(::openOutside)
+                    if (page.hasRecentUserGesture()) targetUrl?.let(::parseUrl)?.let(::openOutside)
                     return true
                 }
             })
@@ -300,9 +308,14 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
             client.addDialogHandler(NoFileDialogs)
             onDispose {
                 // Chromium's jar is on disk and outlives the page: leave no copy of the session there once it closes.
-                // The app's own jar still has it, and the next page is lent it fresh. Only this gateway's: a page
-                // open in another window keeps its own.
-                CefCookieManager.getGlobalManager().deleteCookies(url, "")
+                // The app's own jar still has it, and the next page is lent it fresh. Only this gateway's (plus each
+                // lent cookie's domain/path): a page open in another window keeps its own.
+                runCatching {
+                    val manager = CefCookieManager.getGlobalManager()
+                    lentCookies.forEach { manager.deleteCookies(it.url, it.name) }
+                    manager.deleteCookies(url, "")
+                    manager.flushStore(null)
+                }
                 client.dispose()
             }
         }
@@ -486,12 +499,29 @@ private suspend fun <T> unlessFailed(block: suspend () -> T): T? = try {
 }
 
 /** Sets the `Set-Cookie` [values] for [url], after dropping what the jar had for it when [fresh]. */
-private suspend fun CefCookieManager.put(url: String, values: List<String>, fresh: Boolean) {
+private suspend fun CefCookieManager.put(url: String, values: List<String>, fresh: Boolean): List<CefCookie> {
     if (fresh) deleteCookies(url, "")
-    values.mapNotNull(::parseSetCookie).forEach { setCookie(url, it) }
+    val parsed = values.mapNotNull(::parseSetCookie)
+    parsed.forEach { setCookie(url, it) }
     val done = CompletableDeferred<Unit>()
     if (!flushStore { done.complete(Unit) }) done.complete(Unit)
     done.await()
+    return parsed
+}
+
+/** The URL and cookie name Chromium needs to drop a lent cookie when its plugin page closes. */
+internal data class CookieTarget(val url: String, val name: String)
+
+/** Builds the deletion URL and name for [cookie] lent to [pageUrl], covering domain-scoped and sub-path cookies. */
+internal fun cookieDeleteTarget(pageUrl: String, cookie: CefCookie): CookieTarget {
+    val parsed = parseUrl(pageUrl)
+    val scheme = if (cookie.secure) "https" else parsed?.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: "https"
+    val domainHost = cookie.domain.trim().removePrefix(".")
+    val host = domainHost.ifEmpty { parsed?.host.orEmpty() }
+    val port = if (domainHost.isEmpty() && parsed != null && parsed.port != -1) ":${parsed.port}" else ""
+    val path = cookie.path.trim().let { if (it.startsWith("/")) it else "/$it" }
+    val deleteUrl = if (host.isNotEmpty()) "$scheme://$host$port$path" else pageUrl
+    return CookieTarget(deleteUrl, cookie.name)
 }
 
 /** A `Set-Cookie` value as Chromium's cookie; one without a domain stays the host's alone. */
