@@ -988,7 +988,8 @@ class ChatViewModelTest {
         val (vm, _) = viewModel(openTransport = { gated })
         connection.start(gateway.gatewayUrl)
         connection.state.first { it is ConnectionState.Connected }
-        vm.open(ChatTarget(gateway, null, null, nonce = 1))
+        val chatA = ChatTarget(gateway, null, null, nonce = 1)
+        vm.open(chatA)
         vm.composer.setTextAndPlaceCursorAtEnd("from chat A")
         vm.addAttachments(listOf(attachment("a1")))
         vm.send(null)
@@ -1001,6 +1002,12 @@ class ChatViewModelTest {
 
         assertEquals("chat B draft", vm.composer.text.toString())
         assertTrue(vm.attachments.value.isEmpty())
+
+        // What chat A couldn't send waits in chat A: its error says it's back in the composer.
+        vm.open(chatA)
+        runCurrent()
+        assertEquals("from chat A", vm.composer.text.toString())
+        assertEquals(listOf("a1"), vm.attachments.value.map { it.id })
     }
 
     @Test

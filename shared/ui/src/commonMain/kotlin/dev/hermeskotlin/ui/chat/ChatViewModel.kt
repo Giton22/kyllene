@@ -1140,8 +1140,8 @@ class ChatViewModel(
                 SlashRoute.Background -> chat.runInBackground(arg)
                 SlashRoute.Steer -> if (arg.isEmpty()) {
                     chat.showCommandOutput("/steer", getString(Res.string.chat_cmd_steer_usage))
-                } else if (chat.steer(arg) == SendOutcome.NotSent && session.value === chat) {
-                    giveBack("/steer $arg")
+                } else if (chat.steer(arg) == SendOutcome.NotSent) {
+                    returnUnsent(chat, owner, listOf("/steer $arg"))
                 }
                 SlashRoute.Reasoning -> when (chat.reasoning(arg)) {
                     // The gateway's display words drive this app's own Thinking toggle too.
@@ -1315,6 +1315,7 @@ class ChatViewModel(
         _comments.value = emptyList()
         val outgoing = if (comments.isEmpty()) text else formatReview(comments, text)
         val running = sendModeFor(state.value.running, mode, settings.settings.value?.runningSend, attachments.isNotEmpty())
+        val owner = target
         viewModelScope.launch {
             val outcome = when (running) {
                 null -> chat.submit(outgoing, attachments)
@@ -1322,20 +1323,15 @@ class ChatViewModel(
                 RunningSend.Queue -> chat.submit(outgoing, attachments, queue = true)
                 RunningSend.StopAndSend -> {
                     val result = chat.stopAndSubmit(outgoing, attachments)
-                    if (session.value !== chat) return@launch
                     // The stop drops what was queued behind the task; hand it back rather than lose it.
-                    result.dropped.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }?.let { giveBack(it.joinToString("\n\n")) }
+                    result.dropped.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }
+                        ?.let { returnUnsent(chat, owner, listOf(it.joinToString("\n\n"))) }
                     result.outcome
                 }
             }
-            if (session.value !== chat) return@launch
             // Give everything back if it never reached the gateway, so nothing typed or picked is lost. One
             // that may have arrived keeps its bubble to resend from instead, so it isn't in two places.
-            if (outcome == SendOutcome.NotSent) {
-                giveBack(text)
-                _attachments.update { attachments + it }
-                _comments.update { comments + it }
-            }
+            if (outcome == SendOutcome.NotSent) returnUnsent(chat, owner, listOf(text), attachments, comments)
         }
     }
 
@@ -1343,6 +1339,7 @@ class ChatViewModel(
         val chat = session.value ?: return
         if (text.isBlank()) return
         val running = sendModeFor(state.value.running, null, settings.settings.value?.runningSend, withAttachments = false)
+        val owner = target
         viewModelScope.launch {
             val outcome = when (running) {
                 null -> chat.submit(text, emptyList())
@@ -1350,19 +1347,17 @@ class ChatViewModel(
                 // Stopping someone's run from a box in another app is too much; it waits its turn instead.
                 RunningSend.Queue, RunningSend.StopAndSend -> chat.submit(text, emptyList(), queue = true)
             }
-            if (session.value !== chat) return@launch
-            if (outcome == SendOutcome.NotSent) giveBack(text)
+            if (outcome == SendOutcome.NotSent) returnUnsent(chat, owner, listOf(text))
         }
     }
 
     override fun interrupt() {
         val chat = session.value ?: return
+        val owner = target
         viewModelScope.launch {
             // Stop drops what was queued behind the task; hand it back rather than lose it.
             val dropped = chat.interrupt().filter { it.isNotBlank() }
-            if (session.value !== chat || dropped.isEmpty()) return@launch
-            val typed = composer.text.toString()
-            composer.setTextAndPlaceCursorAtEnd(listOf(takeComments(dropped), typed).filter { it.isNotBlank() }.joinToString("\n\n"))
+            if (dropped.isNotEmpty()) returnUnsent(chat, owner, dropped)
         }
     }
 
@@ -1373,14 +1368,11 @@ class ChatViewModel(
         if (!state.canChangeChat(connectionState.value is ConnectionState.Connected)) return
         if (state.messages.lastOrNull { it is ChatMessage.User }?.key != key) return
         val undo = SlashCommand.parse("/undo") ?: return
+        val owner = target
         viewModelScope.launch {
             val raw = chat.runCommand(undo) ?: return@launch
-            if (session.value !== chat) return@launch
-            val text = takeComments(listOf(raw))
             // Whatever was being typed stays, after the prompt that comes back.
-            val typed = composer.text.toString()
-            if (text.isBlank()) return@launch
-            composer.setTextAndPlaceCursorAtEnd(if (typed.isBlank()) text else "$text\n\n$typed")
+            returnUnsent(chat, owner, listOf(raw))
         }
     }
 
@@ -1448,9 +1440,11 @@ class ChatViewModel(
         val outgoing = if (comments.isEmpty()) text else formatReview(comments, text)
         _comments.value = emptyList()
         cancelEdit()
+        val owner = target
         viewModelScope.launch {
             if (chat.rewind(key, outgoing) != SendOutcome.NotSent) return@launch
-            if (session.value !== chat) return@launch
+            // Another chat is open by now: the edit waits in this one's draft.
+            if (session.value !== chat) return@launch returnUnsent(chat, owner, listOf(text), comments = comments)
             // The prompt is back where it was if the gateway turned the edit down; carry on editing it.
             _comments.update { comments + it }
             if (state.value.messages.any { it.key == key }) {
@@ -1491,11 +1485,10 @@ class ChatViewModel(
 
     override fun resend(key: String) {
         val chat = session.value ?: return
+        val owner = target
         viewModelScope.launch {
             // Not sent again after all: the text waits in the composer like any failed send.
-            val failed = chat.resend(key)
-            if (session.value !== chat) return@launch
-            failed?.let(::giveBack)
+            chat.resend(key)?.let { returnUnsent(chat, owner, listOf(it)) }
         }
     }
 
@@ -1507,10 +1500,43 @@ class ChatViewModel(
      * Puts [text] back in the composer, ahead of anything typed since, which stays. Comments it carries go
      * back to the tray as cards, not as their markup.
      */
-    private fun giveBack(text: String) {
-        val typed = takeComments(listOf(text))
+    private fun giveBack(text: String) = giveBackAll(listOf(text))
+
+    private fun giveBackAll(texts: List<String>) {
+        val typed = takeComments(texts)
         if (typed.isBlank()) return
         composer.setTextAndPlaceCursorAtEnd(if (composer.text.isBlank()) typed else "$typed\n\n${composer.text}")
+    }
+
+    /**
+     * Hands what [chat] couldn't send back to it: [texts], [attachments] and [comments] go to the composer while
+     * it's the open chat. Once another chat is open they go to its draft and trays instead, ahead of what waits
+     * there, so they're in the composer when it's opened again. [owner] is the chat's target when it was sent.
+     */
+    private suspend fun returnUnsent(
+        chat: ChatSession,
+        owner: ChatTarget?,
+        texts: List<String>,
+        attachments: List<OutgoingAttachment> = emptyList(),
+        comments: List<PendingComment> = emptyList(),
+    ) {
+        val id = chat.state.value.storedSessionId ?: owner?.storedSessionId
+        val key = owner?.let { trayKey(it, id) }
+        // The same chat opened again has a new session; the composer is still this chat's.
+        val open = session.value === chat || (key != null && target?.let { trayKey(it, draftChat(it)) } == key)
+        if (open) {
+            giveBackAll(texts)
+            _attachments.update { attachments + it }
+            _comments.update { comments + it }
+            return
+        }
+        if (owner == null || key == null) return
+        val (sent, typed) = unsend(texts) { ++lastCommentId }
+        if (attachments.isNotEmpty()) trays[key] = attachments + trays[key].orEmpty()
+        (comments + sent).takeIf { it.isNotEmpty() }?.let { commentTrays[key] = it + commentTrays[key].orEmpty() }
+        if (typed.isBlank()) return
+        val saved = drafts.get(owner.gateway.gatewayUrl, id, owner.profile)
+        drafts.set(owner.gateway.gatewayUrl, id, if (saved.isNullOrBlank()) typed else "$typed\n\n$saved", owner.profile)
     }
 
     /**
