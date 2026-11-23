@@ -2951,6 +2951,41 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aSessionAuthorityCutWithNoAnswerShowsTheTranscriptAndSendsNothing() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope) { null }
+
+        val rewinding = backgroundScope.async { chat.rewind("row-3", "one") }
+        transport.awaitSent { it.isCall("session.mutate") }
+        // The cut went through. What's left ends on a prompt with the same words, which is not this one arriving.
+        history = """{"session_id":"stored-1","messages":[{"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"}]}"""
+        transport.serverClose(1006)
+
+        assertEquals(SendOutcome.NotSent, rewinding.await())
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+        assertEquals(listOf("row-1", "row-2"), chat.state.value.messages.map { it.key })
+        assertTrue(chat.state.value.error!!.contains("Lost the connection"))
+    }
+
+    @Test
+    fun aPromptWithNoAnswerAfterTheSessionAuthorityCutStaysToCheck() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to SILENT)) { it.rewound() }
+
+        val rewinding = backgroundScope.async { chat.rewind("row-3", "two, edited") }
+        transport.awaitSent { it.isCall("prompt.submit") }
+        history = """{"session_id":"stored-1","messages":[{"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"}]}"""
+        transport.serverClose(1006)
+
+        assertEquals(SendOutcome.Unsettled, rewinding.await())
+        val shown = chat.state.value
+        assertEquals(listOf("one", "First", "two, edited"), shown.messages.map { it.textOf() })
+        // It may be running: the authority writes the prompt's row only once its turn starts.
+        assertEquals(SendCheck.Unknown, assertIs<ChatMessage.User>(shown.messages.last()).check)
+        assertTrue(shown.error!!.contains("Check that it isn't running"))
+    }
+
+    @Test
     fun aPromptSentOnTheSessionAuthorityGetsItsRowWhenItsTurnEnds() = runTest {
         // Its `prompt.submit` answers before the row is written, with no `user_row_id`; `message.complete` names it.
         val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
