@@ -58,19 +58,19 @@ internal object Bidi {
             val end = markdown.indexOf('\n', start).let { if (it < 0) markdown.length else it }
             val line = markdown.substring(start, end)
             val trimmed = line.trimStart()
-            val opener = when {
-                trimmed.startsWith("```") -> "```"
-                trimmed.startsWith("~~~") -> "~~~"
-                else -> null
-            }
             val blank = trimmed.isEmpty()
             val indented = line.startsWith("    ") || line.startsWith("\t")
-            val inFence = fence != null || opener != null
+            val opening = if (fence == null && !(indented && !inList && !previousParagraph)) openingFence(trimmed) else null
+            val inFence = fence != null || opening != null
             val listItem = !inFence && !blank && (!indented || inList) && listMarkerEnd(trimmed, 0) > 0
             if (listItem) inList = true else if (!inFence && !blank && !indented && previousBlank) inList = false
             val indentedCode = !inFence && indented && !inList && !previousParagraph
             val isCode = inFence || indentedCode || (!indented && LINK_DEFINITION.matches(line))
-            if (opener != null) fence = if (fence == opener) null else opener
+            if (fence != null) {
+                if (closesFence(trimmed, fence)) fence = null
+            } else if (opening != null) {
+                fence = opening
+            }
             out.append(if (isCode) code(line) else transform(line))
             if (end < markdown.length) out.append('\n')
             // Only paragraph text can be continued by an indented line; a heading, a rule or a table can't.
@@ -323,17 +323,46 @@ internal object Bidi {
         return i < 0 || line[i] == '\n'
     }
 
+    /** The opening fence delimiter (` ``` `, ` ```` `, ` ~~~ `, …) on [trimmed], or null. */
+    private fun openingFence(trimmed: String): String? {
+        val ch = trimmed.firstOrNull() ?: return null
+        if (ch != '`' && ch != '~') return null
+        var run = 0
+        while (run < trimmed.length && trimmed[run] == ch) run++
+        if (run < 3) return null
+        // CommonMark: a backtick fence's info string cannot contain backticks, so ```code``` stays an inline span.
+        if (ch == '`' && trimmed.indexOf('`', run) >= 0) return null
+        return trimmed.substring(0, run)
+    }
+
+    /** Whether [trimmed] closes [fence]: same character, at least as long, and only trailing whitespace. */
+    private fun closesFence(trimmed: String, fence: String): Boolean {
+        val ch = fence[0]
+        var run = 0
+        while (run < trimmed.length && trimmed[run] == ch) run++
+        if (run < fence.length) return false
+        for (i in run until trimmed.length) {
+            val c = trimmed[i]
+            if (c != ' ' && c != '\t' && c != '\r') return false
+        }
+        return true
+    }
+
     /** End of a list marker starting at [at], or [at] when there is none. `1. `, `1) `, `- `, `* `, `+ `. */
     private fun listMarkerEnd(line: String, at: Int): Int {
+        if (at >= line.length) return at
         var end = at
-        if (line[at] in '0'..'9') {
+        val c = line[at]
+        if (c in '0'..'9') {
             while (end < line.length && line[end] in '0'..'9') end++
             if (end - at > 9) return at // CommonMark allows at most nine digits
             if (end >= line.length || line[end] !in ".)") return at
             end++
-        } else {
+        } else if (c == '-' || c == '*' || c == '+') {
             // A bullet: the marker is one character and needs a space after it.
             end = at + 1
+        } else {
+            return at
         }
         if (end >= line.length || line[end] != ' ') return at
         return end + 1

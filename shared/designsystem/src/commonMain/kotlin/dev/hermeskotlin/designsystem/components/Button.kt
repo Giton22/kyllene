@@ -38,6 +38,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import dev.hermeskotlin.designsystem.label
 import dev.hermeskotlin.designsystem.onAccent
+import dev.hermeskotlin.designsystem.onDanger
 import dev.hermeskotlin.designsystem.onInverse
 import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import dev.hermeskotlin.designsystem.strokeStrong
@@ -81,7 +82,7 @@ fun Button(
         ButtonVariant.Secondary -> Theme[colors][surface3] to Theme[colors][textColor]
         ButtonVariant.Outline -> Color.Transparent to Theme[colors][textColor]
         ButtonVariant.Ghost -> Color.Transparent to Theme[colors][textColor]
-        ButtonVariant.Danger -> Theme[colors][danger] to Color.White
+        ButtonVariant.Danger -> Theme[colors][danger] to Theme[colors][onDanger]
         ButtonVariant.Inverse -> Theme[colors][inverse] to Theme[colors][onInverse]
     }
     val outline = if (variant == ButtonVariant.Outline) {

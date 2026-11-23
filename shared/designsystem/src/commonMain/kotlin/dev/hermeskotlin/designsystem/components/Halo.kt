@@ -21,8 +21,10 @@ fun Modifier.halo(): Modifier {
     if (!LocalGlow.current) return this
     val glow = Theme[colors][accentSoft]
     return drawWithCache {
+        if (size.width <= 0f || size.height <= 0f) return@drawWithCache onDrawBehind {}
         // The glow fades out at FADE of the radius; capping the radius keeps that within the reach.
         val radius = minOf(size.width * 0.8f, HALO_REACH.toPx() / FADE)
+        if (radius <= 0f) return@drawWithCache onDrawBehind {}
         val brush = Brush.radialGradient(0f to glow, FADE to Color.Transparent, center = Offset(size.width * 0.15f, 0f), radius = radius)
         onDrawBehind { drawRect(brush) }
     }

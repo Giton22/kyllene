@@ -26,6 +26,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -39,10 +41,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.composeunstyled.Text
@@ -81,6 +85,8 @@ fun <T> SegmentedControl(
     val track = Theme[colors][well]
     val ring = Theme[colors][stroke]
     val badges = LocalDensity.current.fontScale <= 1.3f
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val requesters = remember(options.size) { List(options.size) { FocusRequester() } }
     Row(
         modifier
             .fillMaxWidth()
@@ -99,21 +105,25 @@ fun <T> SegmentedControl(
             .then(
                 if (LocalDesktopLayout.current && enabled) {
                     Modifier.onPreviewKeyEvent { event ->
-                        val step = when {
-                            event.type != KeyEventType.KeyDown -> 0
-                            event.key == Key.DirectionRight -> 1
-                            event.key == Key.DirectionLeft -> -1
-                            else -> 0
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        val right = when (event.key) {
+                            Key.DirectionRight -> true
+                            Key.DirectionLeft -> false
+                            else -> return@onPreviewKeyEvent false
                         }
-                        val at = options.indexOf(selected)
-                        val next = options.getOrNull(at + step)
-                        (step != 0 && next != null).also { if (it) onSelect(next!!) }
+                        val target = segmentedStepIndex(options.indexOf(selected), options.size, right, rtl)
+                        if (target != null) {
+                            onSelect(options[target])
+                            runCatching { requesters[target].requestFocus() }
+                        }
+                        // Consume Left/Right at boundaries too so arrowing doesn't push focus out of the group.
+                        true
                     }
                 } else Modifier,
             )
             .selectableGroup(),
     ) {
-        options.forEach { option ->
+        options.forEachIndexed { index, option ->
             val isSelected = option == selected
             val interaction = remember { MutableInteractionSource() }
             val fill by animateColorAsState(if (isSelected) Theme[colors][thumb] else Color.Transparent)
@@ -123,6 +133,7 @@ fun <T> SegmentedControl(
                 Modifier
                     .weight(1f)
                     .fillMaxHeight()
+                    .focusRequester(requesters[index])
                     .handCursor(enabled && !isSelected)
                     .selectable(selected = isSelected, enabled = enabled, interactionSource = interaction, indication = null, role = Role.RadioButton, onClick = { onSelect(option) }),
                 contentAlignment = Alignment.Center,
@@ -163,4 +174,11 @@ fun <T> SegmentedControl(
             }
         }
     }
+}
+
+/** The option index an arrow key lands on from [currentIndex] among [count] options, or null at a boundary. */
+internal fun segmentedStepIndex(currentIndex: Int, count: Int, directionRight: Boolean, rtl: Boolean): Int? {
+    if (currentIndex !in 0 until count) return null
+    val step = (if (directionRight) 1 else -1) * (if (rtl) -1 else 1)
+    return (currentIndex + step).takeIf { it in 0 until count }
 }

@@ -32,6 +32,21 @@ class CodeViewTest {
     }
 
     @Test
+    fun lineColumnsExpandsTabsAndWideCharacters() {
+        fun cols(s: String) = lineColumns(s, s.indices)
+        assertEquals(0, cols(""))
+        assertEquals(5, cols("hello"))
+        assertEquals(4 + 3, cols("\tval"))
+        assertEquals(8, cols("\t\t"))
+        assertEquals(4, cols("中文"))
+        assertEquals(4, cols("あア"))
+        assertEquals(4, cols("한글"))
+        assertEquals(4, cols("ＡＢ"))
+        assertEquals(4, cols("a😀b"))
+        assertEquals(4 + 3 + 6 + 5, cols("\t// 日本語 test"))
+    }
+
+    @Test
     fun aColoringOfOtherTextIsntUsed() {
         val raw = """{"a":1}"""
         val colored = raw to AnnotatedString(raw)

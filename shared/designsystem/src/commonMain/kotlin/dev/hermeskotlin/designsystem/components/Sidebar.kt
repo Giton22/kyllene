@@ -139,6 +139,7 @@ fun SidebarLayout(
     BoxWithConstraints(modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val layoutDirection = LocalLayoutDirection.current
+        val isRtl = layoutDirection == LayoutDirection.Rtl
         // A side navigation bar or a cutout. Not safeDrawing: its keyboard part would recompose this on every frame
         // the keyboard moves, and it has no sides.
         val insets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
@@ -178,7 +179,10 @@ fun SidebarLayout(
                     orientation = Orientation.Horizontal,
                     // A phone's swipe; a mouse drag over the chat selects text instead of sliding the list in.
                     enabled = !docked && !LocalDesktopLayout.current,
+                    reverseDirection = isRtl,
                     onDragStarted = { state.stopAnimation() },
+                    // Modifier.draggable already reverses velocity when reverseDirection is true, so positive
+                    // velocity always means dragging toward open (right in LTR, left in RTL).
                     onDragStopped = { velocity ->
                         val open = when {
                             velocity > FLING_VELOCITY -> true
@@ -215,13 +219,21 @@ fun SidebarLayout(
                         drawContent()
                         val r = DRAWER_RADIUS.toPx()
                         val s = 1.dp.toPx()
-                        val w = size.width - s / 2
                         val h = size.height
                         val path = Path().apply {
-                            moveTo(w - r, s / 2)
-                            arcTo(Rect(w - 2 * r, s / 2, w, 2 * r), -90f, 90f, false)
-                            lineTo(w, h - r)
-                            arcTo(Rect(w - 2 * r, h - 2 * r, w, h - s / 2), 0f, 90f, false)
+                            if (isRtl) {
+                                val x = s / 2
+                                moveTo(x + r, s / 2)
+                                arcTo(Rect(x, s / 2, x + 2 * r, 2 * r), -90f, -90f, false)
+                                lineTo(x, h - r)
+                                arcTo(Rect(x, h - 2 * r, x + 2 * r, h - s / 2), 180f, -90f, false)
+                            } else {
+                                val w = size.width - s / 2
+                                moveTo(w - r, s / 2)
+                                arcTo(Rect(w - 2 * r, s / 2, w, 2 * r), -90f, 90f, false)
+                                lineTo(w, h - r)
+                                arcTo(Rect(w - 2 * r, h - 2 * r, w, h - s / 2), 0f, 90f, false)
+                            }
                         }
                         drawPath(path, edge, style = Stroke(s))
                     } to
@@ -264,6 +276,7 @@ fun SidebarLayout(
                                     dragged = ((dragged ?: width) + with(density) { delta.toDp() }).coerceIn(MIN_DOCKED_WIDTH, most)
                                 },
                                 orientation = Orientation.Horizontal,
+                                reverseDirection = isRtl,
                                 onDragStarted = { dragged = width },
                                 onDragStopped = {
                                     dragged?.let(onDockedWidthChange)

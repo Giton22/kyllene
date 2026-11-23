@@ -251,6 +251,37 @@ class BidiTest {
     fun indentedCodeAfterAHeadingGetsNoIsolates() {
         val out = prepared("## مثال على الأمر\n    chown www-data /srv\n\nثم شغل الخدمة")
         assertEquals(emptyList(), isolatesInside(out, MarkdownElementTypes.CODE_BLOCK))
+        val h1 = prepared("# مثال\n    chown www-data /srv\n\nثم شغل الخدمة")
+        assertEquals(emptyList(), isolatesInside(h1, MarkdownElementTypes.CODE_BLOCK))
+    }
+
+    @Test
+    fun singleCharPrefixOtherThanBulletDoesNotStartAListBeforeIndentedCode() {
+        for (prefix in listOf("> اقتباس", "و نص", "A note")) {
+            val out = prepared("$prefix\n\n    chown www-data /srv\n\nثم أكمل")
+            assertEquals(emptyList(), isolatesInside(out, MarkdownElementTypes.CODE_BLOCK), "prefix=$prefix out=$out")
+        }
+    }
+
+    @Test
+    fun aDifferentFenceDelimiterInsideAFenceDoesNotCloseIt() {
+        val backtickWithTilde = prepared("```\n~~~\nchown www-data /srv\n```\nبعد `x` و 2026")
+        assertTrue(backtickWithTilde.contains("```\n~~~\nchown www-data /srv\n```"), backtickWithTilde)
+        assertTrue(backtickWithTilde.endsWith("بعد `${lri}x$pdi` و ${lri}2026$pdi"), backtickWithTilde)
+
+        val tildeWithBacktick = prepared("~~~\n```\nchown www-data /srv\n~~~\nبعد `x` و 2026")
+        assertTrue(tildeWithBacktick.contains("~~~\n```\nchown www-data /srv\n~~~"), tildeWithBacktick)
+        assertTrue(tildeWithBacktick.endsWith("بعد `${lri}x$pdi` و ${lri}2026$pdi"), tildeWithBacktick)
+    }
+
+    @Test
+    fun aShorterFenceOrInlineTripleBacktickDoesNotBreakFenceTracking() {
+        val nested = prepared("````markdown\n```\nchown www-data /srv\n```\n````\nبعد `x`")
+        assertTrue(nested.contains("````markdown\n```\nchown www-data /srv\n```\n````"), nested)
+        assertTrue(nested.endsWith("بعد `${lri}x$pdi`"), nested)
+
+        val inlineTriple = prepared("قبل ```hermes``` بعد\nثم 2026")
+        assertTrue(inlineTriple.endsWith("ثم ${lri}2026$pdi"), inlineTriple)
     }
 
     @Test

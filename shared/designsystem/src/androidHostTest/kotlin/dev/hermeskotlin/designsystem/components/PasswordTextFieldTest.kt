@@ -5,9 +5,11 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.unit.dp
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.designsystem.HermesTheme
 import org.junit.Rule
@@ -22,6 +24,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -130,6 +133,50 @@ class PasswordTextFieldTest {
         assertValue("a")
         backspace()
         assertValue("")
+    }
+
+    @Test
+    fun passwordAndErrorSemanticsAreExposed() {
+        composeRule.setContent {
+            HermesTheme(ColorScheme.Dark) {
+                TextField(state = state, password = true, error = "Invalid token", label = "Token")
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password)).assertExists()
+        composeRule.onNode(SemanticsMatcher.expectValue(SemanticsProperties.Error, "Invalid token")).assertExists()
+    }
+
+    @Test
+    fun disabledClearableFieldCannotBeCleared() {
+        state.edit { replace(0, length, "keep me") }
+        composeRule.setContent {
+            HermesTheme(ColorScheme.Dark) {
+                TextField(state = state, clearable = true, enabled = false, label = "Host")
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.onNodeWithContentDescription("Clear").assertDoesNotExist()
+        assertEquals("keep me", state.text.toString())
+    }
+
+    @Test
+    fun clearAndPasswordButtonsHaveAdequateTouchTargetsOnPhone() {
+        state.edit { replace(0, length, "secret") }
+        composeRule.setContent {
+            HermesTheme(ColorScheme.Dark) {
+                TextField(state = state, clearable = true, password = true, label = "Password")
+            }
+        }
+        composeRule.waitForIdle()
+        for (desc in listOf("Clear", "Show password")) {
+            val bounds = composeRule.onNodeWithContentDescription(desc).getUnclippedBoundsInRoot()
+            val w = bounds.right - bounds.left
+            val h = bounds.bottom - bounds.top
+            assertTrue(w >= 40.dp && h >= 40.dp, "$desc touch target was ${w}x$h, expected at least 40dp")
+        }
+        composeRule.onNodeWithContentDescription("Clear").performClick()
+        assertValue("", TextRange(0))
     }
 
     private class RegisterHostActivity : TestRule {

@@ -74,6 +74,7 @@ val stroke = ThemeToken<Color>("stroke")
 val strokeStrong = ThemeToken<Color>("stroke_strong")
 
 val danger = ThemeToken<Color>("danger")
+val onDanger = ThemeToken<Color>("on_danger")
 val success = ThemeToken<Color>("success")
 val warning = ThemeToken<Color>("warning")
 

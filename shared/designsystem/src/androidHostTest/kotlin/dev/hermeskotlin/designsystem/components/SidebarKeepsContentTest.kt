@@ -30,6 +30,9 @@ import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -49,6 +52,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * The content beside the sidebar when the window crosses the docking point (a foldable unfolded, a tablet turned, a
@@ -76,7 +81,7 @@ class SidebarKeepsContentTest {
             scope = rememberCoroutineScope()
             HermesTheme(ColorScheme.Light) {
                 CompositionLocalProvider(LocalLayoutDirection provides direction) {
-                    Box(Modifier.width(width)) {
+                    Box(Modifier.width(width).testTag(ROOT)) {
                         SidebarLayout(state, sidebar = sidebar, dockedBreakpoint = BREAKPOINT, content = content)
                     }
                 }
@@ -199,6 +204,23 @@ class SidebarKeepsContentTest {
         assertContentBetween(0.dp, WIDE - DOCKED_WIDTH - HAIRLINE)
     }
 
+    @Test
+    fun rightToLeftSwipeLeftOpensAndSwipeRightClosesDrawer() {
+        width = NARROW
+        show(LayoutDirection.Rtl) { Box(Modifier.fillMaxSize().testTag(CONTENT)) }
+        composeRule.waitForIdle()
+        assertFalse(state.isOpen)
+
+        // In RTL the drawer sits on the right edge: swiping left pulls it open, swiping right pushes it shut.
+        composeRule.onNodeWithTag(ROOT).performTouchInput { swipeLeft(durationMillis = 120) }
+        composeRule.waitForIdle()
+        assertTrue(state.isOpen, "swiping left in RTL should open the drawer")
+
+        composeRule.onNodeWithTag(ROOT).performTouchInput { swipeRight(durationMillis = 120) }
+        composeRule.waitForIdle()
+        assertFalse(state.isOpen, "swiping right in RTL should close the drawer")
+    }
+
     private fun assertContentBetween(left: Dp, right: Dp) {
         val bounds = composeRule.onNodeWithTag(CONTENT).getUnclippedBoundsInRoot()
         assertEquals(left, bounds.left)
@@ -218,6 +240,7 @@ class SidebarKeepsContentTest {
     }
 
     private companion object {
+        const val ROOT = "root"
         const val CONTENT = "content"
         const val SAVED = "saved"
         const val KEPT = "kept"

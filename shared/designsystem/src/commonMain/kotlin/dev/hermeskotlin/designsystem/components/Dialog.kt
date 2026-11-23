@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -155,7 +156,8 @@ fun Dialog(
                 ),
             ) {
                 Surface(Modifier.fillMaxWidth(), elevated = true) {
-                    Column(Modifier.padding(if (desktop) 18.dp else 20.dp), verticalArrangement = Arrangement.spacedBy(if (desktop) 12.dp else 16.dp)) {
+                    val gap = if (desktop) 12.dp else 16.dp
+                    Column(Modifier.padding(if (desktop) 18.dp else 20.dp), verticalArrangement = Arrangement.spacedBy(gap)) {
                         // A desktop dialog's title is a heading, not a page's.
                         val heading = Theme[typography][titleStyle]
                         Text(
@@ -163,10 +165,21 @@ fun Dialog(
                             style = if (desktop) heading.copy(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold) else heading,
                             color = Theme[colors][textColor],
                         )
-                        if (message != null) {
-                            Text(message, style = Theme[typography][body], color = Theme[colors][textSecondary])
+                        // Scrollable body keeps the title and actions reachable in short windows (landscape, open IME).
+                        // Bounding the inner height preserves finite constraints for callers that nest a weighted scroll container.
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .weight(1f, fill = false)
+                                .verticalScrollWithBar()
+                                .heightIn(max = DIALOG_MAX_BODY_HEIGHT),
+                            verticalArrangement = Arrangement.spacedBy(gap),
+                        ) {
+                            if (message != null) {
+                                Text(message, style = Theme[typography][body], color = Theme[colors][textSecondary])
+                            }
+                            content()
                         }
-                        content()
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
@@ -178,3 +191,6 @@ fun Dialog(
         }
     }
 }
+
+/** Finite upper bound for a dialog's scrollable body so nested weighted scroll containers never see infinity. */
+private val DIALOG_MAX_BODY_HEIGHT = 4096.dp

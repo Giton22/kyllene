@@ -3,6 +3,7 @@ package dev.hermeskotlin.designsystem.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -80,7 +81,7 @@ fun CodeView(
     val charWidth = remember(style, density) { with(density) { measurer.measure("0000000000", style).size.width.toDp() / 10 } }
     // The digits plus room on either side: a number never runs into the frame's edge or the code.
     val gutterWidth = charWidth * lines.size.toString().length.coerceAtLeast(2) * 1.15f + 22.dp
-    val longest = remember(lines) { unwrappedColumns(lines.maxOfOrNull { it.last - it.first + 1 } ?: 0) }
+    val longest = remember(text, lines) { unwrappedColumns(lines.maxOfOrNull { lineColumns(text, it) } ?: 0) }
     val state = rememberLazyListState()
     LaunchedEffect(focusLine, lines.size) {
         val target = focusLine?.minus(1)?.takeIf { it in lines.indices } ?: return@LaunchedEffect
@@ -90,17 +91,19 @@ fun CodeView(
     val sideways = rememberScrollState()
     val horizontal = if (wrap) Modifier else Modifier.horizontalScroll(sideways)
     SelectionContainer(modifier) {
-      Box {
+      BoxWithConstraints {
+        val naturalWidth = gutterWidth + charWidth * (longest + 2) + 28.dp
+        val unwrappedWidth = if (constraints.hasBoundedWidth) maxOf(maxWidth, naturalWidth) else naturalWidth
         Box(horizontal) {
-            // Scrolled sideways the list needs a fixed width: the longest line's, so rows don't jump as they come in.
-            val width = if (wrap) Modifier.fillMaxWidth() else Modifier.width(gutterWidth + charWidth * (longest + 2) + 28.dp)
+            // Scrolled sideways the list needs a fixed width: at least the viewport, or the longest line's, so rows don't jump as they come in.
+            val width = if (wrap) Modifier.fillMaxWidth() else Modifier.width(unwrappedWidth)
             // Room under the last line for the sideways bar, so it doesn't sit over it.
             val underBar = if (!wrap && LocalDesktopLayout.current) 12.dp else 0.dp
             LazyColumn(width, state = state, contentPadding = PaddingValues(bottom = underBar)) {
                 itemsIndexed(lines, key = { index, _ -> index }) { index, range ->
                     val number = index + 1
                     // A line past the width the list can take (minified code, a log line) wraps within it.
-                    val overlong = range.last - range.first + 1 > MAX_LINE_COLUMNS
+                    val overlong = range.last - range.first + 1 > MAX_LINE_COLUMNS / TAB_COLUMNS && lineColumns(text, range) > MAX_LINE_COLUMNS
                     val lineText = colored?.getOrNull(index) ?: AnnotatedString(text.substring(range.first, range.last + 1))
                     Row(
                         Modifier
@@ -168,10 +171,66 @@ internal fun splitLines(text: String): List<IntRange> {
 }
 
 /**
+ * Monospace display columns for [text] across [range]: tabs expand to [TAB_COLUMNS] spaces, and wide CJK,
+ * fullwidth and supplementary characters count as 2 columns so unwrapped lines are not clipped.
+ */
+internal fun lineColumns(text: String, range: IntRange): Int {
+    if (range.isEmpty()) return 0
+    var cols = 0
+    var i = range.first
+    val last = range.last
+    while (i <= last) {
+        val c = text[i]
+        when {
+            c == '\t' -> {
+                cols += TAB_COLUMNS
+                i++
+            }
+            c.isHighSurrogate() && i + 1 <= last && text[i + 1].isLowSurrogate() -> {
+                cols += 2
+                i += 2
+            }
+            isWideChar(c) -> {
+                cols += 2
+                i++
+            }
+            else -> {
+                cols += 1
+                i++
+            }
+        }
+    }
+    return cols
+}
+
+/** Whether [c] occupies two monospace columns (CJK ideographs, kana, hangul, fullwidth forms). */
+private fun isWideChar(c: Char): Boolean = when (c) {
+    in '\u1100'..'\u115F', // Hangul Jamo init
+    in '\u2329'..'\u232A', // Angle brackets
+    in '\u2E80'..'\u303E', // CJK radicals and punctuation
+    in '\u3040'..'\u33FF', // Kana, Bopomofo, enclosed CJK
+    in '\u3400'..'\u4DBF', // CJK Unified Ideographs Extension A
+    in '\u4E00'..'\u9FFF', // CJK Unified Ideographs
+    in '\uA000'..'\uA4CF', // Yi
+    in '\uA960'..'\uA97C', // Hangul Jamo Extended-A
+    in '\uAC00'..'\uD7A3', // Hangul Syllables
+    in '\uF900'..'\uFAFF', // CJK Compatibility Ideographs
+    in '\uFE10'..'\uFE19', // Vertical forms
+    in '\uFE30'..'\uFE6F', // CJK Compatibility Forms
+    in '\uFF00'..'\uFF60', // Fullwidth ASCII & punctuation
+    in '\uFFE0'..'\uFFE6', // Fullwidth signs
+    -> true
+    else -> false
+}
+
+/**
  * How many characters wide the unwrapped list is laid out: the longest line's, up to [MAX_LINE_COLUMNS].
  * Unbounded, one long line (minified JSON) would ask for a width Compose's constraints can't hold.
  */
 internal fun unwrappedColumns(longest: Int): Int = longest.coerceIn(0, MAX_LINE_COLUMNS)
+
+/** Columns reserved per tab character in unwrapped width estimation. */
+internal const val TAB_COLUMNS = 4
 
 /** About 15,000 dp of monospace: far past any screen, well inside what a layout can measure. */
 internal const val MAX_LINE_COLUMNS = 2_000

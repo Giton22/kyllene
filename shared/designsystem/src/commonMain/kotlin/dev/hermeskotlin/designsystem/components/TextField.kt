@@ -44,6 +44,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentType
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -146,6 +148,10 @@ fun TextField(
         else -> Theme[colors][strokeStrong]
     }
     val focusRing = if (error != null) Theme[colors][dangerSoft] else Theme[colors][accentSoft]
+    val showClear = enabled && clearable && state.text.isNotEmpty()
+    val hasEndAction = showClear || password
+    val actionSize = if (desktop) 28.dp else 40.dp
+    val actionGap = if (desktop) 4.dp else 2.dp
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (label != null) {
@@ -171,7 +177,11 @@ fun TextField(
             interactionSource = interactionSource,
             modifier = Modifier
                 .then(requester?.let { Modifier.focusRequester(it) } ?: Modifier)
-                .then(contentType?.let { type -> Modifier.semantics { this.contentType = type } } ?: Modifier)
+                .semantics {
+                    contentType?.let { this.contentType = it }
+                    if (password) password()
+                    if (error != null) error(error)
+                }
                 .then(if (singleLine) Modifier else Modifier.commitComposingOnEnter(state))
                 .fillMaxWidth()
                 // Under a mouse a desktop field keeps to a desktop's 40dp, as a phone's does to a finger's 52dp.
@@ -190,10 +200,14 @@ fun TextField(
                 }
                 .background(Theme[colors][surface], shape)
                 .border(if (focused) 1.5.dp else 1.dp, borderColor, shape)
-                // A trailing control brings its own 48dp touch target, so the field keeps to 52dp round it.
+                // A trailing control or end action button brings its own touch target padding, so the icon sits evenly inset.
                 .padding(
                     start = if (desktop) 12.dp else 16.dp,
-                    end = if (trailing != null) 6.dp else if (desktop) 12.dp else 16.dp,
+                    end = when {
+                        trailing != null || hasEndAction -> 6.dp
+                        desktop -> 12.dp
+                        else -> 16.dp
+                    },
                     // A field of several lines keeps room above its first line and below its last.
                     top = if (trailing != null) 2.dp else if (singleLine) 6.dp else 12.dp,
                     bottom = if (trailing != null) 2.dp else if (singleLine) 6.dp else 12.dp,
@@ -214,10 +228,10 @@ fun TextField(
                         { Text(it, style = Theme[typography][body], color = Theme[colors][textTertiary]) }
                     },
                 )
-                if (clearable && state.text.isNotEmpty()) {
+                if (showClear) {
                     UnstyledButton(
                         onClick = { state.clearText() },
-                        modifier = Modifier.padding(start = 8.dp).size(24.dp).handCursor().clip(CircleShape),
+                        modifier = Modifier.padding(start = actionGap).size(actionSize).handCursor().clip(CircleShape),
                         indication = rememberHoverIndication(Theme[colors][textTertiary]),
                     ) {
                         UnstyledIcon(
@@ -231,7 +245,7 @@ fun TextField(
                 if (password) {
                     UnstyledButton(
                         onClick = { revealed = !revealed },
-                        modifier = Modifier.padding(start = 8.dp).size(24.dp).handCursor().clip(CircleShape),
+                        modifier = Modifier.padding(start = actionGap).size(actionSize).handCursor().clip(CircleShape),
                         indication = rememberHoverIndication(Theme[colors][textTertiary]),
                     ) {
                         UnstyledIcon(
