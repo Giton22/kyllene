@@ -1,6 +1,7 @@
 package dev.hermeskotlin.android.notify
 
 import android.content.Context
+import dev.hermeskotlin.android.HermesApplication
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatSession
@@ -42,7 +43,10 @@ class ChatNotifier(
     private val outsideWork: StateFlow<Boolean> = MutableStateFlow(false),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var serviceStarted = false
+    /** Something currently wants [ChatService] up. */
+    private var serviceWanted = false
+    /** [ChatService] is in the foreground, so it may be stopped safely. */
+    private var serviceForeground = false
 
     fun start() {
         scope.launch {
@@ -58,8 +62,11 @@ class ChatNotifier(
                     }
                 }
         }
+        val locked = (context.applicationContext as? HermesApplication)?.appLock?.locked ?: MutableStateFlow(false)
         scope.launch {
-            visibility.visible.collect { visible -> if (visible) notifications.cancelAttention() }
+            combine(visibility.visible, locked) { visible, isLocked -> visible && !isLocked }
+                .distinctUntilChanged()
+                .collect { unlockedInSight -> if (unlockedInSight) notifications.cancelAttention() }
         }
     }
 
@@ -76,15 +83,17 @@ class ChatNotifier(
 
                 // Each change is a chance to start it: Android refuses while the app is in the background.
                 val wanted = state.running || prefs.keepsProcessUp || outside
-                if (wanted && !serviceStarted) {
-                    serviceStarted = ChatService.start(context)
-                    // The service shows the notification as it is when it starts.
-                    shown = Shown(link::class, prefs.pushAnywhere)
+                if (wanted) {
+                    if (!serviceWanted && startService()) {
+                        // The service shows the notification as it is when it starts.
+                        shown = Shown(link::class, prefs.pushAnywhere)
+                    }
+                } else {
+                    stopService()
                 }
-                if (!wanted) stopService()
                 // Its line says only whether Herald is connected, so it changes with the link, never with a turn.
                 val now = Shown(link::class, prefs.pushAnywhere)
-                if (serviceStarted && now != shown) {
+                if (serviceForeground && now != shown) {
                     notifications.postOngoing(link, prefs.pushAnywhere)
                     shown = now
                 }
@@ -132,10 +141,10 @@ class ChatNotifier(
     }
 
     private suspend fun keepConnected() {
-        if (!serviceStarted) serviceStarted = ChatService.start(context)
+        startService()
         combine(connection.state, settings.settings) { state, prefs -> state to (prefs?.pushAnywhere == true) }
             .distinctUntilChanged()
-            .collect { (state, push) -> if (serviceStarted) notifications.postOngoing(state, push) }
+            .collect { (state, push) -> if (serviceForeground) notifications.postOngoing(state, push) }
     }
 
     /**
@@ -143,13 +152,44 @@ class ChatNotifier(
      * the usual rules stop it again once nothing needs it. Main thread only.
      */
     fun startServiceNow() {
-        if (!serviceStarted) serviceStarted = ChatService.start(context)
+        startService()
+    }
+
+    private fun startService(): Boolean {
+        if (serviceWanted) return true
+        val started = ChatService.start(context)
+        serviceWanted = started
+        return started
     }
 
     private fun stopService() {
-        if (!serviceStarted) return
-        serviceStarted = false
-        ChatService.stop(context)
+        if (!serviceWanted) return
+        serviceWanted = false
+        // One still starting stops itself once it's in the foreground (onServiceStarted).
+        if (serviceForeground) {
+            serviceForeground = false
+            ChatService.stop(context)
+        }
+    }
+
+    /** The service entered the foreground; false when nothing needs it anymore, so it should stop. */
+    internal fun onServiceStarted(): Boolean {
+        serviceForeground = serviceWanted
+        return serviceWanted
+    }
+
+    /** The service was destroyed: if it wasn't stopped by [stopService], clear stale wanted state too. */
+    internal fun onServiceStopped() {
+        if (serviceForeground) {
+            serviceForeground = false
+            serviceWanted = false
+        }
+    }
+
+    /** The service failed to enter the foreground after all. */
+    internal fun onServiceLost() {
+        serviceForeground = false
+        serviceWanted = false
     }
 
     /** Notifications anywhere holds the ntfy stream, which needs the process alive between turns too. */

@@ -1,6 +1,7 @@
 package dev.hermeskotlin.android.assist
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.assist.AssistContent
 import android.app.assist.AssistStructure
 import android.content.ActivityNotFoundException
@@ -9,10 +10,14 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
 import android.service.voice.VoiceInteractionSession
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -30,6 +35,7 @@ import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import dev.hermeskotlin.android.HeraldActivity
+import dev.hermeskotlin.android.HermesApplication
 import dev.hermeskotlin.android.notify.AppVisibility
 import dev.hermeskotlin.android.notify.ChatNotifications
 import dev.hermeskotlin.core.bots.BotsApi
@@ -66,8 +72,12 @@ class HeraldAssistSession(context: Context) :
     private val savedState = SavedStateRegistryController.create(this)
     private val store = ViewModelStore()
     private val work = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val main = Handler(Looper.getMainLooper())
     private lateinit var model: AssistantPanelModel
     private val microphone = mutableStateOf(false)
+    private val locked = mutableStateOf(true)
+
+    private val app: HermesApplication? get() = context.applicationContext as? HermesApplication
 
     /** This call-up's screenshot at full size, to cut circled parts from. */
     @Volatile private var screenshot: Bitmap? = null
@@ -104,6 +114,9 @@ class HeraldAssistSession(context: Context) :
         setViewTreeViewModelStoreOwner(this@HeraldAssistSession)
         setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@HeraldAssistSession))
         setContent {
+            val lockFlow = app?.appLock?.locked
+            val appLocked = if (lockFlow != null) lockFlow.collectAsState().value else false
+            if (locked.value || appLocked) return@setContent
             AssistantPanel(
                 model = model,
                 microphoneAllowed = microphone.value,
@@ -117,6 +130,26 @@ class HeraldAssistSession(context: Context) :
 
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
+        val keyguardLocked = context.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+        val appLock = app?.appLock
+        if (!keyguardLocked) appLock?.onForeground(SystemClock.elapsedRealtime())
+        val appLocked = appLock?.locked?.value == true
+        updateWindowSecure(app?.isAppLockEnabled() == true)
+        if (keyguardLocked || appLocked) {
+            locked.value = true
+            screenshot = null
+            // Opening Herald triggers keyguard dismissal and, when enabled, App lock before exposing gateway access.
+            runCatching {
+                context.startActivity(
+                    Intent(context, HeraldActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                )
+            }
+            // Defer hide() until VoiceInteractionSession.show() marks the window visible.
+            main.post { hide() }
+            return
+        }
+        locked.value = false
         // Read on every show: it may have just been allowed, which is why the panel came back.
         microphone.value = microphoneAllowed()
         if (args?.getBoolean(HeraldAssistService.EXTRA_RESUME) == true) {
@@ -134,14 +167,22 @@ class HeraldAssistSession(context: Context) :
 
     override fun onHide() {
         super.onHide()
+        val wasUnlocked = !locked.value
+        locked.value = true
         get<AppVisibility>().assistantShown(false)
         model.voice.cancelDictation()
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        if (wasUnlocked && !get<AppVisibility>().visible.value) {
+            app?.appLock?.onBackground(SystemClock.elapsedRealtime())
+        }
+        if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        }
     }
 
     // The one-structure form: Android calls it for the app in front on every version Herald runs on.
     @Deprecated("Superseded by onHandleAssist(AssistState) on API 29, which calls this for the app in front")
     override fun onHandleAssist(data: Bundle?, structure: AssistStructure?, content: AssistContent?) {
+        if (locked.value) return
         // Taken now, on arrival: by the time the walk is done the user may have called the assistant up again.
         val callUp = model.callUp
         if (structure == null) {
@@ -156,6 +197,7 @@ class HeraldAssistSession(context: Context) :
     }
 
     override fun onHandleScreenshot(screenshot: Bitmap?) {
+        if (locked.value) return
         this.screenshot = screenshot
         val callUp = model.callUp
         if (screenshot == null) {
@@ -166,6 +208,12 @@ class HeraldAssistSession(context: Context) :
             val jpeg = runCatching { ScreenReader.jpeg(screenshot) }.getOrNull()
             model.onScreenshot(callUp, jpeg, screenshot.width, screenshot.height)
         }
+    }
+
+    private fun updateWindowSecure(on: Boolean) {
+        val w = window.window ?: return
+        if (on) w.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else w.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
 
     /** Back leaves circling first, then closes the panel as usual. */

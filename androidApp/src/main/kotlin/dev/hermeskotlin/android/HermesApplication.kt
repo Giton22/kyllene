@@ -3,6 +3,7 @@ package dev.hermeskotlin.android
 import android.app.Application
 import android.content.Intent
 import android.content.res.Configuration
+import androidx.core.content.edit
 import dev.hermeskotlin.android.notify.AppVisibility
 import dev.hermeskotlin.android.notify.BotNotifier
 import dev.hermeskotlin.android.notify.ChatNotifications
@@ -51,6 +52,16 @@ class HermesApplication : Application() {
     /** App lock's state lives as long as the process, so a recreated activity isn't a cold start. */
     val appLock = AppLockTimer()
 
+    private val windowPrefs by lazy { getSharedPreferences(WINDOW_PREFS, MODE_PRIVATE) }
+
+    /** Synchronous copy of Settings → App lock, kept current with [SettingsStore]. */
+    fun isAppLockEnabled(): Boolean = windowPrefs.getBoolean(KEY_APP_LOCK, false)
+
+    internal fun setAppLockEnabled(on: Boolean) {
+        windowPrefs.edit { putBoolean(KEY_APP_LOCK, on) }
+        appLock.setEnabled(on)
+    }
+
     /**
      * A link or share that came in while App lock was locked; it opens once the user unlocks. Kept here,
      * not on the activity, so a rotation or theme change under the lock doesn't drop it.
@@ -59,10 +70,14 @@ class HermesApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Seed App lock from the synchronous copy on process start, so entry points other than
+        // HeraldActivity (assistant, call screen, phone tool actions) enforce it from a cold start too.
+        appLock.onLaunch(isAppLockEnabled(), fresh = true)
         val koin = startKoin {
             androidContext(this@HermesApplication)
             modules(sharedModules + notifyModule + wearModule)
         }.koin
+        followAppLockSetting(koin.get(), koin.get())
         // Before anything the Pebble app hands over is read: only the picked Pebble app is heard.
         PebbleApps.choose(this, koin.get())
         slowHeartbeatWhenUnused(koin.get(), koin.get(), koin.get(), koin.get(), koin.get())
@@ -139,11 +154,23 @@ class HermesApplication : Application() {
         renameChannels()
     }
 
+    /** Keeps the synchronous App lock copy and timer in sync with Settings even before HeraldActivity opens. */
+    private fun followAppLockSetting(settings: SettingsStore, scope: CoroutineScope) {
+        scope.launch(Dispatchers.Main.immediate) {
+            settings.settings.filterNotNull().map { it.appLock }.distinctUntilChanged().collect(::setAppLockEnabled)
+        }
+    }
+
     /** A new language: the notification channels take its names, as Settings › Notifications lists them. */
     private fun renameChannels() {
         GlobalContext.getOrNull()?.run {
             get<ChatNotifications>().createChannels()
             get<PhoneConfirmations>().createChannel()
         }
+    }
+
+    companion object {
+        const val WINDOW_PREFS = "window"
+        const val KEY_APP_LOCK = "app_lock"
     }
 }

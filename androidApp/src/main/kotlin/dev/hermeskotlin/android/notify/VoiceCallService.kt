@@ -29,6 +29,7 @@ class VoiceCallService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_END) {
             keeper.end()
+            stopIfIdle(startId)
             return START_NOT_STICKY
         }
         val end = PendingIntent.getService(
@@ -53,6 +54,14 @@ class VoiceCallService : Service() {
         // The chat ended while it was starting: it was left to stop here.
         if (!keeper.started()) stopSelf()
         return START_NOT_STICKY
+    }
+
+    /**
+     * A tap on the notification's End with nothing held (a second tap, say) may have started this service anew,
+     * never into the foreground: it stops, unless a voice chat started since, whose start is newer than [startId].
+     */
+    private fun stopIfIdle(startId: Int) {
+        if (!keeper.holding) stopSelf(startId)
     }
 
     override fun onDestroy() {

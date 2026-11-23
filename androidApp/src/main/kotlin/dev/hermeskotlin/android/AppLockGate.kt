@@ -13,7 +13,12 @@ import dev.hermeskotlin.core.settings.AppLockTimer
  * App lock's Android side for [activity]: asks for a fingerprint, face or the screen lock through
  * BiometricPrompt, and keeps the app's content out of Recents while the lock is on.
  */
-class AppLockGate(private val activity: FragmentActivity, private val timer: AppLockTimer, private val onUnlocked: () -> Unit) {
+class AppLockGate(
+    private val activity: FragmentActivity,
+    private val timer: AppLockTimer,
+    private val onUnlocked: () -> Unit,
+    private val onCancelled: () -> Unit = {},
+) {
 
     private var asking = false
 
@@ -36,6 +41,7 @@ class AppLockGate(private val activity: FragmentActivity, private val timer: App
             // Cancelled or too many tries: the cover stays, with its Unlock button to ask again.
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 asking = false
+                onCancelled()
             }
         })
         val info = BiometricPrompt.PromptInfo.Builder()

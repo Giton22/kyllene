@@ -194,11 +194,12 @@ internal class CalendarTool(private val context: Context, private val confirmati
         if (!event.organizing && !event.guestsCanModify) {
             throw PhoneToolException("The user was invited to that event; only its organizer can move it.")
         }
-        val length = event.length ?: throw PhoneToolException("That event's length isn't known: give end too.")
         val zone = ZoneId.systemDefault()
         val start = time(startText, "start").atZone(zone)
+        val endArg = args.string("end")?.let { time(it, "end").atZone(zone) }
         // The same real length, also across a change of the clocks.
-        val end = args.string("end")?.let { time(it, "end").atZone(zone) } ?: start.plus(length).withZoneSameInstant(zone)
+        val end = endArg ?: event.length?.let { start.plus(it).withZoneSameInstant(zone) }
+            ?: throw PhoneToolException("That event's length isn't known: give end too.")
         if (!end.isAfter(start)) throw PhoneToolException("end must be after start.")
         val was = LocalDateTime.ofInstant(Instant.ofEpochMilli(event.start), zone)
         // Only the times change: the event keeps its own time zone, which its guests see it in.

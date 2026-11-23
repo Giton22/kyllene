@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.ServiceCompat
@@ -24,15 +25,36 @@ class ChatService : Service() {
     private val notifications: ChatNotifications by inject()
     private val connection: GatewayConnection by inject()
     private val settings: SettingsStore by inject()
+    private val notifier: ChatNotifier by inject()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        ServiceCompat.startForeground(
-            this,
-            ChatNotifications.WORKING_ID,
-            notifications.ongoing(connection.state.value, settings.settings.value?.pushAnywhere == true),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-        )
+        // Into the foreground first, always: a service started this way and stopped before it is a crash.
+        try {
+            ServiceCompat.startForeground(
+                this,
+                ChatNotifications.WORKING_ID,
+                notifications.ongoing(connection.state.value, settings.settings.value?.pushAnywhere == true),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                } else {
+                    0
+                },
+            )
+        } catch (e: Exception) {
+            // Android 12+ can refuse entering foreground from the background or without permission.
+            Log.w("ChatService", "Couldn't enter the foreground", e)
+            notifier.onServiceLost()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // Stopped while it was starting: it was left to stop here once in the foreground.
+        if (!notifier.onServiceStarted()) stopSelf()
         return START_NOT_STICKY
+    }
+
+    override fun onDestroy() {
+        notifier.onServiceStopped()
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

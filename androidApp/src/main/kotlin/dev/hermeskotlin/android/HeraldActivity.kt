@@ -61,7 +61,7 @@ import org.koin.android.ext.android.inject
 class HeraldActivity : FragmentActivity() {
 
     // The last theme shown, read synchronously so the window behind the first frame already matches it.
-    private val windowPrefs by lazy { getSharedPreferences("window", MODE_PRIVATE) }
+    private val windowPrefs by lazy { getSharedPreferences(HermesApplication.WINDOW_PREFS, MODE_PRIVATE) }
 
     private val host: ChatHost by inject()
     private val connection: GatewayConnection by inject()
@@ -89,7 +89,7 @@ class HeraldActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         if (windowPrefs.contains(KEY_DARK)) applyWindowTheme(windowPrefs.getBoolean(KEY_DARK, false))
         // The stored setting is read asynchronously; this copy decides the very first frame.
-        val lockOn = windowPrefs.getBoolean(KEY_APP_LOCK, false)
+        val lockOn = app.isAppLockEnabled()
         // Switching the app icon restarts Herald in a new task: that's no fresh open, so it stays unlocked.
         appLock.onLaunch(lockOn, fresh = savedInstanceState == null && !AppIconRestart.take())
         lockGate.hideFromRecents(lockOn)
@@ -130,6 +130,9 @@ class HeraldActivity : FragmentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // onNewIntent can run before onStart: re-evaluate the App lock timeout before handling the intent.
+        appLock.onForeground(SystemClock.elapsedRealtime())
+        if (appLock.locked.value) promptOnResume = true
         handleIntent(intent)
     }
 
@@ -209,8 +212,7 @@ class HeraldActivity : FragmentActivity() {
     private fun followAppLockSetting() {
         lifecycleScope.launch {
             settings.settings.filterNotNull().map { it.appLock }.distinctUntilChanged().collect { on ->
-                windowPrefs.edit { putBoolean(KEY_APP_LOCK, on) }
-                appLock.setEnabled(on)
+                app.setAppLockEnabled(on)
                 lockGate.hideFromRecents(on)
             }
         }
@@ -278,6 +280,5 @@ class HeraldActivity : FragmentActivity() {
     private companion object {
         const val KEY_DARK = "dark"
         const val KEY_ASKED_NOTIFICATIONS = "asked_notifications"
-        const val KEY_APP_LOCK = "app_lock"
     }
 }

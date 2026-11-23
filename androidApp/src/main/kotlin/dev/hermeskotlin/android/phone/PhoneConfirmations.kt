@@ -9,14 +9,19 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import dev.hermeskotlin.android.HeraldActivity
+import dev.hermeskotlin.android.HermesApplication
 import dev.hermeskotlin.android.R
+import dev.hermeskotlin.android.notify.AppVisibility
+import dev.hermeskotlin.android.notify.OutOfSight
 import dev.hermeskotlin.core.phone.PhoneToolException
+import org.koin.core.context.GlobalContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
@@ -191,14 +196,18 @@ class PhoneConfirmations(private val context: Context) {
             .setDeleteIntent(deny)
             .setTimeoutAfter(ANSWER_MS)
             .addAction(0, text(R.string.phone_deny), deny)
-            .addAction(0, text(R.string.phone_allow), allow)
+            .addAction(
+                NotificationCompat.Action.Builder(0, text(R.string.phone_allow), allow)
+                    .setAuthenticationRequired(true)
+                    .build(),
+            )
             .build()
         return runCatching { manager.notify(TAG, id, notification) }.isSuccess
     }
 
     companion object {
         private const val CHANNEL = "phone_tools"
-        private const val TAG = "phone_tool"
+        internal const val TAG = "phone_tool"
         private const val NOTE_TAG = "phone_tool_note"
         internal const val EXTRA_KEY = "phone_tool_key"
         internal const val EXTRA_ID = "phone_tool_id"
@@ -245,18 +254,39 @@ class PhoneConfirmations(private val context: Context) {
             if (intent.getStringExtra(EXTRA_KEY)?.let { deny(it) } != true) forget(context, intent)
         }
 
-        private fun forget(context: Context, intent: Intent) {
+        internal fun forget(context: Context, intent: Intent) {
             val id = intent.getIntExtra(EXTRA_ID, 0).takeIf { it != 0 } ?: return
             NotificationManagerCompat.from(context).cancel(TAG, id)
         }
     }
 }
 
-/** Opened by Allow: does the action from the user's tap, then closes. Draws nothing. */
-class PhoneActionActivity : Activity() {
+/** Opened by Allow: does the action from the user's tap, or opens Herald to unlock first when App lock is locked. */
+class PhoneActionActivity : Activity(), OutOfSight {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        PhoneConfirmations.allow(intent, this)
+        val key = intent.getStringExtra(PhoneConfirmations.EXTRA_KEY)
+        if (key == null || !PhoneConfirmations.waiting.containsKey(key)) {
+            PhoneConfirmations.forget(this, intent)
+            finish()
+            return
+        }
+        val appLock = (application as? HermesApplication)?.appLock
+        val now = SystemClock.elapsedRealtime()
+        appLock?.onForeground(now)
+        if (appLock?.locked?.value == true) {
+            // App lock is active: open Herald so the user unlocks and confirms the pending question in-app.
+            val open = Intent(this, HeraldActivity::class.java)
+                .setAction(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            startActivity(open)
+        } else {
+            PhoneConfirmations.allow(intent, this)
+            if (appLock != null && GlobalContext.getOrNull()?.get<AppVisibility>()?.visible?.value != true) {
+                appLock.onBackground(now)
+            }
+        }
         finish()
     }
 }

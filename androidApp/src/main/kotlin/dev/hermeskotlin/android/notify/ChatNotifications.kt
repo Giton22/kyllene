@@ -27,6 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import dev.hermeskotlin.android.HeraldActivity
 import dev.hermeskotlin.android.R
+import dev.hermeskotlin.android.phone.PhoneConfirmations
 import dev.hermeskotlin.core.chat.ApprovalChoice
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.chat.choicesAway
@@ -594,7 +595,7 @@ class ChatNotifications(
                 .putExtra(NotificationActionReceiver.EXTRA_REQUEST_ID, call.id)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        return context.packageManager.getLaunchIntentForPackage(context.packageName)!!
+        return appIntent()
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             .putExtra(EXTRA_ANSWERED_CALL, call.id)
             .apply {
@@ -659,8 +660,11 @@ class ChatNotifications(
         val person = BotShortcuts.person(bot, picture)
         val me = Person.Builder().setName(str(R.string.notification_you)).build()
         // Messages stack like a messaging app's until the bot's notification is opened or cleared.
-        val history = (unreadBotMessages[bot.name].orEmpty() + (preview to System.currentTimeMillis())).takeLast(MAX_STACKED)
-        unreadBotMessages[bot.name] = history
+        val history = synchronized(unreadLock) {
+            val updated = (unreadBotMessages[bot.name].orEmpty() + (preview to System.currentTimeMillis())).takeLast(MAX_STACKED)
+            unreadBotMessages[bot.name] = updated
+            updated
+        }
         val input = RemoteInput.Builder(NotificationActionReceiver.KEY_TEXT).setLabel(str(R.string.notification_message_bot, bot.label)).build()
         val notification = NotificationCompat.Builder(context, CHANNEL_BOTS)
             // The bot's own silhouette in the status bar, not Herald's.
@@ -702,8 +706,11 @@ class ChatNotifications(
     fun postRoomMessages(roomId: String, name: String, lines: List<RoomNotice>) {
         val fresh = lines.mapNotNull { line -> line.text.toPlainText().take(MAX_PREVIEW).ifBlank { null }?.let { line.copy(text = it) } }
         if (fresh.isEmpty()) return
-        val history = (unreadRoomLines[roomId].orEmpty() + fresh).takeLast(MAX_STACKED)
-        unreadRoomLines[roomId] = history
+        val history = synchronized(unreadLock) {
+            val updated = (unreadRoomLines[roomId].orEmpty() + fresh).takeLast(MAX_STACKED)
+            unreadRoomLines[roomId] = updated
+            updated
+        }
         val me = Person.Builder().setName(str(R.string.notification_you)).build()
         val notification = base(CHANNEL_BOTS)
             .setContentIntent(openRoom(roomId, name))
@@ -721,8 +728,11 @@ class ChatNotifications(
 
     /** The room's notification was swiped away: its stack starts over. */
     fun forgetRoom(roomId: String) {
-        unreadRoomLines.remove(roomId)
+        synchronized(unreadLock) { unreadRoomLines.remove(roomId) }
     }
+
+    /** Guards [unreadBotMessages] and [unreadRoomLines] across notifiers (main) and receiver (background) threads. */
+    private val unreadLock = Any()
 
     /** Each room's lines shown in its notification, oldest first. */
     private val unreadRoomLines = mutableMapOf<String, List<RoomNotice>>()
@@ -745,13 +755,13 @@ class ChatNotifications(
     }
 
     fun cancelBot(name: String) {
-        unreadBotMessages.remove(name)
+        synchronized(unreadLock) { unreadBotMessages.remove(name) }
         manager.cancel(name, BOT_ID)
     }
 
     /** The bot's notification was swiped away: its stack starts over. */
     fun forgetBot(name: String) {
-        unreadBotMessages.remove(name)
+        synchronized(unreadLock) { unreadBotMessages.remove(name) }
     }
 
     /** Each bot's messages shown in its notification, oldest first, with when they came. */
@@ -860,10 +870,21 @@ class ChatNotifications(
 
     /** Everything except the ongoing notification, once the user is looking at the app. */
     fun cancelAttention() {
-        unreadBotMessages.clear()
-        unreadRoomLines.clear()
+        synchronized(unreadLock) {
+            unreadBotMessages.clear()
+            unreadRoomLines.clear()
+        }
         // A call stays: Herald starting behind its full screen isn't the user looking ([hangUp] is).
-        manager.activeNotifications.filter { it.id != WORKING_ID && it.id != VOICE_ID && it.id != READ_ALOUD_ID && it.id != CALL_ID }.forEach { manager.cancel(it.tag, it.id) }
+        // Active phone tool questions manage their own lifecycle via PhoneConfirmations.inApp.
+        manager.activeNotifications
+            .filter {
+                it.id != WORKING_ID &&
+                    it.id != VOICE_ID &&
+                    it.id != READ_ALOUD_ID &&
+                    it.id != CALL_ID &&
+                    it.tag != PhoneConfirmations.TAG
+            }
+            .forEach { manager.cancel(it.tag, it.id) }
     }
 
     /** Herald is in front: every call ringing is answered by looking, and posts no notification later. */

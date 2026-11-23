@@ -31,9 +31,12 @@ fun sharedContent(context: Context, intent: Intent): SharedContent? {
     )
 }
 
-private fun isForeignContent(context: Context, uri: Uri): Boolean {
+internal fun isForeignContent(context: Context, uri: Uri): Boolean {
     if (uri.scheme != ContentResolver.SCHEME_CONTENT) return false
-    val authority = uri.authority ?: return false
+    // ContentResolver strips a leading "<userId>@" prefix before routing, while PackageManager.resolveContentProvider
+    // does not — strip it first so "0@<own>.attachments" cannot masquerade as an unknown foreign provider.
+    val authority = uri.authority?.substringAfterLast('@')?.takeIf { it.isNotBlank() } ?: return false
+    if (authority.equals("${context.packageName}.attachments", ignoreCase = true)) return false
     val provider = context.packageManager.resolveContentProvider(authority, 0)
     return provider?.packageName != context.packageName
 }

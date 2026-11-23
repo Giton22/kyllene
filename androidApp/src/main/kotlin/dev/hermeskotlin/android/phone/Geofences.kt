@@ -58,8 +58,10 @@ class Geofences(private val context: Context, private val settings: SettingsStor
     }
 
     override fun refresh() {
-        scope.launch { arm(if (enabled()) _places.value else emptyList()) }
+        scope.launch { syncNow() }
     }
+
+    internal suspend fun syncNow() = arm(if (enabled()) _places.value else emptyList())
 
     fun start() {
         scope.launch {
