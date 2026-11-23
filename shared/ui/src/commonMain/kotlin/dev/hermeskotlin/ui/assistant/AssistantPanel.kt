@@ -240,7 +240,8 @@ internal interface AssistantActions {
     val composer: TextFieldState
     fun send()
     fun stop()
-    fun answer(request: InputRequest, result: JsonObject)
+    /** [onDone] hears whether the answer went out; when it didn't, the request is still open to answer again. */
+    fun answer(request: InputRequest, result: JsonObject, onDone: (sent: Boolean) -> Unit = {})
     fun toggleDictation()
     fun setIncludeScreen(include: Boolean)
     fun startCircling()
@@ -278,7 +279,7 @@ private fun Card(
             override val composer get() = model.composer
             override fun send() = model.send()
             override fun stop() = model.stop()
-            override fun answer(request: InputRequest, result: JsonObject) = model.answer(request, result)
+            override fun answer(request: InputRequest, result: JsonObject, onDone: (sent: Boolean) -> Unit) = model.answer(request, result, onDone)
             override fun toggleDictation() = model.toggleDictation()
             override fun setIncludeScreen(include: Boolean) = model.setIncludeScreen(include)
             override fun startCircling() = model.startCircling()

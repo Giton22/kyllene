@@ -1465,15 +1465,17 @@ class ChatViewModel(
         viewModelScope.launch { chat.stopSubagent(subagentId) }
     }
 
-    override fun answer(request: InputRequest, result: JsonObject) {
-        val chat = session.value ?: return
+    override fun answer(request: InputRequest, result: JsonObject, onDone: (sent: Boolean) -> Unit) {
+        val chat = session.value ?: return onDone(false)
         val key = chat to request.id
-        if (!answering.add(key)) return
+        if (!answering.add(key)) return onDone(false)
         viewModelScope.launch {
+            var sent = false
             try {
-                chat.answer(request, result)
+                sent = chat.answer(request, result)
             } finally {
                 answering.remove(key)
+                onDone(sent)
             }
         }
     }

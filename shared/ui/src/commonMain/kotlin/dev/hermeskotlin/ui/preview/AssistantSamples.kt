@@ -49,7 +49,7 @@ internal object PreviewAssistantActions : AssistantActions {
     override val composer = TextFieldState()
     override fun send() = Unit
     override fun stop() = Unit
-    override fun answer(request: InputRequest, result: JsonObject) = Unit
+    override fun answer(request: InputRequest, result: JsonObject, onDone: (sent: Boolean) -> Unit) = Unit
     override fun toggleDictation() = Unit
     override fun setIncludeScreen(include: Boolean) = Unit
     override fun startCircling() = Unit

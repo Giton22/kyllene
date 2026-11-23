@@ -139,17 +139,16 @@ import org.jetbrains.compose.resources.stringResource
 /**
  * Takes the composer's place while the agent waits on a person: the oldest open request first, the
  * rest queued behind it. Answering sends one response; another client answering first makes the
- * gateway withdraw the request, and the panel moves on. [onStop] keeps the task's Stop within reach
- * while the composer is hidden.
+ * gateway withdraw the request, and the panel moves on. [onAnswer] calls its last argument with whether
+ * the answer went out; one that didn't leaves the request open to answer again. [onStop] keeps the task's
+ * Stop within reach while the composer is hidden.
  */
 @Composable
 internal fun InputRequestPanel(
     requests: List<InputRequest>,
     connected: Boolean,
-    onAnswer: (InputRequest, JsonObject) -> Unit,
+    onAnswer: (InputRequest, JsonObject, onDone: (sent: Boolean) -> Unit) -> Unit,
     onStop: (() -> Unit)? = null,
-    /** Shown by the chat when an answer RPC fails so a stayed-open request can be retried. */
-    error: String? = null,
 ) {
     val request = requests.firstOrNull() ?: return
     // A floating card ringed in the request's own soft tint: amber for what needs care, the accent for a question.
@@ -176,12 +175,12 @@ internal fun InputRequestPanel(
             // Keyed, so nothing carries over to the next request: a password shown with the eye stays hidden.
             key(request.id) {
                 var submitting by remember { mutableStateOf(false) }
-                // A dropped connection or failed RPC leaves the request open, so let the user try again.
-                LaunchedEffect(connected, error) { if (!connected || error != null) submitting = false }
+                // A dropped connection or an answer that didn't go out leaves the request open, so let the user try again.
+                LaunchedEffect(connected) { if (!connected) submitting = false }
                 val submit: (JsonObject) -> Unit = { payload ->
                     if (!submitting) {
                         submitting = true
-                        onAnswer(request, payload)
+                        onAnswer(request, payload) { sent -> if (!sent) submitting = false }
                     }
                 }
                 val canAnswer = connected && !submitting

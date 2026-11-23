@@ -53,7 +53,8 @@ interface ChatActions {
     /** Starts a `/btw` side question about the selection in the composer. */
     fun askAside(source: CommentSource, anchor: SelectionAnchor)
 
-    fun answer(request: InputRequest, result: JsonObject)
+    /** Answers [request]. [onDone] hears whether the answer went out; when it didn't, the request is still open to answer again. */
+    fun answer(request: InputRequest, result: JsonObject, onDone: (sent: Boolean) -> Unit = {})
 
     fun pickSuggestion(suggestion: SlashSuggestion)
 

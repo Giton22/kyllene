@@ -1422,7 +1422,7 @@ private fun ColumnScope.Dock(
 
     if (state.inputRequests.isNotEmpty()) {
         // The task's Stop is on the live task card above.
-        InputRequestPanel(state.inputRequests, connected, onAnswer = actions::answer, onStop = null, error = state.error)
+        InputRequestPanel(state.inputRequests, connected, onAnswer = actions::answer, onStop = null)
     } else if (voiceChat.phase != VoicePhase.Off) {
         // Full screen, the voice screen has these; the panel would only animate unseen beneath it.
         if (!voiceFull) {

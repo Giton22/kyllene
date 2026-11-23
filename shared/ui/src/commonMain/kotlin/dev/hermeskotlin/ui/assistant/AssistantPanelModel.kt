@@ -424,9 +424,16 @@ class AssistantPanelModel(
         scope.launch { session.interrupt() }
     }
 
-    fun answer(request: InputRequest, result: JsonObject) {
-        val session = _session.value ?: return
-        scope.launch { session.answer(request, result) }
+    fun answer(request: InputRequest, result: JsonObject, onDone: (sent: Boolean) -> Unit = {}) {
+        val session = _session.value ?: return onDone(false)
+        scope.launch {
+            var sent = false
+            try {
+                sent = session.answer(request, result)
+            } finally {
+                onDone(sent)
+            }
+        }
     }
 
     /** The chat's id once it exists on the gateway, for opening it in Kyllene. */
