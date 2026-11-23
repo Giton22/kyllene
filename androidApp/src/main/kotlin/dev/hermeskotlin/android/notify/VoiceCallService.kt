@@ -89,9 +89,7 @@ class VoiceCallKeeper(private val context: Context, settings: SettingsStore) : V
     internal val telecom = TelecomLiveCalls(context, settings)
     internal val telecomName = telecom.name
 
-    override fun systemCallingStatus() = telecom.setupStatus()
-
-    override fun prepareSystemCallingAccount() = telecom.prepareAccount()
+    override fun supportsAndroidCallControls() = telecom.supported
 
     override suspend fun registerLiveCall(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? =
         if (holding) telecom.register(name, onMute, onEnd) else null

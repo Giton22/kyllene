@@ -19,16 +19,10 @@ interface VoiceKeepAlive {
     /** Ends the matching answered system call so it can continue in-app. False if the call is gone. */
     fun handOffIncomingCallToApp(id: String): Boolean = false
 
-    /** Readiness independent of the app's opt-in, so settings can explain what's still needed. */
-    fun systemCallingStatus(): SystemCallingStatus = SystemCallingStatus.Unavailable
-
-    fun prepareSystemCallingAccount(): Boolean = false
+    /** Whether this device can register calls with Android Telecom. */
+    fun supportsAndroidCallControls(): Boolean = false
 
     fun release()
-}
-
-enum class SystemCallingStatus {
-    Unavailable, NeedsPermissions, NeedsAccount, Ready,
 }
 
 interface LiveSystemCall {

@@ -34,4 +34,4 @@ actual fun rememberPhoneToolAccess(): PhoneToolAccess = remember {
 }
 
 @Composable
-internal actual fun rememberSystemCallingAccess(): SystemCallingAccess? = null
+internal actual fun androidCallControlsAvailable(): Boolean = false

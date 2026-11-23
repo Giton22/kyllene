@@ -17,7 +17,6 @@ import androidx.core.telecom.CallsManager
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.canUseAndroidSystemCalling
 import dev.hermeskotlin.core.voice.LiveSystemCall
-import dev.hermeskotlin.core.voice.SystemCallingStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -33,7 +32,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal class TelecomLiveCalls(private val context: Context, private val settings: SettingsStore) {
     private val calls = CallsManager(context)
     private val manager = context.getSystemService(TelecomManager::class.java)
-    private val supported = manager != null && (
+    val supported = manager != null && (
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELECOM)
         )
@@ -45,10 +44,7 @@ internal class TelecomLiveCalls(private val context: Context, private val settin
     private val _incoming = MutableStateFlow<String?>(null)
     val incoming = _incoming.asStateFlow()
 
-    fun setupStatus() = if (supported) SystemCallingStatus.Ready else SystemCallingStatus.Unavailable
-
-    fun prepareAccount(): Boolean {
-        if (!supported) return false
+    private fun prepareAccount(): Boolean {
         if (accountReady) return true
         return runCatching {
             calls.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
