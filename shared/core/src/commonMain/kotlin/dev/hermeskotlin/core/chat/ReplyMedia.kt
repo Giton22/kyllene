@@ -142,7 +142,9 @@ private val BARE_FILE_URI = Regex(
  */
 fun linkFileUris(text: String): String {
     if ("file://" !in text) return text
-    return BARE_FILE_URI.replaceOutsideCode(text) { groups -> if (groups[1].isNotEmpty()) groups[0] else "<${groups[0]}>" }
+    return BARE_FILE_URI.replaceOutsideCode(text.replace("\r\n", "\n")) { groups ->
+        if (groups[1].isNotEmpty()) groups[0] else "<${groups[0]}>"
+    }
 }
 
 /**

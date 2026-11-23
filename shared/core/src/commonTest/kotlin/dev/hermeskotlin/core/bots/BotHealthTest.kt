@@ -208,4 +208,28 @@ class BotHealthTest {
 
         assertTrue(s.health.troubles.value.isEmpty())
     }
+
+    @Test
+    fun aFailedCheckBeforeAResetDoesNotClearTheNextGenerationsCheckedState() = runTest {
+        val firstAttempt = CompletableDeferred<RuntimeCheck>()
+        var attempts = 0
+        val s = setup(backgroundScope) {
+            if (++attempts == 1) firstAttempt.await() else RuntimeCheck(ok = true)
+        }
+        s.health.checkOnce(listOf("scout"))
+        testScheduler.runCurrent()
+
+        s.health.reset()
+        s.health.checkOnce(listOf("scout"))
+        testScheduler.runCurrent()
+        assertEquals(listOf("scout", "scout"), s.checks)
+
+        // The old generation's check fails after reset; it must not unmark "scout" in the new generation.
+        firstAttempt.completeExceptionally(RuntimeException("timeout"))
+        testScheduler.runCurrent()
+
+        s.health.checkOnce(listOf("scout"))
+        testScheduler.runCurrent()
+        assertEquals(listOf("scout", "scout"), s.checks)
+    }
 }

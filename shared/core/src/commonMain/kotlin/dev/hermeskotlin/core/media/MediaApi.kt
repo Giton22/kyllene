@@ -6,6 +6,7 @@ import dev.hermeskotlin.core.network.apiCall
 import dev.hermeskotlin.core.network.map
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -47,6 +48,8 @@ class MediaApi(
     private val web: HttpClient = client,
     /** The most a linked file is fetched into memory for Save or Share ([download]). */
     private val maxDownloadBytes: Long = MAX_DOWNLOAD_BYTES,
+    /** The most a remote picture is fetched into memory ([remote]). */
+    private val maxRemoteBytes: Long = MAX_REMOTE_BYTES,
 ) {
 
     /**
@@ -84,22 +87,9 @@ class MediaApi(
      */
     suspend fun download(url: GatewayUrl, path: String, profile: String? = null): ApiResult<ByteArray> {
         // Streamed and counted: unlike the managed route, /api/fs/download has no size cap of its own.
-        val result = client.prepareGet(url.resolve("api/fs/download")) {
+        val result = client.streamLimited(url.resolve("api/fs/download"), maxDownloadBytes, TOO_LARGE) {
             parameter("path", path)
             profile?.let { parameter("profile", it) }
-        }.execute { response ->
-            apiCall { response }.let { checked ->
-                if (checked !is ApiResult.Success) return@execute checked.map { ByteArray(0) }
-                if ((response.contentLength() ?: 0) > maxDownloadBytes) return@execute ApiResult.Failed(413, TOO_LARGE)
-                val bytes = try {
-                    response.bodyAsChannel().readRemaining(maxDownloadBytes + 1).readByteArray()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    return@execute ApiResult.Unavailable(e.message ?: "Download failed")
-                }
-                if (bytes.size > maxDownloadBytes) ApiResult.Failed(413, TOO_LARGE) else ApiResult.Success(bytes)
-            }
         }
         // FastAPI's own "Not Found" means no such route; the route's own 404 says "File not found".
         val noRoute = result is ApiResult.Failed && (result.status == 405 || result.status == 404 && result.message in setOf("Not Found", "HTTP 404"))
@@ -127,14 +117,38 @@ class MediaApi(
     }.map { }.let { if (it is ApiResult.Failed && (it.status == 404 || it.status == 405)) ApiResult.Failed(404, NO_MKDIR) else it }
 
     /** A reply's picture from the web (`![alt](https://...)`). */
-    suspend fun remote(url: String): ApiResult<ByteArray> = apiCall { web.get(url) }.map { response ->
-        // A reply can point anywhere; a huge "picture" mustn't fill the phone's memory.
-        check((response.contentLength() ?: 0) <= MAX_REMOTE_BYTES) { "Picture is too large" }
-        response.body<ByteArray>().also { check(it.size <= MAX_REMOTE_BYTES) { "Picture is too large" } }
+    suspend fun remote(url: String): ApiResult<ByteArray> =
+        // A reply can point anywhere; stream with a cap so a huge "picture" can't fill the phone's memory.
+        web.streamLimited(url, maxRemoteBytes, PICTURE_TOO_LARGE)
+
+    private suspend fun HttpClient.streamLimited(
+        url: String,
+        maxBytes: Long,
+        tooLargeMessage: String,
+        block: HttpRequestBuilder.() -> Unit = {},
+    ): ApiResult<ByteArray> = try {
+        prepareGet(url, block).execute { response ->
+            val checked = apiCall { response }
+            if (checked !is ApiResult.Success) return@execute checked.map { ByteArray(0) }
+            if ((response.contentLength() ?: 0) > maxBytes) return@execute ApiResult.Failed(413, tooLargeMessage)
+            val bytes = try {
+                response.bodyAsChannel().readRemaining(maxBytes + 1).readByteArray()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return@execute ApiResult.Unavailable(e.message ?: "Download failed")
+            }
+            if (bytes.size > maxBytes) ApiResult.Failed(413, tooLargeMessage) else ApiResult.Success(bytes)
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        ApiResult.Unavailable(e.message ?: e::class.simpleName ?: "Connection failed")
     }
 
     companion object {
         private const val MAX_REMOTE_BYTES = 20L * 1024 * 1024
+        private const val PICTURE_TOO_LARGE = "Picture is too large"
 
         const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
 

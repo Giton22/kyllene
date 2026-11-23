@@ -4,9 +4,11 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import org.webrtc.DataChannel
 import org.webrtc.IceCandidate
@@ -20,9 +22,9 @@ import org.webrtc.SessionDescription
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 import kotlin.math.min
 import kotlin.math.sqrt
 
@@ -37,6 +39,9 @@ class AndroidLiveCall(context: Context) : LiveCall {
     private val incoming = Channel<String>(Channel.UNLIMITED)
     override val events: ReceiveChannel<String> = incoming
 
+    private val lock = Any()
+    private val closed = AtomicBoolean(false)
+
     private var adm: JavaAudioDeviceModule? = null
     private var factory: PeerConnectionFactory? = null
     private var peer: PeerConnection? = null
@@ -46,14 +51,17 @@ class AndroidLiveCall(context: Context) : LiveCall {
     private var previousMode = AudioManager.MODE_NORMAL
     private var routed = false
 
-    @Volatile private var closed = false
     @Volatile private var micLevel = 0f
     @Volatile private var loudAt = 0L
     @Volatile private var statsPending = false
 
     override suspend fun connect(answer: suspend (offerSdp: String) -> String) {
+        if (closed.get()) throw CancellationException("Call closed")
         initialize(appContext)
-        routeAudio()
+        synchronized(lock) {
+            if (closed.get()) throw CancellationException("Call closed")
+            routeAudio()
+        }
         // WebRTC's own echo canceller rather than the phone's: with the voice on the speaker, many phones'
         // cancellers go half-duplex and all but mute the microphone while it talks, so you can't cut in.
         val adm = JavaAudioDeviceModule.builder(appContext)
@@ -61,91 +69,131 @@ class AndroidLiveCall(context: Context) : LiveCall {
             .setUseHardwareNoiseSuppressor(false)
             .setSamplesReadyCallback { samples -> micLevel = level(samples.data) }
             .createAudioDeviceModule()
-        this.adm = adm
-        val factory = PeerConnectionFactory.builder().setAudioDeviceModule(adm).createPeerConnectionFactory()
-        this.factory = factory
+        synchronized(lock) {
+            if (closed.get()) {
+                adm.release()
+                throw CancellationException("Call closed")
+            }
+            this.adm = adm
+        }
+        val factory = synchronized(lock) {
+            if (closed.get()) throw CancellationException("Call closed")
+            PeerConnectionFactory.builder().setAudioDeviceModule(adm).createPeerConnectionFactory().also {
+                this.factory = it
+            }
+        }
 
         val gathered = CompletableDeferred<Unit>()
         val config = PeerConnection.RTCConfiguration(emptyList()).apply { sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN }
-        val peer = factory.createPeerConnection(
-            config,
-            object : PeerConnection.Observer {
-                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
-                    if (state == PeerConnection.IceGatheringState.COMPLETE) gathered.complete(Unit)
+        val peer = synchronized(lock) {
+            if (closed.get()) throw CancellationException("Call closed")
+            (factory.createPeerConnection(
+                config,
+                object : PeerConnection.Observer {
+                    override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                        if (state == PeerConnection.IceGatheringState.COMPLETE) gathered.complete(Unit)
+                    }
+
+                    override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
+                        if (state == PeerConnection.PeerConnectionState.FAILED || state == PeerConnection.PeerConnectionState.CLOSED) incoming.close()
+                    }
+
+                    override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
+                    override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) = Unit
+                    override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+                    override fun onIceCandidate(candidate: IceCandidate) = Unit
+                    override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
+                    override fun onAddStream(stream: MediaStream) = Unit
+                    override fun onRemoveStream(stream: MediaStream) = Unit
+                    override fun onDataChannel(channel: DataChannel) = Unit
+                    override fun onRenegotiationNeeded() = Unit
+                    override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) = Unit
+                },
+            ) ?: error("Couldn't set up the call.")).also { this.peer = it }
+        }
+
+        synchronized(lock) {
+            if (closed.get()) throw CancellationException("Call closed")
+            val source = factory.createAudioSource(
+                MediaConstraints().apply {
+                    for (name in listOf("googEchoCancellation", "googNoiseSuppression", "googAutoGainControl", "googHighpassFilter")) {
+                        mandatory += MediaConstraints.KeyValuePair(name, "true")
+                    }
+                },
+            )
+            audioSource = source
+            val track = factory.createAudioTrack("mic", source)
+            audioTrack = track
+            peer.addTrack(track, listOf("mic"))
+
+            // Before the offer, so the offer carries the channel.
+            val channel = peer.createDataChannel("oai-events", DataChannel.Init()) ?: error("Couldn't open the call's event channel.")
+            this.channel = channel
+            channel.registerObserver(object : DataChannel.Observer {
+                override fun onMessage(buffer: DataChannel.Buffer) {
+                    val bytes = ByteArray(buffer.data.remaining()).also(buffer.data::get)
+                    incoming.trySend(bytes.decodeToString())
                 }
 
-                override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
-                    if (state == PeerConnection.PeerConnectionState.FAILED || state == PeerConnection.PeerConnectionState.CLOSED) incoming.close()
+                override fun onStateChange() {
+                    val isClosed = synchronized(lock) {
+                        closed.get() || this@AndroidLiveCall.channel?.state() == DataChannel.State.CLOSED
+                    }
+                    if (isClosed) incoming.close()
                 }
 
-                override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
-                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) = Unit
-                override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
-                override fun onIceCandidate(candidate: IceCandidate) = Unit
-                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) = Unit
-                override fun onAddStream(stream: MediaStream) = Unit
-                override fun onRemoveStream(stream: MediaStream) = Unit
-                override fun onDataChannel(channel: DataChannel) = Unit
-                override fun onRenegotiationNeeded() = Unit
-                override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) = Unit
-            },
-        ) ?: error("Couldn't set up the call.")
-        this.peer = peer
+                override fun onBufferedAmountChange(previous: Long) = Unit
+            })
+        }
 
-        val source = factory.createAudioSource(
-            MediaConstraints().apply {
-                for (name in listOf("googEchoCancellation", "googNoiseSuppression", "googAutoGainControl", "googHighpassFilter")) {
-                    mandatory += MediaConstraints.KeyValuePair(name, "true")
-                }
-            },
-        )
-        audioSource = source
-        val track = factory.createAudioTrack("mic", source)
-        audioTrack = track
-        peer.addTrack(track, listOf("mic"))
-
-        // Before the offer, so the offer carries the channel.
-        val channel = peer.createDataChannel("oai-events", DataChannel.Init()) ?: error("Couldn't open the call's event channel.")
-        this.channel = channel
-        channel.registerObserver(object : DataChannel.Observer {
-            override fun onMessage(buffer: DataChannel.Buffer) {
-                val bytes = ByteArray(buffer.data.remaining()).also(buffer.data::get)
-                incoming.trySend(bytes.decodeToString())
+        val offer = createSdp { observer ->
+            synchronized(lock) {
+                if (closed.get()) throw CancellationException("Call closed")
+                peer.createOffer(observer, MediaConstraints())
             }
-
-            override fun onStateChange() {
-                if (channel.state() == DataChannel.State.CLOSED) incoming.close()
+        }
+        applySdp { observer ->
+            synchronized(lock) {
+                if (closed.get()) throw CancellationException("Call closed")
+                peer.setLocalDescription(observer, offer)
             }
-
-            override fun onBufferedAmountChange(previous: Long) = Unit
-        })
-
-        val offer = peer.createSdp { observer -> peer.createOffer(observer, MediaConstraints()) }
-        peer.applySdp { observer -> peer.setLocalDescription(observer, offer) }
+        }
         // The vendor answers with whatever candidates are in the offer, so a slow gathering only waits so long.
         withTimeoutOrNull(ICE_GATHER_MS) { gathered.await() }
-        val local = peer.localDescription?.description ?: error("Couldn't make the call offer.")
+        val local = synchronized(lock) {
+            if (closed.get()) throw CancellationException("Call closed")
+            peer.localDescription?.description ?: error("Couldn't make the call offer.")
+        }
         val remote = answer(local)
-        peer.applySdp { observer -> peer.setRemoteDescription(observer, SessionDescription(SessionDescription.Type.ANSWER, remote)) }
+        applySdp { observer ->
+            synchronized(lock) {
+                if (closed.get()) throw CancellationException("Call closed")
+                peer.setRemoteDescription(observer, SessionDescription(SessionDescription.Type.ANSWER, remote))
+            }
+        }
     }
 
-    override fun send(event: String): Boolean {
-        val channel = channel ?: return false
-        if (closed || channel.state() != DataChannel.State.OPEN) return false
-        return channel.send(DataChannel.Buffer(ByteBuffer.wrap(event.encodeToByteArray()), false))
+    override fun send(event: String): Boolean = synchronized(lock) {
+        if (closed.get()) return false
+        val ch = channel ?: return false
+        if (ch.state() != DataChannel.State.OPEN) return false
+        ch.send(DataChannel.Buffer(ByteBuffer.wrap(event.encodeToByteArray()), false))
     }
 
     /** The voice's output level from the call's stats, with a short hangover so pauses between words count. */
     override fun speaking(): Boolean {
-        val peer = peer
-        if (peer != null && !closed && !statsPending) {
-            statsPending = true
-            peer.getStats { report ->
-                statsPending = false
-                val level = report.statsMap.values
-                    .firstOrNull { it.type == "inbound-rtp" && it.members["kind"] == "audio" }
-                    ?.members?.get("audioLevel") as? Double
-                if (level != null && level > SPEAKING_LEVEL) loudAt = System.currentTimeMillis()
+        synchronized(lock) {
+            val currentPeer = peer
+            if (currentPeer != null && !closed.get() && !statsPending) {
+                statsPending = true
+                currentPeer.getStats { report ->
+                    statsPending = false
+                    if (closed.get()) return@getStats
+                    val level = report.statsMap.values
+                        .firstOrNull { it.type == "inbound-rtp" && it.members["kind"] == "audio" }
+                        ?.members?.get("audioLevel") as? Double
+                    if (level != null && level > SPEAKING_LEVEL) loudAt = System.currentTimeMillis()
+                }
             }
         }
         return System.currentTimeMillis() - loudAt < SPEAKING_HANGOVER_MS
@@ -153,27 +201,38 @@ class AndroidLiveCall(context: Context) : LiveCall {
 
     override fun micLevel(): Float = micLevel
 
-    override fun setMuted(muted: Boolean) {
+    override fun setMuted(muted: Boolean) = synchronized(lock) {
+        if (closed.get()) return
         audioTrack?.setEnabled(!muted)
         if (muted) micLevel = 0f
     }
 
     override fun close() {
-        if (closed) return
-        closed = true
+        if (!closed.compareAndSet(false, true)) return
         incoming.close()
-        channel?.unregisterObserver()
-        channel?.close()
-        peer?.close()
-        channel?.dispose()
-        // The peer frees the microphone track with its sender; freeing it again here crashes in native code.
-        peer?.dispose()
-        audioSource?.dispose()
-        factory?.dispose()
-        adm?.release()
-        channel = null
-        peer = null
-        unrouteAudio()
+        synchronized(lock) {
+            val ch = channel
+            val p = peer
+            val src = audioSource
+            val f = factory
+            val a = adm
+            channel = null
+            peer = null
+            audioTrack = null
+            audioSource = null
+            factory = null
+            adm = null
+            ch?.unregisterObserver()
+            ch?.close()
+            p?.close()
+            ch?.dispose()
+            // The peer frees the microphone track with its sender; freeing it again here crashes in native code.
+            p?.dispose()
+            src?.dispose()
+            f?.dispose()
+            a?.release()
+            unrouteAudio()
+        }
     }
 
     /** A call goes to the speaker (or the headset when one is in), with the phone's call processing. */
@@ -236,20 +295,28 @@ class AndroidLiveCall(context: Context) : LiveCall {
 }
 
 /** Creates an SDP and waits for it. */
-private suspend fun PeerConnection.createSdp(start: (SdpObserver) -> Unit): SessionDescription = suspendCoroutine { continuation ->
+internal suspend fun createSdp(start: (SdpObserver) -> Unit): SessionDescription = suspendCancellableCoroutine { continuation ->
     start(object : SdpObserver {
-        override fun onCreateSuccess(description: SessionDescription) = continuation.resume(description)
-        override fun onCreateFailure(error: String?) = continuation.resumeWithException(IllegalStateException(error ?: "Couldn't make the call offer."))
+        override fun onCreateSuccess(description: SessionDescription) {
+            if (continuation.isActive) continuation.resume(description)
+        }
+        override fun onCreateFailure(error: String?) {
+            if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error ?: "Couldn't make the call offer."))
+        }
         override fun onSetSuccess() = Unit
         override fun onSetFailure(error: String?) = Unit
     })
 }
 
 /** Applies an SDP and waits for it. */
-private suspend fun PeerConnection.applySdp(start: (SdpObserver) -> Unit): Unit = suspendCoroutine { continuation ->
+internal suspend fun applySdp(start: (SdpObserver) -> Unit): Unit = suspendCancellableCoroutine { continuation ->
     start(object : SdpObserver {
-        override fun onSetSuccess() = continuation.resume(Unit)
-        override fun onSetFailure(error: String?) = continuation.resumeWithException(IllegalStateException(error ?: "The call was refused."))
+        override fun onSetSuccess() {
+            if (continuation.isActive) continuation.resume(Unit)
+        }
+        override fun onSetFailure(error: String?) {
+            if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error ?: "The call was refused."))
+        }
         override fun onCreateSuccess(description: SessionDescription) = Unit
         override fun onCreateFailure(error: String?) = Unit
     })

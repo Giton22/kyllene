@@ -52,7 +52,7 @@ class EncryptedKeyValueStore(context: Context) : KeyValueStore {
         return cipher.doFinal(bytes, IV_BYTES, bytes.size - IV_BYTES).decodeToString()
     }
 
-    private fun secretKey(): SecretKey {
+    private fun secretKey(): SecretKey = synchronized(KEY_LOCK) {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
@@ -63,10 +63,11 @@ class EncryptedKeyValueStore(context: Context) : KeyValueStore {
                 .setKeySize(256)
                 .build(),
         )
-        return generator.generateKey()
+        generator.generateKey()
     }
 
     private companion object {
+        val KEY_LOCK = Any()
         const val PREFS_NAME = "hermes_secure"
         const val KEY_ALIAS = "hermes_kv_key"
         const val ANDROID_KEYSTORE = "AndroidKeyStore"

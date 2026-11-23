@@ -70,5 +70,12 @@ class NativeTokens(private val store: KeyValueStore) {
     }
 }
 
-/** Host and port: http:// and https:// default ports differ, so a gateway is one or the other. */
-private fun authorityOf(url: Url): String = "${url.host.lowercase().trim('[', ']').trimEnd('.')}:${url.port}"
+/** Scheme, host and port: HTTPS/WSS tokens never go over cleartext HTTP/WS, even on the same custom port. */
+private fun authorityOf(url: Url): String {
+    val scheme = when (url.protocol.name.lowercase()) {
+        "https", "wss" -> "https"
+        "http", "ws" -> "http"
+        else -> url.protocol.name.lowercase()
+    }
+    return "$scheme://${url.host.lowercase().trim('[', ']').trimEnd('.')}:${url.port}"
+}

@@ -78,6 +78,27 @@ class NativeBearerTest {
     }
 
     @Test
+    fun httpsTokensNeverGoOverCleartextHttpOnTheSamePort() = runTest {
+        val httpsCustomPort = GatewayUrl.parse("https://100.64.0.1:9119")
+        signedIn(httpsCustomPort, "SECRET-HTTPS")
+        var auth: String? = "unset"
+        val api = clientWith { request ->
+            auth = request.headers[HttpHeaders.Authorization]
+            respond("""{"user_id":"u"}""", HttpStatusCode.OK, json)
+        }
+
+        // Cleartext HTTP on the exact same host and port must never receive the HTTPS bearer token.
+        api.me(GatewayUrl.parse("http://100.64.0.1:9119"))
+        assertNull(auth)
+
+        // Matching HTTPS and WSS requests do match.
+        api.me(httpsCustomPort)
+        assertEquals("Bearer SECRET-HTTPS", auth)
+        assertEquals("SECRET-HTTPS", tokens.forRequest(Url("wss://100.64.0.1:9119/api/ws"))?.accessToken)
+        assertNull(tokens.forRequest(Url("ws://100.64.0.1:9119/api/ws")))
+    }
+
+    @Test
     fun gatewaysBehindOneProxyKeepTheirOwnTokens() = runTest {
         val a = GatewayUrl.parse("https://proxy.example.com/a")
         val b = GatewayUrl.parse("https://proxy.example.com/b")

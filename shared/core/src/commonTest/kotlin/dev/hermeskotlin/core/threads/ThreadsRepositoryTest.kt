@@ -399,6 +399,24 @@ class ThreadsRepositoryTest {
         assertEquals(null, ThreadsRepository.threadFor(null, threads, rows))
     }
 
+    @Test
+    fun switchingProfileMidRenameStillSavesUnderTheCapturedScope() = runTest {
+        lateinit var repo: ThreadsRepository
+        repo = repository(backgroundScope, patch = {
+            // User switches to another profile while the chat rename request is in flight.
+            repo.bind(URL, "default")
+            null
+        })
+        repo.refresh(force = true)
+        repo.noteRows(URL, "work", listOf(SessionSummary("tip", title = "Misc", pinned = true, lineageIds = listOf("old", "tip"))))
+
+        repo.rename(repo.threads.value.first(), "Errands")
+
+        assertEquals("work", configured.single()["name"]?.jsonPrimitive?.contentOrNull)
+        assertEquals("Errands", savedThreads().first().name)
+        assertEquals(emptyList(), repo.threads.value)
+    }
+
     private companion object {
         val URL = GatewayUrl.parse("https://hermes.example.ts.net")
     }

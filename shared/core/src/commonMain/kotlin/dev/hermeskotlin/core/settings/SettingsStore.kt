@@ -8,7 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.updateAndGet
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -249,26 +249,71 @@ fun SettingsStore.startInstruction(): String? = settings.value?.startInstruction
  */
 class SettingsStore(private val store: KeyValueStore, private val scope: CoroutineScope) {
 
+    private sealed interface LoadState {
+        data class Loading(val pending: List<(AppSettings) -> AppSettings> = emptyList()) : LoadState
+        data class Ready(val value: AppSettings) : LoadState
+    }
+
+    private val loadState = MutableStateFlow<LoadState>(LoadState.Loading())
     private val _settings = MutableStateFlow<AppSettings?>(null)
     val settings: StateFlow<AppSettings?> = _settings.asStateFlow()
 
     private val writes = Mutex()
+    private var persisted: AppSettings? = null
 
     init {
         scope.launch {
             val stored = store.get(KEY)?.let { runCatching { HermesJson.decodeFromString(AppSettings.serializer(), it) }.getOrNull() }
-            // An update made before the read finished wins over the stored copy.
-            _settings.compareAndSet(null, stored ?: AppSettings())
+                ?: AppSettings()
+            var hadPending = false
+            loadState.update { current ->
+                when (current) {
+                    is LoadState.Loading -> {
+                        hadPending = current.pending.isNotEmpty()
+                        LoadState.Ready(current.pending.fold(stored) { acc, transform -> transform(acc) })
+                    }
+                    is LoadState.Ready -> current
+                }
+            }
+            publish()
+            if (hadPending) persist()
         }
     }
 
     fun update(transform: (AppSettings) -> AppSettings) {
-        val next = _settings.updateAndGet { transform(it ?: AppSettings()) } ?: return
-        scope.launch {
-            writes.withLock {
-                // Only the newest value matters if several writes queue up.
-                if (_settings.value == next) store.put(KEY, HermesJson.encodeToString(AppSettings.serializer(), next))
+        var applied = false
+        loadState.update { current ->
+            when (current) {
+                is LoadState.Loading -> {
+                    applied = false
+                    current.copy(pending = current.pending + transform)
+                }
+                is LoadState.Ready -> {
+                    applied = true
+                    LoadState.Ready(transform(current.value))
+                }
             }
+        }
+        if (!applied) return
+        publish()
+        scope.launch { persist() }
+    }
+
+    private fun publish() {
+        while (true) {
+            val target = (loadState.value as? LoadState.Ready)?.value ?: return
+            _settings.value = target
+            if ((loadState.value as? LoadState.Ready)?.value === target) return
+        }
+    }
+
+    private suspend fun persist() {
+        writes.withLock {
+            // Only the newest value matters if several writes queue up.
+            val current = (loadState.value as? LoadState.Ready)?.value ?: return@withLock
+            if (current == persisted) return@withLock
+            store.put(KEY, HermesJson.encodeToString(AppSettings.serializer(), current))
+            persisted = current
         }
     }
 

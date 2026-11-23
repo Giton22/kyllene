@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import dev.hermeskotlin.core.chat.string
@@ -101,12 +102,15 @@ class BotHealth(
     private val _troubles = MutableStateFlow<Map<String, BotTrouble>>(emptyMap())
     val troubles: StateFlow<Map<String, BotTrouble>> = _troubles.asStateFlow()
 
-    /** Bots checked on this connection; a new socket checks them again. */
-    private val checked = mutableSetOf<String>()
+    /** Bots checked on this connection and the reset generation; updated atomically across threads. */
+    private data class CheckState(val generation: Int = 0, val checked: Set<String> = emptySet())
+
+    private val checkState = MutableStateFlow(CheckState())
 
     init {
         scope.launch {
-            connection.state.distinctUntilChangedBy { (it as? ConnectionState.Connected)?.client }.collect { checked.clear() }
+            connection.state.distinctUntilChangedBy { (it as? ConnectionState.Connected)?.client }
+                .collect { checkState.update { it.copy(checked = emptySet()) } }
         }
         scope.launch {
             host.session.collectLatest { session -> if (session != null) watch(session) }
@@ -174,25 +178,31 @@ class BotHealth(
     private fun profileOf(target: String): String? =
         target.trim().removePrefix("@").takeIf { it.isNotEmpty() }?.let { if (it == "hermes") Bot.DEFAULT else it }
 
-    /** Bumped by [reset], so a check begun for the gateway before can't land on the one after. */
-    private var generation = 0
-
     /** Forgets everything: another gateway's bots are other bots. */
     fun reset() {
-        generation++
-        checked.clear()
+        checkState.update { CheckState(generation = it.generation + 1, checked = emptySet()) }
         _troubles.value = emptyMap()
     }
 
     /** Checks each of [profiles] not yet checked on this connection. */
     fun checkOnce(profiles: Collection<String>) {
-        profiles.filter { checked.add(it) }.forEach { recheck(it) }
+        var toCheck: Pair<Int, List<String>> = 0 to emptyList()
+        checkState.update { current ->
+            val fresh = profiles.distinct().filter { it !in current.checked }
+            toCheck = current.generation to fresh
+            if (fresh.isEmpty()) current else current.copy(checked = current.checked + fresh)
+        }
+        val (asked, fresh) = toCheck
+        fresh.forEach { launchCheck(it, asked) }
     }
 
     /** Checks [profile] now, e.g. after its model or keys were changed. */
     fun recheck(profile: String) {
-        checked.add(profile)
-        val asked = generation
+        val asked = checkState.updateAndGet { it.copy(checked = it.checked + profile) }.generation
+        launchCheck(profile, asked)
+    }
+
+    private fun launchCheck(profile: String, asked: Int) {
         scope.launch {
             val result = try {
                 check(profile)
@@ -200,11 +210,14 @@ class BotHealth(
                 throw e
             } catch (e: Exception) {
                 // No verdict: asked again on the next connection.
-                if (asked == generation) checked.remove(profile)
+                checkState.update { current ->
+                    if (current.generation == asked) current.copy(checked = current.checked - profile) else current
+                }
                 return@launch
             }
-            if (asked != generation) return@launch
+            if (checkState.value.generation != asked) return@launch
             _troubles.update { all ->
+                if (checkState.value.generation != asked) return@update all
                 val current = all[profile]
                 val problem = if (result.ok) null else BotProblem.classify(result.error) ?: BotProblem.Setup
                 when {

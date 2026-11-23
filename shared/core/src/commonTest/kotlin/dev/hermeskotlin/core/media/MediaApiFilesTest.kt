@@ -141,4 +141,38 @@ class MediaApiFilesTest {
         val api = MediaApi(createHttpClient(MockEngine { respond("x".repeat(1_000), HttpStatusCode.OK) }), maxDownloadBytes = 1_000)
         assertEquals(1_000, assertIs<ApiResult.Success<ByteArray>>(api.download(url, "/ok.bin")).value.size)
     }
+
+    @Test
+    fun aDownloadNetworkErrorReturnsUnavailableInsteadOfThrowing() = runTest {
+        val api = MediaApi(createHttpClient(MockEngine { throw RuntimeException("DNS failed") }))
+        val result = assertIs<ApiResult.Unavailable>(api.download(url, "/a.txt"))
+        assertEquals("DNS failed", result.message)
+    }
+
+    @Test
+    fun aRemoteImageOverTheCapIsRefusedWhileStreaming() = runTest {
+        val api = MediaApi(
+            client = createHttpClient(MockEngine { error("must use web client") }),
+            web = createHttpClient(MockEngine { respond("x".repeat(2_000), HttpStatusCode.OK) }),
+            maxRemoteBytes = 1_000,
+        )
+        val failed = assertIs<ApiResult.Failed>(api.remote("https://example.com/huge.png"))
+        assertEquals(413, failed.status)
+    }
+
+    @Test
+    fun aRemoteImageAtTheCapSucceedsAndNetworkFailureReturnsUnavailable() = runTest {
+        val okApi = MediaApi(
+            client = createHttpClient(MockEngine { error("must use web client") }),
+            web = createHttpClient(MockEngine { respond("x".repeat(1_000), HttpStatusCode.OK) }),
+            maxRemoteBytes = 1_000,
+        )
+        assertEquals(1_000, assertIs<ApiResult.Success<ByteArray>>(okApi.remote("https://example.com/ok.png")).value.size)
+
+        val failApi = MediaApi(
+            client = createHttpClient(MockEngine { error("must use web client") }),
+            web = createHttpClient(MockEngine { throw RuntimeException("TLS error") }),
+        )
+        assertEquals("TLS error", assertIs<ApiResult.Unavailable>(failApi.remote("https://example.com/bad.png")).message)
+    }
 }

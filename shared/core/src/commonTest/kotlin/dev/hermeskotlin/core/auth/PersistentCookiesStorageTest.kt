@@ -146,4 +146,47 @@ class PersistentCookiesStorageTest {
         assertEquals(listOf("__Host-hermes_session_at", "__Host-hermes_session_provider"), lent.values.map { it.substringBefore('=') })
         assertEquals(now + 3_600_000, lent.accessExpiresAt)
     }
+
+    @Test
+    fun rejectsCookiesWhoseDomainDoesNotMatchTheRequestHost() = runTest {
+        storage.addCookie(https, Cookie("other", "1", domain = "other.ts.net", path = "/"))
+        storage.addCookie(https, Cookie("partial", "1", domain = "mple.ts.net", path = "/"))
+        storage.addCookie(https, Cookie("sub", "1", domain = "sub.hermes.example.ts.net", path = "/"))
+        storage.addCookie(https, Cookie("dots", "1", domain = "...", path = "/"))
+        // IP literals must not suffix-match a shorter domain.
+        storage.addCookie(Url("https://192.168.1.1/"), Cookie("ip", "1", domain = "168.1.1", path = "/"))
+
+        assertTrue(storage.get(Url("https://other.ts.net/")).isEmpty())
+        assertTrue(storage.get(https).isEmpty())
+        assertTrue(storage.get(Url("https://sub.hermes.example.ts.net/")).isEmpty())
+        assertTrue(storage.get(Url("https://192.168.1.1/")).isEmpty())
+
+        // A valid parent domain and exact IP match are accepted.
+        storage.addCookie(https, Cookie("parent", "1", domain = ".example.ts.net", path = "/"))
+        assertEquals(listOf("parent"), storage.get(https).map { it.name })
+        storage.addCookie(Url("https://192.168.1.1/"), Cookie("exact_ip", "1", domain = "192.168.1.1", path = "/"))
+        assertEquals(listOf("exact_ip"), storage.get(Url("https://192.168.1.1/")).map { it.name })
+    }
+
+    @Test
+    fun enforcesHostAndSecureCookiePrefixes() = runTest {
+        val plain = Url("http://hermes.example.ts.net/api/status")
+        // __Host- requires Secure, HTTPS origin, no Domain, and Path=/.
+        storage.addCookie(https, Cookie("__Host-with-domain", "1", domain = "hermes.example.ts.net", path = "/", secure = true))
+        storage.addCookie(https, Cookie("__Host-subpath", "1", path = "/api", secure = true))
+        storage.addCookie(https, Cookie("__Host-no-path", "1", secure = true))
+        storage.addCookie(https, Cookie("__Host-insecure-attr", "1", path = "/", secure = false))
+        storage.addCookie(plain, Cookie("__Host-plain-http", "1", path = "/", secure = true))
+        // __Secure- requires Secure and HTTPS origin.
+        storage.addCookie(https, Cookie("__Secure-insecure-attr", "1", path = "/", secure = false))
+        storage.addCookie(plain, Cookie("__Secure-plain-http", "1", path = "/", secure = true))
+
+        assertTrue(storage.get(https).isEmpty())
+        assertTrue(storage.get(plain).isEmpty())
+
+        // Valid __Host- and __Secure- cookies over HTTPS are stored.
+        storage.addCookie(https, Cookie("__Host-ok", "1", path = "/", secure = true))
+        storage.addCookie(https, Cookie("__Secure-ok", "2", domain = "example.ts.net", path = "/api", secure = true))
+        assertEquals(setOf("__Host-ok", "__Secure-ok"), storage.get(https).map { it.name }.toSet())
+    }
 }

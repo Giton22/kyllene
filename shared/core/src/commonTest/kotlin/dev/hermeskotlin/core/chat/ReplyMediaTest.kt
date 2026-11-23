@@ -260,4 +260,11 @@ class ReplyMediaTest {
         val text = "No pictures here, just [a link](https://example.com)."
         assertEquals(text to emptyList(), extractReplyMedia(text))
     }
+
+    @Test
+    fun linkFileUrisClosesCrlfCodeFences() {
+        val input = "```sh\r\nfile:///tmp/in.txt\r\n```\r\nSee file:///tmp/out.txt."
+        val linked = linkFileUris(input)
+        assertEquals("```sh\nfile:///tmp/in.txt\n```\nSee <file:///tmp/out.txt>.", linked)
+    }
 }

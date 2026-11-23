@@ -94,6 +94,10 @@ class PushSetup(
 
     private suspend fun retireNow() {
         val url = keys.pinnedGatewayUrl() ?: return
+        retire(url)
+    }
+
+    private suspend fun retire(url: String) {
         // Retired first: if the gateway can't be told now, it's told on the next connection.
         keys.retire(url)
         api.registrationChanged()
@@ -138,7 +142,7 @@ class PushSetup(
                 throw e
             } catch (e: Exception) {
                 // Registered but untrusted: give the identity up and have the gateway forget it.
-                retireNow()
+                retire(url)
                 _status.value = PushStatus(State.Failed, "The gateway's plugin sent unusable keys.")
                 return@withLock
             }

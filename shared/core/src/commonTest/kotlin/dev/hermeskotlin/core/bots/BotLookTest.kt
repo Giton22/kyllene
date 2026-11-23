@@ -46,6 +46,10 @@ class BotLookTest {
         assertEquals(0x00FF00, parseCssColor("hsl(120deg 100% 50%)"))
         assertNull(parseCssColor("rebeccapurple"))
         assertNull(parseCssColor("#12345"))
+        assertNull(parseCssColor("hsl(. 50% 50%)"))
+        assertNull(parseCssColor("hsl(1.2.3 50% 50%)"))
+        assertNull(parseCssColor("hsl(0 1..2% 50%)"))
+        assertNull(parseCssColor("hsl(0 50% .%)"))
     }
 
     @Test

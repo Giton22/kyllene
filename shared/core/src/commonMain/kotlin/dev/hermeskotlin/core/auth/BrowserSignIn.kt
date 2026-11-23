@@ -41,16 +41,31 @@ class BrowserSignIn(private val auth: AuthApi, private val loopback: LoopbackRec
         return listener.use {
             val verifier = pkceVerifier()
             val state = randomToken(16)
-            openBrowser(auth.nativeAuthorizeUrl(url, provider, pkceChallenge(verifier), listener.redirectUri, state))
+            val authorizeUrl = auth.nativeAuthorizeUrl(url, provider, pkceChallenge(verifier), listener.redirectUri, state)
+            try {
+                openBrowser(authorizeUrl)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return@use ApiResult.Failed(0, "Couldn't open the browser: ${e.message ?: e::class.simpleName}")
+            }
             // The gateway forgets an unfinished sign-in after 10 minutes. Anything else that reaches the address (a
             // reload of an old page, another app) doesn't carry this sign-in's state and is passed over.
-            val code = withTimeoutOrNull(10.minutes) {
+            val callback = withTimeoutOrNull(10.minutes) {
                 var query = listener.awaitCallback()
-                while (query["state"] != state || query["code"].isNullOrEmpty()) query = listener.awaitCallback()
-                query.getValue("code")
+                while (query["state"] != state || (query["code"].isNullOrEmpty() && query["error"].isNullOrEmpty())) {
+                    query = listener.awaitCallback()
+                }
+                query
             }
-            if (code == null) ApiResult.Failed(0, "The sign-in took too long. Try again.")
-            else auth.redeemNativeCode(url, code, verifier)
+            when {
+                callback == null -> ApiResult.Failed(0, "The sign-in took too long. Try again.")
+                !callback["error"].isNullOrEmpty() -> {
+                    val detail = callback["error_description"]?.takeIf { it.isNotBlank() } ?: callback.getValue("error")
+                    ApiResult.Failed(0, detail)
+                }
+                else -> auth.redeemNativeCode(url, callback.getValue("code"), verifier)
+            }
         }
     }
 }

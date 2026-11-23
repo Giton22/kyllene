@@ -26,42 +26,48 @@ class BotChatUnavailableException(message: String, cause: Throwable? = null) : E
  * the bot's backend was still waking up, was read as "no chat yet". So a lookup that can't be trusted ends
  * in "try again", never in a new chat.
  */
-class BotChats(private val backend: BotChatBackend) {
+class BotChats(
+    private val backend: BotChatBackend,
+    /** Which gateway the backend currently talks to, so bots on two gateways don't share state or locks. */
+    private val currentGateway: () -> String? = { null },
+) {
 
-    /** Bots this app has seen a Bot Chat for; for those an empty lookup means "not sure", not "none". */
-    private val known = mutableSetOf<String>()
+    /** Bots this app has seen a Bot Chat for, keyed by gateway; for those an empty lookup means "not sure", not "none". */
+    private val known = mutableSetOf<Pair<String?, String>>()
     private val knownLock = Mutex()
-    private val locks = mutableMapOf<String, Mutex>()
+    private val locks = mutableMapOf<Pair<String?, String>, Mutex>()
     private val locksLock = Mutex()
 
     /** Remembers which bots have a Bot Chat, from a roster just read. */
     suspend fun note(roster: List<Bot>) = knownLock.withLock {
-        roster.filter { it.canonicalSession?.openId != null }.forEach { known += it.name }
+        val gateway = currentGateway()
+        roster.filter { it.canonicalSession?.openId != null }.forEach { known += gateway to it.name }
     }
 
     /**
      * The user retired [name]'s chat on purpose (archived it to start over): an empty lookup now means "none",
      * so the next open may start a fresh one.
      */
-    suspend fun forget(name: String) = knownLock.withLock { known -= name }
+    suspend fun forget(name: String) = knownLock.withLock { known -= currentGateway() to name }
 
     /**
      * The stored session to open for [bot]'s chat: the live end of its Bot Chat, started first when it has
      * none. One open per bot at a time, so a double tap can't start two chats.
      */
     suspend fun open(bot: Bot): String {
-        if (bot.canonicalSession?.openId != null) knownLock.withLock { known += bot.name }
-        val lock = locksLock.withLock { locks.getOrPut(bot.name) { Mutex() } }
-        return lock.withLock { resolve(bot) }
+        val key = currentGateway() to bot.name
+        if (bot.canonicalSession?.openId != null) knownLock.withLock { known += key }
+        val lock = locksLock.withLock { locks.getOrPut(key) { Mutex() } }
+        return lock.withLock { resolve(bot, key) }
     }
 
-    private suspend fun resolve(bot: Bot): String {
+    private suspend fun resolve(bot: Bot, key: Pair<String?, String>): String {
         lookup(bot)?.let { return it }
-        if (knownLock.withLock { bot.name in known }) {
+        if (knownLock.withLock { key in known }) {
             throw BotChatUnavailableException("Couldn't find ${bot.label}'s chat right now. Try again in a moment.")
         }
         return try {
-            backend.startBotChat(bot.name).also { knownLock.withLock { known += bot.name } }
+            backend.startBotChat(bot.name).also { knownLock.withLock { known += key } }
         } catch (e: CancellationException) {
             throw e
         } catch (_: BotChatTakenException) {

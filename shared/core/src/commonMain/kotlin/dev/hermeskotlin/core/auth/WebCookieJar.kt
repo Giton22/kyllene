@@ -84,7 +84,8 @@ class WebCookieJar(
             add(SESSION_AT to session.accessToken)
             session.provider?.takeIf { it.isNotBlank() }?.let { add(SESSION_PROVIDER to it) }
         }
-        if (!url.protocol.isSecure()) return values.map { (name, value) -> "$name=$value; Path=/; HttpOnly" }
+        val plainPath = mount.ifEmpty { "/" }
+        if (!url.protocol.isSecure()) return values.map { (name, value) -> "$name=$value; Path=$plainPath; HttpOnly" }
         return buildList {
             values.forEach { (name, value) -> add("__Host-$name=$value; Path=/; Secure; HttpOnly") }
             if (mount.isNotEmpty()) values.forEach { (name, value) -> add("__Secure-$name=$value; Path=$mount; Secure; HttpOnly") }

@@ -44,7 +44,7 @@ class PushSetupTest {
     private val gatewayKeys = PushGateway("gw-1", "ENC", "SIG")
 
     /** Keys kept in memory, with the same one-gateway rules as the Android store. */
-    private class FakeKeys(var acceptsAll: Boolean = true) : PushKeys {
+    private class FakeKeys(var acceptsAll: Boolean = true, var pinFails: Boolean = false) : PushKeys {
         var id = 1
         var pin: Pair<String, PushGateway>? = null
         val retiredIds = mutableMapOf<String, Set<String>>()
@@ -53,7 +53,7 @@ class PushSetupTest {
         override fun pinned(gatewayUrl: String) = pin?.takeIf { it.first == gatewayUrl }?.second
         override fun accepts(keys: PushGateway) = acceptsAll
         override fun pin(gatewayUrl: String, keys: PushGateway) {
-            check(acceptsAll) { "unusable keys" }
+            check(acceptsAll && !pinFails) { "unusable keys" }
             pin = gatewayUrl to keys
         }
         override fun retire(gatewayUrl: String) {
@@ -667,5 +667,20 @@ class PushSetupTest {
         assertTrue(gateway.registered.isEmpty())
         assertNull(keys.pinnedGatewayUrl())
         assertEquals(PushStatus.State.Off, s.setup.status.value.state)
+    }
+
+    @Test
+    fun pinFailureAfterRegisterRetiresAndUnregistersTheDevice() = runTest {
+        val keys = FakeKeys(acceptsAll = true, pinFails = true)
+        val s = setup(keys)
+        val gateway = FakeGateway(installed = true)
+        connect(s, gateway)
+        s.setup.enable()
+
+        assertEquals(PushStatus.State.Failed, s.setup.status.value.state)
+        assertNull(keys.pinnedGatewayUrl())
+        assertEquals("device-2", keys.deviceId)
+        assertTrue(gateway.registered.isEmpty())
+        assertTrue(keys.retired("https://a.example").isEmpty())
     }
 }

@@ -10,9 +10,11 @@ import dev.hermeskotlin.core.rpc.TransportClosedException
 import io.ktor.http.URLProtocol
 import io.ktor.http.Url
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /** The three things a working gateway needs, checked one at a time and in this order. */
@@ -168,7 +170,7 @@ class ConnectionCheck(
         } catch (e: Exception) {
             liveFailure(e)
         } finally {
-            runCatching { transport?.close() }
+            withContext(NonCancellable) { runCatching { transport?.close() } }
         }
     }
 

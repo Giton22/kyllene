@@ -159,4 +159,32 @@ class BrowserSignInTest {
         assertEquals(43, verifier.length)
         assertTrue(verifier.all { it.isLetterOrDigit() || it == '-' || it == '_' })
     }
+
+    @Test
+    fun browserLaunchFailureReturnsFailedAndClosesLoopback() = runTest {
+        val (browser, loopback) = signIn { error("must not wait") }
+        val result = browser.signIn(url, provider = null) { throw IllegalStateException("No browser installed") }
+
+        val failed = assertIs<ApiResult.Failed>(result)
+        assertTrue("No browser installed" in failed.message)
+        assertTrue(loopback.closed)
+    }
+
+    @Test
+    fun oauthErrorCallbackStopsWaitingImmediately() = runTest {
+        var calls = 0
+        val (browser, loopback) = signIn { opened ->
+            when (calls++) {
+                // Stray error for another sign-in is ignored.
+                0 -> mapOf("error" to "access_denied", "state" to "someone-else")
+                1 -> mapOf("error" to "access_denied", "error_description" to "User cancelled", "state" to opened.parameters["state"]!!)
+                else -> error("must stop after matching error callback")
+            }
+        }
+
+        val failed = assertIs<ApiResult.Failed>(browser.signIn(url, provider = null) { loopback.opened = Url(it) })
+        assertEquals("User cancelled", failed.message)
+        assertNull(tokens.get(url))
+        assertTrue(loopback.closed)
+    }
 }

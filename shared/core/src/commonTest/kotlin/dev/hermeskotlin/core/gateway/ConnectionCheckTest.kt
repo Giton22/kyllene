@@ -13,7 +13,10 @@ import io.ktor.client.engine.mock.respondError
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -167,5 +170,28 @@ class ConnectionCheckTest {
 
         assertEquals(setOf(CheckStage.Server), results.keys)
         assertIs<StageResult.Passed>(results[CheckStage.Server])
+    }
+
+    @Test
+    fun cancellingLiveCheckClosesTransportUnderNonCancellable() = runTest {
+        var closed = false
+        val opened = CompletableDeferred<Unit>()
+        val transport = object : RpcTransport {
+            private val delegate = FakeTransport()
+            override val incoming get() = delegate.incoming
+            override suspend fun send(text: String) = delegate.send(text)
+            override suspend fun close(code: Short, reason: String) {
+                yield()
+                closed = true
+                delegate.close(code, reason)
+            }
+        }
+        val checker = check(openSocket = { _, _ -> opened.complete(Unit); transport })
+        val job = launch { checker.live(url) }
+        opened.await()
+        job.cancel()
+        job.join()
+
+        assertTrue(closed)
     }
 }

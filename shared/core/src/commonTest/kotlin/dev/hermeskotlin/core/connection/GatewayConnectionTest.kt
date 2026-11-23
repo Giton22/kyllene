@@ -16,7 +16,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
@@ -155,5 +157,31 @@ class GatewayConnectionTest {
 
         assertEquals(2, opens)
         connection.stop()
+    }
+
+    @Test
+    fun stoppingWhileConnectingClosesInFlightTransportUnderNonCancellable() = runTest {
+        val closed = CompletableDeferred<Unit>()
+        val opened = CompletableDeferred<Unit>()
+        val transport = object : dev.hermeskotlin.core.rpc.RpcTransport {
+            private val delegate = FakeTransport()
+            override val incoming get() = delegate.incoming
+            override suspend fun send(text: String) = delegate.send(text)
+            override suspend fun close(code: Short, reason: String) {
+                // Suspends so a cancelled coroutine without NonCancellable would abort here.
+                yield()
+                closed.complete(Unit)
+                delegate.close(code, reason)
+            }
+        }
+        val connection = GatewayConnection(auth(), { _, _ -> opened.complete(Unit); transport }, backgroundScope)
+        connection.start(url)
+        opened.await()
+        testScheduler.runCurrent()
+
+        connection.stop()
+        val done = kotlinx.coroutines.withTimeoutOrNull(1_000) { closed.await(); true } ?: false
+
+        assertTrue(done)
     }
 }

@@ -114,13 +114,14 @@ class ThreadsRepository(
     /** Makes [session] a thread, named after it, at the end of the list; pins it so the gateway keeps it. */
     suspend fun makeThread(session: SessionSummary) {
         val scope = requireScope()
-        change { it.withThread(ChatThread(newThreadId(), session.displayTitle, session.id, session.cwd)) }
+        change(scope) { it.withThread(ChatThread(newThreadId(), session.displayTitle, session.id, session.cwd)) }
         if (!session.pinned) sessions.setPinned(scope.url, session.id, true, scope.profile).orThrow("Made a thread, but couldn't pin its chat.")
     }
 
     /** Applies [edit] to the threads and saves them; another device's edit made meanwhile is kept. */
-    suspend fun change(edit: (List<ChatThread>) -> List<ChatThread>) {
-        val scope = requireScope()
+    suspend fun change(edit: (List<ChatThread>) -> List<ChatThread>) = change(requireScope(), edit)
+
+    private suspend fun change(scope: Scope, edit: (List<ChatThread>) -> List<ChatThread>) {
         val saved = writes.withLock { api.change(name(scope), edit) }
         if (_scope.value == scope) _threads.value = saved
     }
@@ -142,7 +143,7 @@ class ThreadsRepository(
             result.orThrow("Couldn't rename ${thread.name}'s chat.")
         }
         try {
-            change { it.renamed(thread.id, name) }
+            change(scope) { it.renamed(thread.id, name) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -182,7 +183,7 @@ class ThreadsRepository(
             val chat = newChat(scope, thread).also { made = it }.chat
             // Pinned, the gateway never prunes it.
             sessions.update(scope.url, chat.sessionId, pinned = true, profile = scope.profile).orThrow("Couldn't pin the new chat.")
-            change { it.pointedAt(thread.id, chat.sessionId) }
+            change(scope) { it.pointedAt(thread.id, chat.sessionId) }
             chat
         } catch (e: Exception) {
             val landed = made?.takeIf { e !is CancellationException && pointedAtAlready(scope, thread, it.chat) }
@@ -262,7 +263,8 @@ class ThreadsRepository(
     }
 
     private suspend fun name(scope: Scope): String {
-        profileName?.let { return it }
+        scope.profile?.let { return it }
+        if (_scope.value == scope) profileName?.let { return it }
         val roster = profiles.roster(scope.url)
         val launch = (roster as? ApiResult.Success)?.value?.launch
             ?: throw ThreadActionException("Couldn't tell which profile the gateway runs. ${roster.errorMessage.orEmpty()}".trim())

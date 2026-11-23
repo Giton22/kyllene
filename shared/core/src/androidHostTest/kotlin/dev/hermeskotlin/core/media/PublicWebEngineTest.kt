@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.media
 
+import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.createHttpClient
 import io.ktor.client.request.get
 import java.net.ServerSocket
@@ -8,6 +9,7 @@ import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class PublicWebEngineTest {
@@ -53,6 +55,22 @@ class PublicWebEngineTest {
             assertTrue(refused { get("http://127.0.0.1:${server.localPort}/picture.png") })
             server.close()
             listener.join(2_000)
+            assertFalse(received.get())
+        }
+    }
+
+    @Test fun mediaApiRemoteWithPublicWebEngineRefusesLocalAddresses() = runBlocking {
+        ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { server ->
+            val received = AtomicBoolean(false)
+            val listener = thread {
+                runCatching { server.accept().use { if (it.getInputStream().read() >= 0) received.set(true) } }
+            }
+            val publicClient = createHttpClient(publicWebEngine())
+            val api = MediaApi(publicClient, publicClient)
+            val result = api.remote("http://127.0.0.1:${server.localPort}/secret.png")
+            server.close()
+            listener.join(2_000)
+            assertIs<ApiResult.Unavailable>(result)
             assertFalse(received.get())
         }
     }

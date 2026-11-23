@@ -3,6 +3,8 @@ package dev.hermeskotlin.core.settings
 import dev.hermeskotlin.core.bots.SidebarMode
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
+import dev.hermeskotlin.core.storage.KeyValueStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -283,5 +285,40 @@ class SettingsStoreTest {
         val on = off.copy(sidebarNav = true)
         assertTrue(on.showsSidebarPage("Scheduled"))
         assertFalse(on.showsSidebarPage("Insights"))
+    }
+
+    @Test
+    fun earlyUpdatesBeforeInitialLoadPreservePersistedSettings() = runTest {
+        val backing = InMemoryKeyValueStore().apply {
+            put("settings.v1", """{"theme":"Dark","pureBlack":true,"accent":"Teal"}""")
+        }
+        val gate = CompletableDeferred<Unit>()
+        val delayed = object : KeyValueStore {
+            override suspend fun get(key: String): String? {
+                gate.await()
+                return backing.get(key)
+            }
+            override suspend fun put(key: String, value: String) = backing.put(key, value)
+            override suspend fun remove(key: String) = backing.remove(key)
+        }
+
+        val store = SettingsStore(delayed, backgroundScope)
+        // Updates arriving before initial load must not wipe persisted settings with defaults.
+        store.update { it.copy(zoom = 120) }
+        store.update { it.copy(wrapCode = true) }
+        assertNull(store.settings.value)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        val resolved = store.settings.filterNotNull().first()
+        assertEquals(ThemeMode.Dark, resolved.theme)
+        assertEquals(true, resolved.pureBlack)
+        assertEquals("Teal", resolved.accent)
+        assertEquals(120, resolved.zoom)
+        assertEquals(true, resolved.wrapCode)
+
+        val reopened = SettingsStore(backing, backgroundScope).settings.filterNotNull().first()
+        assertEquals(resolved, reopened)
     }
 }

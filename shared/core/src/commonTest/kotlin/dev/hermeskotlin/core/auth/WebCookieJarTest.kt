@@ -94,6 +94,19 @@ class WebCookieJarTest {
     }
 
     @Test
+    fun aBrowserSignInOverPlainHttpBehindAPathPrefixScopesItsCookiesToThatPrefix() = runTest {
+        val mounted = "http://proxy.example.ts.net/hermes"
+        tokens.set(GatewayUrl.parse(mounted), NativeSession("AT1", "RT1", expiresAt = 1_900_000_000, provider = "oidc"))
+
+        val session = jar().sessionFor("$mounted/example-board", "$mounted/")
+
+        assertEquals(
+            listOf("hermes_session_at=AT1; Path=/hermes; HttpOnly", "hermes_session_provider=oidc; Path=/hermes; HttpOnly"),
+            session.cookies,
+        )
+    }
+
+    @Test
     fun theAccessServiceTokenGoesOverHttpsOnly() = runTest {
         access.set("hermes.example.ts.net", AccessToken("id", "secret"))
 

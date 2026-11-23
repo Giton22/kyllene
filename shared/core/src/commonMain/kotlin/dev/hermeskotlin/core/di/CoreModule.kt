@@ -74,6 +74,7 @@ import org.koin.core.qualifier.named
 import org.koin.dsl.module
 
 private const val OUTSIDE_CLIENT = "outside"
+private const val PUBLIC_WEB_CLIENT = "public_web"
 
 /** Platform bindings: a [dev.hermeskotlin.core.storage.KeyValueStore] implementation and the file behind the [dev.hermeskotlin.core.settings.WallpaperStore]. */
 expect val platformModule: Module
@@ -135,7 +136,10 @@ val coreModule = module {
         val settings = get<SettingsStore>()
         ThreadsRepository(get(), get(), get(), get(), startInstruction = { settings.startInstruction() })
     }
-    single { BotChats(get<BotsApi>()) }
+    single {
+        val gateways = get<GatewayRepository>()
+        BotChats(get<BotsApi>()) { gateways.list.value.currentUrl }
+    }
     single { RoomsApi(get()) }
     single { RoomSeenStore(get()) }
     single { RoomLinks() }
@@ -147,11 +151,12 @@ val coreModule = module {
     single { JourneyApi(get()) }
     single { AudioApi(get()) }
     single<SpeechStreams> { GatewaySpeechStreams(get(), get()) }
-    // Outside requests (pictures from the web, GitHub) get a client without the gateway's cookies.
+    // Outside requests (GitHub, ntfy) get a client without the gateway's cookies.
     single(named(OUTSIDE_CLIENT)) { createHttpClient() }
-    single { MediaApi(get(), get(named(OUTSIDE_CLIENT))) }
-    // Previews fetch without a tap, so their client also refuses addresses on the user's own networks.
-    single { LinkPreviews(createHttpClient(publicWebEngine())) }
+    // Replies' remote images and link previews fetch without a tap, so their client also refuses addresses on the user's own networks.
+    single(named(PUBLIC_WEB_CLIENT)) { createHttpClient(publicWebEngine()) }
+    single { MediaApi(get(), get(named(PUBLIC_WEB_CLIENT))) }
+    single { LinkPreviews(get(named(PUBLIC_WEB_CLIENT))) }
     single { UpdateChecker(get(named(OUTSIDE_CLIENT)), get()) }
     single { RenameNotice(get(), get()) }
     // ntfy is someone else's server: never send it the gateway's cookies.

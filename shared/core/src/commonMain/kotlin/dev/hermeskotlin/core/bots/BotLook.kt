@@ -66,8 +66,11 @@ fun parseCssColor(value: String): Int? {
         return full.toIntOrNull(16)
     }
     val hsl = HSL.matchEntire(text) ?: return null
-    val (h, s, l) = hsl.destructured
-    return hsl(h.toDouble(), s.toDouble() / 100, l.toDouble() / 100)
+    val (hText, sText, lText) = hsl.destructured
+    val h = hText.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null
+    val s = sText.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null
+    val l = lText.toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null
+    return hsl(h, s / 100, l / 100)
 }
 
 /** Unknown names (Desktop's blobatars, sigils, solids) fall back to the plain stock shape for the name. */

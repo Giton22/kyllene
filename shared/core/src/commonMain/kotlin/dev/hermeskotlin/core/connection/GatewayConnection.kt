@@ -17,6 +17,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
@@ -126,7 +128,12 @@ class GatewayConnection(
 
             var connectedAt: Long? = null
             val failure: Exception = try {
-                runSession(openSocket(gateway, ticket)) { connectedAt = clock() }
+                val transport = openSocket(gateway, ticket)
+                try {
+                    runSession(transport) { connectedAt = clock() }
+                } finally {
+                    withContext(NonCancellable) { runCatching { transport.close() } }
+                }
             } catch (e: TimeoutCancellationException) {
                 // The ready wait gives up as a cancellation; that is a failed attempt, not a cancelled loop.
                 e
@@ -195,18 +202,18 @@ class GatewayConnection(
     private suspend fun runSession(transport: RpcTransport, onConnected: () -> Unit): Nothing = coroutineScope {
         val client = JsonRpcClient(transport, answers = InputRequest.METHODS::contains)
         // Followed for the socket's whole life, the wait for gateway.ready included: a change made then isn't lost.
-        launch { idle.collect { client.setIdle(it) } }
+        val idleJob = launch { idle.collect { client.setIdle(it) } }
         val pump = async { client.run() }
-        val ready = try {
-            withTimeout(readyTimeoutMs) { client.ready.await() }
-        } catch (e: Exception) {
+        try {
+            val ready = withTimeout(readyTimeoutMs) { client.ready.await() }
+            onConnected()
+            _state.value = ConnectionState.Connected(client, ready)
+            pump.await()
+        } finally {
+            idleJob.cancel()
             pump.cancel()
-            runCatching { transport.close() }
-            throw e
+            withContext(NonCancellable) { runCatching { transport.close() } }
         }
-        onConnected()
-        _state.value = ConnectionState.Connected(client, ready)
-        pump.await()
     }
 
     private suspend fun backoff(attempt: Int, reason: String) {

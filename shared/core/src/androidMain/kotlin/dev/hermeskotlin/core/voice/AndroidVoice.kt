@@ -505,6 +505,8 @@ class AndroidSpeechPlayer(
             File.createTempFile("hermes-speech-", ".$extension", context.cacheDir).apply { writeBytes(audio.bytes) }
         }
         val player = MediaPlayer()
+        var cancelled = false
+        var released = false
         try {
             suspendCancellableCoroutine { continuation ->
                 player.setAudioAttributes(
@@ -519,22 +521,35 @@ class AndroidSpeechPlayer(
                     if (continuation.isActive) continuation.resume(Unit)
                 }
                 player.setOnErrorListener { _, what, _ ->
+                    synchronized(lock) { if (clip === player) clip = null }
                     if (continuation.isActive) continuation.resumeWithException(IllegalStateException("Couldn't play the reply ($what)."))
                     true
                 }
                 player.setDataSource(file.absolutePath)
                 player.setOnPreparedListener {
                     synchronized(lock) {
+                        if (cancelled || released) return@setOnPreparedListener
                         clip = it
                         if (!holding) it.start()
                     }
                 }
                 player.prepareAsync()
-                continuation.invokeOnCancellation { runCatching { player.stop() } }
+                continuation.invokeOnCancellation {
+                    synchronized(lock) {
+                        cancelled = true
+                        if (!released) {
+                            if (clip === player) clip = null
+                            runCatching { player.stop() }
+                        }
+                    }
+                }
             }
         } finally {
-            synchronized(lock) { if (clip === player) clip = null }
-            player.release()
+            synchronized(lock) {
+                released = true
+                if (clip === player) clip = null
+                runCatching { player.release() }
+            }
             file.delete()
         }
     }

@@ -65,9 +65,22 @@ class LoopbackHttpReceiver(private val returnUri: String?) : LoopbackReceiver {
                 out.flush()
                 return null
             }
+            val parameters = parseQueryString(target.substringAfter('?', ""))
+            val query = parameters.names().associateWith { parameters[it].orEmpty() }
+            val error = query["error"]?.takeIf { it.isNotBlank() }
             val next = if (returnUri != null) "<a href=\"$returnUri\">Go back to Kyllene</a>" else "You can close this tab."
+            val title: String
+            val heading: String
+            if (error != null) {
+                val detail = query["error_description"]?.takeIf { it.isNotBlank() } ?: error
+                title = "Sign-in failed"
+                heading = "Sign-in failed: ${escapeHtml(detail)}."
+            } else {
+                title = "Signed in"
+                heading = "Signed in."
+            }
             val body = "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\">" +
-                "<title>Signed in</title><p style=\"font-family:sans-serif;padding:24px\">Signed in. $next</p>"
+                "<title>$title</title><p style=\"font-family:sans-serif;padding:24px\">$heading $next</p>"
             val bytes = body.toByteArray()
             val status = if (returnUri != null) "302 Found\r\nLocation: $returnUri" else "200 OK"
             out.write(
@@ -76,8 +89,20 @@ class LoopbackHttpReceiver(private val returnUri: String?) : LoopbackReceiver {
             )
             out.write(bytes)
             out.flush()
-            val parameters = parseQueryString(target.substringAfter('?', ""))
-            return parameters.names().associateWith { parameters[it].orEmpty() }
+            return query
+        }
+
+        private fun escapeHtml(text: String): String = buildString(text.length) {
+            for (ch in text) {
+                when (ch) {
+                    '&' -> append("&amp;")
+                    '<' -> append("&lt;")
+                    '>' -> append("&gt;")
+                    '"' -> append("&quot;")
+                    '\'' -> append("&#39;")
+                    else -> append(ch)
+                }
+            }
         }
 
         override fun close() = server.close()

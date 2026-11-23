@@ -50,7 +50,7 @@ class PersistentCookiesStorage(
         // Cloudflare Access hands one out when the service token passes. Every request carries the token,
         // so keeping it would only make the host look signed in to Hermes, and let a changed token go untested.
         if (cookie.name.equals(CF_AUTHORIZATION, ignoreCase = true)) return@withLock
-        val stored = cookie.toStored(requestUrl, clock())
+        val stored = cookie.toStored(requestUrl, clock()) ?: return@withLock
         val cookies = load()
         cookies.removeAll { it.name == stored.name && it.domain == stored.domain && it.path == stored.path }
         if (!stored.isExpired(clock())) cookies += stored
@@ -155,8 +155,21 @@ private fun StoredCookie.toCookie() = Cookie(
     httpOnly = httpOnly,
 )
 
-private fun Cookie.toStored(requestUrl: Url, now: Long): StoredCookie {
-    val explicitDomain = domain?.trimStart('.')?.lowercase()?.takeIf { it.isNotEmpty() }
+private fun Cookie.toStored(requestUrl: Url, now: Long): StoredCookie? {
+    val rawDomain = domain?.trim()?.takeIf { it.isNotEmpty() }
+    val explicitDomain = if (rawDomain != null) {
+        rawDomain.trimStart('.').lowercase().takeIf { it.isNotEmpty() } ?: return null
+    } else {
+        null
+    }
+    val requestHost = requestUrl.host.lowercase()
+    if (explicitDomain != null && !domainMatches(requestHost, explicitDomain)) return null
+    val isSecureOrigin = requestUrl.protocol == URLProtocol.HTTPS || requestUrl.protocol == URLProtocol.WSS
+    if (name.startsWith("__Host-", ignoreCase = true)) {
+        if (!secure || !isSecureOrigin || explicitDomain != null || path != "/") return null
+    } else if (name.startsWith("__Secure-", ignoreCase = true)) {
+        if (!secure || !isSecureOrigin) return null
+    }
     val expiresAt = when {
         maxAge != null -> now + maxAge!!.toLong() * 1000
         expires != null -> expires!!.timestamp
@@ -165,7 +178,7 @@ private fun Cookie.toStored(requestUrl: Url, now: Long): StoredCookie {
     return StoredCookie(
         name = name,
         value = value,
-        domain = explicitDomain ?: requestUrl.host.lowercase(),
+        domain = explicitDomain ?: requestHost,
         hostOnly = explicitDomain == null,
         path = path?.takeIf { it.startsWith("/") } ?: "/",
         secure = secure,
@@ -173,3 +186,13 @@ private fun Cookie.toStored(requestUrl: Url, now: Long): StoredCookie {
         expiresAt = expiresAt,
     )
 }
+
+/** RFC 6265 §5.1.3 domain-matching: exact match, or suffix match on a dot boundary for non-IP hostnames. */
+private fun domainMatches(host: String, domain: String): Boolean {
+    if (host == domain) return true
+    if (isIpLiteral(host)) return false
+    return host.endsWith(".$domain")
+}
+
+private fun isIpLiteral(host: String): Boolean =
+    ':' in host || (host.isNotEmpty() && host.all { it.isDigit() || it == '.' })

@@ -97,4 +97,25 @@ class BotChatsTest {
         val e = assertFailsWith<BotChatUnavailableException> { BotChats(backend).open(bot("scribe")) }
         assertTrue("No LLM provider" in e.message.orEmpty())
     }
+
+    @Test
+    fun knownStateAndLocksAreScopedByGateway() = runTest {
+        var gateway = "https://a.example"
+        val backend = FakeBackend()
+        val chats = BotChats(backend) { gateway }
+
+        // Scribe is known to have a chat on gateway A, so an empty lookup there is refused.
+        chats.note(listOf(bot("scribe", BotSession(id = "a-chat"))))
+        assertFailsWith<BotChatUnavailableException> { chats.open(bot("scribe")) }
+
+        // On gateway B, a same-named bot with no chat starts fresh instead of being locked out by gateway A.
+        gateway = "https://b.example"
+        assertEquals("new-1", chats.open(bot("scribe")))
+
+        // Forgetting on gateway B leaves gateway A's memory intact.
+        chats.forget("scribe")
+        backend.chats.clear()
+        gateway = "https://a.example"
+        assertFailsWith<BotChatUnavailableException> { chats.open(bot("scribe")) }
+    }
 }
