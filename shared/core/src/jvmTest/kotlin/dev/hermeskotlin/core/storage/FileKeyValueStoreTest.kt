@@ -2,12 +2,10 @@ package dev.hermeskotlin.core.storage
 
 import kotlinx.coroutines.runBlocking
 import java.io.File
-import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -47,7 +45,7 @@ class FileKeyValueStoreTest {
     }
 
     @Test
-    fun transientReadFailureDoesNotCacheEmptyMapAndCorruptFileIsNotSilentlyWiped() = runBlocking {
+    fun transientReadFailureDoesNotCacheEmptyMap() = runBlocking {
         val dir = Files.createTempDirectory("kyllene-kv-io-").toFile()
         try {
             val file = File(dir, "settings.json")
@@ -60,13 +58,50 @@ class FileKeyValueStoreTest {
             check(file.delete())
             FileKeyValueStore(file).put("k", "persisted")
             assertEquals("persisted", store.get("k"))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 
-            // Corrupt JSON fails put() instead of wiping the file.
-            file.writeText("{not-json")
-            val corrupt = FileKeyValueStore(file)
-            assertNull(corrupt.get("k"))
-            assertFailsWith<IOException> { corrupt.put("new", "value") }
-            assertEquals("{not-json", file.readText())
+    /** A file the app can't parse is kept beside the new one, and reads and writes go on from empty. */
+    private fun startsEmptyOver(content: ByteArray) = runBlocking {
+        val dir = Files.createTempDirectory("kyllene-kv-bad-").toFile()
+        try {
+            val file = File(dir, "settings.json").apply { writeBytes(content) }
+            val store = FileKeyValueStore(file)
+            assertNull(store.get("theme"))
+
+            store.put("theme", "dark")
+            assertEquals("dark", FileKeyValueStore(file).get("theme"))
+            store.remove("theme")
+            assertNull(FileKeyValueStore(file).get("theme"))
+
+            assertTrue(content.contentEquals(File(dir, "settings.json.corrupt").readBytes()), "the unreadable file wasn't kept")
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** As a crash or a full disk leaves behind. */
+    @Test fun anEmptyFileDoesNotBlockReadsOrWrites() = startsEmptyOver(ByteArray(0))
+
+    @Test fun aCorruptFileIsSetAsideAndDoesNotBlockWrites() = startsEmptyOver("{not-json".encodeToByteArray())
+
+    @Test fun aFileThatIsNotAnObjectIsSetAside() = startsEmptyOver("[]".encodeToByteArray())
+
+    @Test fun aValueThatIsNotTextIsSetAside() = startsEmptyOver("""{"a":{"b":1}}""".encodeToByteArray())
+
+    @Test fun bytesThatAreNotUtf8AreSetAside() = startsEmptyOver(byteArrayOf(0x7B, 0xC3.toByte(), 0x28, 0x7D))
+
+    @Test
+    fun aFirstWriteOverAnUnreadableFileKeepsIt() = runBlocking {
+        val dir = Files.createTempDirectory("kyllene-kv-bad-").toFile()
+        try {
+            val file = File(dir, "settings.json").apply { writeText("{not-json") }
+            // No read first: a save is the first thing to touch the file.
+            FileKeyValueStore(file).put("new", "value")
+            assertEquals("value", FileKeyValueStore(file).get("new"))
+            assertEquals("{not-json", File(dir, "settings.json.corrupt").readText())
         } finally {
             dir.deleteRecursively()
         }

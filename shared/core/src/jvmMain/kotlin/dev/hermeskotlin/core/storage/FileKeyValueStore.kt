@@ -12,6 +12,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 import java.io.IOException
+import java.nio.charset.CharacterCodingException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
@@ -23,6 +24,9 @@ import java.util.Base64
  * The desktop's [KeyValueStore]: one JSON file of values. On Windows each value is sealed with DPAPI, so only
  * this Windows user can open it, as the Keystore does on Android. Elsewhere (an experiment for now) the file
  * is only kept private to the user.
+ *
+ * A file that can't be parsed (cut short by a crash or a full disk, or damaged) is moved aside as
+ * `<name>.corrupt` and the store starts empty, so the app still starts and saves.
  */
 class FileKeyValueStore(private val file: File) : KeyValueStore {
     private val mutex = Mutex()
@@ -61,15 +65,27 @@ class FileKeyValueStore(private val file: File) : KeyValueStore {
             Files.readString(file.toPath(), Charsets.UTF_8)
         } catch (_: NoSuchFileException) {
             return@withContext mutableMapOf<String, String>().also { values = it }
+        } catch (_: CharacterCodingException) {
+            null
         }
-        val read = try {
-            Json.parseToJsonElement(text) as? JsonObject
-        } catch (e: Exception) {
-            throw IOException("Couldn't parse ${file.name}.", e)
-        } ?: throw IOException("Couldn't parse ${file.name}.")
-        read.mapNotNull { (k, v) -> v.jsonPrimitive.contentOrNull?.let { k to it } }
-            .toMap(mutableMapOf())
-            .also { values = it }
+        val read = text?.let {
+            runCatching {
+                (Json.parseToJsonElement(it) as JsonObject)
+                    .mapNotNull { (k, v) -> v.jsonPrimitive.contentOrNull?.let { content -> k to content } }
+                    .toMap(mutableMapOf())
+            }.getOrNull()
+        }
+        if (read == null) setAside()
+        (read ?: mutableMapOf()).also { values = it }
+    }
+
+    /**
+     * Moves the unreadable file to `<name>.corrupt`, in place of an older one, so the next save doesn't write
+     * over the only copy. A file that can't be moved fails the read, and the next one tries again.
+     */
+    private fun setAside() {
+        val kept = file.toPath().resolveSibling("${file.name}.corrupt")
+        Files.move(file.toPath(), kept, StandardCopyOption.REPLACE_EXISTING)
     }
 
     private suspend fun save(entries: Map<String, String>) = withContext(Dispatchers.IO) {
