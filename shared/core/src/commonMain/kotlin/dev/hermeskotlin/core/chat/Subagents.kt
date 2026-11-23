@@ -149,9 +149,10 @@ internal fun parseDelegationReport(text: String): DelegationReport? {
     return when (kind) {
         "BATCH COMPLETE" -> {
             val headers = TASK_HEADER.findAll(text).toList()
-            val tasks = headers.mapIndexed { i, header ->
+            val tasks = headers.mapIndexedNotNull { i, header ->
+                val taskIndex = header.groupValues[1].toIntOrNull()?.minus(1)?.takeIf { it >= 0 } ?: return@mapIndexedNotNull null
                 val body = text.substring(header.range.last + 1, headers.getOrNull(i + 1)?.range?.first ?: text.length)
-                header.groupValues[1].toInt() - 1 to DelegatedTask(
+                taskIndex to DelegatedTask(
                     goal = header.groupValues[3].trim(),
                     status = settledStatus(header.groupValues[4].trim()),
                     summary = reportBody(body),
@@ -161,8 +162,9 @@ internal fun parseDelegationReport(text: String): DelegationReport? {
         }
         "TASK FAILED" -> {
             val (id, index) = TASK_OF.find(rest)?.destructured ?: return null
+            val taskIndex = index.toIntOrNull()?.minus(1)?.takeIf { it >= 0 } ?: return null
             val error = ERROR_LINE.find(text)?.groupValues?.get(1)?.trim()
-            DelegationReport(id.trim(), mapOf(index.toInt() - 1 to DelegatedTask("", SubagentStatus.Failed, summary = error)), earlyFailure = true)
+            DelegationReport(id.trim(), mapOf(taskIndex to DelegatedTask("", SubagentStatus.Failed, summary = error)), earlyFailure = true)
         }
         else -> {
             val status = STATUS_LINE.find(text)?.groupValues?.get(1)?.trim()

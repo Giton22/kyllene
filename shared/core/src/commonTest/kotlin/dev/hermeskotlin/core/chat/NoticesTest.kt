@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.chat
 
+import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.sessions.SessionMessage
@@ -89,6 +90,41 @@ class NoticesTest {
         val backing = InMemoryKeyValueStore()
         ToolRiskStore(backing).remember("c1", ToolRisk(listOf("exfil_curl"), redacted = true))
         assertEquals(ToolRisk(listOf("exfil_curl"), redacted = true), ToolRiskStore(backing).all()["c1"])
+    }
+
+    @Test
+    fun toolRisksAreIsolatedByGatewayAndProfileAndCanBeCleared() = runTest {
+        val backing = InMemoryKeyValueStore()
+        val store = ToolRiskStore(backing)
+        val gwA = GatewayUrl.parse("https://a.example.ts.net")
+        val gwB = GatewayUrl.parse("https://b.example.ts.net")
+        val scopeADefault = ToolRiskStore.scope(gwA, null)
+        val scopeAWork = ToolRiskStore.scope(gwA, "work")
+        val scopeBDefault = ToolRiskStore.scope(gwB, null)
+
+        val riskA = ToolRisk(listOf("prompt_injection"))
+        val riskWork = ToolRisk(listOf("exfil_curl"), redacted = true)
+        val riskB = ToolRisk(listOf("secret_leak"))
+
+        store.remember("c1", riskA, scopeADefault)
+        store.remember("c1", riskWork, scopeAWork)
+        store.remember("c1", riskB, scopeBDefault)
+
+        assertEquals(mapOf("c1" to riskA), store.all(scopeADefault))
+        assertEquals(mapOf("c1" to riskWork), store.all(scopeAWork))
+        assertEquals(mapOf("c1" to riskB), store.all(scopeBDefault))
+        assertTrue(store.all().isEmpty())
+
+        val reloaded = ToolRiskStore(backing)
+        assertEquals(mapOf("c1" to riskA), reloaded.all(scopeADefault))
+        assertEquals(mapOf("c1" to riskWork), reloaded.all(scopeAWork))
+        assertEquals(mapOf("c1" to riskB), reloaded.all(scopeBDefault))
+
+        store.clear(scopeAWork)
+        assertTrue(store.all(scopeAWork).isEmpty())
+        assertTrue(ToolRiskStore(backing).all(scopeAWork).isEmpty())
+        assertEquals(riskA, store.all(scopeADefault)["c1"])
+        assertEquals(riskB, store.all(scopeBDefault)["c1"])
     }
 
     @Test

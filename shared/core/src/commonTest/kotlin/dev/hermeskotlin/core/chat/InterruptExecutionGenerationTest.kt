@@ -65,4 +65,41 @@ class InterruptExecutionGenerationTest {
         assertEquals(9L, interrupts.last()["params"]?.jsonObject?.get("execution_generation")?.jsonPrimitive?.longOrNull)
         assertNull(chat.state.value.error)
     }
+
+    @Test
+    fun rewindUpdatesExecutionGenerationForSubsequentInterrupt() = runTest(timeout = 2.seconds) {
+        val gw = FakeGateway(backgroundScope, reconnects = false).apply {
+            ready = { """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}""" }
+            answer = { call ->
+                when (call.method) {
+                    "session.resume" -> """{"session_id":"rt1","running":false,"execution_generation":7}"""
+                    "prompt.submit" -> """{"status":"streaming","user_row_id":3,"execution_generation":11}"""
+                    "session.interrupt" -> {
+                        val gen = call.params["execution_generation"]?.jsonPrimitive?.longOrNull
+                        if (gen == 11L) """{"status":"interrupted"}""" else "error:4001:stale_generation"
+                    }
+                    else -> "{}"
+                }
+            }
+            http = {
+                json(
+                    """{"session_id":"stored-1","messages":[
+                        {"id":1,"role":"user","content":"one"},
+                        {"id":2,"role":"assistant","content":"first"}
+                    ]}""",
+                )
+            }
+            start(awaitConnected = true)
+        }
+        val chat = ChatSession(url, "stored-1", "Rewind", gw.connection, SessionsApi(gw.client), backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+
+        assertEquals(SendOutcome.Sent, chat.rewind("row-1", "one again"))
+        chat.interrupt()
+
+        val interrupt = gw.socket.sent.value.single { it.isCall("session.interrupt") }
+        assertEquals(11L, interrupt["params"]?.jsonObject?.get("execution_generation")?.jsonPrimitive?.longOrNull)
+        assertNull(chat.state.value.error)
+    }
 }

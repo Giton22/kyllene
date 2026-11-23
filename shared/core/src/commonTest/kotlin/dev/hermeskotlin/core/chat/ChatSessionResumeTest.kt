@@ -9,6 +9,8 @@ import dev.hermeskotlin.core.rpc.json
 import dev.hermeskotlin.core.rpc.param
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
@@ -908,5 +910,59 @@ class ChatSessionResumeTest {
         val state = chat.state.first { it.messages.any { m -> m.key == "row-161" } }
         assertEquals("row-21", state.messages.first().key)
         assertTrue(state.olderMessages)
+    }
+
+    @Test
+    fun cancellingAttachDuringHistoryLoadDoesNotFreezeLaterEvents() = runTest {
+        var failHistory = true
+        var blockReconnectHistory = false
+        val reconnectLoadStarted = CompletableDeferred<Unit>()
+        val releaseReconnectLoad = CompletableDeferred<Unit>()
+        gateway = FakeGateway(backgroundScope).apply {
+            ready = { """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"e1"}}}""" }
+            answer = { call ->
+                when (call.method) {
+                    "session.resume" -> """{"session_id":"rt1","running":true}"""
+                    "session.events.since" -> since(replayed(3, "l"), latest = 3)
+                    else -> "{}"
+                }
+            }
+            http = {
+                when {
+                    failHistory -> json("{}", HttpStatusCode.InternalServerError)
+                    blockReconnectHistory -> {
+                        reconnectLoadStarted.complete(Unit)
+                        releaseReconnectLoad.await()
+                        json("""{"session_id":"stored-1","messages":[]}""")
+                    }
+                    else -> json("""{"session_id":"stored-1","messages":[]}""")
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val chat = ChatSession(url, "stored-1", "Chat", gateway.connection, SessionsApi(gateway.client), backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded && !it.historyRead }
+
+        val first = gateway.sockets.last()
+        first.push(event("message.start", 1))
+        first.push(delta(2, "He"))
+        chat.state.first { it.reply()?.text == "He" }
+
+        // On reconnect, attach() is resumable (sets held) and enters loadHistory() because historyRead is false.
+        failHistory = false
+        blockReconnectHistory = true
+        first.serverClose(1006)
+        reconnectLoadStarted.await()
+
+        // Cancel the in-flight attach() during loadHistory() by dropping the second socket.
+        blockReconnectHistory = false
+        gateway.sockets.last().serverClose(1006)
+
+        // Third socket re-attaches, replays seq 3 ("l"), and must deliver subsequent live events without freezing.
+        chat.state.first { it.reply()?.text == "Hel" }
+        gateway.sockets.last().push(delta(4, "lo"))
+        assertEquals("Hello", chat.state.first { it.reply()?.text == "Hello" }.reply()?.text)
+        releaseReconnectLoad.complete(Unit)
     }
 }

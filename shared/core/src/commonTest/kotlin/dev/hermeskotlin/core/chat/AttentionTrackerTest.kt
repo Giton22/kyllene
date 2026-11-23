@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.chat
 
+import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.rpc.FakeGateway
 import dev.hermeskotlin.core.rpc.FakeTransport
 import dev.hermeskotlin.core.rpc.event
@@ -15,6 +16,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class AttentionTrackerTest {
 
@@ -162,6 +164,93 @@ class AttentionTrackerTest {
         advanceTimeBy(10_001)
         runCurrent()
         assertEquals(false, tracker.running.value["stored-1"])
+        collector.cancel()
+    }
+
+    @Test
+    fun signingOutClearsLinksRequestsAndTurns() = runTest {
+        val gateway = FakeGateway(backgroundScope, reconnects = false).apply {
+            ready = { FakeGateway.QUIET_READY }
+            http = { json("""{"messages":[]}""") }
+            answer = { call ->
+                when (call.method) {
+                    "session.resume" -> """{"session_id":"rt${call.param("session_id").orEmpty().removePrefix("stored-")}","running":true}"""
+                    "session.active_list" -> """{"sessions":[]}"""
+                    else -> "{}"
+                }
+            }
+        }
+        val connection = gateway.start()
+        val host = ChatHost(connection, SessionsApi(gateway.client), backgroundScope)
+        val clock = { testScheduler.currentTime + 1 }
+        val active = ActiveSessions(connection, backgroundScope, clock = clock)
+        val tracker = AttentionTracker(connection, host, active, backgroundScope, clock)
+
+        host.open(url, "stored-1", null).state.first { it.runtimeSessionId == "rt1" }
+        gateway.socket.push(approval("srq-1", "rt1"))
+        host.open(url, "stored-2", null).state.first { it.runtimeSessionId == "rt2" }
+
+        tracker.waiting.first { "stored-1" in it }
+        tracker.requestsByChat.first { "stored-1" in it }
+        tracker.running.first { it["stored-1"] == true }
+
+        host.close()
+        connection.stop()
+
+        tracker.waiting.first { it.isEmpty() }
+        tracker.requestsByChat.first { it.isEmpty() }
+        tracker.running.first { it.isEmpty() }
+    }
+
+    @Test
+    fun reconnectingWithANewClientClearsPreviousSocketsState() = runTest {
+        val gateway = FakeGateway(backgroundScope, reconnects = true).apply {
+            ready = { FakeGateway.QUIET_READY }
+            http = { json("""{"messages":[]}""") }
+            answer = { call ->
+                when (call.method) {
+                    "session.resume" -> """{"session_id":"rt${call.param("session_id").orEmpty().removePrefix("stored-")}","running":true}"""
+                    "session.active_list" -> """{"sessions":[]}"""
+                    else -> "{}"
+                }
+            }
+        }
+        val connection = gateway.start()
+        val host = ChatHost(connection, SessionsApi(gateway.client), backgroundScope)
+        val clock = { testScheduler.currentTime + 1 }
+        val active = ActiveSessions(connection, backgroundScope, clock = clock)
+        val tracker = AttentionTracker(connection, host, active, backgroundScope, clock)
+
+        host.open(url, "stored-1", null).state.first { it.runtimeSessionId == "rt1" }
+        gateway.sockets.last().push(approval("srq-1", "rt1"))
+        host.open(url, "stored-2", null).state.first { it.runtimeSessionId == "rt2" }
+        tracker.requestsByChat.first { "stored-1" in it }
+
+        gateway.sockets.last().serverClose(1006, "gone")
+        connection.state.first { it !is ConnectionState.Connected }
+        advanceTimeBy(2_000)
+        connection.state.first { it is ConnectionState.Connected && gateway.sockets.size == 2 }
+        runCurrent()
+
+        assertTrue("stored-1" !in tracker.requestsByChat.value)
+        assertTrue("stored-1" !in tracker.waiting.first { "stored-1" !in it })
+    }
+
+    @Test
+    fun aRequestAnsweredElsewhereIsPrunedFromRequestsByChat() = runTest {
+        val (host, tracker, transport) = setup(backgroundScope)
+        host.open(url, "stored-1", null).state.first { it.runtimeSessionId == "rt1" }
+        host.open(url, "stored-2", null).state.first { it.runtimeSessionId == "rt2" }
+        transport.push(approval("srq-1", "rt1"))
+        tracker.requestsByChat.first { "stored-1" in it }
+
+        val collector = backgroundScope.launch { tracker.waiting.collect {} }
+        live = mapOf("stored-1" to "working")
+        advanceTimeBy(10_001)
+        runCurrent()
+
+        assertTrue("stored-1" !in tracker.waiting.value)
+        assertTrue("stored-1" !in tracker.requestsByChat.value)
         collector.cancel()
     }
 }

@@ -220,4 +220,30 @@ class SubagentsTest {
         val second = first.messages.filterIsInstance<ChatMessage.Assistant>().single().tools.single { it.id == "d2" }
         assertEquals(listOf("s2"), subagentRows(second, first.subagents).map { it.key })
     }
+
+    @Test
+    fun malformedOrOverflowingTaskNumbersInDelegationReportsDoNotCrash() {
+        val batchReport = listOf(
+            "[ASYNC DELEGATION BATCH COMPLETE — deleg_big]",
+            "--- ✓ TASK 99999999999999999999/2: Overflow  (status=completed) ---",
+            "Ignored",
+            "--- ✓ TASK 0/2: Zero  (status=completed) ---",
+            "Ignored",
+            "--- ✓ TASK 2/2: Valid  (status=completed) ---",
+            "All good.",
+        ).joinToString("\n")
+        val batch = parseDelegationReport(batchReport)
+        assertEquals("deleg_big", batch?.delegationId)
+        assertEquals(setOf(1), batch?.tasks?.keys)
+        assertEquals("Valid", batch?.tasks?.get(1)?.goal)
+        assertEquals("All good.", batch?.tasks?.get(1)?.summary)
+
+        val failedOverflow = "[ASYNC DELEGATION TASK FAILED — deleg_big, task 99999999999999999999/2]\nError: boom"
+        assertNull(parseDelegationReport(failedOverflow))
+        assertNull(parseDelegationReport("[ASYNC DELEGATION TASK FAILED — deleg_big, task 0/2]\nError: boom"))
+
+        // historyToMessages must handle malformed reports without throwing NumberFormatException.
+        val messages = historyToMessages(listOf(SessionMessage(id = 1, role = "user", content = JsonPrimitive(failedOverflow))))
+        assertEquals(1, messages.size)
+    }
 }

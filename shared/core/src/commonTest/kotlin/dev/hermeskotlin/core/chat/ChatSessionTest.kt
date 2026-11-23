@@ -7,6 +7,7 @@ import dev.hermeskotlin.core.cache.SavedTranscript
 import kotlin.coroutines.EmptyCoroutineContext
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
+import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.rpc.FakeGateway
 import dev.hermeskotlin.core.rpc.FakeTransport
@@ -18,6 +19,7 @@ import dev.hermeskotlin.core.rpc.param
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.slash.SlashCommand
+import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
@@ -25,6 +27,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -2593,5 +2596,131 @@ class ChatSessionTest {
         connection.state.first { it is dev.hermeskotlin.core.connection.ConnectionState.Connected }
         assertNull(chat.checkpoints())
         assertTrue(transport.sent.value.none { it.isCall("session.create") || it.isCall("rollback.list") })
+    }
+
+    @Test
+    fun concurrentSubmitsAllocateDistinctLocalKeys() = runTest {
+        val (chat, _) = resumedChat(backgroundScope, mapOf("prompt.submit" to SILENT))
+
+        val first = launch { chat.submit("first") }
+        val second = launch { chat.submit("second") }
+        val state = chat.state.first { s -> s.messages.count { it is ChatMessage.User && it.pending } == 2 }
+        val keys = state.messages.filterIsInstance<ChatMessage.User>().filter { it.pending }.map { it.key }
+        assertEquals(2, keys.distinct().size, "duplicate local keys: $keys")
+
+        first.cancelAndJoin()
+        second.cancelAndJoin()
+    }
+
+    @Test
+    fun aServerRequestArrivingBeforeResumeIsClaimedOnceAttached() = runTest {
+        val (connection, transport) = setup(backgroundScope, mapOf("session.resume" to SILENT))
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        val resume = transport.awaitSent { it.isCall("session.resume") }
+
+        // Arrives while session.resume is still in flight; buffered in unclaimed until attach completes.
+        transport.push("""{"jsonrpc":"2.0","id":"srq-early","method":"approval","params":{"session_id":"rt1","command":"ls","choices":["once","deny"]}}""")
+        testScheduler.runCurrent()
+
+        transport.push("""{"jsonrpc":"2.0","id":${resume["id"]},"result":{"session_id":"rt1","running":true}}""")
+        val attached = chat.state.first { it.runtimeSessionId == "rt1" && it.inputRequests.isNotEmpty() }
+        assertEquals(listOf("srq-early"), attached.inputRequests.map { it.id })
+    }
+
+    @Test
+    fun cancellingASendBeforeSubmitDetachesImagesAndCleansUpState() = runTest {
+        val (chat, transport) = newChat(
+            backgroundScope,
+            mapOf(
+                "image.attach_bytes" to """{"attached":true,"path":"/tmp/upload_1.jpg"}""",
+                "file.attach" to SILENT,
+            ),
+        )
+        val photo = OutgoingAttachment("a1", "cat.jpg", "image/jpeg", byteArrayOf(1))
+        val file = OutgoingAttachment("a2", "notes.txt", "text/plain", "hi".encodeToByteArray())
+
+        val sending = launch { chat.send("look", listOf(photo, file)) }
+        transport.awaitSent { it.isCall("file.attach") }
+        sending.cancelAndJoin()
+
+        val detach = transport.awaitSent { it.isCall("image.detach") }
+        assertEquals("/tmp/upload_1.jpg", detach.param("path"))
+        assertTrue(chat.state.value.messages.isEmpty())
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+    }
+
+    @Test
+    fun cancellingASendWaitingForSubmitReplyMarksItUnknown() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf("prompt.submit" to SILENT))
+
+        val sending = launch { chat.submit("deploy it") }
+        transport.awaitSent { it.isCall("prompt.submit") }
+        sending.cancelAndJoin()
+
+        val bubble = assertIs<ChatMessage.User>(chat.state.value.messages.single { it is ChatMessage.User && it.text == "deploy it" })
+        assertFalse(bubble.pending)
+        assertEquals(SendCheck.Unknown, bubble.check)
+
+        // ownTurnsPending was decremented, so a subsequent turn started elsewhere still reloads the transcript.
+        history = history.replace("]}", """,{"id":3,"role":"user","content":"from desktop"}]}""")
+        transport.push(event("message.start", "rt1"))
+        chat.state.first { s -> s.messages.any { it is ChatMessage.User && it.text == "from desktop" } }
+    }
+
+    @Test
+    fun cancellingASteerOrCommandDoesNotLeaveItStuck() = runTest {
+        val (chat, transport) = runningChat(backgroundScope, mapOf("session.steer" to SILENT, "slash.exec" to SILENT))
+
+        val steering = launch { chat.steer("use tabs") }
+        transport.awaitSent { it.isCall("session.steer") }
+        steering.cancelAndJoin()
+        val steered = assertIs<ChatMessage.User>(chat.state.value.messages.single { it is ChatMessage.User && it.text == "use tabs" })
+        assertFalse(steered.pending)
+        assertEquals(SendCheck.Unknown, steered.check)
+
+        val command = launch { chat.runCommand(SlashCommand("status", "")) }
+        transport.awaitSent { it.isCall("slash.exec") }
+        command.cancelAndJoin()
+        assertTrue(chat.state.value.messages.none { it is ChatMessage.Command })
+    }
+
+    @Test
+    fun rewindWaitsForAnInFlightSendInsteadOfRacingIt() = runTest {
+        history = threeTurns
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("file.attach" to SILENT, "prompt.submit" to """{"status":"streaming","user_row_id":7}"""),
+        )
+        val file = OutgoingAttachment("f1", "a.txt", "text/plain", "hi".encodeToByteArray())
+        val sending = backgroundScope.async { chat.send("look", listOf(file)) }
+        val attach = transport.awaitSent { it.isCall("file.attach") }
+
+        val rewinding = backgroundScope.async { chat.rewind("row-3", "two edited") }
+        testScheduler.runCurrent()
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+
+        transport.push("""{"jsonrpc":"2.0","id":${attach["id"]},"result":{"attached":true,"ref_text":"@file:a.txt"}}""")
+        assertTrue(sending.await())
+        assertEquals(SendOutcome.NotSent, rewinding.await())
+        assertTrue(chat.state.value.error!!.contains("Wait"))
+    }
+
+    @Test
+    fun flaggedToolRisksStayScopedToTheirGatewayAndProfile() = runTest {
+        val risks = ToolRiskStore(InMemoryKeyValueStore())
+        val (connection, transport) = setup(backgroundScope, mapOf("session.resume" to """{"session_id":"rt1","running":true}"""))
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope, profile = "work", risks = risks)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+
+        transport.push(event("tool.start", "rt1", """{"tool_id":"t1","name":"web_extract"}"""))
+        transport.push(event("tool.output_risk", "rt1", """{"tool_id":"t1","name":"web_extract","risk":"high","findings":["prompt_injection"],"redacted":false}"""))
+        chat.state.first { s -> s.messages.filterIsInstance<ChatMessage.Assistant>().any { a -> a.tools.any { it.risk != null } } }
+        testScheduler.runCurrent()
+
+        assertNotNull(risks.all(ToolRiskStore.scope(url, "work"))["t1"])
+        assertTrue(risks.all(ToolRiskStore.scope(url, "personal")).isEmpty())
+        assertTrue(risks.all(ToolRiskStore.scope(GatewayUrl.parse("https://other.example.ts.net"), "work")).isEmpty())
     }
 }
