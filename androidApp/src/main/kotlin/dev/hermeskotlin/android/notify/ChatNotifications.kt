@@ -420,7 +420,7 @@ class ChatNotifications(
         // Herald on the watch rings itself, with an Answer that talks there: this phone's call isn't shown on it too,
         // unless the watch doesn't say it rings ([showOnWatch]).
         val watchRings = alsoRings?.ring(call) == true
-        val managed = call.agent != null && managedCalls?.ring(
+        if (call.agent != null) managedCalls?.ring(
             call.id, call.title?.takeIf { it.isNotBlank() } ?: "Hermes",
             onAnswer = {
                 answer(call.id)?.let { open ->
@@ -429,8 +429,8 @@ class ChatNotifications(
                 }
             },
             onReject = { decline(call.id) },
-        ) == true
-        if (!managed) manager.notify(call.id, CALL_ID, callNotification(call, localOnly = watchRings))
+        )
+        manager.notify(call.id, CALL_ID, callNotification(call, localOnly = watchRings))
         HandlerCompat.postDelayed(main, { rangOut(call.id) }, call.timer, RING_MS)
         return true
     }

@@ -14,8 +14,6 @@
     <!-- A voice chat goes on with the screen off, like a call (VoiceCallService). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
-    <uses-permission android:name="android.permission.CALL_PHONE" />
-    <uses-permission android:name="android.permission.READ_PHONE_NUMBERS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <!-- A reply read aloud goes on with the screen off, like music (ReadAloudService). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
@@ -393,15 +391,6 @@
             tools:ignore="ExportedService">
             <intent-filter>
                 <action android:name="io.rebble.pebblekit2.RECEIVE_DATA_FROM_WATCH" />
-            </intent-filter>
-        </service>
-
-        <service
-            android:name=".notify.ManagedCallService"
-            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.telecom.ConnectionService" />
             </intent-filter>
         </service>
 

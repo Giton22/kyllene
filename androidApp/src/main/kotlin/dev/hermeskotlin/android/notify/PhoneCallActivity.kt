@@ -73,7 +73,7 @@ class PhoneCallActivity : ComponentActivity() {
         val chat = ringing?.storedSessionId
         // A call from the agent may have no chat on this gateway (Desktop's, say): it talks in a new one.
         if (requestId == null || ringing == null || (chat == null && ringing.agent == null)) return finish()
-        val managedId = requestId.takeIf { keeper.telecom.incoming.value == it }
+        val managedId = requestId.takeIf(keeper.telecom::answerFromPhone)
         model.pickUp(PickedUpCall(
             requestId, chat, ringing.title?.takeIf { it.isNotBlank() } ?: "Hermes", ringing.request, ringing.agent,
             managedId,

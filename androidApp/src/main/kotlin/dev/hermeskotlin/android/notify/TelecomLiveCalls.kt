@@ -1,102 +1,120 @@
 package dev.hermeskotlin.android.notify
 
-import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
-import android.os.Bundle
-import android.telecom.CallAudioState
-import android.telecom.Connection
-import android.telecom.ConnectionRequest
-import android.telecom.ConnectionService
 import android.telecom.DisconnectCause
-import android.telecom.PhoneAccount
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.util.Log
+import androidx.core.net.toUri
+import androidx.core.telecom.CallAttributesCompat
+import androidx.core.telecom.CallControlResult
+import androidx.core.telecom.CallControlScope
+import androidx.core.telecom.CallsManager
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.canUseAndroidSystemCalling
 import dev.hermeskotlin.core.voice.LiveSystemCall
 import dev.hermeskotlin.core.voice.SystemCallingStatus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import org.koin.android.ext.android.inject
-import java.util.UUID
 
-/** Calls belong to this installation and are routed only against a pending Kyllene request. */
+/** Reports live voice to Telecom while Kyllene continues to own the phone UI. */
 internal class TelecomLiveCalls(private val context: Context, private val settings: SettingsStore) {
+    private val calls = CallsManager(context)
     private val manager = context.getSystemService(TelecomManager::class.java)
     private val supported = manager != null && (
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             context.packageManager.hasSystemFeature(PackageManager.FEATURE_TELECOM)
         )
-    private val account = PhoneAccountHandle(ComponentName(context, ManagedCallService::class.java), "live-voice")
+    private val scope = CoroutineScope(Dispatchers.Main.immediate)
+    private var accountReady = false
+    private var pending: Registration? = null
     private val _name = MutableStateFlow<String?>(null)
     val name = _name.asStateFlow()
-    private var pending: ManagedCall? = null
     private val _incoming = MutableStateFlow<String?>(null)
     val incoming = _incoming.asStateFlow()
 
-    fun setupStatus(): SystemCallingStatus = when {
-        !supported -> SystemCallingStatus.Unavailable
-        context.checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED ||
-            context.checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) != PackageManager.PERMISSION_GRANTED ->
-            SystemCallingStatus.NeedsPermissions
-        runCatching { manager?.getPhoneAccount(account)?.isEnabled == true }.getOrDefault(false) ->
-            SystemCallingStatus.Ready
-        else -> SystemCallingStatus.NeedsAccount
-    }
+    fun setupStatus() = if (supported) SystemCallingStatus.Ready else SystemCallingStatus.Unavailable
 
-    fun prepareAccount(): Boolean = when (setupStatus()) {
-        SystemCallingStatus.Ready -> true
-        SystemCallingStatus.NeedsAccount -> runCatching {
-            requireNotNull(manager).registerPhoneAccount(
-                PhoneAccount.builder(account, "Kyllene")
-                    .setCapabilities(PhoneAccount.CAPABILITY_CALL_PROVIDER)
-                    .setSupportedUriSchemes(listOf(PhoneAccount.SCHEME_SIP))
-                    .build(),
-            )
-        }.onFailure { Log.w(TAG, "Couldn't register Kyllene's calling account", it) }.isSuccess
-        SystemCallingStatus.Unavailable, SystemCallingStatus.NeedsPermissions -> false
+    fun prepareAccount(): Boolean {
+        if (!supported) return false
+        if (accountReady) return true
+        return runCatching {
+            calls.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE)
+            accountReady = true
+            // Retire the previous system-managed account for this installation after registration succeeds.
+            val legacy = PhoneAccountHandle(ComponentName(context, LEGACY_SERVICE), "live-voice")
+            runCatching { manager?.unregisterPhoneAccount(legacy) }
+                .onFailure { Log.w(TAG, "Couldn't remove the previous Kyllene calling account", it) }
+        }.onFailure { Log.w(TAG, "Couldn't register Kyllene with Telecom", it) }.isSuccess
     }
 
     private fun enabled(): Boolean =
-        settings.settings.value?.canUseAndroidSystemCalling(setupStatus() == SystemCallingStatus.Ready) == true
+        settings.settings.value?.canUseAndroidSystemCalling(supported) == true && prepareAccount()
 
     suspend fun register(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? {
         if (pending != null || !enabled()) return null
-        val call = ManagedCall(name).apply { attach(onMute, onEnd) }
-        pending = call
-        return try {
-            manager.placeCall(call.sessionAddress, Bundle().apply { putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, account) })
-            if (withTimeoutOrNull(5_000) { call.created.await() } == true) call else null
-        } catch (error: SecurityException) {
-            Log.w(TAG, "Couldn't place the Kyllene internet call", error)
-            null
+        val call = Registration(name).apply { attach(onMute, onEnd) }
+        start(call)
+        var registered = false
+        try {
+            registered = withTimeoutOrNull(5_000) { call.created.await() } == true
+            return call.takeIf { registered }
         } finally {
-            if (!call.bound) call.close()
+            if (!registered) call.close()
         }
     }
 
-    fun ring(id: String, name: String, onAnswer: () -> Unit, onReject: () -> Unit): Boolean {
-        if (pending != null || !enabled()) return false
-        val call = ManagedCall(name, id, onAnswer, onReject)
+    fun ring(id: String, name: String, onAnswer: () -> Unit, onReject: () -> Unit) {
+        if (pending != null || !enabled()) return
+        start(Registration(name, id, onAnswer, onReject))
+    }
+
+    private fun start(call: Registration) {
         pending = call
-        _incoming.value = id
-        return try {
-            manager.addNewIncomingCall(account, Bundle().apply {
-                putParcelable(TelecomManager.EXTRA_INCOMING_CALL_ADDRESS, call.sessionAddress)
-            })
-            true
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "Couldn't report the incoming Kyllene call", error)
-            call.close()
-            false
+        call.job = scope.launch {
+            try {
+                calls.addCall(
+                    call.attributes,
+                    onAnswer = { call.answerFromTelecom() },
+                    onDisconnect = { call.endedByTelecom() },
+                    onSetActive = {},
+                    onSetInactive = { error("Hold is unavailable") },
+                ) {
+                    call.control = this
+                    if (pending !== call) return@addCall
+                    if (call.incomingId != null) _incoming.value = call.incomingId
+                    _name.value = call.attributes.displayName.toString()
+                    call.created.complete(true)
+                    launch { isMuted.collect(call::updateMute) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.w(TAG, "Couldn't register the Kyllene voice session with Telecom", error)
+            } finally {
+                call.created.complete(false)
+                if (pending === call) call.registrationEnded()
+            }
         }
+    }
+
+    /** A tap on Kyllene's incoming notification uses the same pending call as Android Auto. */
+    fun answerFromPhone(id: String): Boolean {
+        val call = pending?.takeIf { it.incomingId == id && it.control != null } ?: return false
+        call.markAccepted()
+        return true
     }
 
     fun attachIncoming(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? =
@@ -108,7 +126,7 @@ internal class TelecomLiveCalls(private val context: Context, private val settin
         return true
     }
 
-    private fun answeredIncoming(id: String): ManagedCall? =
+    private fun answeredIncoming(id: String): Registration? =
         pending?.takeIf { it.incomingId == id && it.accepted }
 
     fun stopRinging(id: String) {
@@ -119,105 +137,120 @@ internal class TelecomLiveCalls(private val context: Context, private val settin
         pending?.takeIf { it.incomingId == id }?.close()
     }
 
-    fun create(handle: PhoneAccountHandle?, request: ConnectionRequest, incoming: Boolean): Connection {
-        val call = pending?.takeIf {
-            handle == account && request.address == it.sessionAddress && incoming == (it.incomingId != null) && !it.bound
-        } ?: return Connection.createFailedConnection(DisconnectCause(DisconnectCause.ERROR))
-        call.bound = true
-        if (incoming) call.setRinging() else call.setDialing()
-        _name.value = call.caller
-        call.created.complete(true)
-        return call
-    }
-
-    private inner class ManagedCall(
-        val caller: String,
+    private inner class Registration(
+        name: String,
         val incomingId: String? = null,
         private val answer: () -> Unit = {},
         private val rejection: () -> Unit = {},
-    ) : Connection(), LiveSystemCall {
-        val sessionAddress = Uri.fromParts(PhoneAccount.SCHEME_SIP, "${UUID.randomUUID()}@kyllene.invalid", null)
+    ) : LiveSystemCall {
+        val attributes = kylleneCallAttributes(name, incomingId != null)
         val created = CompletableDeferred<Boolean>()
-        var bound = false
+        var job: Job? = null
+        var control: CallControlScope? = null
         var accepted = false
+            private set
+        private var answeredByTelecom = false
         private var closed = false
+        private var activated = false
         private var muted = false
         private var mute: (Boolean) -> Unit = {}
         private var end: (() -> Unit)? = null
-
-        init {
-            setAudioModeIsVoip(true)
-            setAddress(sessionAddress, TelecomManager.PRESENTATION_ALLOWED)
-            setCallerDisplayName(caller, TelecomManager.PRESENTATION_ALLOWED)
-        }
+        private var pickupTimeout: Job? = null
 
         fun attach(onMute: (Boolean) -> Unit, onEnd: () -> Unit) {
+            pickupTimeout?.cancel()
             mute = onMute
             end = onEnd
             mute(muted)
         }
 
-        override fun onAnswer() {
-            if (closed || accepted) return
-            accepted = true
-            answer()
-            // Allow the existing call activity to request unlock and hand the call off to live audio.
-            android.os.Handler(context.mainLooper).postDelayed({
-                if (end == null && !closed) {
-                    close()
-                    rejection()
-                }
-            }, 20_000)
+        fun updateMute(value: Boolean) {
+            muted = value
+            if (!closed) mute(value)
         }
 
-        override fun onAnswer(videoState: Int) = onAnswer()
-        override fun onReject() = remoteEnd(DisconnectCause.REJECTED)
-        override fun onDisconnect() = remoteEnd(DisconnectCause.LOCAL)
-        override fun onAbort() = remoteEnd(DisconnectCause.CANCELED)
+        fun markAccepted() {
+            if (closed || accepted) return
+            accepted = true
+            pickupTimeout = scope.launch {
+                delay(20_000)
+                close()
+                rejection()
+            }
+        }
 
-        @Suppress("DEPRECATION")
-        override fun onCallAudioStateChanged(state: CallAudioState) {
-            muted = state.isMuted
-            mute(muted)
+        fun answerFromTelecom() {
+            check(incomingId != null && !closed)
+            answeredByTelecom = true
+            if (accepted) return
+            markAccepted()
+            answer()
         }
 
         override suspend fun activate() {
-            if (!closed) setActive()
+            val call = control ?: return
+            if (closed || activated) return
+            activated = true
+            if (answeredByTelecom) return
+            val result = if (incomingId != null) call.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)
+            else call.setActive()
+            if (result is CallControlResult.Error) {
+                Log.w(TAG, "Couldn't mark the Kyllene call active")
+            }
         }
 
-        override fun close() = finish(DisconnectCause.LOCAL)
-
-        private fun remoteEnd(cause: Int) {
+        override fun close() {
             if (closed) return
-            finish(cause)
+            clear()
+            val call = control
+            if (call == null) job?.cancel()
+            else scope.launch {
+                try {
+                    withTimeoutOrNull(5_500) { call.disconnect(DisconnectCause(DisconnectCause.LOCAL)) }
+                } finally {
+                    job?.cancel()
+                }
+            }
+        }
+
+        fun endedByTelecom() {
+            if (closed) return
+            clear()
             end?.invoke() ?: rejection()
         }
 
-        private fun finish(cause: Int) {
-            if (closed) return
+        fun registrationEnded() {
+            val wasRegistered = control != null
+            clear()
+            // If Telecom refused registration, Kyllene's ordinary voice or ringing UI can carry on.
+            if (wasRegistered) end?.invoke() ?: rejection()
+        }
+
+        private fun clear() {
             closed = true
+            pickupTimeout?.cancel()
             if (pending === this) {
                 pending = null
                 _name.value = null
                 _incoming.value = null
             }
-            created.complete(false)
-            setDisconnected(DisconnectCause(cause))
-            destroy()
         }
     }
 
     private companion object {
         const val TAG = "KylleneTelecom"
+        const val LEGACY_SERVICE = "dev.hermeskotlin.android.notify.ManagedCallService"
     }
 }
 
-class ManagedCallService : ConnectionService() {
-    private val keeper: VoiceCallKeeper by inject()
-
-    override fun onCreateOutgoingConnection(handle: PhoneAccountHandle?, request: ConnectionRequest): Connection =
-        keeper.telecom.create(handle, request, incoming = false)
-
-    override fun onCreateIncomingConnection(handle: PhoneAccountHandle?, request: ConnectionRequest): Connection =
-        keeper.telecom.create(handle, request, incoming = true)
+internal fun kylleneCallAttributes(name: String, incoming: Boolean): CallAttributesCompat {
+    val label = name.ifBlank { "Kyllene" }
+    return CallAttributesCompat(
+        displayName = label,
+        // Some surfaces show the address while dialing. Telecom assigns the actual call a separate ID.
+        address = "sip:${Uri.encode(label)}@kyllene.invalid".toUri(),
+        direction = if (incoming) CallAttributesCompat.DIRECTION_INCOMING else CallAttributesCompat.DIRECTION_OUTGOING,
+        callCapabilities = 0,
+        isLogExcluded = true,
+    )
 }
