@@ -1242,6 +1242,7 @@ class ChatViewModel(
      */
     override fun send(mode: RunningSend?) {
         val chat = session.value ?: return
+        composer.dropEmptyListItem()
         val text = composer.text.toString()
         val attachments = _attachments.value
         val comments = _comments.value

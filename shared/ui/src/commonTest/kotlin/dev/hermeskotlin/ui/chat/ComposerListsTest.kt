@@ -107,4 +107,21 @@ class ComposerListsTest {
         assertNull(listContinuation("1. a", 2))
     }
 
+    private fun dropped(text: String): String = TextFieldState(text).apply { dropEmptyListItem() }.text.toString()
+
+    @Test
+    fun anEmptyLastItemIsDroppedBeforeSending() {
+        assertEquals("1. a\n2. b", dropped("1. a\n2. b\n3. "))
+        assertEquals("- a", dropped("- a\n- "))
+        assertEquals("- [ ] a", dropped("- [ ] a\n- [ ] "))
+        assertEquals("1. a", dropped("1. a\r\n2. "))
+    }
+
+    @Test
+    fun anythingElseAtTheEndIsSentAsTyped() {
+        assertEquals("- ", dropped("- "))
+        assertEquals("- a\n- b", dropped("- a\n- b"))
+        assertEquals("hello\n", dropped("hello\n"))
+        assertEquals("```\n- a\n- ", dropped("```\n- a\n- "))
+    }
 }

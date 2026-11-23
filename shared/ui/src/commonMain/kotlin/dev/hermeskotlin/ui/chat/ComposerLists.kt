@@ -3,6 +3,7 @@ package dev.hermeskotlin.ui.chat
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.ui.text.TextRange
 
 /** What a line break after a list item does: [start] until [end] becomes [text], with the cursor after it. */
@@ -64,6 +65,20 @@ internal fun TextFieldBuffer.continueList() {
     val edit = listContinuation(asCharSequence(), newLine) ?: return
     replace(edit.start, edit.end, edit.text)
     selection = TextRange(edit.start + edit.text.length)
+}
+
+/**
+ * Takes off a last line that is only a list marker, as a line break after the last item leaves it, so the
+ * message doesn't go out with an empty item. Call before reading the text to send. A marker alone stays.
+ */
+internal fun TextFieldState.dropEmptyListItem() {
+    val text = text
+    val lineStart = text.lastIndexOf('\n') + 1
+    if (lineStart == 0) return
+    val item = listItem.matchEntire(text.subSequence(lineStart, text.length)) ?: return
+    if (item.groupValues[7].isNotBlank() || insideFence(text, lineStart)) return
+    val cut = (lineStart - 1).let { if (it > 0 && text[it - 1] == '\r') it - 1 else it }
+    edit { replace(cut, length, "") }
 }
 
 /** The composers' list continuation, for a field's `inputTransformation`. See [continueList]. */
