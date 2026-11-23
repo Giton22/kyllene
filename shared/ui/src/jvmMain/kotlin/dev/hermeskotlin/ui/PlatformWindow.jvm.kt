@@ -9,6 +9,9 @@ import dev.hermeskotlin.core.voice.nativeDesktopAudio
 internal actual val imeVisible: Boolean
     @Composable get() = true
 
+internal actual val hardwareKeyboard: Boolean
+    @Composable get() = true
+
 internal actual fun fullScreenDialogProperties() = DialogProperties(usePlatformDefaultWidth = false)
 
 internal actual val enterSends: Boolean = true
