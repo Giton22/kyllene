@@ -1,6 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
-import dev.hermeskotlin.ui.imeVisible
+import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
 import dev.hermeskotlin.ui.ShortcutHandler
@@ -131,7 +131,6 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -4007,11 +4006,7 @@ private fun Composer(
     var focused by remember { mutableStateOf(false) }
     // Up and Down through this chat's earlier prompts, from the desktop's keyboard.
     val recall = remember(state.storedSessionId) { PromptRecall() }
-    // Back hides the keyboard but leaves the field focused, and a focused field brings the keyboard back on
-    // the next relayout (opening a tool card, the menu). Put away means done typing, so let go of the focus.
-    val keyboardUp = imeVisible
-    val focusManager = LocalFocusManager.current
-    LaunchedEffect(keyboardUp) { if (!keyboardUp && focused) focusManager.clearFocus() }
+    ReleaseFocusWhenKeyboardPutAway(focused)
     // How open the composer stands, 1 open to 0 folded to a line. It tracks the scroll as it goes, and springs
     // across when a tap, the keyboard or a draft holds it open or lets go.
     val open = remember { Animatable(1f) }
