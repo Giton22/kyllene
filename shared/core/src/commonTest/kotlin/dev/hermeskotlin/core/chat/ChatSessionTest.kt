@@ -2980,6 +2980,34 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aPromptWhoseTurnStartsBeforeItsReplyIsReadIsNotLeftQueued() = runTest {
+        val (chat, transport) = authorityChat(backgroundScope) { it.rewound() }
+        val canned = gateway.answer
+        // A quick turn: its start is on the wire ahead of the `prompt.submit` reply, which says "queued" for every prompt.
+        gateway.answer = { call ->
+            if (call.method != "prompt.submit") canned(call) else {
+                call.socket.push(event("message.start", "stored-1"))
+                """{"admission_id":"a1","status":"queued"}"""
+            }
+        }
+
+        assertTrue(chat.send("three"))
+        val submission = transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id")
+        transport.push(
+            event(
+                "message.complete",
+                "stored-1",
+                """{"text":"Third","status":"complete","persisted_turn":{"row_ids":[9,10],"complete":true,"user_row_id":9,"submission_id":"$submission"}}""",
+            ),
+        )
+
+        val done = chat.state.first { !it.running && it.messages.last() is ChatMessage.Assistant }
+        val prompt = done.messages.filterIsInstance<ChatMessage.User>().last()
+        assertFalse(prompt.queued)
+        assertEquals(prompt, done.regenerateTarget(done.messages.last().key))
+    }
+
+    @Test
     fun aTurnEndNamingAnotherSubmissionGivesNoRow() = runTest {
         val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
 

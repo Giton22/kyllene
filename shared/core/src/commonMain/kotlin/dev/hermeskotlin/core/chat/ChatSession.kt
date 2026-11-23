@@ -345,11 +345,14 @@ class ChatSession(
             // The row written for it, so it can be regenerated or edited before the transcript is read again.
             val rowId = result.long("user_row_id")
             val sentText = visible.takeIf { attachments.isEmpty() && resent.isEmpty() && display == null && it.isNotEmpty() }
+            // The session authority answers every prompt "queued", one that starts a turn too. Marked so, a prompt whose
+            // turn began before this read the reply would wait for a start that has already come.
+            val held = status == "queued" && !(client.sessionAuthority && startsTurn)
             _state.update { state ->
                 val sent = state.copy(
                     running = true,
                     messages = state.messages.updateUser(key) {
-                        it.copy(pending = false, queued = status == "queued", rowId = rowId ?: it.rowId, sentText = sentText)
+                        it.copy(pending = false, queued = held, rowId = rowId ?: it.rowId, sentText = sentText)
                     },
                 )
                 // What streamed before the correction stays above it; the rest of the turn continues below.
