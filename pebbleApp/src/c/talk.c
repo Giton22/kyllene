@@ -21,6 +21,8 @@
 #define REPLY_FONT FONT_KEY_GOTHIC_24
 // A quick launch opens straight into dictation, once the window is up.
 #define QUICK_DICTATE_MS 400
+// Wait briefly for a replayed reply matching a persisted ask id before falling back to chat history.
+#define HISTORY_WAIT_MS 2000
 // How long the launcher says Kyllene's working, after it closed mid-turn.
 #define GLANCE_WORKING_S (10 * 60)
 // The launcher's line under Kyllene holds 150 bytes.
@@ -53,6 +55,7 @@ typedef enum {
 } PhoneState;
 
 static Window *s_window;
+static bool s_loaded;
 static Layer *s_header_layer;
 static TextLayer *s_activity_layer;
 static ScrollLayer *s_scroll_layer;
@@ -60,6 +63,10 @@ static TextLayer *s_said_layer;
 static TextLayer *s_reply_layer;
 static AppTimer *s_answer_timer;
 static AppTimer *s_status_timer;
+static AppTimer *s_first_status_timer;
+static AppTimer *s_quick_dictate_timer;
+static AppTimer *s_history_timer;
+static bool s_asked_history;
 
 static PhoneState s_phone = PHONE_UNKNOWN;
 static char s_chat_id[64];
@@ -83,6 +90,13 @@ static bool s_loading_chat;
 static char s_activity[128];
 static char s_error[128];
 static int s_ask_count;
+
+static void prv_cancel_timer(AppTimer **timer) {
+  if (*timer) {
+    app_timer_cancel(*timer);
+    *timer = NULL;
+  }
+}
 
 static void prv_copy(char *to, size_t size, const char *from) {
   strncpy(to, from ? from : "", size - 1);
@@ -185,6 +199,7 @@ static void prv_header_update(Layer *layer, GContext *ctx) {
 
 // Sizes the said and reply text to what they hold, the reply below what was said.
 static void prv_layout(void) {
+  if (!s_loaded) return;
   GRect bounds = layer_get_bounds(scroll_layer_get_layer(s_scroll_layer));
   int w = bounds.size.w - PAD * 2;
   int y = 4;
@@ -195,7 +210,7 @@ static void prv_layout(void) {
 }
 
 static void prv_redraw(void) {
-  if (!s_window) return;
+  if (!s_loaded) return;
   layer_mark_dirty(s_header_layer);
   bool failed = s_has_turn && s_phase == PHASE_FAILED;
   text_layer_set_text_color(s_activity_layer, failed ? PBL_IF_COLOR_ELSE(GColorDarkCandyAppleRed, GColorBlack)
@@ -221,11 +236,13 @@ static void prv_redraw(void) {
 
 static void prv_answer_timeout(void *data) {
   s_answer_timer = NULL;
+  if (!s_loaded) return;
   if (s_phone != PHONE_NOT_CONNECTED) s_phone = PHONE_NO_HERALD;
   prv_redraw();
 }
 
 static void prv_ask_status(void) {
+  if (!s_loaded) return;
   if (!link_phone_connected()) {
     s_phone = PHONE_NOT_CONNECTED;
     prv_redraw();
@@ -236,26 +253,41 @@ static void prv_ask_status(void) {
 }
 
 static void prv_status_tick(void *data) {
+  s_status_timer = NULL;
+  if (!s_loaded) return;
   s_status_timer = app_timer_register(STATUS_EVERY_MS, prv_status_tick, NULL);
   prv_ask_status();
 }
 
+static bool prv_request_history(void) {
+  if (!link_history_request(s_chat_id, s_chat_scope)) return false;
+  s_asked_history = true;
+  prv_set_history_ask();
+  s_loading_chat = true;
+  return true;
+}
+
+static void prv_history_timeout(void *data) {
+  s_history_timer = NULL;
+  if (!s_loaded || s_asked_history || s_has_turn || !s_chat_id[0] || s_phone != PHONE_READY) return;
+  if (prv_request_history()) prv_redraw();
+}
+
 void talk_on_status(const LinkStatus *status) {
-  if (s_answer_timer) {
-    app_timer_cancel(s_answer_timer);
-    s_answer_timer = NULL;
-  }
+  prv_cancel_timer(&s_answer_timer);
   if (status->flags & LINK_FLAG_OFF) s_phone = PHONE_OFF;
   else if (!(status->flags & LINK_FLAG_SIGNED_IN)) s_phone = PHONE_SIGNED_OUT;
   else if (status->flags & LINK_FLAG_FAILED) s_phone = PHONE_UNREACHABLE;
   else if (status->flags & LINK_FLAG_CONNECTED) s_phone = PHONE_READY;
   else s_phone = PHONE_RECONNECTING;
   // Opened in a chat with no turn to show: its last exchange, once the phone's there to send it.
-  static bool s_asked_history;
-  if (!s_asked_history && !s_has_turn && s_chat_id[0] && s_phone == PHONE_READY) {
-    s_asked_history = true;
-    prv_set_history_ask();
-    s_loading_chat = link_history_request(s_chat_id, s_chat_scope);
+  if (s_loaded && !s_asked_history && !s_has_turn && s_chat_id[0] && s_phone == PHONE_READY) {
+    if (!s_ask_id[0] || strncmp(s_ask_id, "h:", 2) == 0) {
+      prv_request_history();
+    } else if (!s_history_timer) {
+      // Wait briefly so a replayed reply for the persisted ask id isn't clobbered before it arrives.
+      s_history_timer = app_timer_register(HISTORY_WAIT_MS, prv_history_timeout, NULL);
+    }
   }
   if (s_phone == PHONE_OFF && s_has_turn && s_phase == PHASE_SENDING) {
     // What was just said went nowhere.
@@ -286,6 +318,8 @@ static void prv_phone_connection(bool connected) {
 // --- The turn
 
 static void prv_ask(const char *text) {
+  prv_cancel_timer(&s_history_timer);
+  s_loading_chat = false;
   char id[sizeof(s_ask_id)];
   snprintf(id, sizeof(id), "p%lx%d", (unsigned long)time(NULL), ++s_ask_count);
   prv_set_ask(id);
@@ -300,7 +334,7 @@ static void prv_ask(const char *text) {
     s_phase = PHASE_FAILED;
     prv_copy(s_error, sizeof(s_error), "Couldn't send that. Try again.");
   }
-  scroll_layer_set_content_offset(s_scroll_layer, GPointZero, false);
+  if (s_loaded) scroll_layer_set_content_offset(s_scroll_layer, GPointZero, false);
   prv_redraw();
 }
 
@@ -312,8 +346,12 @@ void talk_on_send_failed(int type) {
     prv_redraw();
   } else if (type == LINK_STATUS_REQ) {
     // Not even delivered: the answer won't come.
-    if (s_answer_timer) app_timer_cancel(s_answer_timer);
+    prv_cancel_timer(&s_answer_timer);
     prv_answer_timeout(NULL);
+  } else if (type == LINK_HISTORY_REQ && s_loading_chat) {
+    s_loading_chat = false;
+    s_asked_history = false;
+    prv_redraw();
   }
 }
 
@@ -321,6 +359,8 @@ void talk_on_reply(const LinkReply *reply) {
   // An ask this watch moved on from (asked again, or picked another chat): the phone streams it until it ends, and
   // taking it would put the watch back in that ask's chat.
   if (s_ask_id[0] && strcmp(reply->ask_id, s_ask_id) != 0) return;
+  if (reply->text_offset < 0 || reply->text_offset > MAX_REPLY) return;
+  prv_cancel_timer(&s_history_timer);
   s_loading_chat = false;
   if (!s_has_turn) {
     // The first turn since this app opened (one the phone sends again on opening), or the chat's last exchange.
@@ -336,9 +376,10 @@ void talk_on_reply(const LinkReply *reply) {
     return;
   }
   // Placed at its offset: the same piece sent twice changes nothing, and 0 replaces the text.
-  int len = strlen(reply->text);
-  if (reply->text_offset + len > MAX_REPLY) len = MAX_REPLY - reply->text_offset;
-  memcpy(s_reply + reply->text_offset, reply->text, len);
+  size_t raw_len = strlen(reply->text);
+  size_t room = (size_t)(MAX_REPLY - reply->text_offset);
+  int len = (int)(raw_len > room ? room : raw_len);
+  memcpy(s_reply + reply->text_offset, reply->text, (size_t)len);
   s_reply_len = reply->text_offset + len;
   s_reply[s_reply_len] = '\0';
 
@@ -412,19 +453,22 @@ static void prv_use_chat(const char *chat_id, const char *title, const char *sco
     persist_delete(KEY_CHAT_TITLE);
     persist_delete(KEY_CHAT_SCOPE);
   }
+  prv_cancel_timer(&s_history_timer);
   s_has_turn = false;
   s_said[0] = '\0';
   // Only this chat's last exchange shows from now on; a new chat shows nothing until it's asked in.
   prv_set_history_ask();
   // An old chat opens on its last exchange.
   s_loading_chat = s_chat_id[0] && link_history_request(s_chat_id, s_chat_scope);
-  scroll_layer_set_content_offset(s_scroll_layer, GPointZero, false);
+  s_asked_history = s_loading_chat;
+  if (s_loaded) scroll_layer_set_content_offset(s_scroll_layer, GPointZero, false);
   prv_redraw();
 }
 
 // --- Buttons
 
 static void prv_dictated(const char *text) {
+  if (!s_loaded) return;
   prv_ask(text);
 }
 
@@ -511,6 +555,7 @@ static void prv_tap(const Recognizer *recognizer, RecognizerEvent event) {
 }
 
 static void prv_pan(const Recognizer *recognizer, RecognizerEvent event) {
+  if (!s_loaded) return;
   if (event == RecognizerEvent_Started) {
     s_scroll_from = scroll_layer_get_content_offset(s_scroll_layer).y;
   } else if (event == RecognizerEvent_Updated) {
@@ -561,22 +606,39 @@ static void prv_window_load(Window *window) {
   window_attach_recognizer(window, pan_recognizer_create(prv_pan, NULL, PanAxis_Vertical));
 #endif
 
+  s_loaded = true;
   prv_redraw();
 }
 
 static void prv_window_unload(Window *window) {
+  s_loaded = false;
+  prv_cancel_timer(&s_first_status_timer);
+  prv_cancel_timer(&s_quick_dictate_timer);
+  prv_cancel_timer(&s_answer_timer);
+  prv_cancel_timer(&s_status_timer);
+  prv_cancel_timer(&s_history_timer);
+  dictate_forget(prv_dictated);
   text_layer_destroy(s_reply_layer);
+  s_reply_layer = NULL;
   text_layer_destroy(s_said_layer);
+  s_said_layer = NULL;
   scroll_layer_destroy(s_scroll_layer);
+  s_scroll_layer = NULL;
   text_layer_destroy(s_activity_layer);
+  s_activity_layer = NULL;
   layer_destroy(s_header_layer);
+  s_header_layer = NULL;
 }
 
 static void prv_first_status(void *data) {
+  s_first_status_timer = NULL;
+  if (!s_loaded) return;
   prv_status_tick(NULL);
 }
 
 static void prv_quick_dictate(void *data) {
+  s_quick_dictate_timer = NULL;
+  if (!s_loaded) return;
   prv_select(NULL, NULL);
 }
 
@@ -631,6 +693,7 @@ void talk_init(void) {
   if (persist_exists(KEY_PROMPTS_REV)) {
     persist_read_string(KEY_PROMPTS_REV, s_prompts_rev, sizeof(s_prompts_rev));
     s_prompt_count = persist_read_int(KEY_PROMPT_COUNT);
+    if (s_prompt_count < 0) s_prompt_count = 0;
     if (s_prompt_count > MAX_PROMPTS) s_prompt_count = MAX_PROMPTS;
     for (int i = 0; i < s_prompt_count; i++) persist_read_string(KEY_PROMPT + i, s_prompts[i], sizeof(s_prompts[i]));
   }
@@ -643,14 +706,19 @@ void talk_init(void) {
   });
   window_stack_push(s_window, true);
   // A moment after opening, once the link is up.
-  app_timer_register(300, prv_first_status, NULL);
-  if (launch_reason() == APP_LAUNCH_QUICK_LAUNCH) app_timer_register(QUICK_DICTATE_MS, prv_quick_dictate, NULL);
+  s_first_status_timer = app_timer_register(300, prv_first_status, NULL);
+  if (launch_reason() == APP_LAUNCH_QUICK_LAUNCH) s_quick_dictate_timer = app_timer_register(QUICK_DICTATE_MS, prv_quick_dictate, NULL);
 }
 
 void talk_deinit(void) {
 #ifdef _PBL_API_EXISTS_app_glance_reload
   app_glance_reload(prv_glance, NULL);
 #endif
+  prv_cancel_timer(&s_first_status_timer);
+  prv_cancel_timer(&s_quick_dictate_timer);
+  prv_cancel_timer(&s_answer_timer);
+  prv_cancel_timer(&s_status_timer);
+  prv_cancel_timer(&s_history_timer);
   connection_service_unsubscribe();
   dictate_deinit();
   window_destroy(s_window);

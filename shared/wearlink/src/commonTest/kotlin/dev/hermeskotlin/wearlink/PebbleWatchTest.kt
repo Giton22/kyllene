@@ -98,6 +98,17 @@ class PebbleWatchTest {
     }
 
     @Test
+    fun aReplyRewrittenAtASupplementaryCharacterDoesNotSplitItsSurrogatePair() = pebbleTest { fake, watch ->
+        // Both emojis share the UTF-16 high surrogate \uD83D: commonPrefixWith must not cut inside the code point.
+        watch.reply(update(1, "Status 🟢"))
+        advanceUntilIdle()
+        watch.reply(update(2, "Status 🔴"))
+        advanceUntilIdle()
+        assertEquals(7 to "🔴", fake.replies.last().let { it.offset to it.chunk })
+        assertEquals("Status 🔴", fake.text)
+    }
+
+    @Test
     fun aReplyThatLostItsEndIsCutOnTheWatch() = pebbleTest { fake, watch ->
         watch.reply(update(1, "Done *"))
         advanceUntilIdle()

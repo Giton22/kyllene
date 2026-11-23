@@ -381,18 +381,25 @@ class WatchLink(
         store.setChat(ring.chatId, ring.title, scope = store.phoneScope?.let { WatchScope(it.gateway) })
         scope.launch {
             // Again if it didn't go: else the phone rings on through the call.
-            repeat(ANSWER_TRIES) {
-                if (send(WearPaths.RING_END, WearJson.encode(RingEnd(requestId, answered = true))) != null) return@launch
-                delay(ANSWER_AGAIN_MS)
+            retryUntilSent(ANSWER_TRIES, ANSWER_AGAIN_MS) {
+                send(WearPaths.RING_END, WearJson.encode(RingEnd(requestId, answered = true)))
             }
         }
         return ring
     }
 
     /** Declines the ring for [requestId]: it stops here and on the phone, where the question waits as a notification. */
-    fun declineRing(requestId: String) {
+    fun declineRing(requestId: String, onDone: () -> Unit = {}) {
         rings.stop(requestId)
-        scope.launch { send(WearPaths.RING_END, WearJson.encode(RingEnd(requestId))) }
+        scope.launch {
+            try {
+                withTimeoutOrNull(DECLINE_TIMEOUT_MS) {
+                    send(WearPaths.RING_END, WearJson.encode(RingEnd(requestId)))
+                }
+            } finally {
+                onDone()
+            }
+        }
     }
 
     /** Hangs up. */
@@ -736,7 +743,21 @@ class WatchLink(
         private const val DROP_GRACE_MS = 2_000L
         private const val ANSWER_TRIES = 3
         private const val ANSWER_AGAIN_MS = 1_000L
+        private const val DECLINE_TIMEOUT_MS = 8_000L
     }
+}
+
+/** Tries [send] up to [tries] times, pausing [delayMs] after each failure, stopping as soon as it returns null (sent). */
+internal suspend fun retryUntilSent(
+    tries: Int,
+    delayMs: Long,
+    send: suspend () -> String?,
+): Boolean {
+    repeat(tries) { attempt ->
+        if (send() == null) return true
+        if (attempt < tries - 1) delay(delayMs)
+    }
+    return false
 }
 
 /** The `type` of an event-channel message; null for garbage. */

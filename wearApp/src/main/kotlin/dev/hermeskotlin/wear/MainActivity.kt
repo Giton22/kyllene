@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
     private var defaultCallJob: Job? = null
     private var permissionDefault: String? = null
     private var callPermissionPending = false
+    private var awaitingPermission = false
     private var inputGeneration: Long? = null
     private var recognitionGeneration: Long? = null
     private var callGeneration: Long? = null
@@ -61,10 +62,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        awaitingPermission = false
         if (granted) completeInput(inputGeneration, ::record) else listening.value = Listening(error = NEEDS_MICROPHONE)
     }
 
     private val callMicrophone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        awaitingPermission = false
         val target = permissionDefault
         val pending = callPermissionPending
         permissionDefault = null
@@ -120,10 +123,11 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (savedInstanceState == null) {
-            handle(intent)
-            // Hermes rings the watch when it needs an answer, which takes notifications. Asked once; a no stays a no.
-            if (Build.VERSION.SDK_INT >= 33 && !app.rings.canRing && !app.store.askedToRing) {
+            val handled = handle(intent)
+            // Hermes rings the watch when it needs an answer, which takes notifications. Asked once on a plain launch; a no stays a no.
+            if (!handled && Build.VERSION.SDK_INT >= 33 && !app.rings.canRing && !app.store.askedToRing) {
                 app.store.askedToRing = true
+                awaitingPermission = true
                 notificationsAllowed.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
@@ -134,7 +138,9 @@ class MainActivity : ComponentActivity() {
         app.callDisplay.refresh()
     }
 
-    private val notificationsAllowed = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val notificationsAllowed = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        awaitingPermission = false
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -142,14 +148,15 @@ class MainActivity : ComponentActivity() {
         handle(intent)
     }
 
-    private fun handle(intent: Intent) {
+    private fun handle(intent: Intent): Boolean {
         // Debug builds take a typed question from adb (`--es ask "…"`), for trying a turn on an emulator without a mic.
         val typed = if (BuildConfig.DEBUG) intent.getStringExtra(EXTRA_DEBUG_ASK) else null
-        when {
-            !typed.isNullOrBlank() -> app.link.ask(typed)
-            intent.getBooleanExtra(EXTRA_CALL, false) -> defaultCall()
-            intent.getStringExtra(EXTRA_ANSWER_CALL) == app.callToken -> call()
-            AssistEntry.asksToListen(intent.action, intent.getBooleanExtra(EXTRA_LISTEN, false)) -> talk()
+        return when {
+            !typed.isNullOrBlank() -> { app.link.ask(typed); true }
+            intent.getBooleanExtra(EXTRA_CALL, false) -> { defaultCall(); true }
+            intent.getStringExtra(EXTRA_ANSWER_CALL) == app.callToken -> { call(); true }
+            AssistEntry.asksToListen(intent.action, intent.getBooleanExtra(EXTRA_LISTEN, false)) -> { talk(); true }
+            else -> false
         }
     }
 
@@ -157,13 +164,15 @@ class MainActivity : ComponentActivity() {
     private fun call() {
         defaultCallJob?.cancel()
         permissionDefault = null
-        callPermissionPending = true
+        callPermissionPending = false
         inputGeneration = app.link.profileReset.value
         app.link.dismissCall()
         listening.value = Listening()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             app.link.startCall()
         } else {
+            callPermissionPending = true
+            awaitingPermission = true
             callMicrophone.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
@@ -172,7 +181,7 @@ class MainActivity : ComponentActivity() {
         super.onStop()
         // Out of sight, a recording or a call would go on hearing the room.
         recordingJob?.cancel()
-        if (!isChangingConfigurations) {
+        if (!isChangingConfigurations && !awaitingPermission) {
             defaultCallJob?.cancel()
             permissionDefault = null
             callPermissionPending = false
@@ -204,6 +213,7 @@ class MainActivity : ComponentActivity() {
             } else {
                 permissionDefault = target.requestId
                 callPermissionPending = true
+                awaitingPermission = true
                 callMicrophone.launch(Manifest.permission.RECORD_AUDIO)
             }
         }
@@ -227,6 +237,7 @@ class MainActivity : ComponentActivity() {
                 app.link.startCall()
             } else {
                 callPermissionPending = true
+                awaitingPermission = true
                 callMicrophone.launch(Manifest.permission.RECORD_AUDIO)
             }
         }
@@ -268,6 +279,7 @@ class MainActivity : ComponentActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             record()
         } else {
+            awaitingPermission = true
             microphone.launch(Manifest.permission.RECORD_AUDIO)
         }
     }

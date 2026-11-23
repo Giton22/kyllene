@@ -53,6 +53,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -740,29 +741,30 @@ fun AssistPanel(
     val chat by store.chat.collectAsState()
     val speaking by speech.speaking.collectAsState()
     MaterialTheme(colorScheme = watchColors(accent)) {
+        val running = turn?.running == true
         val mood = when {
             listening.recording -> OrbMood.Listening
             listening.waiting -> OrbMood.Waiting
             turn?.update?.phase == ReplyPhase.WaitingOnPhone -> OrbMood.Waiting
-            turn?.running == true -> OrbMood.Working
+            running -> OrbMood.Working
             speaking -> OrbMood.Speaking
             turn?.update?.phase == ReplyPhase.Failed || listening.error != null -> OrbMood.Failed
             else -> OrbMood.Idle
         }
-        val orbLabel = stringResource(
-            when {
-                listening.recording -> R.string.wear_done_talking
-                listening.waiting -> R.string.wear_cancel
-                else -> R.string.wear_talk_to_hermes
-            },
-        )
+        val orbLabel = stringResource(assistOrbLabel(listening.recording, listening.waiting, running, speaking))
+        val round = LocalConfiguration.current.isScreenRound
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
                 .halo(mood, MaterialTheme.colorScheme.primaryContainer)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(
+                    start = if (round) 20.dp else 12.dp,
+                    end = if (round) 20.dp else 12.dp,
+                    top = 6.dp,
+                    bottom = if (round) 48.dp else 12.dp,
+                ),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             HeraldOrb(
@@ -789,6 +791,14 @@ fun AssistPanel(
             }
         }
     }
+}
+
+@StringRes
+internal fun assistOrbLabel(recording: Boolean, waiting: Boolean, running: Boolean, speaking: Boolean): Int = when {
+    recording -> R.string.wear_done_talking
+    waiting -> R.string.wear_cancel
+    running || speaking -> R.string.wear_stop
+    else -> R.string.wear_talk_to_hermes
 }
 
 /** How the watch talks: live in a call (when the gateway can), and whether replies are read aloud. */

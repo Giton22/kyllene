@@ -36,6 +36,8 @@ class SpeechOut(private val context: Context) {
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var pendingSay: String? = null
+    private var utteranceGen = 0
+    @Volatile private var lastUtteranceId: String? = null
 
     /**
      * Whether anything would be heard: a speaker, or earbuds or a headset over Bluetooth. Many watches have
@@ -74,12 +76,26 @@ class SpeechOut(private val context: Context) {
         }
         pendingSay = text
         if (engine == null) {
-            tts = TextToSpeech(context) { status ->
-                ttsReady = status == TextToSpeech.SUCCESS
-                val waiting = pendingSay
-                pendingSay = null
-                if (ttsReady && waiting != null) tts?.let { speakNow(it, waiting) }
+            var created: TextToSpeech? = null
+            created = TextToSpeech(context) { status ->
+                main.post {
+                    val active = created ?: tts
+                    if (status == TextToSpeech.SUCCESS) {
+                        if (active != null && tts === active) {
+                            ttsReady = true
+                            val waiting = pendingSay
+                            pendingSay = null
+                            if (waiting != null) speakNow(active, waiting)
+                        }
+                    } else {
+                        ttsReady = false
+                        pendingSay = null
+                        if (tts === active) tts = null
+                        active?.shutdown()
+                    }
+                }
             }
+            tts = created
         }
     }
 
@@ -95,12 +111,14 @@ class SpeechOut(private val context: Context) {
         count = 0
         askId = null
         pendingSay = null
+        lastUtteranceId = null
         tts?.stop()
         _speaking.value = false
     }
 
     fun release() {
         stop()
+        ttsReady = false
         tts?.shutdown()
         tts = null
     }
@@ -146,25 +164,36 @@ class SpeechOut(private val context: Context) {
     }
 
     private fun speakNow(engine: TextToSpeech, text: String) {
+        // The engine takes at most getMaxSpeechInputLength() at a time; the rest of a long reply waits in its queue.
+        val most = TextToSpeech.getMaxSpeechInputLength().coerceAtMost(MAX_TTS_PIECE)
+        val gen = ++utteranceGen
+        val chunks = speechUtterances(text, most, gen)
+        if (chunks.isEmpty()) {
+            _speaking.value = false
+            return
+        }
+        val prefix = "reply-$gen-"
+        val finalId = chunks.last().first
+        lastUtteranceId = finalId
         _speaking.value = true
         engine.language = Locale.getDefault()
         engine.setOnUtteranceProgressListener(
             object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = Unit
                 override fun onDone(utteranceId: String?) {
-                    _speaking.value = false
+                    if (utteranceId == lastUtteranceId) _speaking.value = false
                 }
 
                 @Deprecated("Deprecated in Java")
                 override fun onError(utteranceId: String?) {
-                    _speaking.value = false
+                    if (utteranceId == lastUtteranceId || utteranceId?.startsWith(prefix) == true) {
+                        _speaking.value = false
+                    }
                 }
             },
         )
-        // The engine takes at most getMaxSpeechInputLength() at a time; the rest of a long reply waits in its queue.
-        val most = TextToSpeech.getMaxSpeechInputLength().coerceAtMost(MAX_TTS_PIECE)
-        text.chunked(most).forEachIndexed { i, piece ->
-            engine.speak(piece, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, "reply-$i")
+        chunks.forEachIndexed { i, (id, piece) ->
+            engine.speak(piece, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, id)
         }
     }
 
@@ -188,3 +217,7 @@ class SpeechOut(private val context: Context) {
         )
     }
 }
+
+/** Splits [text] into TTS pieces of at most [maxChunk] chars, each tagged with its utterance id. */
+internal fun speechUtterances(text: String, maxChunk: Int, generation: Int = 0): List<Pair<String, String>> =
+    text.chunked(maxChunk.coerceAtLeast(1)).mapIndexed { i, piece -> "reply-$generation-$i" to piece }

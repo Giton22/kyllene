@@ -3,9 +3,12 @@ package dev.hermeskotlin.wear
 import androidx.compose.ui.graphics.Color
 import dev.hermeskotlin.wearlink.ReplyPhase
 import dev.hermeskotlin.wearlink.WatchAccent
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class WatchTextTest {
 
@@ -130,5 +133,49 @@ class WatchTextTest {
         assertEquals(HeraldBlueText, contextTint(0.5f))
         assertEquals(Amber, contextTint(0.8f))
         assertEquals(Danger, contextTint(0.95f))
+    }
+
+    @Test
+    fun retryUntilSentStopsOnSuccessAndRetriesFailures() = runBlocking {
+        var attempts = 0
+        assertTrue(retryUntilSent(tries = 3, delayMs = 0) {
+            attempts++
+            null
+        })
+        assertEquals(1, attempts)
+
+        var failThenSucceed = 0
+        assertTrue(retryUntilSent(tries = 3, delayMs = 0) {
+            failThenSucceed++
+            if (failThenSucceed < 3) "offline" else null
+        })
+        assertEquals(3, failThenSucceed)
+
+        var alwaysFails = 0
+        assertFalse(retryUntilSent(tries = 3, delayMs = 0) {
+            alwaysFails++
+            "offline"
+        })
+        assertEquals(3, alwaysFails)
+    }
+
+    @Test
+    fun speechUtterancesTagEachChunkWithUniqueLastId() {
+        assertEquals(emptyList(), speechUtterances("", maxChunk = 10, generation = 1))
+        val chunks = speechUtterances("abcdefghij", maxChunk = 4, generation = 2)
+        assertEquals(
+            listOf("reply-2-0" to "abcd", "reply-2-1" to "efgh", "reply-2-2" to "ij"),
+            chunks,
+        )
+        assertEquals("reply-2-2", chunks.last().first)
+    }
+
+    @Test
+    fun assistOrbLabelOffersStopWhileRunningOrSpeaking() {
+        assertEquals(R.string.wear_done_talking, assistOrbLabel(recording = true, waiting = false, running = false, speaking = false))
+        assertEquals(R.string.wear_cancel, assistOrbLabel(recording = false, waiting = true, running = false, speaking = false))
+        assertEquals(R.string.wear_stop, assistOrbLabel(recording = false, waiting = false, running = true, speaking = false))
+        assertEquals(R.string.wear_stop, assistOrbLabel(recording = false, waiting = false, running = false, speaking = true))
+        assertEquals(R.string.wear_talk_to_hermes, assistOrbLabel(recording = false, waiting = false, running = false, speaking = false))
     }
 }

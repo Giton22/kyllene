@@ -202,7 +202,16 @@ class PebbleWatch(
         val sameAsk = update.askId == shownAsk
         // What the watch has that still stands: all of it while the reply only grows, and up to where it changed
         // when a mark closing later in the stream (a link, an emphasis) rewrote what came before.
-        val kept = if (sameAsk) plain.commonPrefixWith(shownText) else ""
+        val rawKept = if (sameAsk) plain.commonPrefixWith(shownText) else ""
+        // Never split a UTF-16 surrogate pair when two supplementary-plane characters (such as emojis) share a high surrogate.
+        val kept = if (rawKept.isNotEmpty() && rawKept.last().isHighSurrogate() &&
+            ((rawKept.length < plain.length && plain[rawKept.length].isLowSurrogate()) ||
+                (rawKept.length < shownText.length && shownText[rawKept.length].isLowSurrogate()))
+        ) {
+            rawKept.dropLast(1)
+        } else {
+            rawKept
+        }
         val chunk = takeUtf8(plain, PebbleLink.CHUNK_BYTES, from = kept.length)
         // The watch has text past what stands: a message cuts it there, even with nothing to add.
         val cuts = kept.length < shownText.length

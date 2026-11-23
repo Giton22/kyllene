@@ -64,6 +64,12 @@ static int16_t prv_row_height(MenuLayer *menu, MenuIndex *index, void *data) {
 static void prv_select(MenuLayer *menu, MenuIndex *index, void *data) {
   if (index->row == 0) {
     s_picked("", "", "");
+  } else if (!s_loading && s_error[0]) {
+    s_error[0] = '\0';
+    s_loading = link_chats_request();
+    if (!s_loading) prv_copy(s_error, sizeof(s_error), "Couldn't ask your phone. Try again.");
+    menu_layer_reload_data(s_menu);
+    return;
   } else if (!s_loading && !s_error[0] && index->row - 1 < s_count && s_chats[index->row - 1].id[0]) {
     // A row whose chat never came has no id, which would pick a new chat.
     s_picked(s_chats[index->row - 1].id, s_chats[index->row - 1].title, s_scope);
@@ -74,12 +80,14 @@ static void prv_select(MenuLayer *menu, MenuIndex *index, void *data) {
 }
 
 void chats_on_item(const LinkChatItem *item) {
-  if (!s_window) return;
+  if (!s_window || !s_menu) return;
+  if (item->count < 0) return;
   if (item->count == 0) {
     s_count = 0;
     s_loading = false;
     prv_copy(s_error, sizeof(s_error), item->error);
-  } else if (item->index >= 0 && item->index < MAX_CHATS) {
+  } else {
+    if (item->index < 0 || item->index >= MAX_CHATS) return;
     Chat *chat = &s_chats[item->index];
     prv_copy(chat->id, sizeof(chat->id), item->chat_id);
     prv_copy(chat->title, sizeof(chat->title), item->title);
@@ -89,6 +97,13 @@ void chats_on_item(const LinkChatItem *item) {
     // They come in order: the last one ends the list.
     if (item->index >= s_count - 1) s_loading = false;
   }
+  menu_layer_reload_data(s_menu);
+}
+
+void chats_on_send_failed(int type) {
+  if (type != LINK_CHATS_REQ || !s_window || !s_menu || !s_loading) return;
+  s_loading = false;
+  prv_copy(s_error, sizeof(s_error), "Couldn't reach Kyllene on your phone.");
   menu_layer_reload_data(s_menu);
 }
 
@@ -108,6 +123,7 @@ static void prv_load(Window *window) {
 
 static void prv_unload(Window *window) {
   menu_layer_destroy(s_menu);
+  s_menu = NULL;
   window_destroy(s_window);
   s_window = NULL;
 }

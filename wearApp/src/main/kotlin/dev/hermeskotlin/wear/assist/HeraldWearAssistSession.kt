@@ -135,11 +135,14 @@ class HeraldWearAssistSession(context: Context) :
         super.onDestroy()
     }
 
-    /** The orb: done talking, never mind while the phone is checked, or talk again once the last recording ended. */
+    /** The orb: done talking, never mind while the phone is checked, stop a running turn or its voice, or talk again. */
     private fun orb() {
+        val running = showsLast.value && app.link.turn.value?.running == true
         when {
             listening.value.recording -> recorder.finish()
             listening.value.waiting -> stopRecording()
+            running -> app.link.stop()
+            app.speech.speaking.value -> app.link.quiet()
             else -> listen()
         }
     }

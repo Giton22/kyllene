@@ -158,6 +158,7 @@ class WatchRings(private val context: Context) {
 class RingDeclineReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val requestId = intent.getStringExtra(RingActivity.EXTRA_REQUEST_ID) ?: return
-        HeraldWatch.of(context).link.declineRing(requestId)
+        val pending = goAsync()
+        HeraldWatch.of(context).link.declineRing(requestId) { pending.finish() }
     }
 }

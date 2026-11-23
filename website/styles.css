@@ -139,7 +139,7 @@ section { scroll-margin-top: 16px; }
 .section { padding: 112px 0; }
 .section-head { display: flex; flex-direction: column; gap: 16px; max-width: 720px; }
 .eyebrow { font-family: "Geist Mono", ui-monospace, monospace; font-size: 13px; line-height: 16px; color: var(--text-3); }
-h2 { margin: 0; font-weight: 500; font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; }
+.section-head h1, h2 { margin: 0; font-weight: 500; font-size: 40px; line-height: 1.1; letter-spacing: -0.02em; }
 h3 { margin: 0; font-weight: 500; font-size: 16px; line-height: 24px; }
 h1, h2 { text-wrap: balance; }
 .section-head p { margin: 0; font-size: 18px; line-height: 28px; color: var(--text-2); }
@@ -242,7 +242,7 @@ h1, h2 { text-wrap: balance; }
   .actions .btn { justify-content: center; }
   .stage { width: 260px; height: 440px; }
   .notif { left: -40px; top: 176px; width: 300px; }
-  h2 { font-size: 32px; }
+  .section-head h1, h2 { font-size: 32px; }
   .section { padding: 80px 0; }
   .route { grid-template-columns: minmax(0, 1fr); }
   .link .line { height: 40px; width: 0; margin: 4px auto; border-top: 0; border-left: 2px dashed var(--route); align-self: center; }

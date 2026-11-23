@@ -13,3 +13,4 @@ void chats_open(const char *current, GColor fill, GColor on_fill, ChatPicked pic
 
 // What the link hands over while the list is open.
 void chats_on_item(const LinkChatItem *item);
+void chats_on_send_failed(int type);
