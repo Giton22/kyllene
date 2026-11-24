@@ -74,6 +74,16 @@ jobs:
             echo '::error::R8 changed the TeX macro method'; exit 1;
           }
 
+      # A build anyone can try a pull request with: Kyllene Dev installs next to the normal app. Each run signs it
+      # with that runner's debug key, so an older Kyllene Dev has to be uninstalled first.
+      - name: Kyllene Dev APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kyllene-dev-apk
+          path: androidApp/build/outputs/apk/dev/androidApp-dev.apk
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Lint report
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
