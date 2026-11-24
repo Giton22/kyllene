@@ -179,6 +179,26 @@ class ReplayGapTest {
     }
 
     @Test
+    fun aSendAfterAFailedGapResumeAttachesAgain() = runTest(timeout = 5.seconds) {
+        val gw = FakeGateway(backgroundScope, reconnects = false)
+        val authority = gw.authority()
+        val answer = gw.answer
+        gw.answer = { call -> if (call.method == "session.resume" && authority.resumes == 1) { authority.resumes++; "error:5000" } else answer(call) }
+        val chat = gw.chat(backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "stored-1" && it.running }
+
+        authority.overflow(replayGap("stored-1", "sess-e1", authority.seq))
+        chat.state.first { it.attachment is Attachment.Failed }
+        authority.running = false
+        chat.send("hi")
+        // Not sent on a socket that no longer follows the chat: it resumes first, so the reply reaches it.
+        val sent = gw.socket.sent.value.map { (it["method"] as? JsonPrimitive)?.content }
+        assertEquals(3, sent.count { it == "session.resume" }, "sent: $sent")
+        assertTrue(sent.lastIndexOf("session.resume") < sent.indexOf("prompt.submit"), "sent: $sent")
+    }
+
+    @Test
     fun aGapForAnotherSessionDoesNotResume() = runTest(timeout = 5.seconds) {
         val gw = FakeGateway(backgroundScope, reconnects = false)
         val authority = gw.authority()
