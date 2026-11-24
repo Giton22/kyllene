@@ -97,8 +97,9 @@ For Kyllene on the phone to take the watch's messages, its package has to be in 
 Beside the `.pbw` on each release, the watchapp can be in the Pebble appstore, which the Pebble app installs from and
 updates. After the setup below, `.github/workflows/pebble-appstore.yml` does it: when a release is published on
 GitHub, it sends that release's `kyllene-pebble-<version>.pbw` to the store, checked against the SHA-256 the release
-carries, and the store's version is the tag's. Prereleases (and tags like `v1.2.3-rc1`) are skipped. To send a release
-that was published earlier, run the workflow by hand from the Actions tab with its tag.
+carries, and the store's version is the tag's. Prereleases (and tags like `v1.2.3-rc1`) are skipped until they're made
+full releases. Only the latest release is sent, so an older version can't become the store's newest. To send the latest
+release again, or one published before the setup, run the workflow by hand from the Actions tab with its tag.
 
 Setting it up takes a maintainer once:
 
@@ -118,11 +119,12 @@ Setting it up takes a maintainer once:
 4. **Let the workflow sign in**, one of:
    - *A refresh token.* Run `pebble login` on your computer, then put the `refresh_token` from the file the tool
      keeps into the repository secret `PEBBLE_FIREBASE_REFRESH_TOKEN`. The workflow trades it for a one-hour sign-in
-     each run. On Linux the file is `~/.local/share/pebble-sdk/firebase_oauth_storage.json` (`~/.pebble-sdk/` if that
-     exists; on macOS `~/Library/Application Support/Pebble SDK/`):
+     each run. On Linux the file is `~/.local/share/pebble-sdk/oauth_firebase/firebase_oauth_storage.json`
+     (`~/.pebble-sdk/oauth_firebase/` if that folder exists; on macOS
+     `~/Library/Application Support/Pebble SDK/oauth_firebase/`):
 
      ```bash
-     jq -r .refresh_token ~/.local/share/pebble-sdk/firebase_oauth_storage.json | gh secret set PEBBLE_FIREBASE_REFRESH_TOKEN
+     jq -er .refresh_token ~/.local/share/pebble-sdk/oauth_firebase/firebase_oauth_storage.json | gh secret set PEBBLE_FIREBASE_REFRESH_TOKEN
      ```
    - *A trusted publisher.* In the dashboard, **Settings → Publish from GitHub Actions**: register this repository and
      `pebble-appstore.yml`. This needs no secret, but it's newer, and whether the dashboard matches a workflow that

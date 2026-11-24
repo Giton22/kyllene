@@ -8,9 +8,10 @@
 # is in pebbleApp/README.md ("Pebble appstore"). It never creates a listing: the tool refuses to without a
 # description, which this workflow doesn't give it, so a release whose watchapp isn't listed fails here.
 #
-# Prereleases (and tags like v1.2.3-rc1) are skipped: a store version is numbers only, so two candidates of one
-# version would be the same release. To send one release again, or one published before this was set up, run this
-# workflow by hand with its tag.
+# Prereleases are skipped until they're made full releases, and so are tags like v1.2.3-rc1: a store version is
+# numbers only, so two candidates of one version would be the same release. Only the latest release is sent, so an
+# older version can't become the store's newest. To send the latest release again, or one published before this was
+# set up, run this workflow by hand with its tag.
 #
 # Signing in to the store, either of:
 #   PEBBLE_FIREBASE_REFRESH_TOKEN  secret: the refresh token of the account that owns the listing (see the README).
@@ -20,7 +21,8 @@ name: Pebble appstore
 
 on:
   release:
-    types: [published]
+    # Not "published": that fires once, for a prerelease too, so a prerelease made a full release later would be missed.
+    types: [released]
   workflow_dispatch:
     inputs:
       tag:
@@ -30,15 +32,15 @@ on:
 
 permissions: {}
 
+# One group for every run, so two uploads never overlap.
 concurrency:
-  group: pebble-appstore-${{ github.event.release.tag_name || inputs.tag }}
+  group: pebble-appstore
   cancel-in-progress: false
 
 jobs:
   publish:
     if: >-
       vars.PEBBLE_APPSTORE == 'true'
-      && !github.event.release.prerelease
       && !contains(github.event.release.tag_name, '-')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -49,10 +51,25 @@ jobs:
     env:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
-      - name: Check the tag
+      # A manual run gets a tag from anyone who can start it, so the release is checked here, not trusted: a draft or
+      # prerelease would go live at once, and an older release would become the store's newest.
+      - name: Check the release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::'$TAG' isn't a release tag like v1.2.3; a store version is numbers only"
+            exit 1
+          fi
+          read -r draft prerelease < <(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
+            --jq '[.isDraft, .isPrerelease] | @tsv')
+          if [ "$draft" != false ] || [ "$prerelease" != false ]; then
+            echo "::error::$TAG is a draft or a prerelease; publish it as a full release first"
+            exit 1
+          fi
+          latest=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          if [ "$latest" != "$TAG" ]; then
+            echo "::error::$TAG isn't the latest release ($latest is); the store would offer the older version as its newest"
             exit 1
           fi
 
@@ -93,6 +110,7 @@ jobs:
             api_key=$("$RUNNER_TEMP/pebble-tool/bin/python" -c \
               'from pebble_tool.firebase_account import DEFAULT_FIREBASE_API_KEY as k; print(k)')
             umask 077
+            trap 'rm -f "$RUNNER_TEMP/refresh-token"' EXIT
             printf '%s' "$REFRESH_TOKEN" > "$RUNNER_TEMP/refresh-token"
             id_token=$(curl -fsS "https://securetoken.googleapis.com/v1/token?key=$api_key" \
               --data-urlencode grant_type=refresh_token \
