@@ -41,7 +41,7 @@ data class ToolRisk(val findings: List<String>, val redacted: Boolean = false) {
 
 enum class TurnOutcome { Complete, Interrupted, Error }
 
-/** A prompt that went out but got no reply: the link dropped or the gateway didn't answer in time. */
+/** Delivery status for a prompt kept in the transcript for checking or resending. */
 enum class SendCheck {
     /** Looking for it in the stored transcript. */
     Checking,
@@ -49,7 +49,7 @@ enum class SendCheck {
     /** The transcript couldn't tell: it may be running, so it shouldn't simply be sent again. */
     Unknown,
 
-    /** A later check found it missing from the transcript: Hermes never got it, so it's safe to resend. */
+    /** The gateway rejected the prompt or a transcript check found it missing, so it's safe to resend. */
     NotReceived,
 }
 
@@ -65,7 +65,7 @@ enum class SendOutcome {
     /** It never reached Hermes; the bubble is gone, so the text should go back to the composer. */
     NotSent,
 
-    /** It went out without a reply and its bubble stays, marked by a [SendCheck], to check or resend from. */
+    /** Its bubble stays, marked by a [SendCheck], so delivery can be checked or the prompt resent. */
     Unsettled,
 }
 
@@ -83,6 +83,7 @@ internal class UnsettledPrompt(
     val startsTurn: Boolean,
     val files: List<Pair<String, ShownAttachment>> = emptyList(),
     val images: List<Pair<StagedImage, ShownAttachment>> = emptyList(),
+    val keepRejected: Boolean = false,
 )
 
 sealed interface ChatMessage {

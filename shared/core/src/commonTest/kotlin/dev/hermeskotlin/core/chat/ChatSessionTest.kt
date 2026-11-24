@@ -145,6 +145,102 @@ class ChatSessionTest {
     }
 
     @Test
+    fun clearingAReactionSurvivesLoadingEarlierHistory() = runTest {
+        val rows = (3 until HISTORY_PAGE + 3).joinToString(",") { id ->
+            val role = if (id % 2 != 0) "user" else "assistant"
+            val reaction = if (id == 4) ""","display_metadata":{"reactions":[{"author":"user","emoji":"👍"}]}""" else ""
+            """{"id":$id,"role":"$role","content":"Message $id"$reaction}"""
+        }
+        history = """{"session_id":"stored-1","messages":[$rows]}"""
+        val (chat, _) = resumedChat(backgroundScope, mapOf(
+            "message.react" to """{"row_id":4,"reactions":[]}""",
+        ))
+        fun reaction() = chat.state.value.messages.filterIsInstance<ChatMessage.Assistant>()
+            .single { it.key == "row-4" }.userReaction
+
+        assertEquals("👍", reaction())
+        chat.react("row-4", ReplyReaction.Acknowledge) { true }
+        assertNull(reaction())
+
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"Earlier question"},{"id":2,"role":"assistant","content":"Earlier reply"}]}"""
+        chat.loadOlder()
+
+        assertTrue(chat.state.value.messages.any { it.key == "row-2" })
+        assertNull(reaction())
+    }
+
+    @Test
+    fun clearingAReactionUpdatesTheOfflineCopyWithoutAddingARow() = runTest {
+        val cache = OfflineCache(InMemoryOfflineDao(), PlainSealer, EmptyCoroutineContext) { 5_000L }
+        val unchangedRows = history
+        history = history.replace(
+            """"content":"Hi! What next?"""",
+            """"content":"Hi! What next?","display_metadata":{"reactions":[{"author":"user","emoji":"👍"}]}""",
+        )
+        val (connection, _) = setup(backgroundScope, mapOf(
+            "session.resume" to """{"session_id":"rt1","running":false}""",
+            "message.react" to """{"row_id":2,"reactions":[]}""",
+        ))
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope, cache = cache)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+        testScheduler.runCurrent()
+        assertEquals("👍", cache.savedTranscript(url, null, "stored-1")?.rows?.last()?.userReaction)
+
+        history = unchangedRows
+        chat.react("row-2", ReplyReaction.Acknowledge) { true }
+        testScheduler.runCurrent()
+
+        val saved = assertNotNull(cache.savedTranscript(url, null, "stored-1"))
+        assertEquals(listOf(1L, 2L), saved.rows.map { it.id })
+        assertNull(saved.rows.last().userReaction)
+    }
+
+    @Test
+    fun aRejectedReactionFollowUpCanBeResentWithoutTogglingTheEmoji() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"👍"}]}""",
+            "prompt.submit" to "error:4000",
+        ))
+        chat.react("row-2", ReplyReaction.Acknowledge) { true }
+
+        val failed = chat.state.value.messages.filterIsInstance<ChatMessage.User>().single { it.check == SendCheck.NotReceived }
+        val firstPrompt = transport.sent.value.single { it.isCall("prompt.submit") }.param("text")
+        assertEquals(firstPrompt, failed.text)
+        // A previous application of the same reaction could have submitted the identical prompt.
+        history = history.removeSuffix("]}") + """,{"id":3,"role":"user","content":${JsonPrimitive(failed.text)}}]}"""
+        chat.retry()
+        testScheduler.runCurrent()
+        assertTrue(chat.state.value.messages.any { it.key == "row-3" })
+        assertTrue(chat.state.value.messages.any { it.key == failed.key && it is ChatMessage.User && it.check == SendCheck.NotReceived })
+
+        gateway.answer = { """{"status":"started"}""" }
+        assertNull(chat.resend(failed.key))
+        assertEquals(listOf(firstPrompt, firstPrompt), transport.sent.value.filter { it.isCall("prompt.submit") }.map { it.param("text") })
+        assertEquals(1, transport.sent.value.count { it.isCall("message.react") })
+    }
+
+    @Test
+    fun aSecondReplyReactionWaitsForTheFirstToSettle() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"First question"},{"id":2,"role":"assistant","content":"First reply"},
+            {"id":3,"role":"user","content":"Second question"},{"id":4,"role":"assistant","content":"Second reply"}]}"""
+        val (chat, transport) = resumedChat(backgroundScope, mapOf("message.react" to SILENT))
+        val first = async { chat.react("row-2", ReplyReaction.Acknowledge) { true } }
+        val firstCall = transport.awaitSent { it.isCall("message.react") }
+        val second = async { chat.react("row-4", ReplyReaction.Verify) { true } }
+        testScheduler.runCurrent()
+
+        gateway.answer = { """{"row_id":4,"reactions":[]}""" }
+        transport.push("""{"jsonrpc":"2.0","id":${firstCall["id"]},"result":{"row_id":2,"reactions":[]}}""")
+        first.await()
+        second.await()
+
+        assertEquals(listOf("2", "4"), transport.sent.value.filter { it.isCall("message.react") }.map { it.param("row_id") })
+    }
+
+    @Test
     fun verifySubmitsAVisiblePromptAboutTheReactedReply() = runTest {
         val (chat, transport) = resumedChat(backgroundScope, mapOf(
             "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"🔍"}]}""",
