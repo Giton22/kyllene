@@ -1884,13 +1884,20 @@ class ChatSession(
         _state.update { it.copy(model = model, provider = provider) }
         return try {
             val client = connectedClient() ?: throw RpcException(0, "Not connected to the gateway.")
+            // --session: a pick on the phone must not quietly rewrite the profile default (config.yaml).
+            suspend fun overConfigSet() = configSet("model", JsonPrimitive("$model --provider $provider --session")) {
+                if (confirm) put("confirm_expensive_model", true)
+            }
             val result = if (client.sessionAuthority) {
-                mutateModel(client, model, provider, confirm)
-            } else {
-                // --session: a pick on the phone must not quietly rewrite the profile default (config.yaml).
-                configSet("model", JsonPrimitive("$model --provider $provider --session")) {
-                    if (confirm) put("confirm_expensive_model", true)
+                try {
+                    mutateModel(client, model, provider, confirm)
+                } catch (e: RpcException) {
+                    // Every session authority so far (hermes-agent v0.22.1 on) has it; one that doesn't gets the old call.
+                    if (e.code != METHOD_NOT_FOUND) throw e
+                    overConfigSet()
                 }
+            } else {
+                overConfigSet()
             }
             if (result.boolean("confirm_required") == true) {
                 _state.update { it.copy(model = previous.model, provider = previous.provider) }
@@ -1942,10 +1949,16 @@ class ChatSession(
         val runtimeId = ensureAttached(client)
         val token = modelConfirm?.takeIf { confirm && it.first == model && it.second == provider }?.third
         modelConfirm = null
-        return mutateFenced(client, runtimeId, "model", CHANGED_WHILE_SWITCHING) {
-            put("model", model)
-            put("provider", provider)
-            token?.let { put("confirm", it) }
+        return try {
+            mutateFenced(client, runtimeId, "model", CHANGED_WHILE_SWITCHING) {
+                put("model", model)
+                put("provider", provider)
+                token?.let { put("confirm", it) }
+            }
+        } catch (e: RpcException) {
+            // v0.22.1 refuses a pick during a turn; later versions defer it to the next turn.
+            if (e.reason != "session_busy") throw e
+            throw RpcException(e.code, SWITCH_WHEN_DONE, e.reason, e.data)
         }
     }
 
@@ -2727,6 +2740,8 @@ class ChatSession(
         const val CHANGED_WHILE_BRANCHING = "The chat changed on the gateway while branching. Try again."
 
         const val CHANGED_WHILE_SWITCHING = "The chat changed on the gateway while switching the model. Try again."
+
+        const val SWITCH_WHEN_DONE = "The model can't change while a reply is running. Switch it when this one is done."
 
         /** A REST read of a session the gateway no longer has. */
         const val HTTP_NOT_FOUND = 404

@@ -31,6 +31,7 @@ class ModelSwitchTest {
         authority: Boolean,
         mutate: (FakeGateway.Call) -> String? = { it.switched() },
         configSet: (FakeGateway.Call) -> String? = { """{"key":"${it.param("key")}","value":"ok"}""" },
+        refusesConfigSetModel: Boolean = authority,
     ): Pair<ChatSession, FakeGateway> {
         val gateway = FakeGateway(scope, reconnects = false).apply {
             ready = {
@@ -41,7 +42,7 @@ class ModelSwitchTest {
                     "session.resume" ->
                         """{"session_id":"rt1","running":false,"revision":4,"execution_generation":2,"info":{"model":"m1","provider":"p1"}}"""
                     // What the authority does with config.set model (busy_config -> AuthorityRefusal, wire 4001).
-                    "config.set" -> if (authority && call.param("key") == "model") {
+                    "config.set" -> if (refusesConfigSetModel && call.param("key") == "model") {
                         call.error(4001, "use_session_mutation_model", reason = "use_session_mutation_model")
                     } else {
                         configSet(call)
@@ -172,6 +173,27 @@ class ModelSwitchTest {
         val state = chat.state.value
         assertEquals("m1" to "p1", state.model to state.provider)
         assertEquals("The chat changed on the gateway while switching the model. Try again.", state.error)
+    }
+
+    @Test
+    fun aPickDuringATurnOnAnEarlySessionAuthorityIsExplained() = runTest {
+        // hermes-agent v0.22.1 has no deferred pick: a turn in progress refuses it as session_busy.
+        val (chat, _) = chat(backgroundScope, authority = true, mutate = { "error:4001:session_busy" })
+
+        assertEquals(ModelSwitch.Failed, chat.setModel("m2", "p2"))
+        val state = chat.state.value
+        assertEquals("m1", state.model)
+        assertEquals("The model can't change while a reply is running. Switch it when this one is done.", state.error)
+    }
+
+    @Test
+    fun aSessionAuthorityWithoutModelMutationsFallsBackToConfigSet() = runTest {
+        val (chat, gateway) = chat(backgroundScope, authority = true, refusesConfigSetModel = false, mutate = { "error:-32601" })
+
+        assertEquals(ModelSwitch.Done, chat.setModel("m2", "p2"))
+        assertEquals(1, gateway.sent("session.mutate").size)
+        assertEquals("m2 --provider p2 --session", gateway.sent("config.set").single { it.param("key") == "model" }.param("value"))
+        assertEquals("m2", chat.state.value.model)
     }
 
     @Test
