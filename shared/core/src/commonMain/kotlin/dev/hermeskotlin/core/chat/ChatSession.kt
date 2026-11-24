@@ -1707,7 +1707,11 @@ class ChatSession(
             // Not left "Attaching": the chat shows the failure with its retry, as a failed send's attach does.
             _state.update {
                 if (it.attachment !is Attachment.Attaching) it
-                else it.copy(attachment = Attachment.Failed(e.message ?: "Couldn't open the session."))
+                else it.copy(
+                    attachment = Attachment.Failed(e.message ?: "Couldn't open the session."),
+                    // As runCatchingAttach: a chat the gateway turned down has no turn left to follow.
+                    running = it.running && e !is RpcException,
+                )
             }
             throw SteerNotSent(e)
         }

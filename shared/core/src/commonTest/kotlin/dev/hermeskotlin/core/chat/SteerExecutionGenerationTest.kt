@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -142,6 +143,8 @@ class SteerExecutionGenerationTest {
         assertEquals("Couldn't reach the running reply, so the steer wasn't sent.", chat.state.value.error)
         // Not left "Attaching", with no retry to offer.
         assertIs<Attachment.Failed>(chat.state.value.attachment)
+        // The gateway turned the chat down, so no turn of it can be followed or stopped.
+        assertFalse(chat.state.value.running)
     }
 
     @Test
