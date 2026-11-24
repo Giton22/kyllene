@@ -7,13 +7,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -23,6 +27,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +39,9 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.ArrowRight
 import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Lucide
@@ -44,11 +52,12 @@ import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.ToolActivity
 import dev.hermeskotlin.designsystem.*
-import dev.hermeskotlin.designsystem.components.BottomSheet
+import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
-import dev.hermeskotlin.designsystem.components.SheetHeader
 import dev.hermeskotlin.designsystem.components.handCursor
 import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
+import dev.hermeskotlin.ui.clearOfWindowControls
+import dev.hermeskotlin.ui.fullScreenDialogProperties
 import dev.hermeskotlin.ui.resources.*
 import kotlin.math.roundToLong
 import org.jetbrains.compose.resources.pluralStringResource
@@ -58,11 +67,11 @@ import org.jetbrains.compose.resources.stringResource
 @Composable
 internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
     var expanded by rememberSaveable(messageKey) { mutableStateOf(false) }
-    var selectedId by rememberSaveable(messageKey) { mutableStateOf<String?>(null) }
     var detailsVisible by rememberSaveable(messageKey) { mutableStateOf(false) }
     val icons = remember(tools) { tools.map { toolIcon(it.name) }.distinct().take(3) }
     val expandedState = stringResource(if (expanded) Res.string.chat_expanded else Res.string.chat_collapsed)
     val interaction = remember { MutableInteractionSource() }
+    val total = tools.mapNotNull { it.durationSeconds?.takeIf(::validToolDuration) }.takeIf { it.isNotEmpty() }?.sum()
     Column {
         Row(
             Modifier.heightIn(min = MinTouchTarget)
@@ -86,6 +95,9 @@ internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
                 style = Theme[typography][caption],
                 color = Theme[colors][textSecondary],
             )
+            total?.let {
+                Text("· " + formatDuration(it), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+            }
             UnstyledIcon(
                 if (expanded) Lucide.ChevronDown else Lucide.ChevronRight,
                 contentDescription = null,
@@ -95,18 +107,21 @@ internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
         }
         if (expanded) {
             val offsets = remember(tools) { toolTimelineOffsets(tools) }
+            val showOffsets = offsets.any { it != null }
             tools.forEachIndexed { index, tool ->
                 key(tool.id) {
-                    ToolTimelineRow(tool, offsets[index], index > 0, index < tools.lastIndex) {
-                        selectedId = tool.id
-                        detailsVisible = true
-                    }
+                    ToolTimelineRow(tool, offsets[index], showOffsets, index > 0, index < tools.lastIndex)
+                }
+            }
+            if (tools.any { it.hasToolDetails() }) {
+                ToolDetailsLink(stringResource(Res.string.chat_view_tool_details), Modifier.padding(start = 26.dp)) {
+                    detailsVisible = true
                 }
             }
         }
     }
-    tools.firstOrNull { it.id == selectedId }?.let { tool ->
-        ToolResultsSheet(tool, messageKey, detailsVisible) { detailsVisible = false }
+    if (detailsVisible) key(messageKey) {
+        ToolDetailsViewer(tools, messageKey) { detailsVisible = false }
     }
 }
 
@@ -125,23 +140,34 @@ private fun ToolKindIcon(icon: ImageVector) {
     }
 }
 
+private fun validToolDuration(value: Double) = value.isFinite() && value >= 0
+
+private fun ToolActivity.hasToolDetails() =
+    !input.isNullOrBlank() || !output.isNullOrBlank() || !diff.isNullOrBlank() || risk != null || !summary.isNullOrBlank()
+
+private fun ToolActivity.title() = detail?.lineSequence()?.firstOrNull()?.trim().takeUnless { it.isNullOrEmpty() } ?: name
+
 @Composable
-private fun ToolTimelineRow(tool: ToolActivity, offset: String?, hasPrevious: Boolean, hasNext: Boolean, onClick: () -> Unit) {
-    val status = when {
-        tool.running -> Theme[colors][accentText]
-        tool.failed -> Theme[colors][danger]
-        tool.completed -> Theme[colors][success]
-        else -> Theme[colors][textTertiary]
-    }
-    val statusLabel = stringResource(when {
-        tool.failed -> Res.string.chat_tool_failed
-        tool.running -> Res.string.chat_tool_still_running
-        tool.completed -> Res.string.chat_processes_finished
-        else -> Res.string.chat_tool_completion_unknown
-    })
+private fun ToolActivity.statusColor() = when {
+    running -> Theme[colors][accentText]
+    failed -> Theme[colors][danger]
+    completed -> Theme[colors][success]
+    else -> Theme[colors][textTertiary]
+}
+
+@Composable
+private fun ToolActivity.statusLabel() = stringResource(when {
+    failed -> Res.string.chat_tool_failed
+    running -> Res.string.chat_tool_still_running
+    completed -> Res.string.chat_tool_completed
+    else -> Res.string.chat_tool_completion_unknown
+})
+
+@Composable
+private fun ToolTimelineRow(tool: ToolActivity, offset: String?, showOffsets: Boolean, hasPrevious: Boolean, hasNext: Boolean) {
+    val status = tool.statusColor()
+    val statusLabel = tool.statusLabel()
     val rail = Theme[colors][strokeStrong]
-    val title = tool.detail?.lineSequence()?.firstOrNull()?.trim().takeIf { it?.isNotEmpty() == true } ?: tool.name
-    val summary = tool.summary?.trim()?.takeIf { it.isNotEmpty() && it != title }
     Box {
         Canvas(Modifier.matchParentSize()) {
             val inset = 12.dp.toPx()
@@ -157,73 +183,151 @@ private fun ToolTimelineRow(tool: ToolActivity, offset: String?, hasPrevious: Bo
         )
         Row(
             Modifier.fillMaxWidth()
-                .heightIn(min = MinTouchTarget)
-                .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
-                .handCursor()
-                .clickable(onClickLabel = stringResource(Res.string.chat_show_details), role = Role.Button, onClick = onClick)
-                .semantics { stateDescription = statusLabel }
+                .heightIn(min = 32.dp)
+                .semantics(mergeDescendants = true) { stateDescription = statusLabel }
                 .padding(start = 26.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            Text(
+            if (showOffsets) Text(
                 offset.orEmpty(), Modifier.widthIn(min = 44.dp, max = 80.dp),
                 style = Theme[typography][caption], color = Theme[colors][textSecondary],
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(title, style = Theme[typography][label], color = Theme[colors][text], maxLines = 2, overflow = TextOverflow.Ellipsis)
-                summary?.let {
-                    Text(it, style = Theme[typography][caption], color = Theme[colors][textTertiary], maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-            }
+            Text(tool.title(), Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+            ToolDuration(tool)
             if (tool.failed) {
                 UnstyledIcon(Lucide.X, null, tint = status, modifier = Modifier.size(14.dp))
             }
             if (tool.risk != null) {
                 UnstyledIcon(Lucide.ShieldAlert, stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
             }
-            UnstyledIcon(Lucide.ChevronRight, null, tint = Theme[colors][textMuted], modifier = Modifier.size(14.dp))
         }
     }
 }
 
 @Composable
-internal fun ToolResultsSheet(tool: ToolActivity, messageKey: String, visible: Boolean, onDismiss: () -> Unit) {
-    BottomSheet(visible = visible, onDismiss = onDismiss, fromBottom = true) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) { SheetHeader(tool.name, tool.detail) }
-            Box(
-                Modifier.size(MinTouchTarget)
-                    .handCursor()
-                    .clickable(role = Role.Button, onClick = onDismiss),
-                contentAlignment = Alignment.Center,
+private fun ToolDuration(tool: ToolActivity) {
+    tool.durationSeconds?.takeIf(::validToolDuration)?.let {
+        Text(formatDuration(it), style = Theme[typography][caption], color = Theme[colors][textSecondary])
+    }
+}
+
+@Composable
+private fun ToolDetailsLink(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val tint = Theme[colors][accentText]
+    Row(
+        modifier.heightIn(min = MinTouchTarget)
+            .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
+            .handCursor()
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(end = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = Theme[typography][caption], color = tint)
+        UnstyledIcon(Lucide.ArrowRight, null, tint = tint, modifier = Modifier.size(14.dp))
+    }
+}
+
+@Composable
+private fun ToolDetailsViewer(tools: List<ToolActivity>, messageKey: String, onDismiss: () -> Unit) {
+    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var expandedIds by rememberSaveable { mutableStateOf(emptyArray<String>()) }
+    val pages = rememberSaveableStateHolder()
+    val selected = tools.firstOrNull { it.id == selectedId }
+    fun back() {
+        if (selected == null) onDismiss() else {
+            pages.removeState("output:" + selected.id)
+            selectedId = null
+        }
+    }
+    Dialog(onDismissRequest = ::back, properties = fullScreenDialogProperties()) {
+        Column(Modifier.fillMaxSize().background(Theme[colors][background]).windowInsetsPadding(WindowInsets.safeDrawing)) {
+            Row(
+                Modifier.fillMaxWidth().clearOfWindowControls().padding(start = 4.dp, end = 16.dp, top = 6.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                UnstyledIcon(Lucide.X, stringResource(Res.string.chat_close), tint = Theme[colors][textSecondary], modifier = Modifier.size(18.dp))
+                IconButton(Lucide.ArrowLeft, stringResource(Res.string.common_back), ::back)
+                Text(
+                    stringResource(if (selected == null) Res.string.chat_tool_details_page else Res.string.chat_tool_output_page),
+                    style = Theme[typography][title], color = Theme[colors][text],
+                )
+            }
+            pages.SaveableStateProvider(if (selected == null) "details" else "output:" + selected.id) {
+                Column(
+                    Modifier.fillMaxWidth().weight(1f).verticalScrollWithBar().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (selected == null) {
+                        tools.forEach { tool ->
+                            key(tool.id) {
+                                val expanded = tool.id in expandedIds && tool.hasToolDetails()
+                                ToolComparisonRow(tool, expanded, onToggle = {
+                                    expandedIds = if (expanded) expandedIds.filterNot { it == tool.id }.toTypedArray()
+                                    else expandedIds + tool.id
+                                }, onOpenOutput = { selectedId = tool.id })
+                            }
+                        }
+                    } else {
+                        Text(selected.title(), style = Theme[typography][title], color = Theme[colors][text])
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(selected.statusLabel(), style = Theme[typography][caption], color = selected.statusColor())
+                            ToolDuration(selected)
+                        }
+                        if (selected.output.isNullOrBlank() && selected.diff.isNullOrBlank()) {
+                            Text(
+                                selected.summary?.takeIf { it.isNotBlank() } ?: stringResource(Res.string.chat_tool_no_output),
+                                style = Theme[typography][bodySmall], color = Theme[colors][textSecondary],
+                            )
+                        }
+                        ToolDetailsContent(selected, messageKey)
+                    }
+                }
             }
         }
-        key(tool.id) {
-            Column(
-                Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScrollWithBar().padding(horizontal = 18.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                tool.durationSeconds?.takeIf { it.isFinite() && it >= 0 }?.let { elapsed ->
-                    Text(
-                        stringResource(Res.string.chat_tool_duration, formatDuration(elapsed)),
-                        style = Theme[typography][caption],
-                        color = Theme[colors][textSecondary],
-                    )
-                }
-                if (tool.output == null && !tool.running) {
-                    Text(
-                        tool.summary?.takeIf { it.isNotBlank() } ?: stringResource(Res.string.chat_tool_no_output),
-                        style = Theme[typography][bodySmall],
-                        color = Theme[colors][textSecondary],
-                    )
-                }
-                ToolDetailsContent(tool, messageKey)
-            }
+    }
+}
+
+@Composable
+private fun ToolComparisonRow(tool: ToolActivity, expanded: Boolean, onToggle: () -> Unit, onOpenOutput: () -> Unit) {
+    val status = tool.statusLabel()
+    val hasDetails = tool.hasToolDetails()
+    val modifier = Modifier.fillMaxWidth().heightIn(min = MinTouchTarget)
+    val toggle = if (hasDetails) modifier.handCursor().clickable(
+        onClickLabel = stringResource(if (expanded) Res.string.chat_hide_details else Res.string.chat_show_details),
+        role = Role.Button, onClick = onToggle,
+    ) else modifier
+    Column {
+        Row(
+            toggle.semantics(mergeDescendants = true) { stateDescription = status },
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            UnstyledIcon(toolIcon(tool.name), null, tint = tool.statusColor(), modifier = Modifier.size(16.dp))
+            Text(tool.title(), Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text])
+            ToolDuration(tool)
+            if (hasDetails) UnstyledIcon(
+                if (expanded) Lucide.ChevronDown else Lucide.ChevronRight,
+                null, tint = Theme[colors][textMuted], modifier = Modifier.size(14.dp),
+            )
         }
+        if (expanded) {
+            val preview = if (tool.risk != null) stringResource(Res.string.chat_tool_risk) else
+                sequenceOf(tool.output, tool.summary, tool.diff, tool.input).firstOrNull { !it.isNullOrBlank() }
+            preview?.let {
+                val shape = RoundedCornerShape(Theme[radii][radiusSmall])
+                Text(
+                    it.take(360), Modifier.fillMaxWidth().border(1.dp, Theme[colors][stroke], shape).padding(10.dp),
+                    maxLines = 3, overflow = TextOverflow.Ellipsis,
+                    style = Theme[typography][code], color = Theme[colors][text],
+                )
+            }
+            ToolDetailsLink(stringResource(Res.string.chat_view_full_tool_output), onClick = onOpenOutput)
+        }
+        Box(Modifier.fillMaxWidth().size(1.dp).background(Theme[colors][stroke]))
     }
 }
 

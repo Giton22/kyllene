@@ -138,6 +138,11 @@
     <string name="chat_tool_error">Fehler</string>
     <string name="chat_tool_output">Ausgabe</string>
     <string name="chat_tool_no_output">Es wurde keine Ausgabe aufgezeichnet.</string>
+    <string name="chat_view_tool_details">Tooldetails anzeigen</string>
+    <string name="chat_tool_details_page">Tooldetails</string>
+    <string name="chat_tool_output_page">Toolausgabe</string>
+    <string name="chat_view_full_tool_output">Vollständige Ausgabe anzeigen</string>
+    <string name="chat_tool_completed">Abgeschlossen</string>
     <string name="chat_tool_duration">Dauer: %1$s</string>
     <string name="chat_tool_completion_unknown">Abschluss nicht bestätigt</string>
     <string name="chat_tool_still_running">Läuft noch…</string>

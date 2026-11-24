@@ -138,6 +138,11 @@
     <string name="chat_tool_error">Hiba</string>
     <string name="chat_tool_output">Kimenet</string>
     <string name="chat_tool_no_output">Nem rögzítettek kimenetet.</string>
+    <string name="chat_view_tool_details">Eszközrészletek megtekintése</string>
+    <string name="chat_tool_details_page">Eszközrészletek</string>
+    <string name="chat_tool_output_page">Eszközkimenet</string>
+    <string name="chat_view_full_tool_output">Teljes kimenet megtekintése</string>
+    <string name="chat_tool_completed">Befejezve</string>
     <string name="chat_tool_duration">Időtartam: %1$s</string>
     <string name="chat_tool_completion_unknown">A befejezés nincs megerősítve</string>
     <string name="chat_tool_still_running">Még fut…</string>
