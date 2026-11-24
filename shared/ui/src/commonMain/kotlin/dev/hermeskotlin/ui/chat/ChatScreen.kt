@@ -3586,73 +3586,6 @@ internal fun Reasoning(text: String, streaming: Boolean) {
 }
 
 /**
- * The tools the reply used, folded; the one running now is named above the composer instead. Opened, it stays open
- * when the activity is made again, as on unfolding a foldable.
- */
-@Composable
-internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
-    var expanded by rememberSaveable(messageKey) { mutableStateOf(false) }
-    val icons = remember(tools) { tools.map { toolIcon(it.name) }.distinct().take(3) }
-    val (ranWords, took) = workedLabel(tools)
-    val ran = ranWords.text()
-    val expandedState = stringResource(if (expanded) Res.string.chat_expanded else Res.string.chat_collapsed)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // A pill: up to three of the kinds of tool it used, overlapping, then how many ran and for how long.
-        // It's drawn 36dp tall, but the full touch height around it takes the tap.
-        val pill = CircleShape
-        val interaction = remember { MutableInteractionSource() }
-        Box(
-            Modifier
-                .heightIn(min = MinTouchTarget)
-                .handCursor()
-                .clickable(interaction, indication = null) { expanded = !expanded }
-                .semantics {
-                    contentDescription = listOfNotNull(ran, took).joinToString(", ")
-                    stateDescription = expandedState
-                },
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            Row(
-                Modifier
-                    .clearAndSetSemantics {}
-                    .heightIn(min = 36.dp)
-                    .clip(pill)
-                    .background(Theme[colors][surface], pill)
-                    .border(1.dp, Theme[colors][stroke], pill)
-                    .indication(interaction, rememberHoverIndication(Theme[colors][textSecondary]))
-                    .padding(start = 6.dp, end = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) { icons.forEach { ToolKindIcon(it) } }
-                Text(ran, style = Theme[typography][caption], color = Theme[colors][textSecondary])
-                took?.let { Text("· $it", style = Theme[typography][caption], color = Theme[colors][textMuted]) }
-                UnstyledIcon(
-                    if (expanded) Lucide.ChevronDown else Lucide.ChevronRight,
-                    contentDescription = null,
-                    tint = Theme[colors][textMuted],
-                    modifier = Modifier.size(13.dp),
-                )
-            }
-        }
-        if (expanded) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Theme[colors][stroke], RoundedCornerShape(Theme[radii][radiusMedium]))
-                    .background(Theme[colors][surface], RoundedCornerShape(Theme[radii][radiusMedium]))
-                    .padding(12.dp),
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Keyed, so a row opened before the activity was made again is restored by its tool, not its place.
-                    tools.forEach { key(it.id) { ToolRow(it, messageKey) } }
-                }
-            }
-        }
-    }
-}
-
-/**
  * A running reply's finished steps, newest last: a check (or a cross) in a soft circle, what was done, and
  * how long it took. The step in hand is on the live task card instead. Only the last few show. One opened stays
  * open when the activity is made again, as on unfolding a foldable.
@@ -3737,31 +3670,6 @@ private fun LiveStepRow(tool: ToolActivity, messageKey: String) {
 }
 
 private const val LIVE_STEPS_SHOWN = 4
-
-/** One kind of tool in the pill: its icon in a small circle, ringed in the pill's fill so the circles overlap cleanly. */
-@Composable
-private fun ToolKindIcon(icon: ImageVector) {
-    Box(
-        Modifier
-            .size(24.dp)
-            .border(2.dp, Theme[colors][surface], CircleShape)
-            .padding(1.dp)
-            .background(Theme[colors][surface3], CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        UnstyledIcon(icon, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(11.dp))
-    }
-}
-
-/**
- * "Ran 3 tools" and the time they took between them ("42s"), for the reply's tool pill; no time when none
- * was timed. It's the tools' own time added up, not the turn's: calls run side by side each count.
- */
-internal fun workedLabel(tools: List<ToolActivity>): Pair<Words, String?> {
-    val timed = tools.mapNotNull { it.durationSeconds }
-    val ran = Words.Count(Res.plurals.chat_tools_ran, tools.size)
-    return ran to timed.takeIf { it.isNotEmpty() }?.let { formatDuration(it.sum()) }
-}
 
 /** A tool's kind, as a small icon. */
 internal fun toolIcon(name: String): ImageVector = when {

@@ -109,10 +109,15 @@ fun BottomSheet(
     onDismiss: () -> Unit,
     onEscape: (() -> Unit)? = null,
     anchor: Rect? = null,
+    fromBottom: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     OpenModals.Count(visible)
-    if (LocalDesktopLayout.current) DesktopSheet(visible, onDismiss, onEscape, anchor, content) else PhoneSheet(visible, onDismiss, content)
+    if (LocalDesktopLayout.current && !fromBottom) {
+        DesktopSheet(visible, onDismiss, onEscape, anchor, content)
+    } else {
+        PhoneSheet(visible, onDismiss, content)
+    }
 }
 
 /**
