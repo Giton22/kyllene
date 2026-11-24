@@ -506,6 +506,8 @@ class ChatSessionTest {
         val steer = transport.sent.value.single { it.isCall("session.steer") }
         assertEquals("rt1", steer.param("session_id"))
         assertEquals("use tabs", steer.param("text"))
+        // tui_gateway's contract forbids any other key, so no execution_generation goes off the session authority.
+        assertEquals(setOf("session_id", "text"), steer["params"]?.jsonObject?.keys)
         assertTrue(transport.sent.value.none { it.isCall("prompt.submit") || it.isCall("slash.exec") })
         transport.push(event("message.delta", "rt1", """{"text":"Switching to tabs"}"""))
         val live = chat.state.first { s -> (s.messages.last() as? ChatMessage.Assistant)?.text == "Switching to tabs" }
