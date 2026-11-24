@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,20 +19,26 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -41,7 +48,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.composables.icons.lucide.ArrowLeft
-import com.composables.icons.lucide.ArrowRight
 import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Lucide
@@ -56,6 +62,7 @@ import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
 import dev.hermeskotlin.designsystem.components.handCursor
 import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
+import dev.hermeskotlin.ui.PlatformBackHandler
 import dev.hermeskotlin.ui.clearOfWindowControls
 import dev.hermeskotlin.ui.fullScreenDialogProperties
 import dev.hermeskotlin.ui.resources.*
@@ -63,11 +70,14 @@ import kotlin.math.roundToLong
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
+internal val LocalOpenToolDetails = staticCompositionLocalOf<((String, String) -> Unit)?> { null }
+
 /** Completed tools read like the other disclosures in the reply. The list itself is a flat timeline. */
 @Composable
 internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
     var expanded by rememberSaveable(messageKey) { mutableStateOf(false) }
-    var detailsVisible by rememberSaveable(messageKey) { mutableStateOf(false) }
+    var selectedToolId by rememberSaveable(messageKey) { mutableStateOf<String?>(null) }
+    val openDockedDetails = LocalOpenToolDetails.current
     val icons = remember(tools) { tools.map { toolIcon(it.name) }.distinct().take(3) }
     val expandedState = stringResource(if (expanded) Res.string.chat_expanded else Res.string.chat_collapsed)
     val interaction = remember { MutableInteractionSource() }
@@ -110,18 +120,17 @@ internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
             val showOffsets = offsets.any { it != null }
             tools.forEachIndexed { index, tool ->
                 key(tool.id) {
-                    ToolTimelineRow(tool, offsets[index], showOffsets, index > 0, index < tools.lastIndex)
-                }
-            }
-            if (tools.any { it.hasToolDetails() }) {
-                ToolDetailsLink(stringResource(Res.string.chat_view_tool_details), Modifier.padding(start = 26.dp)) {
-                    detailsVisible = true
+                    ToolTimelineRow(tool, offsets[index], showOffsets, index > 0, index < tools.lastIndex) {
+                        if (openDockedDetails != null) openDockedDetails(messageKey, tool.id)
+                        else selectedToolId = tool.id
+                    }
                 }
             }
         }
     }
-    if (detailsVisible) key(messageKey) {
-        ToolDetailsViewer(tools, messageKey) { detailsVisible = false }
+    val selected = selectedToolId
+    if (selected != null && openDockedDetails == null) key(messageKey) {
+        ToolDetailsViewer(tools, messageKey, selected) { selectedToolId = null }
     }
 }
 
@@ -142,9 +151,6 @@ private fun ToolKindIcon(icon: ImageVector) {
 
 private fun validToolDuration(value: Double) = value.isFinite() && value >= 0
 
-private fun ToolActivity.hasToolDetails() =
-    !input.isNullOrBlank() || !output.isNullOrBlank() || !diff.isNullOrBlank() || risk != null || !summary.isNullOrBlank()
-
 private fun ToolActivity.title() = detail?.lineSequence()?.firstOrNull()?.trim().takeUnless { it.isNullOrEmpty() } ?: name
 
 @Composable
@@ -164,16 +170,23 @@ private fun ToolActivity.statusLabel() = stringResource(when {
 })
 
 @Composable
-private fun ToolTimelineRow(tool: ToolActivity, offset: String?, showOffsets: Boolean, hasPrevious: Boolean, hasNext: Boolean) {
+private fun ToolTimelineRow(
+    tool: ToolActivity,
+    offset: String?,
+    showOffsets: Boolean,
+    hasPrevious: Boolean,
+    hasNext: Boolean,
+    onClick: () -> Unit,
+) {
     val status = tool.statusColor()
     val statusLabel = tool.statusLabel()
-    val rail = Theme[colors][strokeStrong]
+    val rail = Theme[colors][textMuted].copy(alpha = 0.55f)
     Box {
         Canvas(Modifier.matchParentSize()) {
             val inset = 12.dp.toPx()
             val x = if (layoutDirection == LayoutDirection.Ltr) inset else size.width - inset
             if (hasPrevious) drawLine(rail, Offset(x, 0f), Offset(x, 6.dp.toPx()), 1.dp.toPx())
-            if (hasNext) drawLine(rail, Offset(x, 24.dp.toPx()), Offset(x, size.height), 1.dp.toPx())
+            if (hasNext) drawLine(rail, Offset(x, 25.dp.toPx()), Offset(x, size.height), 1.dp.toPx())
         }
         UnstyledIcon(
             toolIcon(tool.name),
@@ -183,7 +196,10 @@ private fun ToolTimelineRow(tool: ToolActivity, offset: String?, showOffsets: Bo
         )
         Row(
             Modifier.fillMaxWidth()
-                .heightIn(min = 32.dp)
+                .heightIn(min = MinTouchTarget)
+                .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
+                .handCursor()
+                .clickable(onClickLabel = stringResource(Res.string.chat_tool_details_page), role = Role.Button, onClick = onClick)
                 .semantics(mergeDescendants = true) { stateDescription = statusLabel }
                 .padding(start = 26.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -209,125 +225,111 @@ private fun ToolTimelineRow(tool: ToolActivity, offset: String?, showOffsets: Bo
 
 @Composable
 private fun ToolDuration(tool: ToolActivity) {
-    tool.durationSeconds?.takeIf(::validToolDuration)?.let {
-        Text(formatDuration(it), style = Theme[typography][caption], color = Theme[colors][textSecondary])
+    tool.durationSeconds?.takeIf(::validToolDuration)?.let { duration ->
+        val text = if (duration < 60) {
+            val tenths = (duration * 10).roundToLong()
+            "${tenths / 10}.${tenths % 10}s"
+        } else formatDuration(duration)
+        Text(text, style = Theme[typography][caption], color = Theme[colors][textSecondary])
     }
 }
 
 @Composable
-private fun ToolDetailsLink(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val tint = Theme[colors][accentText]
-    Row(
-        modifier.heightIn(min = MinTouchTarget)
-            .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
-            .handCursor()
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(end = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, style = Theme[typography][caption], color = tint)
-        UnstyledIcon(Lucide.ArrowRight, null, tint = tint, modifier = Modifier.size(14.dp))
+internal fun ToolDetailsViewer(
+    tools: List<ToolActivity>,
+    messageKey: String,
+    selectedToolId: String,
+    docked: Boolean = false,
+    onDismiss: () -> Unit,
+) {
+    var expandedIds by rememberSaveable { mutableStateOf(arrayOf(selectedToolId)) }
+    val selectedRow = remember { BringIntoViewRequester() }
+    LaunchedEffect(selectedToolId) {
+        if (selectedToolId !in expandedIds) expandedIds = expandedIds + selectedToolId
+        withFrameNanos { }
+        selectedRow.bringIntoView()
     }
-}
-
-@Composable
-private fun ToolDetailsViewer(tools: List<ToolActivity>, messageKey: String, onDismiss: () -> Unit) {
-    var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
-    var expandedIds by rememberSaveable { mutableStateOf(emptyArray<String>()) }
-    val pages = rememberSaveableStateHolder()
-    val selected = tools.firstOrNull { it.id == selectedId }
-    fun back() {
-        if (selected == null) onDismiss() else {
-            pages.removeState("output:" + selected.id)
-            selectedId = null
-        }
-    }
-    Dialog(onDismissRequest = ::back, properties = fullScreenDialogProperties()) {
-        Column(Modifier.fillMaxSize().background(Theme[colors][background]).windowInsetsPadding(WindowInsets.safeDrawing)) {
+    val focus = remember { FocusRequester() }
+    PlatformBackHandler(enabled = docked, onBack = onDismiss)
+    LaunchedEffect(docked) { if (docked) focus.requestFocus() }
+    val page = @Composable {
+        Column(
+            Modifier.fillMaxSize().background(Theme[colors][background])
+                .then(if (docked) Modifier.focusRequester(focus).focusable() else Modifier.windowInsetsPadding(WindowInsets.safeDrawing)),
+        ) {
             Row(
-                Modifier.fillMaxWidth().clearOfWindowControls().padding(start = 4.dp, end = 16.dp, top = 6.dp, bottom = 10.dp),
+                Modifier.fillMaxWidth().clearOfWindowControls().padding(
+                    start = if (docked) 16.dp else 4.dp, end = 16.dp, top = 6.dp, bottom = 10.dp,
+                ),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                IconButton(Lucide.ArrowLeft, stringResource(Res.string.common_back), ::back)
+                if (!docked) IconButton(Lucide.ArrowLeft, stringResource(Res.string.common_back), onDismiss)
                 Text(
-                    stringResource(if (selected == null) Res.string.chat_tool_details_page else Res.string.chat_tool_output_page),
+                    stringResource(Res.string.chat_tool_details_page),
+                    modifier = if (docked) Modifier.weight(1f) else Modifier,
                     style = Theme[typography][title], color = Theme[colors][text],
                 )
+                if (docked) IconButton(Lucide.X, stringResource(Res.string.chat_close), onDismiss)
             }
-            pages.SaveableStateProvider(if (selected == null) "details" else "output:" + selected.id) {
-                Column(
-                    Modifier.fillMaxWidth().weight(1f).verticalScrollWithBar().padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (selected == null) {
-                        tools.forEach { tool ->
-                            key(tool.id) {
-                                val expanded = tool.id in expandedIds && tool.hasToolDetails()
-                                ToolComparisonRow(tool, expanded, onToggle = {
-                                    expandedIds = if (expanded) expandedIds.filterNot { it == tool.id }.toTypedArray()
-                                    else expandedIds + tool.id
-                                }, onOpenOutput = { selectedId = tool.id })
-                            }
+            Column(
+                Modifier.fillMaxWidth().weight(1f).verticalScrollWithBar().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                tools.forEachIndexed { index, tool ->
+                    if (index > 0) {
+                        Box(Modifier.fillMaxWidth().size(1.dp).background(Theme[colors][textMuted].copy(alpha = 0.45f)))
+                    }
+                    key(tool.id) {
+                        val expanded = tool.id in expandedIds
+                        ToolComparisonRow(
+                            tool, messageKey, expanded,
+                            modifier = if (tool.id == selectedToolId) Modifier.bringIntoViewRequester(selectedRow) else Modifier,
+                        ) {
+                            expandedIds = if (expanded) expandedIds.filterNot { it == tool.id }.toTypedArray()
+                            else expandedIds + tool.id
                         }
-                    } else {
-                        Text(selected.title(), style = Theme[typography][title], color = Theme[colors][text])
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(selected.statusLabel(), style = Theme[typography][caption], color = selected.statusColor())
-                            ToolDuration(selected)
-                        }
-                        if (selected.output.isNullOrBlank() && selected.diff.isNullOrBlank()) {
-                            Text(
-                                selected.summary?.takeIf { it.isNotBlank() } ?: stringResource(Res.string.chat_tool_no_output),
-                                style = Theme[typography][bodySmall], color = Theme[colors][textSecondary],
-                            )
-                        }
-                        ToolDetailsContent(selected, messageKey)
                     }
                 }
             }
         }
     }
+    if (docked) page() else Dialog(onDismissRequest = onDismiss, properties = fullScreenDialogProperties()) { page() }
 }
 
 @Composable
-private fun ToolComparisonRow(tool: ToolActivity, expanded: Boolean, onToggle: () -> Unit, onOpenOutput: () -> Unit) {
+private fun ToolComparisonRow(
+    tool: ToolActivity, messageKey: String, expanded: Boolean, modifier: Modifier, onToggle: () -> Unit,
+) {
     val status = tool.statusLabel()
-    val hasDetails = tool.hasToolDetails()
-    val modifier = Modifier.fillMaxWidth().heightIn(min = MinTouchTarget)
-    val toggle = if (hasDetails) modifier.handCursor().clickable(
-        onClickLabel = stringResource(if (expanded) Res.string.chat_hide_details else Res.string.chat_show_details),
-        role = Role.Button, onClick = onToggle,
-    ) else modifier
     Column {
         Row(
-            toggle.semantics(mergeDescendants = true) { stateDescription = status },
+            modifier.fillMaxWidth().heightIn(min = MinTouchTarget).handCursor().clickable(
+                onClickLabel = stringResource(if (expanded) Res.string.chat_hide_details else Res.string.chat_show_details),
+                role = Role.Button, onClick = onToggle,
+            ).semantics { stateDescription = status },
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             UnstyledIcon(toolIcon(tool.name), null, tint = tool.statusColor(), modifier = Modifier.size(16.dp))
             Text(tool.title(), Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text])
             ToolDuration(tool)
-            if (hasDetails) UnstyledIcon(
+            UnstyledIcon(
                 if (expanded) Lucide.ChevronDown else Lucide.ChevronRight,
                 null, tint = Theme[colors][textMuted], modifier = Modifier.size(14.dp),
             )
         }
         if (expanded) {
-            val preview = if (tool.risk != null) stringResource(Res.string.chat_tool_risk) else
-                sequenceOf(tool.output, tool.summary, tool.diff, tool.input).firstOrNull { !it.isNullOrBlank() }
-            preview?.let {
-                val shape = RoundedCornerShape(Theme[radii][radiusSmall])
-                Text(
-                    it.take(360), Modifier.fillMaxWidth().border(1.dp, Theme[colors][stroke], shape).padding(10.dp),
-                    maxLines = 3, overflow = TextOverflow.Ellipsis,
-                    style = Theme[typography][code], color = Theme[colors][text],
-                )
+            Column(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ToolDetailsContent(tool, messageKey)
+                if (tool.output.isNullOrBlank() && tool.diff.isNullOrBlank()) {
+                    Text(
+                        tool.summary?.takeIf { it.isNotBlank() } ?: stringResource(Res.string.chat_tool_no_output),
+                        style = Theme[typography][bodySmall], color = Theme[colors][textSecondary],
+                    )
+                }
             }
-            ToolDetailsLink(stringResource(Res.string.chat_view_full_tool_output), onClick = onOpenOutput)
         }
-        Box(Modifier.fillMaxWidth().size(1.dp).background(Theme[colors][stroke]))
     }
 }
 

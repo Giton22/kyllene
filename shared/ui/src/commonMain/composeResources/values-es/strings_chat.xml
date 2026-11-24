@@ -138,10 +138,7 @@
     <string name="chat_tool_error">Error</string>
     <string name="chat_tool_output">Salida</string>
     <string name="chat_tool_no_output">No se registró ninguna salida.</string>
-    <string name="chat_view_tool_details">Ver detalles de las herramientas</string>
     <string name="chat_tool_details_page">Detalles de las herramientas</string>
-    <string name="chat_tool_output_page">Salida de la herramienta</string>
-    <string name="chat_view_full_tool_output">Ver salida completa</string>
     <string name="chat_tool_completed">Completada</string>
     <string name="chat_tool_duration">Duración: %1$s</string>
     <string name="chat_tool_completion_unknown">Finalización sin confirmar</string>

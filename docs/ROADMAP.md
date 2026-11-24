@@ -149,7 +149,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 
 ### 5. Tool activity
 - [x] Tool rows in the reply: name, what it is doing, running spinner → done (`tool.start`, `tool.complete` summary)
-- [x] Completed tool calls expand into a timeline with status icons and relative start times when observed live. A link opens a page for comparing calls and viewing their complete arguments, output, and errors. The live activity still follows `tool.generating`.
+- [x] Completed tool calls expand into a timeline with status icons and relative start times when observed live. Selecting a call opens its details with arguments, output, and errors. Calls can stay expanded together, docked beside the chat when a desktop window has room. The live activity still follows `tool.generating`.
 - [x] Completion details: duration, error flag, output preview, diffs (`tool.complete`)
 - [x] Output-risk warnings (`tool.output_risk`)
 - [x] Todo list updates (`todo.updated`)

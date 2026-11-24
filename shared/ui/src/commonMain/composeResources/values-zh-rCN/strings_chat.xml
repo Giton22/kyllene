@@ -135,10 +135,7 @@
     <string name="chat_tool_error">错误</string>
     <string name="chat_tool_output">输出</string>
     <string name="chat_tool_no_output">没有记录输出。</string>
-    <string name="chat_view_tool_details">查看工具详情</string>
     <string name="chat_tool_details_page">工具详情</string>
-    <string name="chat_tool_output_page">工具输出</string>
-    <string name="chat_view_full_tool_output">查看完整输出</string>
     <string name="chat_tool_completed">已完成</string>
     <string name="chat_tool_duration">耗时：%1$s</string>
     <string name="chat_tool_completion_unknown">未确认完成</string>

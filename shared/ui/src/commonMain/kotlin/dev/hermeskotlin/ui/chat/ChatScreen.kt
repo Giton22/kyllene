@@ -679,6 +679,7 @@ fun ChatScreen(
         keysEnabled = keysEnabled && !dialogOpen,
         attachmentPicker = attachmentPicker.takeIf { isDesktop },
         imagePaste = imagePaste,
+        onOpenToolDetails = { if (docked) previewing = null },
         rail = railFile?.let { file ->
             {
                 FileViewer(file, onDismiss = { previewing = null }, load = viewModel::previewFile, download = viewModel::downloadFile, docked = true)
@@ -855,7 +856,32 @@ internal fun ChatView(
     imagePaste: Modifier = Modifier,
     /** A panel at the right, beside the conversation: the desktop's file rail. */
     rail: (@Composable () -> Unit)? = null,
+    onOpenToolDetails: () -> Unit = {},
 ) {
+    val density = LocalDensity.current
+    var chatPaneWidth by remember { mutableStateOf(0.dp) }
+    val canDockTools = isDesktop && chatPaneWidth >= RAIL_MIN_PANE
+    var toolSelection by remember(conversationKey) { mutableStateOf<Pair<String, String>?>(null) }
+    val selectedTool = toolSelection
+    val toolReplyKey = selectedTool?.first
+    val showToolActivity = LocalAppSettings.current.showToolActivity
+    val inspectedTools = remember(toolReplyKey, state.messages, showToolActivity) {
+        toolReplyKey?.takeIf { showToolActivity }?.let { replyKey ->
+            state.messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey && !it.streaming }
+                ?.tools?.filter { it.name != MESSAGE_AGENT_TOOL }?.takeIf { it.isNotEmpty() }
+        }
+    }
+    // Opening a different inspector or losing the owning reply ends this selection.
+    LaunchedEffect(rail != null, inspectedTools != null) {
+        if (rail != null || inspectedTools == null) toolSelection = null
+    }
+    val showToolDetails = inspectedTools != null && rail == null
+    val toolRailWidth = (chatPaneWidth * 0.44f).coerceIn(200.dp, 520.dp)
+    val railWidth = when {
+        showToolDetails && canDockTools -> toolRailWidth
+        rail != null -> RAIL_WIDTH
+        else -> 0.dp
+    }
     val canAttach = attachmentPicker != null && connected && attachments.size < OutgoingAttachment.MAX_COUNT
     var dropping by remember { mutableStateOf(false) }
     // A chat that stops taking files mid-drag takes its drop target away, which then says nothing more.
@@ -863,6 +889,7 @@ internal fun ChatView(
     Box(
         Modifier
             .fillMaxSize()
+            .then(if (isDesktop) Modifier.onSizeChanged { chatPaneWidth = with(density) { it.width.toDp() } } else Modifier)
             .background(Theme[colors][background])
             .then(if (wallpaper == null) Modifier.halo() else Modifier)
             .then(if (canAttach) Modifier.fileDrop(onHover = { dropping = it }) { attachmentPicker?.attachFiles(it) } else Modifier),
@@ -892,20 +919,45 @@ internal fun ChatView(
             val key = readAloud.key ?: return@LaunchedEffect
             if (state.historyLoaded && state.messages.none { it.key == key }) actions.stopReading()
         }
+        val composerFocus = remember { FocusRequester() }
+        var focusComment by remember { mutableStateOf<Long?>(null) }
+        val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
+        val commentHost = remember(comments, actions, composerShown) {
+            if (!composerShown) return@remember null
+            object : CommentHost {
+                override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
+                    when (action) {
+                        SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
+                        SelectionAction.Explain -> actions.explain(source, anchor)
+                        SelectionAction.AskAside -> {
+                            actions.askAside(source, anchor)
+                            composerFocus.requestFocus()
+                        }
+                    }
+                }
+                override fun highlights(messageKey: String) =
+                    comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
+            }
+        }
         // The rail takes the right of the screen; the conversation centres in what's left.
-        if (rail != null) {
+        if (rail != null || showToolDetails) {
             Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .width(RAIL_WIDTH)
-                    .fillMaxHeight()
-                    .background(Theme[colors][background])
-                    .border(1.dp, Theme[colors][stroke]),
-            ) { rail() }
+                Modifier.align(Alignment.TopEnd).width(railWidth).fillMaxHeight()
+                    .background(Theme[colors][background]).border(1.dp, Theme[colors][stroke]),
+            ) {
+                if (rail != null) rail()
+                else if (inspectedTools != null && selectedTool != null) key(toolReplyKey) {
+                    CompositionLocalProvider(LocalCommentHost provides commentHost) {
+                        ToolDetailsViewer(inspectedTools, selectedTool.first, selectedTool.second, docked = canDockTools) {
+                            toolSelection = null
+                        }
+                    }
+                }
+            }
         }
         Column(
             Modifier
-                .padding(end = if (rail != null) RAIL_WIDTH else 0.dp)
+                .padding(end = railWidth)
                 // A desktop window's chat takes its whole width, so the bar's buttons sit at its edges and the
                 // scrollbar and the wheel work at the window's side; the reading column inside keeps to READING_WIDTH.
                 .then(if (isDesktop) Modifier else Modifier.widthIn(max = READING_WIDTH))
@@ -952,7 +1004,6 @@ internal fun ChatView(
             val composerFold = remember { ComposerFold() }
             // Ctrl+F: the matches for what's typed, from the newest back, each brought on screen and marked.
             var findOpen by remember { mutableStateOf(false) }
-            val composerFocus = remember { FocusRequester() }
             val focusHeld = LocalFocusHeld.current
             // Closing the find bar hands the keyboard back to the composer rather than to nothing.
             var findClosed by remember { mutableStateOf(0) }
@@ -1004,7 +1055,6 @@ internal fun ChatView(
             val hazeState = rememberHazeState()
             val controlHaze = if (isDesktop) null else rememberHazeState()
             // Comments wait in the composer, so the selection menus offer them only while it shows.
-            var focusComment by remember { mutableStateOf<Long?>(null) }
             // Type on the voice screen ends the call; the composer takes the keyboard once it's back.
             // Once the call is over the wish is spent either way: a question waiting in the composer's place
             // mustn't hand the keyboard over minutes later when it's answered.
@@ -1020,7 +1070,7 @@ internal fun ChatView(
             }
             val shortcutScope = rememberCoroutineScope()
             // The desktop's keys for the chat; a voice chat over it has the screen.
-            ShortcutHandler(enabled = keysEnabled && !voiceFull) { shortcut ->
+            ShortcutHandler(enabled = keysEnabled && !voiceFull && !(showToolDetails && !canDockTools)) { shortcut ->
                 when (shortcut) {
                     Shortcut.FocusComposer -> composerShown.also { if (it) composerFocus.requestFocus() }
                     Shortcut.FindInChat -> true.also {
@@ -1088,24 +1138,6 @@ internal fun ChatView(
             }
             // A new loader each time the link comes back, so cards that failed offline try again; good ones come from the cache.
             val linkPreviewLoader = remember<suspend (String) -> LinkPreview?>(actions, connected) { { url -> actions.loadLinkPreview(url) } }
-            val commentHost = remember(comments, actions, composerShown) {
-                if (!composerShown) return@remember null
-                object : CommentHost {
-                    override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
-                        when (action) {
-                            SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
-                            SelectionAction.Explain -> actions.explain(source, anchor)
-                            SelectionAction.AskAside -> {
-                                actions.askAside(source, anchor)
-                                composerFocus.requestFocus()
-                            }
-                        }
-                    }
-
-                    override fun highlights(messageKey: String) =
-                        comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
-                }
-            }
             Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { paneHeight = it.height; paneWidth = it.width }) {
                 Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
                     if (wallpaper != null) {
@@ -1136,6 +1168,10 @@ internal fun ChatView(
                             },
                             LocalAgentScreenSend provides actions::sendPrompt,
                             LocalCommentHost provides commentHost,
+                            LocalOpenToolDetails provides if (isDesktop) ({ replyKey, toolId ->
+                                onOpenToolDetails()
+                                toolSelection = replyKey to toolId
+                            }) else null,
                         ) {
                             key(conversationKey) {
                                 Messages(
