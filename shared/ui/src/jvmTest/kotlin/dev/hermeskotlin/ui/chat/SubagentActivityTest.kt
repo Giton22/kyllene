@@ -41,7 +41,7 @@ class SubagentActivityTest {
 
         runOnIdle {
             calls.value = calls.value.map { call ->
-                call.copy(tasks = tasks.dropLast(1) + tasks.last().copy(status = SubagentStatus.Running))
+                call.copy(running = true, tasks = tasks.dropLast(1) + tasks.last().copy(status = SubagentStatus.Running))
             }
         }
         group.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded, Running"))
