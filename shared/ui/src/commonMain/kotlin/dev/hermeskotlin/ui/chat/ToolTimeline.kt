@@ -133,6 +133,12 @@ private fun ToolTimelineRow(tool: ToolActivity, offset: String?, hasPrevious: Bo
         tool.completed -> Theme[colors][success]
         else -> Theme[colors][textTertiary]
     }
+    val statusLabel = stringResource(when {
+        tool.failed -> Res.string.chat_tool_failed
+        tool.running -> Res.string.chat_tool_still_running
+        tool.completed -> Res.string.chat_processes_finished
+        else -> Res.string.chat_tool_completion_unknown
+    })
     val rail = Theme[colors][strokeStrong]
     val title = tool.detail?.lineSequence()?.firstOrNull()?.trim().takeIf { it?.isNotEmpty() == true } ?: tool.name
     val summary = tool.summary?.trim()?.takeIf { it.isNotEmpty() && it != title }
@@ -155,11 +161,16 @@ private fun ToolTimelineRow(tool: ToolActivity, offset: String?, hasPrevious: Bo
                 .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
                 .handCursor()
                 .clickable(onClickLabel = stringResource(Res.string.chat_show_details), role = Role.Button, onClick = onClick)
+                .semantics { stateDescription = statusLabel }
                 .padding(start = 26.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            Text(offset.orEmpty(), Modifier.widthIn(min = 44.dp), style = Theme[typography][caption], color = Theme[colors][textSecondary])
+            Text(
+                offset.orEmpty(), Modifier.widthIn(min = 44.dp, max = 80.dp),
+                style = Theme[typography][caption], color = Theme[colors][textSecondary],
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = Theme[typography][label], color = Theme[colors][text], maxLines = 2, overflow = TextOverflow.Ellipsis)
                 summary?.let {
@@ -167,7 +178,7 @@ private fun ToolTimelineRow(tool: ToolActivity, offset: String?, hasPrevious: Bo
                 }
             }
             if (tool.failed) {
-                UnstyledIcon(Lucide.X, stringResource(Res.string.chat_tool_failed), tint = status, modifier = Modifier.size(14.dp))
+                UnstyledIcon(Lucide.X, null, tint = status, modifier = Modifier.size(14.dp))
             }
             if (tool.risk != null) {
                 UnstyledIcon(Lucide.ShieldAlert, stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
@@ -196,6 +207,13 @@ internal fun ToolResultsSheet(tool: ToolActivity, messageKey: String, visible: B
                 Modifier.fillMaxWidth().heightIn(max = 480.dp).verticalScrollWithBar().padding(horizontal = 18.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                tool.durationSeconds?.takeIf { it.isFinite() && it >= 0 }?.let { elapsed ->
+                    Text(
+                        stringResource(Res.string.chat_tool_duration, formatDuration(elapsed)),
+                        style = Theme[typography][caption],
+                        color = Theme[colors][textSecondary],
+                    )
+                }
                 if (tool.output == null && !tool.running) {
                     Text(
                         tool.summary?.takeIf { it.isNotBlank() } ?: stringResource(Res.string.chat_tool_no_output),
@@ -216,7 +234,12 @@ internal fun toolTimelineOffsets(tools: List<ToolActivity>): List<String?> {
         val start = tool.startedAt?.takeIf(Double::isFinite)
         if (origin == null || start == null || start < origin) null else {
             val tenths = ((start - origin) * 10).roundToLong()
-            "+${tenths / 10}.${tenths % 10}s"
+            val seconds = tenths / 10
+            when {
+                seconds >= 3600 -> "+${seconds / 3600}h ${seconds / 60 % 60}m"
+                seconds >= 60 -> "+${seconds / 60}m ${seconds % 60}s"
+                else -> "+$seconds.${tenths % 10}s"
+            }
         }
     }
 }

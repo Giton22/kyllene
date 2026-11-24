@@ -138,6 +138,8 @@
     <string name="chat_tool_error">Erreur</string>
     <string name="chat_tool_output">Sortie</string>
     <string name="chat_tool_no_output">Aucune sortie n’a été enregistrée.</string>
+    <string name="chat_tool_duration">Durée : %1$s</string>
+    <string name="chat_tool_completion_unknown">Fin non confirmée</string>
     <string name="chat_tool_still_running">Toujours en cours…</string>
     <string name="chat_tool_risk">Cette sortie semble chercher à orienter l’agent ou à atteindre des secrets. L’agent a reçu l’ordre de ne pas s’y fier.</string>
     <string name="chat_tool_risk_found">Trouvé : %1$s</string>

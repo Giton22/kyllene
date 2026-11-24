@@ -138,6 +138,8 @@
     <string name="chat_tool_error">Fehler</string>
     <string name="chat_tool_output">Ausgabe</string>
     <string name="chat_tool_no_output">Es wurde keine Ausgabe aufgezeichnet.</string>
+    <string name="chat_tool_duration">Dauer: %1$s</string>
+    <string name="chat_tool_completion_unknown">Abschluss nicht bestätigt</string>
     <string name="chat_tool_still_running">Läuft noch…</string>
     <string name="chat_tool_risk">Diese Ausgabe sieht aus, als wolle sie den Agenten lenken oder an Geheimnisse kommen. Der Agent wurde angewiesen, ihr nicht zu trauen.</string>
     <string name="chat_tool_risk_found">Gefunden: %1$s</string>

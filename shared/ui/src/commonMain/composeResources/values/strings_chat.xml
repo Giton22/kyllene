@@ -154,6 +154,8 @@
     <string name="chat_tool_error">Error</string>
     <string name="chat_tool_output">Output</string>
     <string name="chat_tool_no_output">No output was recorded.</string>
+    <string name="chat_tool_duration">Duration: %1$s</string>
+    <string name="chat_tool_completion_unknown">Completion unconfirmed</string>
     <string name="chat_tool_still_running">Still running…</string>
     <string name="chat_tool_risk">This output looks like it’s trying to steer the agent or reach secrets. The agent was told not to trust it.</string>
     <string name="chat_tool_risk_found">Found: %1$s</string>

@@ -168,8 +168,10 @@ class ChatSession(
     private var seqRuntime: String? = null
     private var seqEpoch: String? = null
 
+    private data class ReceivedEvent(val event: GatewayEvent, val toolStartedAt: Double?)
+
     /** Live events held back while the gap before them is filled; null when nothing is being caught up. */
-    private var held: MutableList<GatewayEvent>? = null
+    private var held: MutableList<ReceivedEvent>? = null
 
     /** Orders applying events, holding them and filling gaps, which run on different threads. Never held across I/O. */
     private val streamMutex = Mutex()
@@ -1960,7 +1962,8 @@ class ChatSession(
         connection.events.collect { event ->
             val runtimeId = _state.value.runtimeSessionId ?: return@collect
             if (event.sessionId != runtimeId) return@collect
-            streamMutex.withLock { deliver(event) }
+            val received = ReceivedEvent(event, if (event.type == "tool.start") nowSeconds() else null)
+            streamMutex.withLock { deliver(received) }
         }
     }
 
@@ -1990,9 +1993,10 @@ class ChatSession(
      * Applies a live event in order: one already applied (replayed, or sent twice) is skipped, and one past a gap
      * waits, with those after it, while [catchUp] fills the gap. Called under [streamMutex].
      */
-    private fun deliver(event: GatewayEvent, timelyToolStart: Boolean = true) {
+    private fun deliver(received: ReceivedEvent) {
+        val event = received.event
         held?.let {
-            it += event
+            it += received
             return
         }
         val seq = event.seq
@@ -2000,14 +2004,14 @@ class ChatSession(
         if (seq != null && last != null) {
             if (seq <= last) return
             if (seq > last + 1) {
-                held = mutableListOf(event)
+                held = mutableListOf(received)
                 val client = connectedClient()
                 val runtimeId = _state.value.runtimeSessionId
                 if (client != null && runtimeId != null) scope.launch { catchUp(client, runtimeId) } else held = null
                 return
             }
         }
-        apply(event, timelyToolStart)
+        apply(event, received.toolStartedAt)
     }
 
     /**
@@ -2043,7 +2047,10 @@ class ChatSession(
                 return
             }
             if (missed != null) {
-                missed.forEach { apply(it, timelyToolStart = false) }
+                val observedStarts = held.orEmpty()
+                    .filter { it.toolStartedAt != null && it.event.seq != null }
+                    .associate { it.event.seq to it.toolStartedAt }
+                missed.forEach { apply(it, observedStarts[it.seq]) }
             } else if (!keep) {
                 lastSeq = null
                 val streamed = inflightText
@@ -2063,11 +2070,11 @@ class ChatSession(
             }
             val waiting = held.orEmpty()
             held = null
-            waiting.forEach { deliver(it, timelyToolStart = false) }
+            waiting.forEach(::deliver)
         }
     }
 
-    private fun apply(event: GatewayEvent, timelyToolStart: Boolean) {
+    private fun apply(event: GatewayEvent, toolStartedAt: Double?) {
         event.seq?.let { lastSeq = it }
         (event.payload as? JsonObject).long("execution_generation")?.let { executionGeneration = it }
         if (event.type == "session.info" || event.type == "session.updated") {
@@ -2083,7 +2090,7 @@ class ChatSession(
             turnStartedAt = null
             turnReplyKey = null
         }
-        _state.update { it.reduce(event, now, toolStartedAt = now.takeIf { timelyToolStart }) }
+        _state.update { it.reduce(event, now, toolStartedAt) }
         when (event.type) {
             // Timed here, not on screen, so it ends on time even while the chat isn't showing. A notice that
             // replaced this one by the time it runs out has its own timer.

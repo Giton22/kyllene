@@ -20,6 +20,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 /** Picking the event stream up after a drop (`session.events.since`) and reading the transcript a page at a time. */
 class ChatSessionResumeTest {
@@ -653,13 +655,13 @@ class ChatSessionResumeTest {
     }
 
     /** A chat attached to rt1 with a turn streaming "Hel" (seqs 1-3) on a link that stays up. */
-    private suspend fun streamingHel(scope: CoroutineScope): Pair<ChatSession, FakeTransport> {
+    private suspend fun streamingHel(scope: CoroutineScope, clock: Clock = Clock.System): Pair<ChatSession, FakeTransport> {
         val base = answer
         answer = { transport, method, params ->
             if (method == "session.resume") """{"session_id":"rt1","running":true}""" else base(transport, method, params)
         }
         val (connection, transports) = connect(scope)
-        val chat = ChatSession(url, "stored-1", "Chat", connection, SessionsApi(scope.client()), scope)
+        val chat = ChatSession(url, "stored-1", "Chat", connection, SessionsApi(scope.client()), scope, clock = clock)
         chat.start()
         chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
         val socket = transports.last()
@@ -668,6 +670,32 @@ class ChatSessionResumeTest {
         socket.push(delta(3, "l"))
         chat.state.first { it.reply()?.text == "Hel" }
         return chat to socket
+    }
+
+    @Test
+    fun toolsHeldBehindAGapUseTheirOriginalLiveReceiptTime() = runTest {
+        var now = 100L
+        val clock = object : Clock { override fun now() = Instant.fromEpochSeconds(now) }
+        answer = { _, method, _ -> if (method == "session.events.since") null else "{}" }
+        val (chat, socket) = streamingHel(backgroundScope, clock)
+        val first = """{"tool_id":"first","name":"terminal"}"""
+        socket.push(event("tool.start", 5, first))
+        val ask = socket.awaitSent { it.isCall("session.events.since") }
+
+        now = 103
+        socket.push(event("tool.start", 6, """{"tool_id":"second","name":"read_file"}"""))
+        testScheduler.runCurrent()
+        now = 200
+        val replay = since(
+            replayed(4, "lo"),
+            """{"type":"tool.start","session_id":"rt1","seq":5,"payload":$first}""",
+            latest = 5,
+        )
+        socket.push("""{"jsonrpc":"2.0","id":${ask["id"]},"result":$replay}""")
+
+        val tools = chat.state.first { it.reply()?.tools?.size == 2 }.reply()!!.tools
+        assertEquals(listOf("first", "second"), tools.map { it.id })
+        assertEquals(listOf(100.0, 103.0), tools.map { it.startedAt })
     }
 
     @Test

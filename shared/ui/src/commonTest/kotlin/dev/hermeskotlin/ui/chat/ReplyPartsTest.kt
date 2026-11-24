@@ -34,6 +34,16 @@ class ReplyPartsTest {
     }
 
     @Test
+    fun longToolOffsetsKeepTheTimeColumnCompact() {
+        val tools = listOf(
+            ToolActivity("first", "terminal", startedAt = 100.0),
+            ToolActivity("later", "patch", startedAt = 176.0),
+            ToolActivity("last", "read_file", startedAt = 3825.4),
+        )
+        assertEquals(listOf("+0.0s", "+1m 16s", "+1h 2m"), toolTimelineOffsets(tools))
+    }
+
+    @Test
     fun toolsGetTheIconOfTheirKind() {
         assertEquals(Lucide.SquareTerminal, toolIcon("terminal"))
         assertEquals(Lucide.FileDiff, toolIcon("patch"))

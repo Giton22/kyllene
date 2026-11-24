@@ -138,6 +138,8 @@
     <string name="chat_tool_error">Hiba</string>
     <string name="chat_tool_output">Kimenet</string>
     <string name="chat_tool_no_output">Nem rögzítettek kimenetet.</string>
+    <string name="chat_tool_duration">Időtartam: %1$s</string>
+    <string name="chat_tool_completion_unknown">A befejezés nincs megerősítve</string>
     <string name="chat_tool_still_running">Még fut…</string>
     <string name="chat_tool_risk">Ez a kimenet úgy tűnik, irányítani próbálja az ügynököt, vagy titkokhoz akar hozzáférni. Az ügynök utasítást kapott, hogy ne bízzon benne.</string>
     <string name="chat_tool_risk_found">Találat: %1$s</string>
