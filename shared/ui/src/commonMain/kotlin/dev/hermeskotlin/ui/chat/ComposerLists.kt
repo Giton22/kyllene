@@ -12,7 +12,8 @@ internal data class ListEdit(val start: Int, val end: Int, val text: String)
 // A Markdown list item: indent, then a number with `.` or `)` or a `-`, `*` or `+` bullet, the space after it,
 // an optional task box, and the item's text. The number is capped so a long one can't overflow.
 private val listItem = Regex("""([ \t]*)(?:(\d{1,9})([.)])|([-*+]))([ \t]+)(\[[ xX]](?:[ \t]+|$))?(.*)""")
-private val fence = Regex("""[ \t]*(```|~~~).*""")
+// A code fence: three or more backticks or tildes, then the rest of the line.
+private val fence = Regex("""[ \t]*(`{3,}|~{3,})([\s\S]*)""")
 
 /**
  * Carries a Markdown list on after the line break at [newLine] in [text]. After `1. buy milk` it puts `2. `
@@ -38,16 +39,29 @@ internal fun listContinuation(text: CharSequence, newLine: Int): ListEdit? {
     return ListEdit(newLine + 1, newLine + 1, indent + marker + space + nextBox)
 }
 
-/** Whether [lineStart] is inside a ``` or ~~~ code block opened above it. */
+/**
+ * Whether [lineStart] is inside a ``` or ~~~ code block opened above it. As in Markdown, only a fence of the same
+ * character, at least as long as the opening one and with nothing after it closes the block, and a backtick fence
+ * can't open with a backtick after it.
+ */
 private fun insideFence(text: CharSequence, lineStart: Int): Boolean {
-    var open = false
+    var open: String? = null
     var start = 0
     while (start < lineStart) {
         val end = text.indexOf('\n', start).let { if (it < 0 || it > lineStart) lineStart else it }
-        if (fence.matches(text.subSequence(start, end))) open = !open
+        val match = fence.matchEntire(text.subSequence(start, end).toString().removeSuffix("\r"))
+        if (match != null) {
+            val (marker, rest) = match.destructured
+            val opener = open
+            if (opener == null) {
+                if (marker[0] == '~' || '`' !in rest) open = marker
+            } else if (marker[0] == opener[0] && marker.length >= opener.length && rest.isBlank()) {
+                open = null
+            }
+        }
         start = end + 1
     }
-    return open
+    return open != null
 }
 
 /**

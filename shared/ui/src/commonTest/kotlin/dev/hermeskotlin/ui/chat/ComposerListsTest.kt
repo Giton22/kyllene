@@ -84,6 +84,21 @@ class ComposerListsTest {
     }
 
     @Test
+    fun aCodeBlockClosesOnlyAsMarkdownCloses() {
+        // CRLF lines still open a block.
+        assertTyped("```\r\n- a\r\n|", "```\r\n- a\r|")
+        // A shorter fence, the other character or a fence with text after it is code inside the block.
+        assertTyped("````\n```\n- a\n|", "````\n```\n- a|")
+        assertTyped("```\n~~~\n- a\n|", "```\n~~~\n- a|")
+        assertTyped("```\n```js\n- a\n|", "```\n```js\n- a|")
+        // A longer fence, or one with spaces after it, closes it.
+        assertTyped("```\ncode\n`````\n- a\n- |", "```\ncode\n`````\n- a|")
+        assertTyped("~~~\r\ncode\r\n~~~ \r\n- a\r\n- |", "~~~\r\ncode\r\n~~~ \r\n- a\r|")
+        // Backticks after three backticks aren't a fence.
+        assertTyped("``` a`b\n- a\n- |", "``` a`b\n- a|")
+    }
+
+    @Test
     fun crlfTextAndHugeNumbersDontBreakIt() {
         assertTyped("1. a\r\n2. |", "1. a\r|")
         assertTyped("999999999. a\n1000000000. |", "999999999. a|")
@@ -123,5 +138,8 @@ class ComposerListsTest {
         assertEquals("- a\n- b", dropped("- a\n- b"))
         assertEquals("hello\n", dropped("hello\n"))
         assertEquals("```\n- a\n- ", dropped("```\n- a\n- "))
+        assertEquals("```\r\n- a\r\n- ", dropped("```\r\n- a\r\n- "))
+        assertEquals("````\n```\n- a\n- ", dropped("````\n```\n- a\n- "))
+        assertEquals("```\n~~~\n- a\n- ", dropped("```\n~~~\n- a\n- "))
     }
 }
