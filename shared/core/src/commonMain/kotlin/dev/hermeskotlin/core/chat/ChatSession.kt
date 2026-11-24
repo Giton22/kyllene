@@ -170,7 +170,9 @@ class ChatSession(
 
     /**
      * Where the event stream stands, to pick it up after a drop: the seq of the last event applied, the runtime
-     * session it counts in and the gateway run (`replay_epoch`) numbering it. Null seq: nothing to resume from.
+     * session it counts in and the `replay_epoch` numbering it. Null seq: nothing to resume from. The epoch is the
+     * gateway run's (`gateway.ready`) on the legacy gateway, and the session's own on the session authority, from
+     * `session.resume` / `session.create` and each event (see [EventReplay]).
      */
     private var lastSeq: Long? = null
     private var seqRuntime: String? = null
@@ -2663,6 +2665,13 @@ class ChatSession(
             return
         }
         val seq = event.seq
+        // The session authority started counting the session anew (its ring was evicted): seqs from before don't follow.
+        event.replayEpoch?.let { epoch ->
+            if (epoch != seqEpoch) {
+                seqEpoch = epoch
+                lastSeq = null
+            }
+        }
         val last = lastSeq
         if (seq != null && last != null) {
             if (seq <= last) return
@@ -2683,16 +2692,20 @@ class ChatSession(
      * reloads the transcript and takes the running reply as the gateway has it, as it did before replay existed.
      */
     private suspend fun catchUp(client: JsonRpcClient, runtimeId: String, foreground: Boolean = false) {
-        val (from, generation) = streamMutex.withLock { lastSeq to streamGeneration }
+        val (from, epoch, generation) = streamMutex.withLock { Triple(lastSeq, seqEpoch, streamGeneration) }
         val missed = if (from == null) null else try {
             val reply = client.request(
                 "session.events.since",
                 buildJsonObject {
                     put("session_id", runtimeId)
                     put("last_seen", from)
+                    // The session authority answers only in the session's epoch, and a gateway before it (up to
+                    // v0.22.2) refuses the param: only a session's own epoch is sent. Never `last_sequence`, which
+                    // those refuse too.
+                    if (client.sessionAuthority && epoch != null) put("replay_epoch", epoch)
                 },
             ) as? JsonObject
-            EventReplay.parse(reply, runtimeId, from, seqEpoch)
+            EventReplay.parse(reply, runtimeId, from, epoch)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -3121,13 +3134,13 @@ class ChatSession(
         // Questions asked while no socket of ours was attached; the gateway keeps them open for us.
         val open = InputRequest.parseResume(result)
         val streamed = inflight.string("assistant").orEmpty()
-        val epoch = readyEpoch(client)
+        val epoch = replayEpoch(client, result)
         val (resumable, catchingUp) = streamMutex.withLock {
             inflightText = streamed
-            // Seqs count per runtime session and per gateway run, so only the same of both can be picked up.
+            // Seqs count per runtime session and per epoch, so only the same of both can be picked up.
             val resumable = !afterGap && reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
             if (!resumable) {
-                lastSeq = null
+                lastSeq = startSeq(client, result, epoch)
                 // The turn may have changed while away: the gateway's copy names its reply again below.
                 turnReplyKey = null
             }
@@ -3193,9 +3206,24 @@ class ChatSession(
     private fun List<ChatMessage>.withSavedStepsFolded(): List<ChatMessage> =
         withSavedStepsInLiveReply(turnStartedAt, inflightText, turnReplyKey)
 
-    /** The gateway run's `replay_epoch` from [client]'s `gateway.ready`, when it is the connected one. */
-    private fun readyEpoch(client: JsonRpcClient): String? =
-        (connection.state.value as? ConnectionState.Connected)?.takeIf { it.client === client }?.ready.string("replay_epoch")
+    /**
+     * The `replay_epoch` the seqs of a session opened on [client] count in: the session's own from the session
+     * authority's `session.resume` / `session.create` [result], else the gateway run's from `gateway.ready`, when
+     * [client] is the connected one.
+     */
+    private fun replayEpoch(client: JsonRpcClient, result: JsonObject): String? =
+        if (client.sessionAuthority) {
+            result.string("replay_epoch")
+        } else {
+            (connection.state.value as? ConnectionState.Connected)?.takeIf { it.client === client }?.ready.string("replay_epoch")
+        }
+
+    /**
+     * Where a freshly opened session's stream starts: the session authority's `last_sequence` from [result], so a
+     * gap in the first events is filled too. Null elsewhere: the first event applied sets it.
+     */
+    private fun startSeq(client: JsonRpcClient, result: JsonObject, epoch: String?): Long? =
+        result.long("last_sequence").takeIf { client.sessionAuthority && epoch != null }
 
     /**
      * `session.create` for a brand-new chat; its stored row appears with the first prompt, or at once when it starts
@@ -3233,9 +3261,9 @@ class ChatSession(
         // The session authority stores every new chat's row on create, so a send after a lost link resumes it.
         if (client.sessionAuthority || !instruction.isNullOrBlank()) rowExists = true
         streamMutex.withLock {
-            lastSeq = null
+            seqEpoch = replayEpoch(client, result)
+            lastSeq = startSeq(client, result, seqEpoch)
             seqRuntime = runtimeId
-            seqEpoch = readyEpoch(client)
         }
         // The gateway takes a folder that's gone without an error and runs the chat in its own folder instead.
         val ranIn = (result["info"] as? JsonObject).string("cwd")
