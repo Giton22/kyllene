@@ -82,10 +82,10 @@ internal object Jcef {
         CefApp.addAppHandler(object : CefAppHandlerAdapter(args) {
             override fun onBeforeCommandLineProcessing(processType: String?, commandLine: CefCommandLine) {
                 // WebRTC may only go through a proxy, and the proxy leads nowhere: past it, only the gateways. Loopback
-                // isn't let past on its own (`<-loopback>`), only a gateway's own port on it.
+                // isn't let past on its own (`<-loopback>`), an explicit gateway rule after it can still allow that port.
                 commandLine.appendSwitchWithValue("force-webrtc-ip-handling-policy", "disable_non_proxied_udp")
                 commandLine.appendSwitchWithValue("proxy-server", NOWHERE)
-                commandLine.appendSwitchWithValue("proxy-bypass-list", (gateways + "<-loopback>").joinToString(";"))
+                commandLine.appendSwitchWithValue("proxy-bypass-list", (listOf("<-loopback>") + gateways).joinToString(";"))
                 // No Google sign-in, sync, translation or spelling service: nothing here talks to Google.
                 commandLine.appendSwitch("disable-sync")
                 commandLine.appendSwitch("disable-component-update")
