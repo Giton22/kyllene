@@ -122,6 +122,9 @@ class ChatSession(
     @kotlin.concurrent.Volatile
     private var executionGeneration: Long? = null
 
+    /** The session authority's `confirm` token for the last guarded pick: model, provider, token. */
+    private var modelConfirm: Triple<String, String, String>? = null
+
     /**
      * The session authority's `revision` for the attached session (from `session.resume`, `session.create`,
      * `session.info` and `session.updated`), which a `session.mutate` presents as `expected_revision`.
@@ -1413,7 +1416,9 @@ class ChatSession(
         runOnGateway("/branch") { client, runtimeId ->
             val result = if (client.sessionAuthority) {
                 val row = if (keep == null) null else through() ?: throw RpcException(0, BRANCH_ROW_UNKNOWN)
-                mutateBranch(client, runtimeId, row)
+                mutateFenced(client, runtimeId, "branch", CHANGED_WHILE_BRANCHING) {
+                    row?.let { put("through_message_id", it) }
+                }
             } else {
                 val params = buildJsonObject {
                     put("session_id", runtimeId)
@@ -1438,12 +1443,18 @@ class ChatSession(
     }
 
     /**
-     * A `branch` through `session.mutate` on the session authority (gateway/session_mutations.py), as Hermes Desktop
+     * A `session.mutate` [operation] on the session authority (gateway/session_mutations.py), as Hermes Desktop
      * sends it: fenced by the session's revision and execution generation. A refusal for stale ones carries the
-     * current ones, so it goes once more with those; a second refusal is the error.
+     * current ones, so it goes once more with those; a second refusal is the error, as [changed].
      */
     @OptIn(ExperimentalUuidApi::class)
-    private suspend fun mutateBranch(client: JsonRpcClient, runtimeId: String, through: Long?): JsonObject? {
+    private suspend fun mutateFenced(
+        client: JsonRpcClient,
+        runtimeId: String,
+        operation: String,
+        changed: String,
+        payload: JsonObjectBuilder.() -> Unit,
+    ): JsonObject? {
         suspend fun send(expectedRevision: Long, expectedGeneration: Long) = client.request(
             "session.mutate",
             buildJsonObject {
@@ -1452,8 +1463,8 @@ class ChatSession(
                 put("request_id", Uuid.random().toString())
                 put("expected_revision", expectedRevision)
                 put("expected_generation", expectedGeneration)
-                put("operation", "branch")
-                putJsonObject("payload") { through?.let { put("through_message_id", it) } }
+                put("operation", operation)
+                putJsonObject("payload", payload)
             },
         ) as? JsonObject
         return try {
@@ -1469,7 +1480,7 @@ class ChatSession(
                 send(fresh, generation)
             } catch (again: RpcException) {
                 if (again.reason !in FENCE_REFUSALS) throw again
-                throw RpcException(again.code, CHANGED_WHILE_BRANCHING, again.reason, again.data)
+                throw RpcException(again.code, changed, again.reason, again.data)
             }
         }
     }
@@ -1872,12 +1883,18 @@ class ChatSession(
         }
         _state.update { it.copy(model = model, provider = provider) }
         return try {
-            val result = // --session: a pick on the phone must not quietly rewrite the profile default (config.yaml).
-            configSet("model", JsonPrimitive("$model --provider $provider --session")) {
-                if (confirm) put("confirm_expensive_model", true)
+            val client = connectedClient() ?: throw RpcException(0, "Not connected to the gateway.")
+            val result = if (client.sessionAuthority) {
+                mutateModel(client, model, provider, confirm)
+            } else {
+                // --session: a pick on the phone must not quietly rewrite the profile default (config.yaml).
+                configSet("model", JsonPrimitive("$model --provider $provider --session")) {
+                    if (confirm) put("confirm_expensive_model", true)
+                }
             }
             if (result.boolean("confirm_required") == true) {
                 _state.update { it.copy(model = previous.model, provider = previous.provider) }
+                modelConfirm = result.string("confirm")?.let { Triple(model, provider, it) }
                 ModelSwitch.NeedsConfirmation(result.string("confirm_message") ?: "This model costs more than usual. Switch anyway?")
             } else {
                 ModelSwitch.Done
@@ -1912,6 +1929,23 @@ class ChatSession(
             throw e
         } catch (e: Exception) {
             _state.update { it.copy(reasoningEffort = previous.reasoningEffort, fast = previous.fast, error = e.message ?: "Couldn't change the setting.") }
+        }
+    }
+
+    /**
+     * The session authority refuses `config.set model` (`use_session_mutation_model`, gateway/session_busy_controls.py):
+     * there a pick is `session.mutate` `model`, as Hermes Desktop sends it. A guarded (expensive) target answers
+     * `confirmation_required` with a `confirm` token, and only that token applies it; [confirm] sends the one the
+     * gateway gave for this pick. A pick during a turn is deferred to the next one, which is still a switch.
+     */
+    private suspend fun mutateModel(client: JsonRpcClient, model: String, provider: String, confirm: Boolean): JsonObject? {
+        val runtimeId = ensureAttached(client)
+        val token = modelConfirm?.takeIf { confirm && it.first == model && it.second == provider }?.third
+        modelConfirm = null
+        return mutateFenced(client, runtimeId, "model", CHANGED_WHILE_SWITCHING) {
+            put("model", model)
+            put("provider", provider)
+            token?.let { put("confirm", it) }
         }
     }
 
@@ -2691,6 +2725,8 @@ class ChatSession(
         const val BRANCH_ROW_UNKNOWN = "Couldn't find this message in the saved chat. Open the chat again, then branch from it."
 
         const val CHANGED_WHILE_BRANCHING = "The chat changed on the gateway while branching. Try again."
+
+        const val CHANGED_WHILE_SWITCHING = "The chat changed on the gateway while switching the model. Try again."
 
         /** A REST read of a session the gateway no longer has. */
         const val HTTP_NOT_FOUND = 404

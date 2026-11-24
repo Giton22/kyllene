@@ -160,7 +160,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Vault prompts: the password manager's master password (`vault.unlock_prompt`, masked), a sign-in code (`vault.code`, with one-time-code autofill) and a login to save for the page the agent is on (`vault.save_login`, with username and password autofill); Skip and Don't save send an empty value, and the notification opens the chat instead of answering inline
 
 ### 7. Settings (MVP)
-- [x] Model picker in the composer (`model.options`), switched per chat (`config.set model … --session`; picks before the first send go into `session.create`), with a confirm for expensive models
+- [x] Model picker in the composer (`model.options`), switched per chat (`config.set model … --session`; on the session authority, which refuses that, a `session.mutate` `model` fenced by the session's revision and execution generation, confirmed with the gateway's `confirm` token; picks before the first send go into `session.create`), with a confirm for expensive models
 - [x] Star the models you use most (kept on the device): the picker opens on Your models, starred and recently picked, with chips for All and for each provider
 - [x] One row per model: the same model from several providers shows once, with a pill per provider (and its price) to pick which
 - [x] Ranked model search: name starts first, then words, then anywhere; "op55" finds Opus 5.5; the start of a provider's name lists its models after the name matches
