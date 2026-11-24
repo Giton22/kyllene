@@ -83,6 +83,8 @@ internal class UnsettledPrompt(
     val startsTurn: Boolean,
     val files: List<Pair<String, ShownAttachment>> = emptyList(),
     val images: List<Pair<StagedImage, ShownAttachment>> = emptyList(),
+    /** Went by `session.steer`: the agent reads it into the turn, so no user row of the transcript shows it. */
+    val steer: Boolean = false,
 )
 
 sealed interface ChatMessage {

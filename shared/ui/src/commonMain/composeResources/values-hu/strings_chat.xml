@@ -242,6 +242,9 @@
 
     <string name="chat_event_compaction">A korábbi üzenetek összefoglalva</string>
     <string name="chat_event_routine">Lefutott a(z) „%1$s” rutin</string>
+    <string name="chat_event_routine_unnamed">Lefutott egy rutin</string>
+    <string name="chat_event_routine_problem">A(z) „%1$s” rutin problémát jelzett</string>
+    <string name="chat_event_routine_problem_unnamed">Egy rutin problémát jelzett</string>
     <string name="chat_event_failed_turn">Ez a kör nem fejeződött be.</string>
     <string name="chat_event_system_messages">Rendszerüzenetek · %1$d</string>
     <string name="chat_event_other_bot">a másik bot</string>

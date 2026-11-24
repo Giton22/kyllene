@@ -139,6 +139,11 @@ data class SessionMessage(
     val timestamp: Double? = null,
     val reasoning: String? = null,
     @SerialName("display_kind") val displayKind: String? = null,
+    /**
+     * What the gateway knows about a machine-written row, e.g. `completion_note` naming its producer. An object,
+     * or a string holding one on older backends; missing where a route leaves it out (the API server's).
+     */
+    @SerialName("display_metadata") val displayMetadata: JsonElement? = null,
     /** The session the row is stored under: an ancestor's id for rows from before a compression. */
     @SerialName("session_id") val sessionId: String? = null,
     /** False for rows a compression archived; the live agent no longer holds them. */

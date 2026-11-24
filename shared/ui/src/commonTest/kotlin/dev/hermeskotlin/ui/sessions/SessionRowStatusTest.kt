@@ -5,6 +5,7 @@ import dev.hermeskotlin.core.connection.ConnectionState
 import kotlin.test.Test
 import dev.hermeskotlin.ui.resources.*
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class SessionRowStatusTest {
@@ -32,15 +33,31 @@ class SessionRowStatusTest {
     }
 
     @Test
+    fun aRunningTurnIsNotAReplyYet() {
+        // The gateway counts the turn's own activity as unread (#485); it's a reply once the turn ends.
+        val running = RowStatus(unread = true, running = true)
+        assertFalse(running.newReply)
+        assertFalse(running.needsAttention)
+        assertFalse(AttentionFilter.NeedsAttention.keeps(running))
+        assertTrue(AttentionFilter.Running.keeps(running))
+        assertTrue(RowStatus(waiting = Waiting.Question, running = true).needsAttention)
+        assertTrue(RowStatus(unread = true).newReply)
+        assertTrue(AttentionFilter.NeedsAttention.keeps(RowStatus(unread = true)))
+    }
+
+    @Test
     fun theLineSaysEveryStatusInWords() {
         assertEquals(
             listOf(
                 Res.string.sessions_waiting_approval,
                 Res.string.sessions_status_running,
-                Res.string.sessions_status_new_reply,
                 Res.string.sessions_status_draft,
             ),
             rowStatusWords(RowStatus(waiting = Waiting.Approval, unread = true, running = true), draft = true),
+        )
+        assertEquals(
+            listOf(Res.string.sessions_waiting_approval, Res.string.sessions_status_new_reply, Res.string.sessions_status_draft),
+            rowStatusWords(RowStatus(waiting = Waiting.Approval, unread = true), draft = true),
         )
         assertEquals(listOf(Res.string.sessions_status_draft), rowStatusWords(null, draft = true))
         assertTrue(rowStatusWords(RowStatus(), draft = false).isEmpty())
