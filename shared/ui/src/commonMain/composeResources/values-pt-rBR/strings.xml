@@ -291,4 +291,7 @@
     <string name="managed_update_restart_title">Reiniciar o Kyllene?</string>
     <string name="managed_update_restart_warning">Encerre as chamadas e salve seu trabalho. Reiniciar fecha todas as janelas; alterações e anexos não salvos podem ser perdidos.</string>
     <string name="managed_update_restart_now">Reiniciar agora</string>
+    <string name="voice_muted_by_android">Silenciado pelo Android</string>
+    <string name="voice_muted_in_kyllene">Silenciado no Kyllene</string>
+    <string name="voice_error_system_activation">O Android não conseguiu ativar a chamada. Tente novamente.</string>
 </resources>

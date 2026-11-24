@@ -291,4 +291,7 @@
     <string name="managed_update_restart_title">Újraindítod a Kyllene alkalmazást?</string>
     <string name="managed_update_restart_warning">Fejezd be a hívásokat és mentsd a munkád. Az újraindítás minden ablakot bezár; a nem mentett változások és mellékletek elveszhetnek.</string>
     <string name="managed_update_restart_now">Újraindítás most</string>
+    <string name="voice_muted_by_android">Az Android némította</string>
+    <string name="voice_muted_in_kyllene">Némítva a Kyllene-ben</string>
+    <string name="voice_error_system_activation">Az Android nem tudta aktiválni a hívást. Próbáld újra.</string>
 </resources>

@@ -1,5 +1,7 @@
 package dev.hermeskotlin.core.voice
 
+import kotlinx.coroutines.flow.StateFlow
+
 /**
  * Keeps a voice chat going while Herald is out of sight (the screen off, another app in front), the way a
  * phone call does. On Android, a microphone foreground service with an ongoing notification.
@@ -14,6 +16,9 @@ interface VoiceKeepAlive {
 
     suspend fun registerLiveCall(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? = null
 
+    /** ID of the currently registered incoming call, while it can be accepted or attached. */
+    val incomingLiveCall: StateFlow<String?>? get() = null
+
     fun attachIncomingLiveCall(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? = null
 
     /** Ends the matching answered system call so it can continue in-app. False if the call is gone. */
@@ -26,6 +31,7 @@ interface VoiceKeepAlive {
 }
 
 interface LiveSystemCall {
+    /** Makes the registered call active. Throws if the platform rejects activation. */
     suspend fun activate()
     fun close()
 }

@@ -19,6 +19,8 @@ import dev.hermeskotlin.ui.voice.VoiceChatState
 import dev.hermeskotlin.ui.voice.VoiceController
 import dev.hermeskotlin.ui.voice.VoicePhase
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +28,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 
 data class PhoneCallState(
     /** Who's on the line: the chat that called. */
@@ -64,7 +67,7 @@ class PhoneCallModel(
     recorder: VoiceRecorder,
     player: SpeechPlayer,
     appScope: CoroutineScope,
-    keepAlive: VoiceKeepAlive,
+    private val keepAlive: VoiceKeepAlive,
     liveCalls: LiveCalls,
     deviceLock: DeviceLock,
 ) : ViewModel() {
@@ -99,7 +102,14 @@ class PhoneCallModel(
         counted = true
         call.storedSessionId?.let(relay::callChat)
         viewModelScope.launch {
-            val chat = when (val found = relay.chatForCall(call.storedSessionId)) {
+            val found = resolveWhileCallIsPresent(call.systemCallId, keepAlive.incomingLiveCall) {
+                relay.chatForCall(call.storedSessionId)
+            }
+            val chat = when (found) {
+                null -> {
+                    call.agent?.end(CallOutcome.Declined)
+                    return@launch end(null)
+                }
                 is CallChat.Failed -> {
                     _state.update { it?.copy(notAsked = call) }
                     call.agent?.end(CallOutcome.Declined)
@@ -146,4 +156,29 @@ class PhoneCallModel(
         voice.stopAll()
         if (counted) relay.callEnded()
     }
+}
+
+/** A Telecom hang-up can arrive while the gateway is still resolving the chat. */
+internal suspend fun resolveWhileCallIsPresent(
+    callId: String?,
+    incoming: StateFlow<String?>?,
+    resolve: suspend () -> CallChat,
+): CallChat? {
+    if (callId == null) return resolve()
+    if (incoming == null || incoming.value != callId) return null
+    val resolved = coroutineScope {
+        val target = async { resolve() }
+        val hangup = async { incoming.first { it != callId } }
+        try {
+            select<CallChat?> {
+                hangup.onAwait { null }
+                target.onAwait { it }
+            }
+        } finally {
+            target.cancel()
+            hangup.cancel()
+        }
+    }
+    // Cancelled children finish before coroutineScope returns. The call can end during that wait.
+    return resolved.takeIf { incoming.value == callId }
 }

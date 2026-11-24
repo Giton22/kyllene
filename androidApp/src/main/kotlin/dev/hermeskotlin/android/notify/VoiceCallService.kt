@@ -88,6 +88,7 @@ class VoiceCallKeeper(private val context: Context, settings: SettingsStore) : V
 
     internal val telecom = TelecomLiveCalls(context, settings)
     internal val telecomName = telecom.name
+    override val incomingLiveCall = telecom.incoming
 
     override fun supportsAndroidCallControls() = telecom.supported
 

@@ -91,6 +91,9 @@ data class VoiceChatState(
     val live: Boolean = false,
     /** The microphone is off in a live call. */
     val muted: Boolean = false,
+    /** Android can keep the microphone muted independently of Kyllene's mute control. */
+    val mutedBySystem: Boolean = false,
+    val systemCall: Boolean = false,
     /** The latest words said, as captions: yours, or the voice's when [captionIsVoice]. */
     val caption: String? = null,
     val captionIsVoice: Boolean = false,
@@ -438,7 +441,10 @@ class VoiceController(
                     val name = callName ?: session.state.value.title?.takeIf { it.isNotBlank() } ?: "Kyllene"
                     keepAlive?.registerLiveCall(name, onMute, onEnd)
                 }
-                if (systemCall != null) call.useSystemAudioRouting()
+                if (systemCall != null) {
+                    call.useSystemAudioRouting()
+                    _chat.update { it.copy(systemCall = true) }
+                }
             }
             // A hung up or timed-out incoming call must not start a separate conversation.
             if (incomingSystemCallId != null && systemCall == null) return true
@@ -476,9 +482,8 @@ class VoiceController(
 
     private fun updateLiveMute(conversation: LiveConversation) {
         val muted = liveAppMuted || liveSystemMuted
-        if (_chat.value.muted == muted) return
-        conversation.setMuted(muted)
-        _chat.update { it.copy(muted = muted) }
+        if (_chat.value.muted != muted) conversation.setMuted(muted)
+        _chat.update { it.copy(muted = muted, mutedBySystem = liveSystemMuted) }
     }
 
     fun stopChat() {

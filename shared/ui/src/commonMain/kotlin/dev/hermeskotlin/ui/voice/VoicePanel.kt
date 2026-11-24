@@ -163,7 +163,8 @@ internal fun VoicePanel(
             if (state.phase != VoicePhase.Connecting) {
                 RoundButton(
                     if (state.muted) Lucide.MicOff else Lucide.Mic,
-                    contentDescription = stringResource(if (state.muted) Res.string.voice_unmute else Res.string.voice_mute),
+                    contentDescription = muteControlLabel(state),
+                    enabled = !state.mutedBySystem,
                     fill = if (state.muted) Theme[colors][textColor] else Theme[colors][textColor].copy(alpha = 0.08f),
                     tint = if (state.muted) Theme[colors][background] else Theme[colors][textColor],
                     onClick = onMute,
@@ -223,7 +224,7 @@ internal fun hint(state: VoiceChatState) = when {
 
 @Composable
 internal fun hintText(state: VoiceChatState): String = stringResource(
-    when (hint(state)) {
+    muteStatus(state) ?: when (hint(state)) {
         VoiceHint.Unmute -> Res.string.voice_hint_unmute
         VoiceHint.Connecting -> Res.string.voice_hint_connecting
         VoiceHint.Working -> Res.string.voice_hint_working
@@ -232,6 +233,19 @@ internal fun hintText(state: VoiceChatState): String = stringResource(
         VoiceHint.SendNow -> Res.string.voice_hint_send_now
         VoiceHint.JustTalk -> Res.string.voice_hint_just_talk
     },
+)
+
+internal fun muteStatus(state: VoiceChatState) = when {
+    state.mutedBySystem -> Res.string.voice_muted_by_android
+    state.systemCall && state.muted -> Res.string.voice_muted_in_kyllene
+    else -> null
+}
+
+@Composable
+internal fun muteControlLabel(state: VoiceChatState): String = stringResource(
+    if (state.mutedBySystem) Res.string.voice_muted_by_android
+    else if (state.muted) Res.string.voice_unmute
+    else Res.string.voice_mute,
 )
 
 /** The tool Hermes is running for the request. */
@@ -258,10 +272,11 @@ private fun WorkingChip(tool: String) {
 }
 
 @Composable
-private fun RoundButton(icon: ImageVector, contentDescription: String, fill: Color, tint: Color, onClick: () -> Unit) {
+private fun RoundButton(icon: ImageVector, contentDescription: String, fill: Color, tint: Color, onClick: () -> Unit, enabled: Boolean = true) {
     val background by animateColorAsState(fill)
     UnstyledButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier.size(60.dp).clip(CircleShape),
         indication = rememberHoverIndication(tint),
     ) {

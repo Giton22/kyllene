@@ -184,15 +184,13 @@ internal class TelecomLiveCalls(private val context: Context, private val settin
         }
 
         override suspend fun activate() {
-            val call = control ?: return
-            if (closed || activated) return
-            activated = true
-            if (answeredByTelecom) return
+            val call = checkNotNull(control)
+            check(!closed) { "The system call has ended" }
+            if (activated || answeredByTelecom) return
             val result = if (incomingId != null) call.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)
             else call.setActive()
-            if (result is CallControlResult.Error) {
-                Log.w(TAG, "Couldn't mark the Kyllene call active")
-            }
+            check(result !is CallControlResult.Error) { "Android rejected call activation" }
+            activated = true
         }
 
         override fun close() {

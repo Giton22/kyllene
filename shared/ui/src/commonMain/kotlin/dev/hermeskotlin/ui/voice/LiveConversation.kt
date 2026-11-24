@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.getString
@@ -128,11 +129,27 @@ internal class LiveConversation(
             return@coroutineScope e.message ?: getString(Res.string.voice_error_live_start)
         }
         state.update { it.copy(phase = VoicePhase.Listening) }
+        val activation = Mutex()
+        var activated = false
+        suspend fun activateSystemCall(): Boolean = activation.withLock {
+            if (ended.isCompleted) return@withLock false
+            if (activated) return@withLock true
+            try {
+                onReady()
+                activated = true
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                ended.complete(getString(Res.string.voice_error_system_activation))
+                false
+            }
+        }
         val poll = launch {
             while (isActive) {
                 val speaking = call.speaking()
                 if (speaking) {
-                    onReady()
+                    if (!activateSystemCall()) return@launch
                     onConnectionResult()
                 }
                 state.update {
@@ -156,7 +173,7 @@ internal class LiveConversation(
                 when (val event = parseLiveEvent(raw)) {
                     is LiveEvent.Transcript -> {
                         if (event.fragment.speaker == LiveFragment.Speaker.Assistant) {
-                            onReady()
+                            if (!activateSystemCall()) break
                             onConnectionResult()
                         }
                         transcript += event.fragment
@@ -235,7 +252,7 @@ internal class LiveConversation(
                         break
                     }
                     LiveEvent.Started -> {
-                        onReady()
+                        if (!activateSystemCall()) break
                         onConnectionResult()
                         started.complete(Unit)
                     }

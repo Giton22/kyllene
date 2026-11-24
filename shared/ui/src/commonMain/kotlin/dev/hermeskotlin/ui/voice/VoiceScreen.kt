@@ -200,7 +200,10 @@ internal fun VoiceScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
                     // Mute on the left in a call and a chained chat alike; an empty slot keeps End in the middle.
                     if (state.phase != VoicePhase.Connecting) {
-                        SideButton(Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff, stringResource(Res.string.voice_mute), onMute, on = state.muted, toggle = true)
+                        SideButton(
+                            Lucide.Mic.takeUnless { state.muted } ?: Lucide.MicOff,
+                            muteControlLabel(state), onMute, on = state.muted, toggle = true, enabled = !state.mutedBySystem,
+                        )
                     } else {
                         Spacer(Modifier.size(52.dp))
                     }
@@ -280,7 +283,7 @@ private fun RingButton(icon: ImageVector, description: String, onClick: () -> Un
 
 /** A 52dp round button beside End; [on] fills it in, as Mute does while muted. A [toggle] says it's on or off. */
 @Composable
-private fun SideButton(icon: ImageVector, description: String, onClick: () -> Unit, on: Boolean = false, toggle: Boolean = false) {
+private fun SideButton(icon: ImageVector, description: String, onClick: () -> Unit, on: Boolean = false, toggle: Boolean = false, enabled: Boolean = true) {
     val fill by animateColorAsState(if (on) Theme[colors][textColor] else Theme[colors][surface3])
     val tint = if (on) Theme[colors][background] else Theme[colors][textSecondary]
     Box(
@@ -289,7 +292,7 @@ private fun SideButton(icon: ImageVector, description: String, onClick: () -> Un
             .clip(CircleShape)
             .background(fill)
             .then(
-                if (toggle) Modifier.toggleable(value = on, role = Role.Switch, onValueChange = { onClick() })
+                if (toggle) Modifier.toggleable(value = on, enabled = enabled, role = Role.Switch, onValueChange = { onClick() })
                 else Modifier.clickable(role = Role.Button, onClick = onClick),
             )
             .semantics { contentDescription = description },
