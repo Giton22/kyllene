@@ -4,6 +4,7 @@ import dev.hermeskotlin.core.rpc.FakeGateway
 import dev.hermeskotlin.core.rpc.event
 import dev.hermeskotlin.core.rpc.json
 import dev.hermeskotlin.core.sessions.SessionsApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
@@ -59,6 +60,9 @@ class ReplayGapTest {
         var running = true
         var history = """{"session_id":"stored-1","messages":[]}"""
 
+        /** Runs once as the transcript is read: frames published then reach a chat that is still attaching. */
+        var onHistory: (() -> Unit)? = null
+
         fun publish(type: String, payload: String) {
             seq++
             if (subscribed) gw.socket.push(event(type, "stored-1", payload, seq))
@@ -84,7 +88,15 @@ class ReplayGapTest {
                 else -> "{}"
             }
         }
-        http = { json(authority.history) }
+        http = {
+            authority.onHistory?.let { hook ->
+                authority.onHistory = null
+                hook()
+                // The read takes a while, so the chat takes those frames in before it's attached again.
+                delay(200)
+            }
+            json(authority.history)
+        }
         start(awaitConnected = true)
         return authority
     }
@@ -152,7 +164,10 @@ class ReplayGapTest {
 
         authority.overflow(replayGap("stored-1", "sess-e1", authority.seq))
         authority.publish("message.delta", """{"text":"lost in the hole"}""")
-        withTimeoutOrNull(30.seconds) { gw.socket.sent.first { list -> list.count { it.isResume() } >= 2 } }
+        assertNotNull(
+            withTimeoutOrNull(30.seconds) { gw.socket.sent.first { list -> list.count { it.isResume() } >= 2 } },
+            "no session.resume after session.replay_gap",
+        )
         chat.state.first { it.attachment is Attachment.Attached && it.running }
 
         // Subscribed again: the rest of the turn arrives.
@@ -164,7 +179,47 @@ class ReplayGapTest {
     }
 
     @Test
-    fun gapsBeforeTheResumeStartsTakeOneResume() = runTest(timeout = 5.seconds) {
+    fun aTurnThatEndsWhileTheGapResumeReadsTheTranscriptStopsRunning() = runTest(timeout = 5.seconds) {
+        val gw = FakeGateway(backgroundScope, reconnects = false)
+        val authority = gw.authority()
+        val chat = gw.chat(backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "stored-1" && it.running }
+
+        // Subscribed again by the resume, the socket gets the turn's end while the chat still reads the transcript.
+        authority.onHistory = {
+            authority.publish("message.complete", """{"text":"Hello world","status":"complete"}""")
+            authority.running = false
+        }
+        authority.overflow(replayGap("stored-1", "sess-e1", authority.seq))
+
+        val stopped = withTimeoutOrNull(30.seconds) { chat.state.first { it.attachment is Attachment.Attached && !it.running } }
+        assertNotNull(stopped, "the message.complete that came while the chat attached again was dropped; it still shows Running")
+    }
+
+    @Test
+    fun aGapWhileTheGapResumeReadsTheTranscriptResumesAgain() = runTest(timeout = 5.seconds) {
+        val gw = FakeGateway(backgroundScope, reconnects = false)
+        val authority = gw.authority()
+        val chat = gw.chat(backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "stored-1" && it.running }
+
+        // The new subscription overflows too before the chat is attached again.
+        authority.onHistory = { authority.overflow(replayGap("stored-1", "sess-e1", authority.seq)) }
+        authority.overflow(replayGap("stored-1", "sess-e1", authority.seq))
+
+        assertNotNull(
+            withTimeoutOrNull(30.seconds) { gw.socket.sent.first { list -> list.count { it.isResume() } >= 3 } },
+            "the second session.replay_gap, which came while the chat attached again, took no resume",
+        )
+        chat.state.first { it.attachment is Attachment.Attached }
+        authority.publish("message.delta", """{"text":"Back again."}""")
+        chat.state.first { s -> s.messages.any { it is ChatMessage.Assistant && "Back again." in it.text } }
+    }
+
+    @Test
+    fun gapsBeforeTheResumeStartsTakeOneResume()= runTest(timeout = 5.seconds) {
         val gw = FakeGateway(backgroundScope, reconnects = false)
         val authority = gw.authority()
         val chat = gw.chat(backgroundScope)
@@ -173,7 +228,10 @@ class ReplayGapTest {
 
         authority.overflow(replayGap("stored-1", "sess-e1", authority.seq))
         gw.socket.push(replayGap("stored-1", "sess-e1", authority.seq))
-        withTimeoutOrNull(30.seconds) { gw.socket.sent.first { list -> list.count { it.isResume() } >= 2 } }
+        assertNotNull(
+            withTimeoutOrNull(30.seconds) { gw.socket.sent.first { list -> list.count { it.isResume() } >= 2 } },
+            "no session.resume after session.replay_gap",
+        )
         chat.state.first { it.attachment is Attachment.Attached }
         assertEquals(2, gw.resumes(), "the first attach and one resume for the gaps")
     }

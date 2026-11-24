@@ -174,6 +174,17 @@ class ChatSession(
     /** A `session.replay_gap` waits for its `session.resume`; gaps that come before that starts need no second one. */
     private var gapResumePending = false
 
+    /**
+     * The runtime taken up again after a `session.replay_gap`, and the frames of its new subscription, held until the
+     * resume is in: while it attaches the state names no runtime, so they'd be dropped (a `message.complete` with
+     * them). Null when none is being taken up.
+     */
+    private var gapRuntime: String? = null
+    private var gapHeld: MutableList<GatewayEvent>? = null
+
+    /** Counts `session.replay_gap`s: a catch-up begun before one has nothing left to apply. */
+    private var streamGeneration = 0
+
     /** Orders applying events, holding them and filling gaps, which run on different threads. Never held across I/O. */
     private val streamMutex = Mutex()
 
@@ -1789,6 +1800,9 @@ class ChatSession(
     }
 
     /** A steer that never went out: the running turn's generation couldn't be read ([cause]). */
+    /** A resume after a gap that a reconnect overtook: the chat is attached on the new socket, so it isn't sent. */
+    private class StaleGapResume : Exception()
+
     private class SteerNotSent(cause: Throwable) : Exception(cause.message, cause)
 
     /**
@@ -2096,7 +2110,12 @@ class ChatSession(
 
     private suspend fun followEvents() {
         connection.events.collect { event ->
-            val runtimeId = _state.value.runtimeSessionId ?: return@collect
+            val runtimeId = _state.value.runtimeSessionId
+            if (runtimeId == null) {
+                // Taken up again after a gap: the new subscription's frames, a gap among them too, wait for the resume.
+                if (event.sessionId != null) streamMutex.withLock { if (event.sessionId == gapRuntime) gapHeld?.add(event) }
+                return@collect
+            }
             if (event.sessionId != runtimeId) return@collect
             if (event.type == REPLAY_GAP && resumeAfterGap(runtimeId)) return@collect
             streamMutex.withLock { deliver(event) }
@@ -2118,17 +2137,34 @@ class ChatSession(
             if (liveRuntimeId(client) != runtimeId) return true
             !gapResumePending.also { gapResumePending = true }
         }
-        if (start) scope.launch {
-            streamMutex.withLock {
-                gapResumePending = false
-                // The frames since the last one applied are gone: nothing to pick up from. Held ones from before the
-                // gap are in the transcript the resume reloads.
-                lastSeq = null
-                held = null
-            }
-            runCatchingAttach(client, reconnected = true)
-        }
+        if (start) scope.launch { reattachAfterGap(client, runtimeId) }
         return true
+    }
+
+    /**
+     * The `session.resume` after a gap. The frames since the last one applied are gone, so it picks up from nothing
+     * (`afterGap`), and held ones from before the gap are in the transcript it reloads. The new subscription's frames
+     * wait for it in [gapHeld], then go through in order; a gap among them takes another resume.
+     */
+    private suspend fun reattachAfterGap(client: JsonRpcClient, runtimeId: String) {
+        val waiting = mutableListOf<GatewayEvent>()
+        streamMutex.withLock {
+            gapResumePending = false
+            streamGeneration++
+            held = null
+            gapRuntime = runtimeId
+            gapHeld = waiting
+        }
+        val attached = runCatchingAttach(client, reconnected = true, afterGap = true)
+        val again = streamMutex.withLock {
+            // A later gap took over the holding; its resume lets them through.
+            if (gapHeld !== waiting) return
+            gapHeld = null
+            gapRuntime = null
+            if (!attached) return
+            waiting.any { it.type == REPLAY_GAP }.also { if (!it) waiting.forEach(::deliver) }
+        }
+        if (again) resumeAfterGap(runtimeId)
     }
 
     /**
@@ -2158,6 +2194,10 @@ class ChatSession(
      * waits, with those after it, while [catchUp] fills the gap. Called under [streamMutex].
      */
     private fun deliver(event: GatewayEvent) {
+        gapHeld?.let {
+            it += event
+            return
+        }
         held?.let {
             it += event
             return
@@ -2183,7 +2223,7 @@ class ChatSession(
      * reloads the transcript and takes the running reply as the gateway has it, as it did before replay existed.
      */
     private suspend fun catchUp(client: JsonRpcClient, runtimeId: String, foreground: Boolean = false) {
-        val from = streamMutex.withLock { lastSeq }
+        val (from, generation) = streamMutex.withLock { lastSeq to streamGeneration }
         val missed = if (from == null) null else try {
             val reply = client.request(
                 "session.events.since",
@@ -2204,6 +2244,8 @@ class ChatSession(
         // Read while live events stay held; the stream lock is only taken to apply.
         if (missed == null && !keep && rowExists && _state.value.runtimeSessionId == runtimeId) loadHistory()
         streamMutex.withLock {
+            // A gap came meanwhile: what was missed is in the transcript its resume reloads, and what's held is its own.
+            if (generation != streamGeneration) return
             // The link went, or another runtime took over: the next attach starts its own catch-up.
             if (_state.value.runtimeSessionId != runtimeId) {
                 held = null
@@ -2503,12 +2545,19 @@ class ChatSession(
         )
     }
 
-    private suspend fun runCatchingAttach(client: JsonRpcClient, reconnected: Boolean = false, reuse: Boolean = false): Boolean = try {
-        val runtimeId = attach(client, reconnected, reuse)
+    private suspend fun runCatchingAttach(
+        client: JsonRpcClient,
+        reconnected: Boolean = false,
+        reuse: Boolean = false,
+        afterGap: Boolean = false,
+    ): Boolean = try {
+        val runtimeId = attach(client, reconnected, reuse, afterGap)
         scope.launch { refreshSubagents(client, runtimeId) }
         true
     } catch (e: CancellationException) {
         throw e
+    } catch (e: StaleGapResume) {
+        false
     } catch (e: Exception) {
         _state.update {
             it.copy(
@@ -2550,9 +2599,17 @@ class ChatSession(
      * ([reconnected]) the same runtime picks up from the last event applied (see [catchUp]); a new one, or one
      * with nothing to pick up from, reloads the transcript instead. With [reuse], a runtime already attached on
      * [client] by the time the lock is free (a send and the reconnect racing) is kept rather than resumed again.
+     * [afterGap] takes up a subscription the session authority ended: nothing to pick up from, and nothing to do
+     * when a reconnect attached the chat on a new socket first.
      */
-    private suspend fun attach(client: JsonRpcClient, reconnected: Boolean = false, reuse: Boolean = false): String = attachMutex.withLock {
+    private suspend fun attach(
+        client: JsonRpcClient,
+        reconnected: Boolean = false,
+        reuse: Boolean = false,
+        afterGap: Boolean = false,
+    ): String = attachMutex.withLock {
         if (reuse) liveRuntimeId(client)?.let { return@withLock it }
+        if (afterGap && (attachedClient !== client || connectedClient() !== client)) throw StaleGapResume()
         val stored = _state.value.storedSessionId ?: error("No stored session to resume")
         _state.update { it.copy(attachment = Attachment.Attaching) }
         val result = client.request(
@@ -2580,7 +2637,7 @@ class ChatSession(
         val (resumable, catchingUp) = streamMutex.withLock {
             inflightText = streamed
             // Seqs count per runtime session and per gateway run, so only the same of both can be picked up.
-            val resumable = reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
+            val resumable = !afterGap && reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
             if (!resumable) {
                 lastSeq = null
                 // The turn may have changed while away: the gateway's copy names its reply again below.
