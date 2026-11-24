@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import dev.hermeskotlin.ui.chat.ComposerKey
+import dev.hermeskotlin.ui.chat.ContinueLists
 import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.ui.chat.composerKey
 import dev.hermeskotlin.ui.chat.isPickKey
@@ -634,11 +635,13 @@ private fun RoomComposer(room: OpenRoom, viewModel: RoomActions, mentions: RoomM
             selectionColors = LocalTextSelectionColors.current,
             lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 8),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+            // Lists go on as in the chat's composer.
+            inputTransformation = ContinueLists,
             modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus).then(
                 // The desktop's keys, as the chat's composer has them: Enter sends, Shift+Enter starts a line,
                 // and with the `@` list up, Up and Down mark a member and Enter or Tab takes it.
                 if (!isDesktop) {
-                    Modifier.commitComposingOnEnter(viewModel.composer)
+                    Modifier.commitComposingOnEnter(viewModel.composer, ContinueLists)
                 } else {
                     Modifier.onPreviewKeyEvent { event ->
                         mentions.onKey(event) || (composerKey(event) == ComposerKey.Send).also { send ->

@@ -327,6 +327,46 @@ class ComposerEnterImeTest {
         )
     }
 
+    // A list goes on whichever way the keyboard sends the line break.
+
+    @Test
+    fun softEnterWhileComposingContinuesAList() {
+        val (state, ic) = setupComposer()
+        ic.commitText("1. blah ", 1)
+        ic.setComposingText("balh", 1)
+        composeRule.waitForIdle()
+        ic.sendSoftEnter()
+        assertEquals("1. blah balh\n2. ", state.text.toString())
+        assertEquals(TextRange(16), state.selection)
+    }
+
+    @Test
+    fun softEnterWithoutCompositionContinuesAList() {
+        val (state, ic) = setupComposer()
+        ic.commitText("- milk", 1)
+        composeRule.waitForIdle()
+        ic.sendSoftEnter()
+        assertEquals("- milk\n- ", state.text.toString())
+        assertEquals(TextRange(9), state.selection)
+    }
+
+    @Test
+    fun aCommittedLineBreakContinuesAListAndASecondEndsIt() {
+        val (state, ic) = setupComposer()
+        ic.commitText("1. eggs", 1)
+        // Some keyboards finish the word and send the line break as one commit.
+        ic.setComposingText("brea", 1)
+        ic.commitText(" bread\n", 1)
+        composeRule.waitForIdle()
+        assertEquals("1. eggs bread\n2. ", state.text.toString())
+        assertEquals(TextRange(17), state.selection)
+
+        ic.commitText("\n", 1)
+        composeRule.waitForIdle()
+        assertEquals("1. eggs bread\n", state.text.toString())
+        assertEquals(TextRange(14), state.selection)
+    }
+
     @Implements(InputMethodManager::class)
     class TrackingInputMethodManager : ShadowInputMethodManager() {
         @Implementation
