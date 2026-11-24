@@ -2666,7 +2666,8 @@ class ChatSession(
         }
         val seq = event.seq
         // The session authority started counting the session anew (its ring was evicted): seqs from before don't follow.
-        event.replayEpoch?.let { epoch ->
+        // Only there: the legacy gateway's seqs count in gateway.ready's epoch, whatever a frame says.
+        event.replayEpoch?.takeIf { attachedClient?.sessionAuthority == true }?.let { epoch ->
             if (epoch != seqEpoch) {
                 seqEpoch = epoch
                 lastSeq = null
