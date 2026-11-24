@@ -64,18 +64,9 @@ class AndroidLiveCall(context: Context) : LiveCall {
             .setSamplesReadyCallback { samples -> micLevel = level(samples.data) }
             .createAudioDeviceModule()
         this.adm = adm
-        // Android's NetworkMonitor hides the interfaces WebRTC needs while a VpnService (Tailscale,
-        // OpenVPN, WireGuard, …) is up: the offer then goes out with zero ICE candidates and the
-        // call never connects. Ignore no adapter type, and bypass the monitor only in that case.
-        val factoryOptions = PeerConnectionFactory.Options().apply {
-            networkIgnoreMask = 0
-            // Only with a VPN up does Android's NetworkMonitor hide the interfaces WebRTC needs;
-            // everywhere else it keeps working and keeps picking up network changes.
-            disableNetworkMonitor = hasVpn(appContext)
-        }
         val factory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(adm)
-            .setOptions(factoryOptions)
+            .setOptions(liveCallOptions(vpnUp = hasVpn(appContext)))
             .createPeerConnectionFactory()
         this.factory = factory
 
@@ -193,6 +184,7 @@ class AndroidLiveCall(context: Context) : LiveCall {
     }
 
     /** True when a VpnService (Tailscale, OpenVPN, WireGuard, …) is up. */
+    @Suppress("DEPRECATION")
     private fun hasVpn(context: Context): Boolean {
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
         return manager.allNetworks.any { network ->
@@ -257,6 +249,17 @@ class AndroidLiveCall(context: Context) : LiveCall {
             return min(1.0, sqrt(sum / count) / 256.0 / 42.0).toFloat()
         }
     }
+}
+
+/**
+ * While a VpnService (Tailscale, OpenVPN, WireGuard, …) is up, Android's NetworkMonitor hides the interfaces WebRTC
+ * needs: the offer goes out with zero ICE candidates and the call never connects. So the monitor is off only then;
+ * everywhere else it keeps picking up network changes. Passing options at all drops WebRTC's default of ignoring
+ * loopback, which would put 127.0.0.1 and ::1 in the offer, so that is set again here.
+ */
+internal fun liveCallOptions(vpnUp: Boolean) = PeerConnectionFactory.Options().apply {
+    networkIgnoreMask = PeerConnectionFactory.Options.ADAPTER_TYPE_LOOPBACK
+    disableNetworkMonitor = vpnUp
 }
 
 /** Creates an SDP and waits for it. */
