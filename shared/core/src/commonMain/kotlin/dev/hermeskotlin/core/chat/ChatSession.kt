@@ -558,8 +558,17 @@ class ChatSession(
                 cut = true
                 client.request("prompt.submit", buildJsonObject { put("session_id", runtimeId); put("text", trimmed) }) as? JsonObject
             } else {
-                // Later prompts go too. The app asked before this (see `discardedAfter`), which the gateway wants said.
-                submitCutting(client, runtimeId, trimmed, rowId, deep = before.messages.drop(index + 1).any { it is ChatMessage.User })
+                client.request(
+                    "prompt.submit",
+                    buildJsonObject {
+                        put("session_id", runtimeId)
+                        put("text", trimmed)
+                        put("truncate_before_row_id", rowId)
+                        put("confirm_truncate", true)
+                        // Cutting at the first prompt can empty the transcript (all but a hidden starting instruction), which the gateway wants said outright.
+                        put("confirm_empty_truncate", true)
+                    },
+                ) as? JsonObject
             }
             if (result.string("status") !in TURN_STARTING_STATUSES) ownTurnsPending = (ownTurnsPending - 1).coerceAtLeast(0)
             // The stored rows decide once the turn is over, so what shows matches the gateway's transcript.
@@ -598,7 +607,6 @@ class ChatSession(
             val busy = rpc?.code == BUSY || (client.sessionAuthority && rpc?.reason == "session_busy")
             val stale = rpc?.code in STALE_REWIND_CODES ||
                 (client.sessionAuthority && rpc?.reason == "invalid_params" && rpc?.data.string("field") == "target_message_id")
-            val deeper = rpc?.code == DEEP_CUT_UNCONFIRMED
             val refused = SessionRefusal.of(e)
             _state.update { state ->
                 state.copy(
@@ -609,49 +617,13 @@ class ChatSession(
                         busy -> BUSY_MESSAGE
                         stale -> "This message can't be changed any more."
                         fenced -> CHANGED_ELSEWHERE
-                        deeper -> "The chat has more messages after this one than it showed. It's up to date now; try again."
                         else -> e.message ?: "Couldn't send the message."
                     },
                 )
             }
             // The gateway's transcript isn't what this chat shows; show it as it is.
-            if (stale || fenced || deeper || (busy && client.sessionAuthority)) loadHistory()
+            if (stale || fenced || (busy && client.sessionAuthority)) loadHistory()
             SendOutcome.NotSent
-        }
-    }
-
-    /**
-     * The link on which `prompt.submit` turned down `confirm_deep_truncate` as a key it doesn't know: that gateway
-     * predates it (hermes-agent before v0.21.7), so its later rewinds leave it out.
-     */
-    private var deepConfirmUnknownOn: JsonRpcClient? = null
-
-    /**
-     * A rewind's `prompt.submit` off the session authority: it cuts the stored transcript before row [rowId] and sends
-     * [text] in its place. A [deep] cut, one that takes later prompts with it, says so (`confirm_deep_truncate`), which
-     * the gateway is to require; one too old to know the key refuses it unread, and gets the request without it.
-     */
-    private suspend fun submitCutting(client: JsonRpcClient, runtimeId: String, text: String, rowId: Long, deep: Boolean): JsonObject? {
-        suspend fun send(confirmDeep: Boolean) = client.request(
-            "prompt.submit",
-            buildJsonObject {
-                put("session_id", runtimeId)
-                put("text", text)
-                put("truncate_before_row_id", rowId)
-                put("confirm_truncate", true)
-                // Cutting at the first prompt can empty the transcript (all but a hidden starting instruction), which the gateway wants said outright.
-                put("confirm_empty_truncate", true)
-                if (confirmDeep) put("confirm_deep_truncate", true)
-            },
-        ) as? JsonObject
-        if (!deep || deepConfirmUnknownOn === client) return send(confirmDeep = false)
-        return try {
-            send(confirmDeep = true)
-        } catch (e: RpcException) {
-            // Refused at the door, before anything was cut.
-            if (e.code != UNKNOWN_PARAM || "confirm_deep_truncate" !in e.message) throw e
-            deepConfirmUnknownOn = client
-            send(confirmDeep = false)
         }
     }
 
@@ -2856,12 +2828,6 @@ class ChatSession(
          * away, cut elsewhere), the prompt count drifted (4030), or the target was malformed (4004).
          */
         val STALE_REWIND_CODES = setOf(4018, 4030, 4004)
-
-        /** A rewind that would take more than one later prompt with it, sent without `confirm_deep_truncate`. */
-        const val DEEP_CUT_UNCONFIRMED = 4033
-
-        /** A request with a key the gateway's contract for the method doesn't have; the message names the key. */
-        const val UNKNOWN_PARAM = 4000
 
         const val CHANGED_ELSEWHERE = "The chat changed somewhere else meanwhile. It's up to date now; try again."
 

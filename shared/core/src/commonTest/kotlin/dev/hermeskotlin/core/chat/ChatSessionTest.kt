@@ -2763,78 +2763,106 @@ class ChatSessionTest {
         assertEquals("plain words", prompt.sentText)
     }
 
+    /** What a legacy rewind's `prompt.submit` sends, deep cut or not: the same three keys as before the session authority. */
+    private val legacyRewindKeys = setOf("session_id", "text", "truncate_before_row_id", "confirm_truncate", "confirm_empty_truncate")
+
+    /** What the session authority's `prompt.submit` after a cut sends: none of the truncation keys (CanonicalSubmitParams). */
+    private val authorityPromptKeys = setOf("session_id", "text", "submission_id")
+
+    private fun JsonObject.paramKeys() = this["params"]!!.jsonObject.keys
+
     @Test
-    fun aRewindThatTakesLaterPromptsSaysSo() = runTest {
+    fun aLegacyEditOfAnEarlierPromptSendsTheTruncationKeysAsBefore() = runTest {
         history = threeTurns
         val (chat, transport) = resumedChat(backgroundScope, mapOf("prompt.submit" to """{"status":"streaming","user_row_id":7}"""))
+        assertTrue(chat.state.value.canEdit("row-3"))
 
-        // "three" and its reply go with it: hermes-agent v0.21.7 wants that confirmed (`confirm_deep_truncate`).
-        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two"))
+        // "three" and its reply go too, which the app asked about first (`discardedAfter`): no key says so on the wire.
+        assertEquals(2, chat.state.value.discardedAfter("row-3"))
+        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two, edited"))
 
         val submit = transport.sent.value.single { it.isCall("prompt.submit") }
-        assertEquals("true", submit.param("confirm_deep_truncate"))
+        assertEquals(legacyRewindKeys, submit.paramKeys())
         assertEquals("3", submit.param("truncate_before_row_id"))
-        assertEquals("true", submit.param("confirm_truncate"))
+        assertTrue(transport.sent.value.none { it.isCall("session.mutate") })
+        assertEquals(listOf("one", "First", "two, edited"), chat.state.value.messages.map { it.textOf() })
+    }
+
+    @Test
+    fun aLegacyRegenerateSendsThePromptsOwnTextWithTheTruncationKeys() = runTest {
+        history = threeTurns
+        val (chat, transport) = resumedChat(backgroundScope, mapOf("prompt.submit" to """{"status":"streaming","user_row_id":7}"""))
+        // As the view model regenerates: the prompt the reply answered, with the text it went out with.
+        val prompt = assertNotNull(chat.state.value.regenerateTarget("row-6"))
+
+        assertEquals(SendOutcome.Sent, chat.rewind(prompt.key, assertNotNull(prompt.sentText)))
+
+        val submit = transport.sent.value.single { it.isCall("prompt.submit") }
+        assertEquals(legacyRewindKeys, submit.paramKeys())
+        assertEquals("5", submit.param("truncate_before_row_id"))
+        assertEquals("three", submit.param("text"))
         assertTrue(transport.sent.value.none { it.isCall("session.mutate") })
     }
 
     @Test
-    fun aRewindOfTheLastPromptHasNothingDeepToConfirm() = runTest {
+    fun aLegacyRewindAtTheFirstPromptSaysTheCutMayEmptyTheChat() = runTest {
         history = threeTurns
         val (chat, transport) = resumedChat(backgroundScope, mapOf("prompt.submit" to """{"status":"streaming","user_row_id":7}"""))
 
-        assertEquals(SendOutcome.Sent, chat.rewind("row-5", "three"))
+        assertEquals(SendOutcome.Sent, chat.rewind("row-1", "one"))
 
         val submit = transport.sent.value.single { it.isCall("prompt.submit") }
-        assertEquals(setOf("session_id", "text", "truncate_before_row_id", "confirm_truncate", "confirm_empty_truncate"), submit["params"]!!.jsonObject.keys)
+        assertEquals(legacyRewindKeys, submit.paramKeys())
+        assertEquals("true", submit.param("confirm_empty_truncate"))
+        assertEquals("1", submit.param("truncate_before_row_id"))
     }
 
     @Test
-    fun aGatewayTooOldForTheDeepConfirmGetsTheRewindWithoutIt() = runTest {
+    fun aSessionAuthorityEditOfAnEarlierPromptCutsTheLaterTurnsWithoutAConfirmKey() = runTest {
         history = threeTurns
-        val (chat, transport) = resumedChat(backgroundScope, emptyMap())
-        val canned = gateway.answer
-        // hermes-agent v0.21.6: the contract has no such key, and the request is refused before it's read.
-        gateway.answer = { call ->
-            when {
-                call.method != "prompt.submit" -> canned(call)
-                "confirm_deep_truncate" in call.params ->
-                    call.error(4000, "invalid params for prompt.submit: confirm_deep_truncate: Extra inputs are not permitted")
-                else -> """{"status":"streaming","user_row_id":7}"""
-            }
-        }
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+        assertTrue(chat.state.value.canEdit("row-3"))
+        // The authority has no confirmation gate on the wire; the app's own dialog is the only one.
+        assertEquals(2, chat.state.value.discardedAfter("row-3"))
 
-        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two"))
+        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two, edited"))
 
-        val (first, second) = transport.sent.value.filter { it.isCall("prompt.submit") }
-        assertEquals("true", first.param("confirm_deep_truncate"))
-        assertNull(second.param("confirm_deep_truncate"))
-        assertEquals("3", second.param("truncate_before_row_id"))
-        assertEquals(listOf("one", "First", "two"), chat.state.value.messages.map { it.textOf() })
-
-        // The same link isn't asked twice.
-        transport.push(event("message.start", "rt1"))
-        transport.push(event("message.complete", "rt1", """{"text":"Second, again","status":"complete"}"""))
-        chat.state.first { s -> !s.running && s.messages.lastOrNull()?.key == "row-6" }
-        assertEquals(SendOutcome.Sent, chat.rewind("row-1", "one"))
-        assertEquals(3, transport.sent.value.count { it.isCall("prompt.submit") })
-        assertNull(transport.sent.value.last { it.isCall("prompt.submit") }.param("confirm_deep_truncate"))
+        val mutate = transport.sent.value.single { it.isCall("session.mutate") }
+        assertEquals(setOf("session_id", "request_id", "expected_revision", "expected_generation", "operation", "payload"), mutate.paramKeys())
+        assertEquals("""{"target_message_id":3}""", mutate.mutatePayload().toString())
+        val submit = transport.sent.value.single { it.isCall("prompt.submit") }
+        assertEquals(authorityPromptKeys, submit.paramKeys())
+        assertEquals("two, edited", submit.param("text"))
+        assertEquals(listOf("one", "First", "two, edited"), chat.state.value.messages.map { it.textOf() })
     }
 
     @Test
-    fun aDeepCutTheGatewayWantsConfirmedShowsItsTranscriptAgain() = runTest {
-        history = """{"session_id":"stored-1","messages":[
-            {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
-            {"id":3,"role":"user","content":"two"},{"id":4,"role":"assistant","content":"Second"}]}"""
-        val (chat, transport) = resumedChat(backgroundScope, mapOf("prompt.submit" to "error:4033"))
-        // Another client sent "three" since; here the cut looked like the last exchange only.
+    fun aSessionAuthorityRegenerateSendsThePromptsOwnTextAfterTheCut() = runTest {
         history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+        val prompt = assertNotNull(chat.state.value.regenerateTarget("row-6"))
 
-        assertEquals(SendOutcome.NotSent, chat.rewind("row-3", "two"))
+        assertEquals(SendOutcome.Sent, chat.rewind(prompt.key, assertNotNull(prompt.sentText)))
 
-        assertNull(transport.sent.value.single { it.isCall("prompt.submit") }.param("confirm_deep_truncate"))
-        assertEquals(6, chat.state.value.messages.size)
-        assertTrue(chat.state.value.error!!.contains("more messages"))
+        val calls = transport.sent.value.filter { it.isCall("session.mutate") || it.isCall("prompt.submit") }
+        assertEquals(listOf("session.mutate", "prompt.submit"), calls.map { it["method"]!!.jsonPrimitive.content })
+        assertEquals("""{"target_message_id":5}""", calls[0].mutatePayload().toString())
+        assertEquals(authorityPromptKeys, calls[1].paramKeys())
+        assertEquals("three", calls[1].param("text"))
+        assertTrue(chat.state.value.running)
+    }
+
+    @Test
+    fun aSessionAuthorityRewindAtTheFirstPromptEmptiesTheChatBeforeTheNewOne() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+
+        assertEquals(SendOutcome.Sent, chat.rewind("row-1", "uno"))
+
+        // No `confirm_empty_truncate` anywhere: the authority's rewind takes only the target row.
+        assertEquals("""{"target_message_id":1}""", transport.sent.value.single { it.isCall("session.mutate") }.mutatePayload().toString())
+        assertEquals(authorityPromptKeys, transport.sent.value.single { it.isCall("prompt.submit") }.paramKeys())
+        assertEquals("uno", assertIs<ChatMessage.User>(chat.state.value.messages.single()).text)
     }
 
     private fun FakeGateway.Call.rewound() =
