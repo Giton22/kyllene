@@ -607,6 +607,8 @@ class ChatSession(
             val busy = rpc?.code == BUSY || (client.sessionAuthority && rpc?.reason == "session_busy")
             val stale = rpc?.code in STALE_REWIND_CODES ||
                 (client.sessionAuthority && rpc?.reason == "invalid_params" && rpc?.data.string("field") == "target_message_id")
+            // A session authority without `session.mutate` has no other way to cut: its `prompt.submit` refuses the keys.
+            val noCut = client.sessionAuthority && rpc?.code == METHOD_NOT_FOUND
             val refused = SessionRefusal.of(e)
             _state.update { state ->
                 state.copy(
@@ -617,6 +619,7 @@ class ChatSession(
                         busy -> BUSY_MESSAGE
                         stale -> "This message can't be changed any more."
                         fenced -> CHANGED_ELSEWHERE
+                        noCut -> "This gateway can't cut a chat back. Update Hermes to edit or regenerate here."
                         else -> e.message ?: "Couldn't send the message."
                     },
                 )

@@ -2865,6 +2865,22 @@ class ChatSessionTest {
         assertEquals("uno", assertIs<ChatMessage.User>(chat.state.value.messages.single()).text)
     }
 
+    @Test
+    fun aSessionAuthorityWithoutSessionMutateCutsNothingAndSaysWhy() = runTest {
+        history = threeTurns
+        // Its `prompt.submit` refuses the legacy truncation keys, so there is nothing to fall back to.
+        val (chat, transport) = authorityChat(backgroundScope) { it.error(-32601, "unknown method: session.mutate") }
+        val before = chat.state.value.messages
+
+        assertEquals(SendOutcome.NotSent, chat.rewind("row-3", "two, edited"))
+
+        assertEquals(1, transport.sent.value.count { it.isCall("session.mutate") })
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+        assertEquals(before, chat.state.value.messages)
+        assertTrue(chat.state.value.error!!.contains("can't cut a chat back"))
+        assertFalse(chat.state.value.running)
+    }
+
     private fun FakeGateway.Call.rewound() =
         reply("""{"session_id":"stored-1","revision":5,"execution_generation":3,"operation":"rewind","rewound_count":4}""")
 
