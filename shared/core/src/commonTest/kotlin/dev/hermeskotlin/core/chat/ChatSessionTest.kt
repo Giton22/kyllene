@@ -225,6 +225,25 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aScheduledJobsMessageToAnOpenChatShowsFromTheTranscript() = runTest {
+        val (connection, transport) = setup(backgroundScope, mapOf("session.resume" to """{"session_id":"rt1","running":false}"""))
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+
+        // The gateway writes the cron result as a note, then reports it as a turn with no words of its own.
+        history = history.replace("]}", """,{"id":3,"role":"user","content":"Test notification",
+            "display_kind":"internal_notification","display_metadata":{"completion_note":["[\"cron\",\"route-1\",\"ab\"]"]}}]}""")
+        transport.push(event("message.start", "rt1"))
+        transport.push(event("message.complete", "rt1", """{"text":"","status":"complete"}"""))
+
+        val done = chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Event } }
+        assertEquals(3, done.messages.size, "no empty reply is left behind: ${done.messages}")
+        val note = assertIs<TranscriptEvent.Routine>(assertIs<ChatMessage.Event>(done.messages.last()).event)
+        assertEquals("Test notification", note.body)
+    }
+
+    @Test
     fun firstSendOnANewChatCreatesTheSessionThenSubmits() = runTest {
         val (connection, transport) = setup(
             backgroundScope,

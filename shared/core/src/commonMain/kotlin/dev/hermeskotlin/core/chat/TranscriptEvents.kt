@@ -1,6 +1,9 @@
 package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.network.HermesJson
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -19,8 +22,12 @@ sealed interface TranscriptEvent {
     /** A background process the agent started has finished; [output] is what it printed. */
     data class Process(val title: String, val output: String, val failed: Boolean) : TranscriptEvent
 
-    /** A scheduled job's output, handed to the bot to act on (cron `deliver: bot-chat`, or a mirror). */
-    data class Routine(val name: String, val body: String) : TranscriptEvent
+    /**
+     * A scheduled job's output: handed to the bot to act on (cron `deliver: bot-chat`, or a mirror), or, when
+     * [result], the job's message itself, written into the chat it was scheduled from (`deliver: origin`).
+     * [name] is null when the delivered text doesn't say; [failed] for a notice that the job went wrong.
+     */
+    data class Routine(val name: String?, val body: String, val failed: Boolean = false, val result: Boolean = false) : TranscriptEvent
 
     /** A legacy compaction handoff kept as reference for the agent, not a prompt or reply. */
     data class Compaction(val body: String) : TranscriptEvent
@@ -53,9 +60,13 @@ sealed interface DeliveryOutcome {
 /** Classifies stored rows. Ported from Desktop's renderers and the gateway's own formats; see docs/bot-mode-integration.md §6. */
 object TranscriptRows {
 
-    /** User rows that are machinery the agent reads but nobody needs to see. */
-    fun isNoise(row: String, displayKind: String?): Boolean =
-        (displayKind == "internal_notification" && routine(row) == null) || row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
+    /**
+     * User rows that are machinery the agent reads but nobody needs to see. [displayMetadata] is the row's
+     * `display_metadata`, which tells a scheduled job's message apart from the wakes that share its kind.
+     */
+    fun isNoise(row: String, displayKind: String?, displayMetadata: JsonElement? = null): Boolean =
+        (displayKind == "internal_notification" && routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
+            row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
 
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
     fun compaction(text: String): TranscriptEvent.Compaction? {
@@ -76,10 +87,16 @@ object TranscriptRows {
      * What a stored user row really is, or null when the person wrote it. [deliveries] maps the process ids
      * of this chat's `message_agent` sends to whom they went, to name a delivery's other end.
      */
-    fun classify(text: String, displayKind: String?, deliveries: Map<String, String> = emptyMap()): List<TranscriptEvent>? {
+    fun classify(
+        text: String,
+        displayKind: String?,
+        deliveries: Map<String, String> = emptyMap(),
+        displayMetadata: JsonElement? = null,
+    ): List<TranscriptEvent>? {
         val row = text.trim()
         AgentMessage.parse(row)?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body)) }
         routine(row)?.let { return listOf(it) }
+        if (displayKind == "internal_notification") scheduledResult(row, displayMetadata)?.let { return listOf(it) }
         if (displayKind == "process_complete" || displayKind == "async_delegation_complete" || PROCESS.matches(row)) {
             val parts = row.split(BATCH_SPLIT).mapNotNull { processEvent(it, deliveries) }
             if (parts.isNotEmpty()) return parts
@@ -169,6 +186,52 @@ object TranscriptRows {
         return TranscriptEvent.Routine(match.groupValues[1], match.groupValues[2].trim())
     }
 
+    /**
+     * A cron result written into a local chat as a note (`deliver: origin`, hermes-agent 0.22.6 and later): an
+     * `internal_notification` row whose `display_metadata.completion_note` names only `cron` as its producer
+     * (gateway/session_completion_notes.py `note_if_unviewed`). Wakes, watch notes and heartbeats share the kind
+     * but name another producer or none. Where the route leaves the metadata out, only the exact text cron wraps
+     * a result in (cron/scheduler_delivery.py `_deliver_result`) tells one apart.
+     */
+    private fun scheduledResult(row: String, displayMetadata: JsonElement?): TranscriptEvent.Routine? {
+        val metadata = displayMetadata.asObject()
+        val producers = metadata?.get("completion_note")?.let(::completionProducers)
+        val wrapped = CRON_WRAPPED.matchEntire(row)
+        if (producers == null) {
+            // No note metadata: the whole wrapper, footer included, or it stays hidden.
+            if (displayMetadata != null && displayMetadata !is JsonNull && metadata == null) return null
+            if (wrapped == null || wrapped.groupValues[3].isEmpty()) return null
+        } else if (producers.isEmpty() || producers.any { it != "cron" }) {
+            return null
+        }
+        val failed = (metadata?.get("notification_category") as? JsonPrimitive)?.contentOrNull == "diagnostic"
+        return TranscriptEvent.Routine(
+            name = wrapped?.groupValues?.get(1)?.trim()?.ifEmpty { null },
+            body = (wrapped?.groupValues?.get(2) ?: row).trim(),
+            failed = failed,
+            result = true,
+        )
+    }
+
+    /** Each `completion_note` entry's producer: entries are JSON-encoded `[producer, route, id]` lists. */
+    private fun completionProducers(notes: JsonElement): List<String?> {
+        val entries = notes as? JsonArray ?: return emptyList()
+        return entries.map { entry ->
+            val identity = when (entry) {
+                is JsonArray -> entry
+                is JsonPrimitive -> entry.contentOrNull?.let { runCatching { HermesJson.parseToJsonElement(it) }.getOrNull() } as? JsonArray
+                else -> null
+            }
+            (identity?.firstOrNull() as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+        }
+    }
+
+    private fun JsonElement?.asObject(): JsonObject? = when (this) {
+        is JsonObject -> this
+        is JsonPrimitive -> contentOrNull?.let { runCatching { HermesJson.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+        else -> null
+    }
+
     private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
     /** agent/context_compressor.py: the start of SUMMARY_PREFIX and its historical ones, the end they share, the oldest prefix. */
@@ -188,6 +251,11 @@ object TranscriptRows {
     private val PEER_TARGET = Regex("""\bpeer\s+dm\s+'?"?([A-Za-z0-9_./-]+)""")
     private val ROUTINE = Regex("""^\[Cronjob "(.+?)" output — [^\]\n]*]\s*([\s\S]*)$""")
     private val CRON_MIRROR = Regex("""^\[Cron delivery: ([^\]\n]+)](?:\n([\s\S]*))?$""")
+    /** cron/scheduler_delivery.py `_deliver_result`: header, job id, rule, the output, then the footer. */
+    private val CRON_WRAPPED = Regex(
+        """^Cronjob Response: ([^\n]*)\r?\n\(job_id: [^)\n]*\)\r?\n-{13}\r?\n\r?\n([\s\S]*?)""" +
+            """(\r?\n\r?\nTo stop or manage this job, send me a new message \(e\.g\. "stop reminder [^\n]*"\)\.)?$""",
+    )
     /** The CLI runner's own lines around a reply: the session it used, and that it resumed one. */
     private val SESSION_ID_LINE = Regex("""^\s*(?:session_id:\s.*|↻ Resumed session\b.*)$""")
     /** The CLI's note when it resumes an empty session, which lands in the middle of a delivered reply. */
@@ -233,7 +301,9 @@ internal fun groupSystemMessages(messages: List<ChatMessage>): List<ChatMessage>
     messages.forEach { message ->
         val event = (message as? ChatMessage.Event)?.event
         val fold = when (event) {
-            is TranscriptEvent.Compaction, is TranscriptEvent.Routine, is TranscriptEvent.Label -> true
+            is TranscriptEvent.Compaction, is TranscriptEvent.Label -> true
+            // A job's own message is what the person scheduled it for: it stays in view.
+            is TranscriptEvent.Routine -> !event.result
             is TranscriptEvent.Process -> !event.failed
             else -> false
         }
