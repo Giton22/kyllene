@@ -3935,6 +3935,7 @@ internal fun ComposerTextInput(
     modifier: Modifier = Modifier,
     maxHeightInLines: Int = 8,
     onTextLayout: (Density.(getResult: () -> TextLayoutResult?) -> Unit)? = null,
+    onSend: (() -> Unit)? = null,
     placeholder: @Composable () -> Unit,
 ) {
     BasicTextField(
@@ -3946,7 +3947,7 @@ internal fun ComposerTextInput(
         // A line break after `1. item` or `- item` starts the next item.
         inputTransformation = ContinueLists,
         onTextLayout = onTextLayout,
-        modifier = modifier.commitComposingOnEnter(state, ContinueLists).semantics(mergeDescendants = true) {},
+        modifier = modifier.commitComposingOnEnter(state, ContinueLists).sendOnHardwareCtrlEnter(state, onSend).semantics(mergeDescendants = true) {},
         decorator = { innerTextField ->
             Box(Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Text, overrideDescendants = true).clipToBounds()) {
                 if (state.text.isEmpty()) {
@@ -4056,6 +4057,9 @@ private fun Composer(
                                 },
                             ),
                         maxHeightInLines = if (isDesktop) 14 else 8,
+                        onSend = {
+                            onComposerKey(ComposerKey.Send, actions, state, recall, connected, editing, attachments, comments)
+                        },
                         placeholder = {
                             Text(
                                 when {
