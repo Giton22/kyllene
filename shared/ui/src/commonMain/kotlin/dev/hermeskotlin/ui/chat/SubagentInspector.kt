@@ -58,7 +58,7 @@ import dev.hermeskotlin.core.chat.SubagentRow
 import dev.hermeskotlin.core.chat.SubagentStatus
 import dev.hermeskotlin.core.chat.SubagentTranscriptPage
 import dev.hermeskotlin.core.chat.ToolActivity
-import dev.hermeskotlin.core.chat.historyToMessages
+import dev.hermeskotlin.core.chat.subagentTranscriptMessages
 import dev.hermeskotlin.core.chat.subagentRows
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.designsystem.accentText
@@ -82,19 +82,35 @@ import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
-internal class SubagentContext(val subagents: List<Subagent>, val onOpen: (List<ToolActivity>, String) -> Unit)
+internal class SubagentContext(val subagents: List<Subagent>, val onOpen: (String, String) -> Unit)
 
 internal val LocalSubagents = compositionLocalOf { SubagentContext(emptyList()) { _, _ -> } }
 
-internal data class InspectorRow(val key: String, val task: SubagentRow, val depth: Int = 0)
+internal data class InspectorRow(val key: String, val task: SubagentRow, val depth: Int = 0) {
+    val selectionKey: String get() = task.transcriptId?.let { "child:$it" } ?: key
+}
 
-internal fun delegationRows(calls: List<ToolActivity>, subagents: List<Subagent>): List<InspectorRow> =
-    calls.flatMap { call ->
-        subagentRows(call, subagents).flatMapIndexed { index, row ->
-            val slot = if (index < call.tasks.size) "${call.id}:$index" else row.key
+internal fun selectedDelegationRow(
+    messages: List<ChatMessage>,
+    subagents: List<Subagent>,
+    replyKey: String,
+    selection: String,
+): InspectorRow? {
+    val reply = messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey } ?: return null
+    val rows = delegationRows(reply.tools.filter { it.name == "delegate_task" }, subagents)
+    return rows.firstOrNull { it.selectionKey == selection || it.key == selection }
+}
+
+internal fun delegationRows(calls: List<ToolActivity>, subagents: List<Subagent>): List<InspectorRow> {
+    val owners = calls.flatMapIndexed { index, call -> call.tasks.mapNotNull { task -> task.transcriptId?.let { it to index } } }.toMap()
+    return calls.flatMapIndexed { callIndex, call ->
+        val candidates = subagents.filter { owners[it.id]?.let { owner -> owner == callIndex } != false }
+        subagentRows(call, candidates).flatMapIndexed { index, row ->
+            val slot = if (index < call.tasks.size) "call:$callIndex:$index" else row.key
             InspectorRow(slot, row).withChildren()
         }
-    }.distinctBy { it.task.transcriptId ?: it.key }
+    }.distinctBy { it.selectionKey }
+}
 
 private fun InspectorRow.withChildren(): List<InspectorRow> =
     listOf(this) + task.children.flatMap { InspectorRow(it.key, it, depth + 1).withChildren() }
@@ -105,6 +121,7 @@ internal fun DelegationActivity(calls: List<ToolActivity>, messageKey: String) {
     val rows = remember(calls, context.subagents) { delegationRows(calls, context.subagents) }
     if (rows.isEmpty()) return
     var expanded by rememberSaveable(messageKey) { mutableStateOf(false) }
+    val count = rows.count { !it.task.refused }
     val running = rows.any { it.task.status == SubagentStatus.Running }
     val expandedState = stringResource(if (expanded) Res.string.chat_expanded else Res.string.chat_collapsed)
     val state = if (running) "$expandedState, ${stringResource(Res.string.chat_subagent_running)}" else expandedState
@@ -120,7 +137,7 @@ internal fun DelegationActivity(calls: List<ToolActivity>, messageKey: String) {
         ) {
             UnstyledIcon(Lucide.GitFork, null, tint = Theme[colors][accentText], modifier = Modifier.size(16.dp))
             Text(
-                pluralStringResource(Res.plurals.chat_subagent_count, rows.size, rows.size),
+                pluralStringResource(Res.plurals.chat_subagent_count, count, count),
                 style = Theme[typography][caption], color = Theme[colors][textSecondary],
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
@@ -131,7 +148,7 @@ internal fun DelegationActivity(calls: List<ToolActivity>, messageKey: String) {
         if (expanded) {
             rows.forEachIndexed { index, row ->
                 key(row.key) {
-                    SubagentListRow(row, index > 0, index < rows.lastIndex) { context.onOpen(calls, row.key) }
+                    SubagentListRow(row, index > 0, index < rows.lastIndex) { context.onOpen(messageKey, row.selectionKey) }
                 }
             }
         }
@@ -169,9 +186,7 @@ internal fun SubagentInspector(
             )
             IconButton(Lucide.X, stringResource(Res.string.chat_close), onDismiss)
         }
-        key(selected.key) {
-            SubagentDetail(selected.task, runtimeId, load, onStop, Modifier.weight(1f))
-        }
+        SubagentDetail(selected.task, runtimeId, load, onStop, Modifier.weight(1f))
     }
     if (desktop) LaunchedEffect(Unit) { focus.requestFocus() }
 }
@@ -263,7 +278,7 @@ private fun SubagentDetail(
     }
     val showReasoning = LocalAppSettings.current.showReasoning
     val messages = remember(rows) {
-        historyToMessages(rows).filter { it is ChatMessage.User || it is ChatMessage.Assistant }
+        subagentTranscriptMessages(rows).filter { it is ChatMessage.User || it is ChatMessage.Assistant }
     }
     LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item("task") {

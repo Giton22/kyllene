@@ -3,6 +3,7 @@ package dev.hermeskotlin.core.chat
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.sessions.SessionMessage
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -26,7 +27,7 @@ internal fun decodeSubagentTranscript(
     val available = result.boolean("available") ?: return null
     val rows = (result["rows"] as? JsonArray).orEmpty()
     return SubagentTranscriptPage(
-        rows = if (available) rows.filterIsInstance<JsonObject>().flatMap(::decodeRow) else emptyList(),
+        rows = if (available) rows.filterIsInstance<JsonObject>().mapNotNull(::decodeRow) else emptyList(),
         nextCursor = result.string("next_cursor"),
         reset = result.boolean("reset") == true,
         available = available,
@@ -35,25 +36,40 @@ internal fun decodeSubagentTranscript(
     )
 }
 
-private fun decodeRow(row: JsonObject): List<SessionMessage> {
-    if (row.string("row_kind") == "compaction") return emptyList()
-    val role = row.string("role") ?: return emptyList()
+private fun decodeRow(row: JsonObject): SessionMessage? {
+    if (row.string("row_kind") == "compaction") return null
+    val role = row.string("role") ?: return null
     val message = runCatching {
         HermesJson.decodeFromJsonElement<SessionMessage>(buildJsonObject {
             row.forEach { (key, value) -> put(key, value) }
             row["row_id"]?.let { put("id", it) }
-            if (role != "tool") row["text"]?.let { put("display_content", it) }
+            if (role == "tool") {
+                row["name"]?.let { put("tool_name", it) }
+                // Keep the projected arguments with this occurrence until all pages are assembled.
+                row["args"]?.let { put("tool_calls", it) }
+                if (row["content"] == null || row["content"] == JsonNull) row["text"]?.let { put("content", it) }
+            } else {
+                row["text"]?.let { put("display_content", it) }
+            }
         })
-    }.getOrNull() ?: return emptyList()
-    if (role != "tool") return listOf(message)
-
-    // The gateway projects tool results as standalone rows. Adapt those into the call/result pair
-    // the regular transcript reducer uses so the same expandable tool UI can render them.
-    val name = row.string("name") ?: return emptyList()
-    val call = buildJsonObject {
-        put("name", name)
-        message.toolCallId?.let { put("id", it) }
-        row["args"]?.let { put("arguments", it) }
-    }
-    return listOf(SessionMessage(role = "assistant", toolCalls = JsonArray(listOf(call))), message)
+    }.getOrNull() ?: return null
+    return message.takeIf { role != "tool" || it.toolName != null }
 }
+
+/** Adapt each projected tool occurrence to one call/result pair, with IDs scoped to the assembled transcript. */
+fun subagentTranscriptMessages(rows: List<SessionMessage>): List<ChatMessage> = historyToMessages(
+    rows.flatMapIndexed { index, row ->
+        val name = row.toolName
+        if (row.role != "tool" || name == null) return@flatMapIndexed listOf(row)
+        val id = "subagent-tool-$index"
+        val call = buildJsonObject {
+            put("id", id)
+            put("name", name)
+            row.toolCalls?.let { put("arguments", it) }
+        }
+        listOf(
+            SessionMessage(role = "assistant", timestamp = row.timestamp, toolCalls = JsonArray(listOf(call))),
+            row.copy(toolCallId = id),
+        )
+    },
+)

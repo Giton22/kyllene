@@ -871,10 +871,10 @@ internal fun ChatView(
                 comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
         }
     }
-    var delegationIds by rememberSaveable(conversationKey) { mutableStateOf<ArrayList<String>?>(null) }
+    var selectedDelegationReply by rememberSaveable(conversationKey) { mutableStateOf<String?>(null) }
     var selectedSubagentKey by rememberSaveable(conversationKey) { mutableStateOf<String?>(null) }
     fun closeSubagents() {
-        delegationIds = null
+        selectedDelegationReply = null
         selectedSubagentKey = null
     }
     val subagents = remember(state.messages, state.subagents) {
@@ -886,18 +886,14 @@ internal fun ChatView(
             state.subagents.map { child -> owners[child.id]?.let { child.copy(toolId = it) } ?: child }
         }
     }
-    val inspectedCalls = remember(delegationIds, state.messages) {
-        val ids = delegationIds ?: return@remember emptyList()
-        state.messages.asSequence().filterIsInstance<ChatMessage.Assistant>()
-            .map { reply -> reply.tools.filter { it.name == "delegate_task" } }
-            .firstOrNull { calls -> calls.any { it.id in ids } }.orEmpty()
-    }
-    val inspected = remember(inspectedCalls, subagents, selectedSubagentKey) {
-        selectedSubagentKey?.let { selected -> delegationRows(inspectedCalls, subagents).firstOrNull { it.key == selected } }
+    val inspected = remember(state.messages, subagents, selectedDelegationReply, selectedSubagentKey) {
+        val reply = selectedDelegationReply ?: return@remember null
+        val selected = selectedSubagentKey ?: return@remember null
+        selectedDelegationRow(state.messages, subagents, reply, selected)
     }
     val subagentInspector: (@Composable () -> Unit)? = inspected?.let { row ->
         {
-            key(conversationKey, row.key) {
+            key(conversationKey, selectedDelegationReply, selectedSubagentKey) {
                 CompositionLocalProvider(LocalCommentHost provides commentHost) {
                     SubagentInspector(
                         selected = row,
@@ -1157,8 +1153,8 @@ internal fun ChatView(
                             LocalOpenImage provides onViewImage,
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
-                            LocalSubagents provides SubagentContext(subagents) { calls, selected ->
-                                delegationIds = ArrayList(calls.map { it.id })
+                            LocalSubagents provides SubagentContext(subagents) { reply, selected ->
+                                selectedDelegationReply = reply
                                 selectedSubagentKey = selected
                             },
                             LocalAgentScreenChat provides state.storedSessionId,

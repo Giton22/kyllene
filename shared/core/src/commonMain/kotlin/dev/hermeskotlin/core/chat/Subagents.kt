@@ -50,6 +50,7 @@ data class DelegatedTask(
     val durationSeconds: Double? = null,
     val model: String? = null,
     val transcriptId: String? = null,
+    val refused: Boolean = false,
 )
 
 /** One row of a delegation: a task, what its subagent is doing, and the subagents it spawned in turn. */
@@ -69,6 +70,7 @@ data class SubagentRow(
     val subagentId: String? = null,
     val children: List<SubagentRow> = emptyList(),
     val transcriptId: String? = null,
+    val refused: Boolean = false,
 )
 
 internal const val DELEGATE_TOOL = "delegate_task"
@@ -89,14 +91,22 @@ internal fun delegatedTasks(args: JsonElement?, result: JsonElement?, knownGoals
     val entries = answer?.get("results").asObjectList()
     val failure = answer.string("error")?.trim()?.ifEmpty { null }
     // IDs are in accepted-child order. Refused tasks never received a child, and null slots matter.
-    val refused = answer?.get("refused").asObjectList().mapNotNull { it.int("task_index") }.toSet()
+    val refused = answer?.get("refused").asObjectList().mapNotNull { entry ->
+        entry.int("task_index")?.let { it to entry }
+    }.toMap()
     val ids = (answer?.get("subagent_ids") as? JsonArray).orEmpty()
     val titles = goals.ifEmpty { entries.map { "Delegated task" } }
     val idsByTask = titles.indices.filterNot { it in refused }.takeIf { it.size == ids.size }
         ?.zip(ids)?.toMap().orEmpty()
     return titles.mapIndexed { i, goal ->
         val entry = entries.firstOrNull { it.int("task_index") == i } ?: entries.getOrNull(i)?.takeIf { it.int("task_index") == null }
+        val refusal = refused[i]
         when {
+            refusal != null -> DelegatedTask(
+                goal, SubagentStatus.Failed,
+                summary = (refusal.string("error") ?: refusal.string("summary"))?.trim()?.ifEmpty { null },
+                refused = true,
+            )
             entry != null -> DelegatedTask(
                 goal = goal,
                 status = settledStatus(entry.string("status")),
@@ -335,7 +345,7 @@ private fun List<Subagent>.trimFinished(): List<Subagent> {
  * its subagent; task order does when the goals don't match but the counts do.
  */
 fun subagentRows(call: ToolActivity, subagents: List<Subagent>): List<SubagentRow> {
-    val goals = call.tasks.mapTo(HashSet()) { it.goal.normalized() }
+    val goals = call.tasks.filterNot { it.refused }.mapTo(HashSet()) { it.goal.normalized() }
     // One not tied to a call yet (listed before the transcript loaded) is claimed by its goal.
     val storedIds = call.tasks.mapNotNull { it.transcriptId }.toSet()
     val unclaimed = subagents.filter {
@@ -347,10 +357,10 @@ fun subagentRows(call: ToolActivity, subagents: List<Subagent>): List<SubagentRo
     fun claim(predicate: (Subagent) -> Boolean): Subagent? = unclaimed.firstOrNull(predicate)?.also { unclaimed.remove(it) }
     val byId = call.tasks.map { task -> task.transcriptId?.let { id -> claim { it.id == id } } }
     val byGoal = call.tasks.map { task ->
-        if (task.transcriptId != null) null else claim { it.goal.normalized() == task.goal.normalized() }
+        if (task.transcriptId != null || task.refused) null else claim { it.goal.normalized() == task.goal.normalized() }
     }
     val rows = call.tasks.mapIndexed { i, task ->
-        val live = byId[i] ?: byGoal[i] ?: if (sameShape && task.transcriptId == null) {
+        val live = byId[i] ?: byGoal[i] ?: if (sameShape && task.transcriptId == null && !task.refused) {
             claim { it.taskIndex == i }
         } else null
         if (live != null) {
@@ -371,6 +381,7 @@ fun subagentRows(call: ToolActivity, subagents: List<Subagent>): List<SubagentRo
                 durationSeconds = task.durationSeconds,
                 summary = task.summary,
                 transcriptId = task.transcriptId,
+                refused = task.refused,
             )
         }
     }

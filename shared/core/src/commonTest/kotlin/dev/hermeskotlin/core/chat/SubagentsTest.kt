@@ -29,12 +29,16 @@ class SubagentsTest {
     @Test
     fun backgroundDispatchKeepsTranscriptIdsEvenWhenOneTaskWasRefused() {
         val result = HermesJson.parseToJsonElement(
-            """{"status":"dispatched","goals":["Refused","Read","Write"],"subagent_ids":[null,"child-b"],"refused":[{"task_index":0,"status":"error"}]}""",
+            """{"status":"dispatched","goals":["Refused","Read","Write"],"subagent_ids":[null,"child-b"],"refused":[{"task_index":0,"status":"error","error":"No available backend"}]}""",
         )
         val tasks = delegatedTasks(null, result)
         val rows = subagentRows(ToolActivity("delegate", "delegate_task", running = false, tasks = tasks), emptyList())
         assertEquals(listOf(null, null, "child-b"), rows.map { it.transcriptId })
         assertTrue(rows.all { it.subagentId == null })
+        assertTrue(rows.first().refused)
+        assertEquals(SubagentStatus.Failed, rows.first().status)
+        assertEquals("No available backend", rows.first().summary)
+        assertEquals(2, rows.count { !it.refused })
     }
 
     @Test
@@ -49,13 +53,33 @@ class SubagentsTest {
         assertNull(decodeSubagentTranscript(wire, "parent", "other"))
         val page = requireNotNull(decodeSubagentTranscript(wire, "parent", "child"))
         assertEquals("opaque", page.nextCursor)
-        val messages = historyToMessages(page.rows)
+        val messages = subagentTranscriptMessages(page.rows)
         assertEquals("Read the docs", (messages[0] as ChatMessage.User).text)
         val reply = messages[1] as ChatMessage.Assistant
         assertEquals("Done", reply.text)
         assertEquals("I found the file.", reply.reasoning)
         assertEquals("terminal", reply.tools.single().name)
         assertEquals(2, messages.size)
+    }
+
+    @Test
+    fun projectedResultsKeepDistinctOccurrencesAcrossPages() {
+        fun decode(rows: String): SubagentTranscriptPage {
+            val payload = HermesJson.parseToJsonElement(
+                """{"session_id":"parent","subagent_id":"child","available":true,"rows":$rows}""",
+            ) as JsonObject
+            return requireNotNull(decodeSubagentTranscript(payload, "parent", "child"))
+        }
+        val first = decode(
+            """[{"role":"tool","name":"write_file","tool_call_id":"repeat","args":{"path":"a"},"content":"first write"}]""",
+        )
+        val second = decode(
+            """[{"role":"tool","name":"write_file","tool_call_id":"repeat","truncated":true,"text":"second write"}]""",
+        )
+        val tools = subagentTranscriptMessages(first.rows + second.rows).filterIsInstance<ChatMessage.Assistant>().single().tools
+        assertEquals(2, tools.map { it.id }.distinct().size)
+        assertEquals(listOf("first write", "second write"), tools.map { it.output })
+        assertEquals("a", tools.first().input)
     }
 
     @Test
