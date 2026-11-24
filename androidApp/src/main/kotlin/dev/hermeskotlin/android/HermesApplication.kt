@@ -3,10 +3,12 @@ package dev.hermeskotlin.android
 import android.app.Application
 import android.content.Intent
 import android.content.res.Configuration
+import dev.hermeskotlin.android.notify.AppVisibility
 import dev.hermeskotlin.android.notify.BotNotifier
 import dev.hermeskotlin.android.notify.ChatNotifications
 import dev.hermeskotlin.android.notify.ChatNotifier
 import dev.hermeskotlin.android.notify.RoomNotifier
+import dev.hermeskotlin.android.notify.VoiceCallKeeper
 import dev.hermeskotlin.android.notify.WatchNotifier
 import dev.hermeskotlin.android.phone.PhoneConfirmations
 import dev.hermeskotlin.android.notify.notifyModule
@@ -19,10 +21,12 @@ import dev.hermeskotlin.android.wear.WatchAccentSync
 import dev.hermeskotlin.android.wear.WatchRinger
 import dev.hermeskotlin.android.wear.WearRequests
 import dev.hermeskotlin.android.wear.wearModule
+import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.push.PushSetup
 import dev.hermeskotlin.core.settings.AppLockTimer
 import dev.hermeskotlin.core.settings.SettingsStore
+import dev.hermeskotlin.core.wear.WatchRelay
 import dev.hermeskotlin.ui.applyAppLanguage
 import dev.hermeskotlin.ui.di.sharedModules
 import dev.hermeskotlin.ui.handOverStoredLanguage
@@ -30,6 +34,9 @@ import kotlinx.coroutines.flow.first
 import dev.hermeskotlin.ui.systemKeepsAppLanguage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
@@ -58,6 +65,7 @@ class HermesApplication : Application() {
         }.koin
         // Before anything the Pebble app hands over is read: only the picked Pebble app is heard.
         PebbleApps.choose(this, koin.get())
+        slowHeartbeatWhenUnused(koin.get(), koin.get(), koin.get(), koin.get(), koin.get())
         koin.get<WearRequests>().start()
         koin.get<PebbleRequests>().start()
         koin.get<WatchRinger>().start()
@@ -74,6 +82,33 @@ class HermesApplication : Application() {
         // Android forgets proximity alerts on a restart; a restart or an update wakes Herald to arm them again.
         koin.get<Geofences>().start()
         followLanguageSetting(koin.get(), koin.get())
+    }
+
+    /**
+     * With no screen of Herald in sight (the call screen counts, and the assistant panel over another app) and no
+     * voice chat, call or watch turn on, nobody waits on the socket: its heartbeat slows down
+     * ([GatewayConnection.setIdle]), so Notifications anywhere doesn't wake the phone every few seconds all night. Idle
+     * from the start, so a process woken after a reboot or by a push keeps its socket quiet.
+     */
+    private fun slowHeartbeatWhenUnused(
+        connection: GatewayConnection,
+        visibility: AppVisibility,
+        voice: VoiceCallKeeper,
+        watch: WatchRelay,
+        scope: CoroutineScope,
+    ) {
+        scope.launch(Dispatchers.Main.immediate) {
+            combine(visibility.visible, visibility.assistant, voice.held, watch.busy) { inSight, panel, talking, watchTurn ->
+                !(inSight || panel || talking || watchTurn)
+            }
+                .distinctUntilChanged()
+                .collectLatest { idle ->
+                    // A screen rebuilt (rotation, night mode) stops before its new copy starts: going idle waits a
+                    // moment, so that gap doesn't wake the heartbeat for a ping.
+                    if (idle) delay(2_000)
+                    connection.setIdle(idle)
+                }
+        }
     }
 
     /**

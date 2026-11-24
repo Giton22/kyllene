@@ -56,8 +56,11 @@ def stage(image, prefix, java):
     # Derive arguments from Compose's configuration; keep its image unchanged.
     # An empty LD_LIBRARY_PATH entry means the current directory, so add the
     # separator only when the variable already has a value.
+    # Skia's OpenGL path tears while the window is made larger under XWayland (#405);
+    # its software path doesn't. A value the user sets (SKIKO_RENDER_API=OPENGL) wins.
     launcher.write_text('#!/bin/sh\n' +
                         'export XDG_SESSION_TYPE=x11\nunset WAYLAND_DISPLAY\n' +
+                        'export SKIKO_RENDER_API="${SKIKO_RENDER_API:-SOFTWARE_FAST}"\n' +
                         'export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}"' + quote(str(app)) + '\n' +
                         'if [ "$#" -eq 0 ]; then set -- ' + defaults + '; fi\n' +
                         'exec ' + ' '.join(quote(x) for x in args) + ' "$@"\n')

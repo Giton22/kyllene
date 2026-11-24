@@ -212,6 +212,10 @@
         <item quantity="other">%1$d running</item>
     </plurals>
     <string name="chat_processes_empty">Nothing running. Dev servers, builds and watchers the agent starts in the background show up here.</string>
+    <string name="chat_processes_subagents">Subagents</string>
+    <string name="chat_processes_subagents_unavailable">Subagent status is unavailable.</string>
+    <string name="chat_processes_shell">Shell processes</string>
+    <string name="chat_processes_shell_empty">No background shell processes.</string>
     <string name="chat_processes_finished">Finished</string>
     <string name="chat_process_hide_output">Hide output</string>
     <string name="chat_process_show_output">Show output</string>
@@ -511,6 +515,8 @@
     <string name="chat_regenerate">Regenerate</string>
     <string name="chat_read_aloud">Read aloud</string>
     <string name="chat_stop_reading">Stop reading</string>
+    <string name="chat_pause_reading">Pause reading</string>
+    <string name="chat_resume_reading">Resume reading</string>
     <string name="chat_message_actions">Message actions</string>
     <string name="chat_queued">Queued · sends after this task</string>
     <string name="chat_editing_in_composer">Editing in the composer</string>
