@@ -502,12 +502,9 @@ fun ChatScreen(
         if (viewer != null) sidebarAcknowledgements.show(attentionWindow, viewer)
         onDispose { sidebarAcknowledgements.hide(attentionWindow) }
     }
-    // A desktop chat window can be visible even while the main sidebar is suspended.
-    val transcriptActivity = remember(state.messages) {
-        state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull()
-    }
-    LaunchedEffect(viewer, transcriptActivity) {
-        if (viewer != null) sidebarAcknowledgements.acknowledgeTranscript(viewer, transcriptActivity)
+    // When the sidebar is suspended, use the gateway's stored messages, since tab badges compare gateway times.
+    LaunchedEffect(viewer, state.storedActivityAt) {
+        if (viewer != null) sidebarAcknowledgements.acknowledgeTranscript(viewer, state.storedActivityAt)
     }
     var notice by remember { mutableStateOf<String?>(null) }
     // The notices below are set from callbacks, outside composition, so their words are read here first.

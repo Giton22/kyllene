@@ -38,8 +38,6 @@
     <string name="sessions_load_failed_detail">Nem sikerült betölteni a munkameneteket. %1$s</string>
     <string name="sessions_empty_project">Nincs csevegés ebben a projektben.</string>
     <string name="sessions_empty">A beszélgetéseid itt jelennek meg.</string>
-    <string name="sessions_none_running">Most semmi sem fut.</string>
-    <string name="sessions_none_waiting">Most semmi sem vár rád.</string>
     <string name="sessions_nothing_archived">Nincs archivált elem</string>
     <string name="sessions_nothing_archived_detail">Az archivált munkamenetek nem látszanak a legutóbbiak között, de folytathatók.</string>
     <string name="sessions_filter_all">Mind</string>

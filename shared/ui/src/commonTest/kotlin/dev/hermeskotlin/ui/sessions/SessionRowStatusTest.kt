@@ -23,8 +23,8 @@ class SessionRowStatusTest {
     }
 
     @Test
-    fun replyThenRunningThenDraftThenIdle() {
-        assertEquals(RowTone.Reply, rowTone(RowStatus(running = true, unread = true), draft = true))
+    fun runningStaysVisibleWithAnUnreadReply() {
+        assertEquals(RowTone.Running, rowTone(RowStatus(running = true, unread = true), draft = true))
         assertEquals(RowTone.Running, rowTone(RowStatus(running = true), draft = true))
         assertEquals(RowTone.Reply, rowTone(RowStatus(unread = true), draft = true))
         assertEquals(RowTone.Draft, rowTone(null, draft = true))

@@ -3,7 +3,9 @@ package dev.hermeskotlin.ui.sessions
 import dev.hermeskotlin.core.chat.Waiting
 import dev.hermeskotlin.core.cron.CronJob
 import dev.hermeskotlin.core.gateway.GatewayUrl
+import dev.hermeskotlin.core.sessions.SessionSummary
 import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
+import dev.hermeskotlin.core.threads.ChatThread
 import dev.hermeskotlin.ui.bots.RoutineAcknowledgements
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -56,6 +58,28 @@ class SidebarAttentionTest {
     }
 
     @Test
+    fun attentionLeavesManuallyOrderedThreadsInPlace() {
+        val sections = ThreadSections(
+            listOf("b", "c", "a").map { id -> ThreadRow(ChatThread(id, id, id), SessionSummary(id)) },
+            listOf(SessionSummary("recent"), SessionSummary("needs-input")),
+        )
+        val statuses = mapOf(
+            "b" to RowStatus(running = true),
+            "c" to RowStatus(running = true, unread = true),
+            "a" to RowStatus(running = true, waiting = Waiting.Approval),
+            "needs-input" to RowStatus(waiting = Waiting.Question),
+        )
+
+        val all = sections.filteredForAttention(AttentionFilter.All, statuses)
+        assertEquals(listOf("b", "c", "a"), all.threads.map { it.session.id })
+        assertEquals(listOf("needs-input", "recent"), all.others.map { it.id })
+        val running = sections.filteredForAttention(AttentionFilter.Running, statuses)
+        assertEquals(listOf("b", "c", "a"), running.threads.map { it.session.id })
+        val waiting = sections.filteredForAttention(AttentionFilter.NeedsAttention, statuses)
+        assertEquals(listOf("c", "a"), waiting.threads.map { it.session.id })
+    }
+
+    @Test
     fun chatReceiptsSurviveReloadAndOldPollsCannotClearThem() = runTest {
         val values = InMemoryKeyValueStore()
         val first = GatewayUrl.parse("https://first.example")
@@ -90,6 +114,19 @@ class SidebarAttentionTest {
         val reloaded = SidebarChatAcknowledgements(values).receipts(gateway).first().second
         assertEquals(setOf("root", "tip"), reloaded.map { it.id }.toSet())
         assertTrue(reloaded.all { it.profile == "atlas" && it.requestIds == setOf("approval") && it.unreadAt == 10.0 })
+    }
+
+    @Test
+    fun oldUnreadWatermarksDoNotHideNewGatewayActivity() = runTest {
+        val values = InMemoryKeyValueStore()
+        val gateway = GatewayUrl.parse("https://first.example")
+        values.put("sidebar.chat.seen.v1.${gateway.value}", """
+            [{"profile":"atlas","id":"bot","requests":["approval"],"unreadAt":300,"legacyViewedAt":100}]
+        """.trimIndent())
+
+        val receipt = SidebarChatAcknowledgements(values).receipts(gateway).first().second.single()
+        assertEquals(SidebarChatReceipt("atlas", "bot", setOf("approval"), legacyViewedAt = 100L), receipt)
+        assertTrue(SidebarChatSignal(unreadAt = 120.0).isUnseen(listOf(receipt)))
     }
 
     @Test

@@ -568,8 +568,6 @@ fun SessionsSidebar(
     val sections = remember(threads, state.listed, state.sessions, state.project, projectIndex) {
         threadSections(threads, state.listed, state.sessions, state.project, projectIndex)
     }
-    // The thread rows as the section shows them; moving one goes past its neighbour here, not in the whole list.
-    val scopedChats = (sections.threads.map { it.session } + sections.others).distinctBy { it.id }
     val (chatsBadge, botsBadge) = sidebarTabCounts(
         gateway = gateway.gatewayUrl,
         profile = profile ?: roster?.launch ?: Bot.DEFAULT,
@@ -583,24 +581,16 @@ fun SessionsSidebar(
         nonChatAlerts = troubles.keys + failingRoutines.keys,
         acknowledgements = sidebarAcknowledgements,
     )
-    val attention = AttentionCounts(
-        running = scopedChats.count { statuses[it.id]?.running == true },
-        needsYou = scopedChats.count { statuses[it.id]?.needsAttention == true },
-    )
+    val attention = remember(sections, statuses) {
+        val scopedChats = (sections.threads.map { it.session } + sections.others).distinctBy { it.id }
+        AttentionCounts(
+            running = scopedChats.count { statuses[it.id]?.running == true },
+            needsYou = scopedChats.count { statuses[it.id]?.needsAttention == true },
+        )
+    }
     val attentionFilter = attention.availableSelection(selectedAttention)
-    val projectLoading = state.project != null && state.projectSessions == null
-    LaunchedEffect(attentionFilter, selectedAttention, state.loading, state.error, projectLoading) {
-        if (!state.loading && state.error == null && !projectLoading && attentionFilter != selectedAttention) {
-            viewModel.setAttentionFilter(attentionFilter)
-        }
-    }
-    val prioritizeAttention = attentionFilter != AttentionFilter.NeedsAttention
-    val shownThreads = sections.threads.filter { attentionFilter.keeps(statuses[it.session.id]) }.let { rows ->
-        if (prioritizeAttention && !reorderingThreads) rows.sortedBy { sidebarAttentionOrder(statuses[it.session.id]) }
-        else rows
-    }
-    val shownSessions = sections.others.filter { attentionFilter.keeps(statuses[it.id]) }.let { rows ->
-        if (prioritizeAttention) rows.sortedBy { sidebarAttentionOrder(statuses[it.id]) } else rows
+    val (shownThreads, shownSessions) = remember(sections, statuses, attentionFilter) {
+        sections.filteredForAttention(attentionFilter, statuses)
     }
     val openHere: (SessionSummary) -> Unit = {
         // The viewport decides when the new messages have actually been read.
@@ -1040,8 +1030,10 @@ fun SessionsSidebar(
                                     )
                                 }
                             }
-                            item(key = "attention-filters") {
-                                SidebarAttentionRows(attentionFilter, attention, viewModel::setAttentionFilter)
+                            if (!state.loading && state.error == null && state.listed.isNotEmpty()) {
+                                item(key = "attention-filters") {
+                                    SidebarAttentionRows(selectedAttention, attention, viewModel::setAttentionFilter)
+                                }
                             }
                             state.savedCopyAt?.takeIf { state.project == null }?.let { savedAt ->
                                 item(key = "saved-copy") {
@@ -1302,7 +1294,7 @@ internal fun SessionsSidebarSample(
                         }
                         item(key = "filters") {
                             SidebarAttentionRows(
-                                selected = AttentionFilter.All,
+                                requested = AttentionFilter.All,
                                 counts = AttentionCounts(
                                     running = sessions.count { statuses[it.id]?.running == true },
                                     needsYou = sessions.count { statuses[it.id]?.needsAttention == true },
@@ -2755,8 +2747,8 @@ internal enum class RowTone { Approval, Question, Running, Reply, Draft, Idle }
 internal fun rowTone(status: RowStatus?, draft: Boolean): RowTone = when {
     status?.waiting == Waiting.Approval || status?.waiting == Waiting.Unknown -> RowTone.Approval
     status?.waiting != null -> RowTone.Question
-    status?.unread == true -> RowTone.Reply
     status?.running == true -> RowTone.Running
+    status?.unread == true -> RowTone.Reply
     draft -> RowTone.Draft
     else -> RowTone.Idle
 }
@@ -2931,7 +2923,7 @@ private fun SessionRowContent(
                 UnstyledIcon(mark, contentDescription = markLabel, tint = Theme[colors][textMuted], modifier = Modifier.size(14.dp))
             }
         } else {
-            StatusDisc(tone, toneColor)
+            StatusDisc(tone, toneColor, unread = status?.unread == true)
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3022,7 +3014,7 @@ private val PROJECT_TAG_MIN_WIDTH = 48.dp
 
 /** A 28dp disc tinted for [tone], its icon spinning while a turn runs. The row says the same in words. */
 @Composable
-private fun StatusDisc(tone: RowTone, color: Color) {
+private fun StatusDisc(tone: RowTone, color: Color, unread: Boolean) {
     val fill = when (tone) {
         RowTone.Approval, RowTone.Question -> Theme[colors][warningSoft]
         RowTone.Running, RowTone.Reply -> Theme[colors][accentSoft]
@@ -3030,7 +3022,12 @@ private fun StatusDisc(tone: RowTone, color: Color) {
     }
     Box(Modifier.size(if (isDesktop) DESKTOP_DISC else 28.dp).background(fill, CircleShape).clearAndSetSemantics { }, contentAlignment = Alignment.Center) {
         when (tone) {
-            RowTone.Running -> Spinner(Modifier.size(if (isDesktop) 11.dp else 13.dp), color = color)
+            RowTone.Running -> {
+                Spinner(Modifier.size(if (isDesktop) 11.dp else 13.dp), color = color)
+                if (unread) {
+                    Box(Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 3.dp).size(5.dp).background(color, CircleShape))
+                }
+            }
             else -> UnstyledIcon(
                 when (tone) {
                     RowTone.Approval -> Lucide.TriangleAlert
@@ -3062,16 +3059,18 @@ internal data class AttentionCounts(val running: Int, val needsYou: Int) {
         AttentionFilter.Running -> running
     }
 
+    /** The visible fallback leaves the user's selection in place while statuses reload. */
     fun availableSelection(filter: AttentionFilter): AttentionFilter =
         if (count(filter) == 0) AttentionFilter.All else filter
 }
 
 @Composable
 internal fun SidebarAttentionRows(
-    selected: AttentionFilter,
+    requested: AttentionFilter,
     counts: AttentionCounts,
     onSelect: (AttentionFilter) -> Unit,
 ) {
+    val selected = counts.availableSelection(requested)
     val accentColor = Theme[colors][accent]
     val selectedFill = Theme[colors][accentSoft]
     val foreground = Theme[colors][text]

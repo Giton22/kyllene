@@ -73,7 +73,7 @@ class FoldDrawerTest {
         setContent {
             HermesTheme {
                 Box(Modifier.size(360.dp, 600.dp)) {
-                    SidebarAttentionRows(counts.availableSelection(filter), counts) { filter = it }
+                    SidebarAttentionRows(filter, counts) { filter = it }
                 }
             }
         }
@@ -87,6 +87,13 @@ class FoldDrawerTest {
         runOnIdle { counts = AttentionCounts(running = 0, needsYou = 0) }
         onNodeWithText("Needs you").assertDoesNotExist()
         onNodeWithText("All chats").assertIsSelected()
+        runOnIdle { counts = AttentionCounts(running = 2, needsYou = 3) }
+        onNodeWithText("Running").assertIsSelected()
+        onNodeWithText("Needs you").performClick().assertIsSelected()
+        runOnIdle { counts = AttentionCounts(running = 2, needsYou = 0) }
+        onNodeWithText("All chats").assertIsSelected()
+        runOnIdle { counts = AttentionCounts(running = 2, needsYou = 1) }
+        onNodeWithText("Needs you").assertIsSelected()
     }
 
     @Test

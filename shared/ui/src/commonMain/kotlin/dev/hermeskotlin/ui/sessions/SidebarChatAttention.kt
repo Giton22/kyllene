@@ -36,6 +36,14 @@ internal fun sidebarAttentionOrder(status: RowStatus?): Int = when {
     else -> 2
 }
 
+internal fun ThreadSections.filteredForAttention(filter: AttentionFilter, statuses: Map<String, RowStatus>): ThreadSections {
+    val matchingChats = others.filter { filter.keeps(statuses[it.id]) }
+    return ThreadSections(
+        threads.filter { filter.keeps(statuses[it.session.id]) },
+        if (filter == AttentionFilter.NeedsAttention) matchingChats else matchingChats.sortedBy { sidebarAttentionOrder(statuses[it.id]) },
+    )
+}
+
 @Composable
 internal fun sidebarTabCounts(
     gateway: GatewayUrl,

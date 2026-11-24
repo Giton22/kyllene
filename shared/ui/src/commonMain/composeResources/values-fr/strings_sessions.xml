@@ -38,8 +38,6 @@
     <string name="sessions_load_failed_detail">Impossible de charger les sessions. %1$s</string>
     <string name="sessions_empty_project">Aucune conversation dans ce projet.</string>
     <string name="sessions_empty">Vos conversations apparaîtront ici.</string>
-    <string name="sessions_none_running">Rien n’est en cours pour le moment.</string>
-    <string name="sessions_none_waiting">Rien ne vous attend pour le moment.</string>
     <string name="sessions_nothing_archived">Rien d’archivé</string>
     <string name="sessions_nothing_archived_detail">Les sessions archivées sont masquées des récentes mais peuvent être reprises.</string>
     <string name="sessions_filter_all">Toutes</string>

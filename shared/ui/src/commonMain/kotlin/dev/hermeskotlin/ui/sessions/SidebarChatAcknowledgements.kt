@@ -122,7 +122,7 @@ private fun encodeReceipt(receipt: SidebarChatReceipt): JsonObject = buildJsonOb
     put("profile", receipt.profile)
     put("id", receipt.id)
     put("requests", JsonArray(receipt.requestIds.map(::JsonPrimitive)))
-    receipt.unreadAt?.let { put("unreadAt", it) }
+    receipt.unreadAt?.let { put("gatewayUnreadAt", it) }
     receipt.legacyViewedAt?.let { put("legacyViewedAt", it) }
 }
 
@@ -133,7 +133,8 @@ private fun decodeReceipt(value: JsonObject): SidebarChatReceipt? {
         profile = profile,
         id = id,
         requestIds = (value["requests"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.toSet(),
-        unreadAt = (value["unreadAt"] as? JsonPrimitive)?.doubleOrNull,
+        // Older sidebar builds could store a device-clock timestamp here.
+        unreadAt = (value["gatewayUnreadAt"] as? JsonPrimitive)?.doubleOrNull,
         legacyViewedAt = (value["legacyViewedAt"] as? JsonPrimitive)?.longOrNull,
     )
 }

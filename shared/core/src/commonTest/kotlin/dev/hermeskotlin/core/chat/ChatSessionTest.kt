@@ -254,6 +254,33 @@ class ChatSessionTest {
     }
 
     @Test
+    fun storedActivityDoesNotAdvanceToTheDevicesClockWhenSending() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"assistant","content":"First reply","timestamp":100}]}"""
+        val (connection, transport) = setup(backgroundScope, mapOf(
+            "session.resume" to """{"session_id":"rt1","running":false}""",
+            "prompt.submit" to """{"status":"streaming","user_row_id":2}""",
+        ))
+        val clock = object : Clock { override fun now() = Instant.fromEpochSeconds(300) }
+        val cache = OfflineCache(InMemoryOfflineDao(), PlainSealer, EmptyCoroutineContext) { 5_000L }
+        val chat = ChatSession(url, "stored-1", null, connection, SessionsApi(client()), backgroundScope, clock = clock, cache = cache)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+
+        assertTrue(chat.send("Next prompt"))
+        assertEquals(300.0, assertIs<ChatMessage.User>(chat.state.value.messages.last()).timestamp)
+        assertEquals(100.0, chat.state.value.storedActivityAt)
+
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"assistant","content":"First reply","timestamp":100},
+            {"id":2,"role":"user","content":"Next prompt","timestamp":110},
+            {"id":3,"role":"assistant","content":"New reply","timestamp":120}]}"""
+        transport.push(event("message.start", "rt1"))
+        transport.push(event("message.complete", "rt1", """{"text":"New reply","status":"complete"}"""))
+        chat.state.first { it.storedActivityAt == 120.0 }
+    }
+
+    @Test
     fun aNewChatStartsWithTheStartingInstructionAsAHiddenRow() = runTest {
         val (connection, transport) = setup(
             backgroundScope,

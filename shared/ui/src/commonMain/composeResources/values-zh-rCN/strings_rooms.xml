@@ -114,8 +114,6 @@
     <string name="bots_needs_attention">需要注意</string>
     <string name="bots_unread">未读</string>
     <string name="bots_needs_you">%1$s 需要你</string>
-    <string name="bots_review">查看</string>
-    <string name="bots_open">打开</string>
     <string name="bots_start_fresh_title">与 %1$s 重新开始？</string>
     <string name="bots_start_fresh_detail">%1$s 的对话会被归档，并开始一段新的空白对话。%1$s 会保留记忆、技能和设置，旧对话以归档形式留在网关上。</string>
     <string name="bots_edit_named">编辑 %1$s</string>

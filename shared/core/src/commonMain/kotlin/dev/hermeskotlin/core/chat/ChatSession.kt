@@ -2226,6 +2226,7 @@ class ChatSession(
             val full = page.messages.size >= HISTORY_PAGE
             val newest = if (full) page.messages.fromFirstTurn() else page.messages
             val joined = (if (full) rows.withNewestFull(page.messages) else null) ?: newest
+            _state.update { it.copy(storedActivityAt = joined.latestStoredActivity()) }
             saveCopy(id, joined, page.sessionId)
         }
     }
@@ -2324,6 +2325,7 @@ class ChatSession(
         val messages = (stored + unsettled).withSavedStepsFolded()
         state.copy(
             messages = messages,
+            storedActivityAt = rows.latestStoredActivity(),
             historyLoaded = true,
             // Laid out again, the rows read no better than before: a failed read still shows as one.
             historyError = if (relaid) state.historyError else null,
@@ -2803,6 +2805,8 @@ internal fun ChatState.sealReplyBefore(key: String): ChatState {
         correctedReplyKey = reply.key,
     )
 }
+
+private fun List<SessionMessage>.latestStoredActivity(): Double? = asSequence().mapNotNull { it.timestamp }.maxOrNull()
 
 /**
  * Messages the stored transcript can't contain yet: the streaming reply and prompts still being sent.
