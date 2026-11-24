@@ -611,6 +611,8 @@ class RoomsViewModelTest {
             vm.composer.setTextAndPlaceCursorAtEnd("- milk\n- eggs\n- "); vm.send(); runCurrent()
             val payload = socket.sent("groups.send").single()["payload"]!!.jsonObject
             assertEquals("- milk\n- eggs", payload["text"]!!.jsonPrimitive.content)
+            // Posted, so the composer empties, though it still held the empty item.
+            assertEquals("", vm.composer.text.toString())
         } finally { vm.close(); vm.setVisible(false) }
     }
 
