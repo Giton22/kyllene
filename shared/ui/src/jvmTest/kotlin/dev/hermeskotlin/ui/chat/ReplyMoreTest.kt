@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -59,35 +60,56 @@ class ReplyMoreTest {
             }
         }
 
-        val copy = onNodeWithText("Copy").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
-        val more = onNodeWithText("More").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val copy = onNodeWithContentDescription("Copy").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val more = onNodeWithContentDescription("More").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         val usage = onNodeWithText("640 ↓ · 321 ↑").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         assertTrue(usage.right <= copy.left && copy.right <= more.left && more.right >= 390f * density.density)
         assertTrue(kotlin.math.abs(copy.center.y - more.center.y) < 1f)
         onNodeWithContentDescription("Regenerate").assertDoesNotExist()
         onNodeWithContentDescription("Branch from here").assertDoesNotExist()
 
-        onNodeWithText("More").performClick()
+        onNodeWithContentDescription("More").performClick()
         onNodeWithText("Branch from here").performClick()
-        onNodeWithText("More").performClick()
+        onNodeWithContentDescription("More").performClick()
         onNodeWithText("Regenerate").performClick()
-        onNodeWithText("More").performClick()
+        onNodeWithContentDescription("More").performClick()
         onNodeWithText("Read aloud").performClick()
         runOnIdle {
             assertTrue(branched && regenerated)
             assertEquals("Ready to review.", spoken)
         }
-        onNodeWithText("Pause reading").assertDoesNotExist()
-        onNodeWithText("More").performClick()
-        onNodeWithText("Resume reading").assertDoesNotExist()
-        onNodeWithText("Pause reading").performClick()
+        onNodeWithContentDescription("Resume reading").assertDoesNotExist()
+        onNodeWithContentDescription("Pause reading").assertIsDisplayed().performClick()
         runOnIdle { assertTrue(reading.value && paused.value) }
-        onNodeWithText("More").performClick()
-        onNodeWithText("Pause reading").assertDoesNotExist()
-        onNodeWithText("Resume reading").performClick()
+        onNodeWithContentDescription("Pause reading").assertDoesNotExist()
+        onNodeWithContentDescription("Resume reading").assertIsDisplayed().performClick()
         runOnIdle { assertTrue(reading.value && !paused.value) }
-        onNodeWithText("More").performClick()
-        onNodeWithText("Stop reading").performClick()
+        onNodeWithContentDescription("Stop reading").assertIsDisplayed().performClick()
         runOnIdle { assertEquals(false, reading.value) }
+    }
+
+    @Test
+    fun olderReplyDoesNotExposeItsUnrevealedActions() = runComposeUiTest {
+        val latest = mutableStateOf(false)
+        setContent {
+            HermesTheme(ColorScheme.Dark) {
+                CompositionLocalProvider(LocalDesktopLayout provides true) {
+                    AssistantReply(
+                        message = ChatMessage.Assistant(key = "reply", text = "An earlier reply."),
+                        onBranch = {},
+                        onRegenerate = {},
+                        last = latest.value,
+                    )
+                }
+            }
+        }
+
+        onNodeWithContentDescription("Copy").assertDoesNotExist()
+        onNodeWithContentDescription("More").assertDoesNotExist()
+        onNodeWithText("Copy").assertDoesNotExist()
+        onNodeWithText("More").assertDoesNotExist()
+        runOnIdle { latest.value = true }
+        onNodeWithContentDescription("Copy").assertHasClickAction()
+        onNodeWithContentDescription("More").assertHasClickAction()
     }
 }
