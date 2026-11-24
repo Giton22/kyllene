@@ -440,6 +440,8 @@ class ChatSession(
         val arrived = findInTranscript(bubble.text, key, before)
         // A correction or a queued prompt is written only once the turn takes it in, so mid-turn a miss proves nothing.
         val mayBeWaiting = arrived == false && unsettled[key]?.startsTurn == false && _state.value.running
+        // A steer the agent read is kept in no user row, so a miss can't say it's safe to send again.
+        val steerUnseen = arrived == false && !mayBeWaiting && unsettled[key]?.steer == true
         when {
             arrived == true -> {
                 rowExists = true
@@ -447,12 +449,14 @@ class ChatSession(
                 _state.update { it.copy(error = null, messages = it.messages.updateUser(key) { u -> u.copy(check = null) }) }
                 loadHistory()
             }
-            arrived == false && !mayBeWaiting ->
+            arrived == false && !mayBeWaiting && !steerUnseen ->
                 _state.update { it.copy(error = null, messages = it.messages.updateUser(key) { u -> u.copy(check = SendCheck.NotReceived) }) }
             else -> _state.update { state ->
                 state.copy(
                     error = if (mayBeWaiting) {
                         "Hermes may still be holding it for the running turn. Check again once the turn ends."
+                    } else if (steerUnseen) {
+                        "A steer isn't saved in the conversation, so it can't be checked. See whether the reply followed it."
                     } else {
                         "Couldn't read the conversation to check. Try again once connected."
                     },
@@ -1642,14 +1646,14 @@ class ChatSession(
             _state.update { it.copy(error = e.message.ifBlank { "Couldn't steer the reply." }) }
             return SendOutcome.NotSent
         } catch (e: SteerNotSent) {
-            // The running turn couldn't be read again, so nothing went out: the text goes back.
+            // The running turn couldn't be read, so nothing went out: the text goes back.
             removeMessage(key)
-            _state.update { it.copy(error = e.message?.takeIf(String::isNotBlank) ?: "Couldn't steer the reply.") }
+            _state.update { it.copy(error = "Couldn't reach the running reply, so the steer wasn't sent.") }
             return SendOutcome.NotSent
         } catch (e: Exception) {
             // Out without a reply: the agent may have read it, so it isn't handed back to go twice. Like a
             // lost correction, the bubble stays marked; a steer leaves nothing in the transcript to settle it.
-            return settleUnanswered(key, arrived = null, UnsettledPrompt(trimmed, display = null, startsTurn = false)) {}
+            return settleUnanswered(key, arrived = null, UnsettledPrompt(trimmed, display = null, startsTurn = false, steer = true)) {}
         }
         val status = reply.string("status")
         if (status == STEER_REJECTED && client.sessionAuthority && reply.boolean("delivered") != false) {
@@ -1658,7 +1662,7 @@ class ChatSession(
             return settleUnanswered(
                 key,
                 arrived = null,
-                UnsettledPrompt(trimmed, display = null, startsTurn = false),
+                UnsettledPrompt(trimmed, display = null, startsTurn = false, steer = true),
                 unknownError = STEER_MAYBE_DELIVERED,
             ) {}
         }
@@ -1677,11 +1681,12 @@ class ChatSession(
     /**
      * Sends `session.steer` for [text]. The session authority takes the running turn's `execution_generation`
      * with it, and refuses the steer without one (gateway/session_busy_controls.py `correct`); other gateways
-     * take only the id and the text, and refuse any other key. A generation that isn't known, or that the
-     * authority calls stale (its refusal names no current one), is read again with `session.resume`, and the
-     * steer goes once more with it. Null when that shows no turn running, so nothing went to one.
+     * take only the id and the text, and refuse any other key. A generation that isn't known yet is read with
+     * `session.resume` first; null when that shows no turn running, so nothing went to one. One the authority
+     * calls stale isn't tried again with a newer one, as Desktop doesn't: the turn running by then may be
+     * another prompt's, so the caller sends the text as the next prompt.
      *
-     * @throws SteerNotSent when the running turn couldn't be read again.
+     * @throws SteerNotSent when the running turn couldn't be read.
      */
     private suspend fun steerOnGateway(client: JsonRpcClient, runtimeId: String, text: String): JsonObject? {
         suspend fun send(id: String, generation: Long?) = client.request(
@@ -1693,18 +1698,17 @@ class ChatSession(
             },
         ) as? JsonObject
         if (!client.sessionAuthority) return send(runtimeId, null)
-        executionGeneration?.let { known ->
-            try {
-                return send(runtimeId, known)
-            } catch (e: RpcException) {
-                if (e.reason != STALE_GENERATION) throw e
-            }
-        }
+        executionGeneration?.let { return send(runtimeId, it) }
         val fresh = try {
             attach(client, reconnected = true)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // Not left "Attaching": the chat shows the failure with its retry, as a failed send's attach does.
+            _state.update {
+                if (it.attachment !is Attachment.Attaching) it
+                else it.copy(attachment = Attachment.Failed(e.message ?: "Couldn't open the session."))
+            }
             throw SteerNotSent(e)
         }
         val generation = executionGeneration?.takeIf { _state.value.running } ?: return null
@@ -2635,9 +2639,6 @@ class ChatSession(
          * `correct`, Desktop's `UNDELIVERED_CORRECTION_REASONS`): safe to send as the next prompt.
          */
         val UNDELIVERED_STEER_REFUSALS = setOf("stale_generation", "execution_not_ready", "unsupported_control")
-
-        /** The session authority's refusal of a control for a turn that isn't the running one. */
-        const val STALE_GENERATION = "stale_generation"
 
         const val LOST_WHILE_SENDING = "Lost the connection while sending. Check that it isn't running before you send it again."
 
