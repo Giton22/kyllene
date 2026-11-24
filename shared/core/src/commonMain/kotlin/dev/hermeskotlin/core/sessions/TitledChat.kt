@@ -2,6 +2,8 @@ package dev.hermeskotlin.core.sessions
 
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.rpc.RpcException
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
@@ -77,11 +79,36 @@ internal suspend fun JsonRpcClient.createTitledChat(
         }
         // The authority answers a rename to a taken title with a bare internal error: the store's "already in use"
         // isn't mapped to a refusal (persistence/sqlite/conversation/_store/titles.py, as of hermes-agent v0.23.4).
-        // A rename of a chat just made, with nothing in it, has no other way to fail like that.
-        if (TITLE_TAKEN.containsMatchIn(e.message) || (authority && e.code == INTERNAL_ERROR)) throw taken()
+        // Any other crash answers the same, so it is a taken title only when another chat is found holding it.
+        if (TITLE_TAKEN.containsMatchIn(e.message)) throw taken()
+        if (authority && e.code == INTERNAL_ERROR && titleHeld(profile, title)) throw taken()
         throw e
     }
     return runtime to stored
+}
+
+/**
+ * Whether a chat holds [title] in [profile] on the session authority, by the title lookup `session.list {title}`
+ * (the one a titled create resolves with). A title only another login's chat has is `not_found` there. A lookup
+ * that fails otherwise says nothing, so it is no.
+ */
+private suspend fun JsonRpcClient.titleHeld(profile: String?, title: String): Boolean {
+    val reply = try {
+        request(
+            "session.list",
+            buildJsonObject {
+                profile?.let { put("profile", it) }
+                put("title", title)
+            },
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: RpcException) {
+        return e.reason == "not_found"
+    } catch (_: Exception) {
+        return false
+    }
+    return ((reply as? JsonObject)?.get("sessions") as? JsonArray)?.isNotEmpty() == true
 }
 
 /**

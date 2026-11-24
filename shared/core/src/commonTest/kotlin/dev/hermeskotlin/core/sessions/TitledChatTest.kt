@@ -91,12 +91,13 @@ class TitledChatTest {
 
     @Test
     fun onTheSessionAuthorityATakenTitleIsTakenWithNothingLeftBehind() = runTest(timeout = 5.seconds) {
-        // hermes-agent v0.23.4 answers a rename to a taken title with a bare internal error.
+        // hermes-agent v0.23.4 answers a rename to a taken title with a bare internal error; the title lookup finds
+        // the chat that holds it.
         val client = connect(backgroundScope, authority = true, extra = { call ->
-            if (call.method == "session.mutate" && call.params["operation"]?.jsonPrimitive?.contentOrNull == "rename") {
-                call.error(-32603, "internal error")
-            } else {
-                null
+            when {
+                call.isRename() -> call.error(-32603, "internal error")
+                call.method == "session.list" -> """{"sessions":[{"session_id":"other","title":"Misc"}],"scope":"stored"}"""
+                else -> null
             }
         })
 
@@ -104,7 +105,11 @@ class TitledChatTest {
             client.createTitledChat(null, "Misc", taken = { ThreadTitleTakenException("Misc") })
         }
 
-        assertEquals(listOf("session.create", "session.mutate", "session.detach", "session.mutate"), methods())
+        assertEquals(
+            listOf("session.create", "session.mutate", "session.detach", "session.mutate", "session.list"),
+            methods(),
+        )
+        assertEquals("Misc", sent("session.list").text("title"))
         assertTrue(methods().none { it in LEGACY })
         val delete = gateway.sent("session.mutate").last()["params"]!!.jsonObject
         assertEquals("delete", delete.text("operation"))
@@ -114,6 +119,72 @@ class TitledChatTest {
         val detach = sent("session.detach")
         assertEquals(setOf("session_id", "subscription_id"), detach.keys)
         assertEquals("sub-1", detach.text("subscription_id"))
+    }
+
+    @Test
+    fun onTheSessionAuthorityATitleOnlyAnotherLoginHasIsTaken() = runTest(timeout = 5.seconds) {
+        // The title lookup never confirms another principal's chat: it is not_found (gateway/session_local_title.py).
+        val client = connect(backgroundScope, authority = true, extra = { call ->
+            when {
+                call.isRename() -> call.error(-32603, "internal error")
+                call.method == "session.list" -> call.error(4004, "not_found", reason = "not_found")
+                else -> null
+            }
+        })
+
+        assertFailsWith<ThreadTitleTakenException> {
+            client.createTitledChat(null, "Misc", taken = { ThreadTitleTakenException("Misc") })
+        }
+    }
+
+    @Test
+    fun onTheSessionAuthorityAnInternalErrorWithTheTitleFreeIsThatError() = runTest(timeout = 5.seconds) {
+        // Any crash in a handler is a bare -32603 too (tui_gateway/ws.py): with no chat holding the title, it is
+        // that error, not "every name is taken" after trying each one.
+        val client = connect(backgroundScope, authority = true, extra = { call ->
+            when {
+                call.isRename() -> call.error(-32603, "internal error")
+                call.method == "session.list" -> """{"sessions":[],"scope":"stored"}"""
+                else -> null
+            }
+        })
+
+        val error = assertFailsWith<RpcException> {
+            client.createTitledChat(null, "Misc", taken = { ThreadTitleTakenException("Misc") })
+        }
+
+        assertEquals(-32603, error.code)
+        assertEquals("delete", gateway.sent("session.mutate").last()["params"]!!.jsonObject.text("operation"))
+    }
+
+    @Test
+    fun onTheSessionAuthorityANewBotsIntroGoesOnlyToAChatJustMade() = runTest(timeout = 5.seconds) {
+        // Another client opened the new bot's chat first: a titled create would hand that chat back, and the intro
+        // would be a second one. Made untitled and renamed, the title is taken instead, as on an older gateway.
+        connect(backgroundScope, authority = true, extra = { call ->
+            when {
+                call.isRename() -> call.error(-32603, "internal error")
+                call.method == "session.list" -> """{"sessions":[{"session_id":"theirs","title":"Bot Chat"}],"scope":"stored"}"""
+                else -> null
+            }
+        })
+
+        assertFailsWith<BotChatTakenException> { BotsApi(gateway.connection).startWithIntro("work") }
+
+        assertNull(sent("session.create")["title"])
+        assertEquals("true", sent("session.create").text("hidden"))
+        assertTrue(gateway.sent("prompt.submit").isEmpty())
+    }
+
+    @Test
+    fun onTheSessionAuthorityANewBotsChatIsMadeThenRenamedAndGreeted() = runTest(timeout = 5.seconds) {
+        connect(backgroundScope, authority = true)
+
+        val stored = BotsApi(gateway.connection).startWithIntro("work")
+
+        assertEquals("stored-new", stored)
+        assertEquals("Bot Chat", gateway.sent("session.mutate").single()["params"]!!.jsonObject["payload"]!!.jsonObject.text("title"))
+        assertEquals("rt-new", gateway.sent("prompt.submit").single()["params"]!!.jsonObject.text("session_id"))
     }
 
     @Test
@@ -246,6 +317,9 @@ class TitledChatTest {
          * tui_gateway/contracts/registry.py `unknown_method_message` on the authority; the legacy dispatcher has no
          * `data.reason`.
          */
+        fun FakeGateway.Call.isRename() =
+            method == "session.mutate" && params["operation"]?.jsonPrimitive?.contentOrNull == "rename"
+
         fun FakeGateway.Call.unknown(withReason: Boolean) =
             error(-32601, "unknown method: $method — not available on this Hermes backend", if (withReason) "unknown_method" else null)
     }
