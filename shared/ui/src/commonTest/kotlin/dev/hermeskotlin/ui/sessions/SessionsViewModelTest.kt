@@ -378,7 +378,8 @@ class SessionsViewModelTest {
         // The turn ends: the list's row is still loaded, and the reply waits to be read.
         socket.live["a"] = "idle"
         advanceTimeBy(11_000)
-        val status = vm.statuses.first { it["a"]?.running == false }.getValue("a")
+        // A chat with nothing to say drops out of the map, so wait for "not running" and fail if it went.
+        val status = assertNotNull(vm.statuses.first { it["a"]?.running != true }["a"], "no longer a New reply")
         assertTrue(AttentionFilter.NeedsAttention.keeps(status), "$status")
         assertEquals(listOf(Res.string.sessions_status_new_reply), rowStatusWords(status, draft = false))
     }
