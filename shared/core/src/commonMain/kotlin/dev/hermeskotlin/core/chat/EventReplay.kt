@@ -40,7 +40,13 @@ internal object EventReplay {
             if (seq <= cursor) continue
             if (seq != cursor + 1) return null
             cursor = seq
-            missed += GatewayEvent(type = event.string("type") ?: return null, payload = event["payload"], sessionId = runtimeId, seq = seq)
+            missed += GatewayEvent(
+                type = event.string("type") ?: return null,
+                payload = event["payload"],
+                sessionId = runtimeId,
+                seq = seq,
+                executionGeneration = (event["execution_generation"] as? JsonPrimitive)?.longOrNull,
+            )
         }
         return missed
     }

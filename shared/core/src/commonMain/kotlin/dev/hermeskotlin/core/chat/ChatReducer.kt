@@ -330,8 +330,8 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     messages += ChatMessage.Notice(key, report.line, stored = true)
                     return@forEachIndexed
                 }
-                if (TranscriptRows.isNoise(row.text.trim(), row.displayKind)) return@forEachIndexed
-                TranscriptRows.classify(row.text, row.displayKind, deliveries)?.let { events ->
+                if (TranscriptRows.isNoise(row.text.trim(), row.displayKind, row.displayMetadata)) return@forEachIndexed
+                TranscriptRows.classify(row.text, row.displayKind, deliveries, row.displayMetadata)?.let { events ->
                     events.forEachIndexed { i, event ->
                         messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event, timestamp = row.timestamp)
                         replyingTo = (event as? TranscriptEvent.FromBot)?.takeUnless { from ->

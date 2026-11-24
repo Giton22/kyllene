@@ -183,8 +183,10 @@ sealed interface InputRequest {
         }
 
         /**
-         * All open prompts returned by `session.resume`: classic `open_requests` plus canonical
-         * `pending_controls` (or `pending_clarify` / `pending_approval`) backfills, deduplicated by id.
+         * All open prompts returned by `session.resume`, deduplicated by id: the session authority's pending
+         * clarify and approval prompts in `prompts` (`CanonicalSnapshot.prompts`, the only place a prompt asked
+         * while this client wasn't attached comes back), classic server→client `open_requests`, and the
+         * `pending_controls` / `pending_clarify` / `pending_approval` shapes read before.
          */
         fun parseResume(result: JsonObject): List<InputRequest> {
             val found = mutableListOf<InputRequest>()
@@ -192,6 +194,7 @@ sealed interface InputRequest {
             fun add(request: InputRequest?) {
                 if (request != null && seen.add(request.id)) found += request
             }
+            result["prompts"].asObjectList().forEach { add(parsePendingControl(it, defaultKind = null)) }
             result["open_requests"].asObjectList().forEach { snapshot ->
                 val promptId = snapshot.string("prompt_id")
                 if (promptId != null) {

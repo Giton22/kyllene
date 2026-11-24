@@ -385,6 +385,7 @@ class ChatSession(
         key: String,
         arrived: Boolean?,
         prompt: UnsettledPrompt,
+        unknownError: String = LOST_WHILE_SENDING,
         takeBack: suspend () -> Unit,
     ): SendOutcome {
         when (arrived) {
@@ -406,7 +407,7 @@ class ChatSession(
                 unsettled[key] = prompt
                 _state.update { state ->
                     state.copy(
-                        error = "Lost the connection while sending. Check that it isn't running before you send it again.",
+                        error = unknownError,
                         messages = state.messages.updateUser(key) { it.copy(pending = false, check = SendCheck.Unknown) },
                     )
                 }
@@ -437,8 +438,10 @@ class ChatSession(
             messages.take(index).count { m -> m is ChatMessage.User && !m.pending && m.check == null }
         }
         val arrived = findInTranscript(bubble.text, key, before)
+        // A steer the agent read is kept in no user row, so a miss can't say it's safe to send again, mid-turn or after.
+        val steerUnseen = arrived == false && unsettled[key]?.steer == true
         // A correction or a queued prompt is written only once the turn takes it in, so mid-turn a miss proves nothing.
-        val mayBeWaiting = arrived == false && unsettled[key]?.startsTurn == false && _state.value.running
+        val mayBeWaiting = arrived == false && !steerUnseen && unsettled[key]?.startsTurn == false && _state.value.running
         when {
             arrived == true -> {
                 rowExists = true
@@ -446,12 +449,14 @@ class ChatSession(
                 _state.update { it.copy(error = null, messages = it.messages.updateUser(key) { u -> u.copy(check = null) }) }
                 loadHistory()
             }
-            arrived == false && !mayBeWaiting ->
+            arrived == false && !mayBeWaiting && !steerUnseen ->
                 _state.update { it.copy(error = null, messages = it.messages.updateUser(key) { u -> u.copy(check = SendCheck.NotReceived) }) }
             else -> _state.update { state ->
                 state.copy(
                     error = if (mayBeWaiting) {
                         "Hermes may still be holding it for the running turn. Check again once the turn ends."
+                    } else if (steerUnseen) {
+                        "A steer isn't saved in the conversation, so it can't be checked. See whether the reply followed it."
                     } else {
                         "Couldn't read the conversation to check. Try again once connected."
                     },
@@ -1612,6 +1617,9 @@ class ChatSession(
      * as the next prompt instead; a gateway that can't steer (no such method, or an agent without it) gets a
      * plain prompt, which its busy mode folds in as before.
      *
+     * On the session authority, a refusal that came before any agent saw the text (the turn it was meant for
+     * ended) sends it as the next prompt too. A `rejected` the agent may already have read isn't sent again.
+     *
      * A steer the turn ended before reading isn't lost: the gateway queues the leftover as the next prompt,
      * and that turn shows up like one started elsewhere, its prompt pulled from the transcript.
      */
@@ -1626,22 +1634,37 @@ class ChatSession(
         _state.update {
             it.copy(messages = it.messages + ChatMessage.User(key, trimmed, pending = true), keySeq = it.keySeq + 1, error = null)
         }
-        val status = try {
-            (client.request("session.steer", buildJsonObject {
-                put("session_id", runtimeId)
-                put("text", trimmed)
-            }) as? JsonObject).string("status")
+        val reply = try {
+            steerOnGateway(client, runtimeId, trimmed)
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
             removeMessage(key)
             if (e.code in STEER_UNSUPPORTED) return submit(trimmed)
+            // Refused before any agent saw it: the turn it was meant for is gone, or can't take a steer. It runs next.
+            if (client.sessionAuthority && e.reason in UNDELIVERED_STEER_REFUSALS) return submit(trimmed, queue = true)
             _state.update { it.copy(error = e.message.ifBlank { "Couldn't steer the reply." }) }
+            return SendOutcome.NotSent
+        } catch (e: SteerNotSent) {
+            // The running turn couldn't be read, so nothing went out: the text goes back.
+            removeMessage(key)
+            _state.update { it.copy(error = "Couldn't reach the running reply, so the steer wasn't sent.") }
             return SendOutcome.NotSent
         } catch (e: Exception) {
             // Out without a reply: the agent may have read it, so it isn't handed back to go twice. Like a
             // lost correction, the bubble stays marked; a steer leaves nothing in the transcript to settle it.
-            return settleUnanswered(key, arrived = null, UnsettledPrompt(trimmed, display = null, startsTurn = false)) {}
+            return settleUnanswered(key, arrived = null, UnsettledPrompt(trimmed, display = null, startsTurn = false, steer = true)) {}
+        }
+        val status = reply.string("status")
+        if (status == STEER_REJECTED && client.sessionAuthority && reply.boolean("delivered") != false) {
+            // The session authority's plain `rejected` can follow delivery (a steer whose acknowledgement timed
+            // out), so it isn't sent again; only `delivered: false` says no agent saw it.
+            return settleUnanswered(
+                key,
+                arrived = null,
+                UnsettledPrompt(trimmed, display = null, startsTurn = false, steer = true),
+                unknownError = STEER_MAYBE_DELIVERED,
+            ) {}
         }
         if (status != STEER_ACCEPTED) {
             // Turned down: the turn ended meanwhile, or the agent can't take it now. It runs next instead.
@@ -1654,6 +1677,50 @@ class ChatSession(
         }
         return SendOutcome.Sent
     }
+
+    /**
+     * Sends `session.steer` for [text]. The session authority takes the running turn's `execution_generation`
+     * with it, and refuses the steer without one (gateway/session_busy_controls.py `correct`); other gateways
+     * take only the id and the text, and refuse any other key. A generation that isn't known yet is read with
+     * `session.resume` first; null when that shows no turn running, so nothing went to one. One the authority
+     * calls stale isn't tried again with a newer one, as Desktop doesn't: the turn running by then may be
+     * another prompt's, so the caller sends the text as the next prompt.
+     *
+     * @throws SteerNotSent when the running turn couldn't be read.
+     */
+    private suspend fun steerOnGateway(client: JsonRpcClient, runtimeId: String, text: String): JsonObject? {
+        suspend fun send(id: String, generation: Long?) = client.request(
+            "session.steer",
+            buildJsonObject {
+                put("session_id", id)
+                put("text", text)
+                generation?.let { put("execution_generation", it) }
+            },
+        ) as? JsonObject
+        if (!client.sessionAuthority) return send(runtimeId, null)
+        executionGeneration?.let { return send(runtimeId, it) }
+        val fresh = try {
+            attach(client, reconnected = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Not left "Attaching": the chat shows the failure with its retry, as a failed send's attach does.
+            _state.update {
+                if (it.attachment !is Attachment.Attaching) it
+                else it.copy(
+                    attachment = Attachment.Failed(e.message ?: "Couldn't open the session."),
+                    // As runCatchingAttach: a chat the gateway turned down has no turn left to follow.
+                    running = it.running && e !is RpcException,
+                )
+            }
+            throw SteerNotSent(e)
+        }
+        val generation = executionGeneration?.takeIf { _state.value.running } ?: return null
+        return send(fresh, generation)
+    }
+
+    /** A steer that never went out: the running turn's generation couldn't be read ([cause]). */
+    private class SteerNotSent(cause: Throwable) : Exception(cause.message, cause)
 
     /**
      * Stops the running reply (`session.interrupt`), waits for the turn to settle, then sends [text] as a
@@ -2069,7 +2136,11 @@ class ChatSession(
 
     private fun apply(event: GatewayEvent) {
         event.seq?.let { lastSeq = it }
-        (event.payload as? JsonObject).long("execution_generation")?.let { executionGeneration = it }
+        // The session authority stamps a turn's events with its generation beside the payload; a few payloads carry it
+        // too. Only ever forward, as Desktop keeps it: a replayed or late event of an older turn must not rewind it.
+        (event.executionGeneration ?: (event.payload as? JsonObject).long("execution_generation"))?.let { seen ->
+            executionGeneration = maxOf(executionGeneration ?: seen, seen)
+        }
         if (event.type == "session.info" || event.type == "session.updated") {
             val payload = event.payload as? JsonObject
             // A receipt names its session; only ever forward, as a replayed older one must not rewind it.
@@ -2563,6 +2634,20 @@ class ChatSession(
 
         /** `session.steer`'s status for a steer the running turn took in. */
         const val STEER_ACCEPTED = "queued"
+
+        /** `session.steer`'s status for a steer the agent didn't take, or (on the session authority) may have. */
+        const val STEER_REJECTED = "rejected"
+
+        /**
+         * Session-authority refusals of a steer that came before any agent saw it (session_busy_controls.py
+         * `correct`, Desktop's `UNDELIVERED_CORRECTION_REASONS`): safe to send as the next prompt.
+         */
+        val UNDELIVERED_STEER_REFUSALS = setOf("stale_generation", "execution_not_ready", "unsupported_control")
+
+        const val LOST_WHILE_SENDING = "Lost the connection while sending. Check that it isn't running before you send it again."
+
+        const val STEER_MAYBE_DELIVERED =
+            "Hermes may have read your steer, so it wasn't sent again. Check the reply before you send it again."
 
         /** `session.steer` errors for a gateway that can't steer: no such method, or an agent without `steer()`. */
         val STEER_UNSUPPORTED = setOf(METHOD_NOT_FOUND, 4010)

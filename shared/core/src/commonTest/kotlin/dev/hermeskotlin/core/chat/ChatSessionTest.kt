@@ -225,6 +225,25 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aScheduledJobsMessageToAnOpenChatShowsFromTheTranscript() = runTest {
+        val (connection, transport) = setup(backgroundScope, mapOf("session.resume" to """{"session_id":"rt1","running":false}"""))
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+
+        // The gateway writes the cron result as a note, then reports it as a turn with no words of its own.
+        history = history.replace("]}", """,{"id":3,"role":"user","content":"Test notification",
+            "display_kind":"internal_notification","display_metadata":{"completion_note":["[\"cron\",\"route-1\",\"ab\"]"]}}]}""")
+        transport.push(event("message.start", "rt1"))
+        transport.push(event("message.complete", "rt1", """{"text":"","status":"complete"}"""))
+
+        val done = chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Event } }
+        assertEquals(3, done.messages.size, "no empty reply is left behind: ${done.messages}")
+        val note = assertIs<TranscriptEvent.Routine>(assertIs<ChatMessage.Event>(done.messages.last()).event)
+        assertEquals("Test notification", note.body)
+    }
+
+    @Test
     fun firstSendOnANewChatCreatesTheSessionThenSubmits() = runTest {
         val (connection, transport) = setup(
             backgroundScope,
@@ -506,6 +525,8 @@ class ChatSessionTest {
         val steer = transport.sent.value.single { it.isCall("session.steer") }
         assertEquals("rt1", steer.param("session_id"))
         assertEquals("use tabs", steer.param("text"))
+        // tui_gateway's contract forbids any other key, so no execution_generation goes off the session authority.
+        assertEquals(setOf("session_id", "text"), steer["params"]?.jsonObject?.keys)
         assertTrue(transport.sent.value.none { it.isCall("prompt.submit") || it.isCall("slash.exec") })
         transport.push(event("message.delta", "rt1", """{"text":"Switching to tabs"}"""))
         val live = chat.state.first { s -> (s.messages.last() as? ChatMessage.Assistant)?.text == "Switching to tabs" }
@@ -572,6 +593,12 @@ class ChatSessionTest {
         val bubble = assertIs<ChatMessage.User>(chat.state.value.messages.single { it is ChatMessage.User && it.text == "use tabs" })
         assertEquals(SendCheck.Unknown, bubble.check)
         assertFalse(bubble.pending)
+
+        // Its check can't call it missing either: a steer the agent read leaves no user row in the transcript.
+        chat.checkDelivery(bubble.key)
+        assertEquals(SendCheck.Unknown, assertIs<ChatMessage.User>(chat.state.value.messages.single { it.key == bubble.key }).check)
+        assertEquals("A steer isn't saved in the conversation, so it can't be checked. See whether the reply followed it.", chat.state.value.error)
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
     }
 
     @Test

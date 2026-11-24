@@ -236,6 +236,9 @@
 
     <string name="chat_event_compaction">较早的消息已总结</string>
     <string name="chat_event_routine">已运行例程“%1$s”</string>
+    <string name="chat_event_routine_unnamed">已运行例程</string>
+    <string name="chat_event_routine_problem">例程“%1$s”报告了问题</string>
+    <string name="chat_event_routine_problem_unnamed">某个例程报告了问题</string>
     <string name="chat_event_failed_turn">此轮次未完成。</string>
     <string name="chat_event_system_messages">系统消息 · %1$d</string>
     <string name="chat_event_other_bot">另一个机器人</string>
