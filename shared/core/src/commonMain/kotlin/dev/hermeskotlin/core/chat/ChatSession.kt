@@ -171,6 +171,9 @@ class ChatSession(
     /** Live events held back while the gap before them is filled; null when nothing is being caught up. */
     private var held: MutableList<GatewayEvent>? = null
 
+    /** A `session.replay_gap` waits for its `session.resume`; gaps that come before that starts need no second one. */
+    private var gapResumePending = false
+
     /** Orders applying events, holding them and filling gaps, which run on different threads. Never held across I/O. */
     private val streamMutex = Mutex()
 
@@ -2095,8 +2098,37 @@ class ChatSession(
         connection.events.collect { event ->
             val runtimeId = _state.value.runtimeSessionId ?: return@collect
             if (event.sessionId != runtimeId) return@collect
+            if (event.type == REPLAY_GAP && resumeAfterGap(runtimeId)) return@collect
             streamMutex.withLock { deliver(event) }
         }
+    }
+
+    /**
+     * The session authority ended this socket's subscription to the chat: this viewer fell too far behind, so its
+     * backlog was dropped (hermes-agent `tui_gateway/transport.py` FanoutTransport.write) and one `session.replay_gap`
+     * sent instead (`gateway/session_events.py` SessionEvents.publish). The socket stays up, so no reconnect comes,
+     * and nothing of the session arrives until a `session.resume` attaches it again, as Desktop and the TUI do. The
+     * hole is longer than `session.events.since` keeps, so the chat reloads the transcript, as after a drop with no
+     * replay. The legacy sidecar sends no such frame (it closes the socket instead), so off the authority it's ignored.
+     */
+    private suspend fun resumeAfterGap(runtimeId: String): Boolean {
+        val client = connectedClient()?.takeIf { it.sessionAuthority } ?: return false
+        val start = streamMutex.withLock {
+            // Only this socket's subscription ended; a runtime not attached on it has nothing to take up again.
+            if (liveRuntimeId(client) != runtimeId) return true
+            !gapResumePending.also { gapResumePending = true }
+        }
+        if (start) scope.launch {
+            streamMutex.withLock {
+                gapResumePending = false
+                // The frames since the last one applied are gone: nothing to pick up from. Held ones from before the
+                // gap are in the transcript the resume reloads.
+                lastSeq = null
+                held = null
+            }
+            runCatchingAttach(client, reconnected = true)
+        }
+        return true
     }
 
     /**
@@ -2681,6 +2713,9 @@ class ChatSession(
     private fun connectedClient(): JsonRpcClient? = (connection.state.value as? ConnectionState.Connected)?.client
 
     private companion object {
+        /** The session authority's notice that it ended this socket's subscription to a session. */
+        const val REPLAY_GAP = "session.replay_gap"
+
         /** A message key made from a stored row (`historyToMessages`): `row-<id>`, or `row-<id>-<n>` for one of its events. */
         val ROW_KEY = Regex("row-(\\d+)(?:-\\d+)?")
 
