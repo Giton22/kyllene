@@ -1799,10 +1799,10 @@ class ChatSession(
         return send(fresh, generation)
     }
 
-    /** A steer that never went out: the running turn's generation couldn't be read ([cause]). */
     /** A resume after a gap that a reconnect overtook: the chat is attached on the new socket, so it isn't sent. */
     private class StaleGapResume : Exception()
 
+    /** A steer that never went out: the running turn's generation couldn't be read ([cause]). */
     private class SteerNotSent(cause: Throwable) : Exception(cause.message, cause)
 
     /**
@@ -2110,12 +2110,14 @@ class ChatSession(
 
     private suspend fun followEvents() {
         connection.events.collect { event ->
-            val runtimeId = _state.value.runtimeSessionId
-            if (runtimeId == null) {
+            val runtimeId = _state.value.runtimeSessionId ?: run {
                 // Taken up again after a gap: the new subscription's frames, a gap among them too, wait for the resume.
-                if (event.sessionId != null) streamMutex.withLock { if (event.sessionId == gapRuntime) gapHeld?.add(event) }
-                return@collect
-            }
+                val kept = event.sessionId != null && streamMutex.withLock {
+                    gapHeld?.takeIf { event.sessionId == gapRuntime }?.add(event) == true
+                }
+                // Or the resume got in since: the frame goes on as any other.
+                if (kept) null else _state.value.runtimeSessionId
+            } ?: return@collect
             if (event.sessionId != runtimeId) return@collect
             if (event.type == REPLAY_GAP && resumeAfterGap(runtimeId)) return@collect
             streamMutex.withLock { deliver(event) }
@@ -2162,9 +2164,14 @@ class ChatSession(
             gapHeld = null
             gapRuntime = null
             if (!attached) return
-            waiting.any { it.type == REPLAY_GAP }.also { if (!it) waiting.forEach(::deliver) }
+            if (waiting.none { it.type == REPLAY_GAP }) {
+                waiting.forEach(::deliver)
+                return
+            }
+            // The new subscription ended too: take up the runtime the resume named, which may not be the one before.
+            liveRuntimeId(client)
         }
-        if (again) resumeAfterGap(runtimeId)
+        again?.let { resumeAfterGap(it) }
     }
 
     /**
@@ -2183,7 +2190,9 @@ class ChatSession(
             val start = streamMutex.withLock {
                 // Only the runtime attached on this socket, and not while another catch-up runs. Live events are held
                 // from here, so none lands both live and again in the replay.
-                (liveRuntimeId(client) == runtimeId && held == null).also { if (it) held = mutableListOf() }
+                // Nor while a gap's resume takes the chat up again: it reloads the transcript itself.
+                (liveRuntimeId(client) == runtimeId && held == null && gapHeld == null && !gapResumePending)
+                    .also { if (it) held = mutableListOf() }
             }
             if (start) catchUp(client, runtimeId, foreground = true)
         }
@@ -2645,6 +2654,8 @@ class ChatSession(
             }
             seqRuntime = runtimeId
             seqEpoch = epoch
+            // The resume may name another runtime (the session's newest after a compression): its frames are held.
+            if (afterGap && gapHeld != null) gapRuntime = runtimeId
             // Held from before the state names the runtime, so no live event slips in ahead of the missed ones.
             val catchingUp = resumable && held == null
             if (catchingUp) held = mutableListOf()
