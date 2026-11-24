@@ -26,10 +26,14 @@ class StopProcessScopeTest {
 
     private val url = FakeGateway.URL
 
+    private companion object {
+        const val SILENT = "silent"
+    }
+
     private val authorityReady =
         """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}"""
 
-    /** A chat attached as `rt1` on a gateway that answers with [answer] (and `{}` for anything it leaves out). */
+    /** A chat attached as `rt1` on a gateway that answers with [answer]: `{}` for a call it leaves out, none for [SILENT]. */
     private suspend fun chatOn(
         scope: CoroutineScope,
         authority: Boolean,
@@ -43,7 +47,7 @@ class StopProcessScopeTest {
                 when (call.method) {
                     "session.resume" -> """{"session_id":"rt1","running":$running}"""
                     "session.interrupt" -> """{"status":"interrupted"}"""
-                    else -> answer(call) ?: "{}"
+                    else -> answer(call).let { if (it == SILENT) null else it ?: "{}" }
                 }
             }
             http = { json("""{"session_id":"stored-1","messages":[]}""") }
@@ -145,7 +149,56 @@ class StopProcessScopeTest {
     }
 
     @Test
-    fun stopOnLegacySidecarWithNothingRunning() = runTest(timeout = 2.seconds) {
+    fun stopOnLegacySidecarTriesEveryProcessWhenOneKillFails() = runTest(timeout = 2.seconds) {
+        val (gw, chat) = chatOn(backgroundScope, authority = false) { call ->
+            when (call.method) {
+                "process.list" -> """{"processes":[
+                    {"session_id":"proc_a","command":"a","status":"running"},
+                    {"session_id":"proc_b","command":"b","status":"running"},
+                    {"session_id":"proc_c","command":"c","status":"running"},
+                    {"session_id":"proc_d","command":"d","status":"running"}]}"""
+                "process.kill" -> when (call.param("process_id")) {
+                    "proc_a" -> "error:5010:boom"
+                    // tools/process_registry.py kill_process answers a failed kill as a result.
+                    "proc_d" -> """{"status":"error","error":"permission denied"}"""
+                    else -> """{"status":"killed"}"""
+                }
+                else -> null
+            }
+        }
+
+        chat.stopEverything()
+
+        val kills = gw.socket.sent.value.filter { it.isCall("process.kill") }
+        assertEquals(listOf("proc_a", "proc_b", "proc_c", "proc_d"), kills.map { it.param("process_id") })
+        val output = chat.lastOutput()
+        assertTrue(output.startsWith("Stopped 2 background processes.\nCouldn't stop every background process:"), output)
+        assertFalse(chat.lastFailed())
+    }
+
+    @Test
+    fun stopKeepsStoppedTheReplyWhenKillsRunPastTheTimeLimit() = runTest(timeout = 2.seconds) {
+        // Every kill goes unanswered: three 30 s request timeouts are past /stop's own limit.
+        val (_, chat) = chatOn(backgroundScope, authority = false, running = true) { call ->
+            when (call.method) {
+                "process.list" -> """{"processes":[
+                    {"session_id":"proc_a","command":"a","status":"running"},
+                    {"session_id":"proc_b","command":"b","status":"running"},
+                    {"session_id":"proc_c","command":"c","status":"running"}]}"""
+                "process.kill" -> SILENT
+                else -> null
+            }
+        }
+
+        chat.stopEverything()
+
+        val output = chat.lastOutput()
+        assertTrue(output.startsWith("Stopped the reply.\nCouldn't stop the background processes:"), output)
+        assertFalse(chat.lastFailed())
+    }
+
+    @Test
+    fun stopOnLegacySidecarWithNothingRunning()= runTest(timeout = 2.seconds) {
         val (gw, chat) = chatOn(backgroundScope, authority = false) { call ->
             if (call.method == "process.list") """{"processes":[]}""" else null
         }
