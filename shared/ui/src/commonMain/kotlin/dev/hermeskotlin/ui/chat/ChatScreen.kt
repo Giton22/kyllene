@@ -135,6 +135,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -3014,40 +3015,31 @@ internal fun AssistantReply(
         val actionable = !message.streaming && text.isNotBlank()
         // A reply of only code or files has nothing to say.
         val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
-        if (isDesktop && (actionable || usage != null)) {
-            // A desktop reads a reply's tools from its own start, as desktop chat apps line them up, and shows
-            // them on the newest reply and under the pointer: older replies read without a row of icons each. They
-            // only fade, so nothing moves as the pointer passes; one with the keyboard in it stays shown.
+        val actions = if (actionable) listOfNotNull(
+            onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
+            onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
+            when {
+                readingPaused && reading -> RowMenuItem(resumeReadingLabel, Lucide.Play, run = onResumeReading)
+                reading -> RowMenuItem(pauseReadingLabel, Lucide.Pause, run = onPauseReading)
+                else -> null
+            },
+            when {
+                reading -> RowMenuItem(stopReadingLabel, Lucide.Square, run = onStopReading)
+                speakable && onReadAloud != null -> RowMenuItem(readAloudLabel, Lucide.Volume2) { onReadAloud(text) }
+                else -> null
+            },
+        ) else emptyList()
+        if (actionable || usage != null) {
             var keysInside by remember { mutableStateOf(false) }
-            val shown = last || hovered || keysInside
+            val shown = !isDesktop || last || hovered || keysInside
             val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
+            val actionVisibility = Modifier.alpha(alpha)
             Row(
-                Modifier.trimEndTop(end = 0.dp, top = 4.dp).offset(x = (-10).dp).alpha(alpha).onFocusChanged { keysInside = it.hasFocus },
+                Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)
+                    .onFocusChanged { keysInside = it.hasFocus }.focusGroup(),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (actionable) {
-                    // Pointer-sized, as the icons beside it are.
-                    CopyButton(text, Modifier.size(32.dp))
-                    onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, Modifier) }
-                    onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, Modifier) }
-                }
-                usage?.let {
-                    val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(it.input), compactCount(it.output))
-                    Text(
-                        replyUsage(it.input, it.output),
-                        style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
-                        color = Theme[colors][textMuted],
-                        // On one line in a narrow window at the largest text, as on the phone.
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 8.dp).semantics { contentDescription = spoken },
-                    )
-                }
-            }
-        } else if (actionable || usage != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // The count takes only what the actions leave: at the largest text it ellipsizes instead of squeezing them out.
                 if (usage != null) {
                     val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
                     Text(
@@ -3056,27 +3048,13 @@ internal fun AssistantReply(
                         color = Theme[colors][textMuted],
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).semantics { contentDescription = spoken },
+                        modifier = Modifier.weight(1f).then(actionVisibility).semantics { contentDescription = spoken },
                     )
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
-                if (actionable) {
-                    // On the end, under the thumb of the hand holding the phone; Copy, the one used most, sits last.
-                    // Copy's padding trimmed off the end lines its icon up with the reply's edge; all of them lose 4dp on top to sit close under it.
-                    val action = Modifier.trimEndTop(end = 0.dp, top = 4.dp)
-                    onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, action) }
-                    onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, action) }
-                    when {
-                        reading -> {
-                            if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, action)
-                            else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, action)
-                            ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, action)
-                        }
-                        speakable && onReadAloud != null -> ReplyAction(Lucide.Volume2, readAloudLabel, { onReadAloud(text) }, action)
-                    }
-                    CopyButton(text, Modifier.trimEndTop(end = 16.dp, top = 4.dp).size(MinTouchTarget))
-                }
+                if (actionable) CopyButton(text, modifier = actionVisibility, visibleLabel = copyLabel)
+                if (actions.isNotEmpty()) ReplyMoreMenu(actions, actionVisibility)
             }
         }
     }

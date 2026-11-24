@@ -3,6 +3,7 @@ package dev.hermeskotlin.designsystem.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -614,9 +615,25 @@ private fun CopyPill(text: String) {
  * them can say whose text each one copies.
  */
 @Composable
-fun CopyButton(text: String, modifier: Modifier = Modifier, label: String? = null) {
+fun CopyButton(
+    text: String,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    visibleLabel: String? = null,
+) {
     val (copied, copy) = rememberCopy(text)
     val words = LocalDesignWords.current
+    if (visibleLabel != null) {
+        Button(
+            text = if (copied) words.copied else visibleLabel,
+            onClick = copy,
+            modifier = modifier.heightIn(min = MinTouchTarget),
+            variant = ButtonVariant.Ghost,
+            size = ButtonSize.Small,
+            leadingIcon = if (copied) Lucide.Check else Lucide.Copy,
+        )
+        return
+    }
     IconButton(
         icon = if (copied) Lucide.Check else Lucide.Copy,
         contentDescription = if (copied) words.copied else label ?: words.copy,

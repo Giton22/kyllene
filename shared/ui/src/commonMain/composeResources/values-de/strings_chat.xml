@@ -487,6 +487,7 @@
     <string name="chat_stop_reading">Vorlesen stoppen</string>
     <string name="chat_pause_reading">Vorlesen pausieren</string>
     <string name="chat_resume_reading">Vorlesen fortsetzen</string>
+    <string name="chat_reply_more">Mehr</string>
     <string name="chat_message_actions">Aktionen für die Nachricht</string>
     <string name="chat_queued">Eingereiht · wird nach dieser Aufgabe gesendet</string>
     <string name="chat_editing_in_composer">Wird im Eingabefeld bearbeitet</string>

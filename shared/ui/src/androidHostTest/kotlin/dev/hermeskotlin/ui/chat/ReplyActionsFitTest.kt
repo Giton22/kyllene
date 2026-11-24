@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -75,8 +75,8 @@ class ReplyActionsFitTest {
         }
         composeRule.waitForIdle()
         val touch = with(composeRule.density) { 48.dp.toPx() }
-        for (action in listOf("Branch from here", "Regenerate", "Read aloud", "Copy")) {
-            val node = composeRule.onAllNodes(hasContentDescription(action)).fetchSemanticsNodes().single()
+        for (action in listOf("Copy", "More")) {
+            val node = composeRule.onNodeWithText(action).fetchSemanticsNode()
             assertTrue(node.boundsInRoot.width >= touch - 1, "$action is ${node.boundsInRoot.width}px wide, expected the full ${touch}px touch target")
         }
     }
