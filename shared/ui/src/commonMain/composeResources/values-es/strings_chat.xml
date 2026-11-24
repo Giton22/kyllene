@@ -137,6 +137,7 @@
     <string name="chat_tool_changes">Cambios</string>
     <string name="chat_tool_error">Error</string>
     <string name="chat_tool_output">Salida</string>
+    <string name="chat_tool_no_output">No se registró ninguna salida.</string>
     <string name="chat_tool_still_running">Aún en curso…</string>
     <string name="chat_tool_risk">Esta salida parece querer dirigir al agente o llegar a secretos. Se le indicó al agente que no confíe en ella.</string>
     <string name="chat_tool_risk_found">Encontrado: %1$s</string>

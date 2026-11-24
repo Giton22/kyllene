@@ -134,6 +134,7 @@
     <string name="chat_tool_changes">更改</string>
     <string name="chat_tool_error">错误</string>
     <string name="chat_tool_output">输出</string>
+    <string name="chat_tool_no_output">没有记录输出。</string>
     <string name="chat_tool_still_running">仍在运行…</string>
     <string name="chat_tool_risk">这段输出看起来想操纵智能体或获取机密。已告知智能体不要信任它。</string>
     <string name="chat_tool_risk_found">发现：%1$s</string>
