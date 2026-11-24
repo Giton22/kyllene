@@ -121,6 +121,22 @@ class ModelSwitchTest {
     }
 
     @Test
+    fun aGuardedPickMarkedOnlyByItsStatusStillAsks() = runTest {
+        val (chat, gateway) = chat(backgroundScope, authority = true, mutate = { call ->
+            if (call.payload()["confirm"] == "tok-1") {
+                call.switched()
+            } else {
+                call.reply("""{"session_id":"rt1","operation":"model","status":"confirmation_required","confirm":"tok-1","confirm_message":"Costs a lot"}""")
+            }
+        })
+
+        assertEquals(ModelSwitch.NeedsConfirmation("Costs a lot"), chat.setModel("big", "p2"))
+        assertEquals("m1", chat.state.value.model)
+        assertEquals(ModelSwitch.Done, chat.setModel("big", "p2", confirm = true))
+        assertEquals(JsonPrimitive("tok-1"), gateway.sent("session.mutate").last().payload()["confirm"])
+    }
+
+    @Test
     fun aStaleConfirmationOnTheSessionAuthorityAsksAgain() = runTest {
         // A token bound to a revision that moved on gets a fresh confirmation_required, never a silent apply.
         var calls = 0

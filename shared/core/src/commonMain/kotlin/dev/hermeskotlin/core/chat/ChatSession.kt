@@ -1899,7 +1899,8 @@ class ChatSession(
             } else {
                 overConfigSet()
             }
-            if (result.boolean("confirm_required") == true) {
+            // The session authority marks a guarded pick with both; key on either.
+            if (result.boolean("confirm_required") == true || result.string("status") == "confirmation_required") {
                 _state.update { it.copy(model = previous.model, provider = previous.provider) }
                 modelConfirm = result.string("confirm")?.let { Triple(model, provider, it) }
                 ModelSwitch.NeedsConfirmation(result.string("confirm_message") ?: "This model costs more than usual. Switch anyway?")
