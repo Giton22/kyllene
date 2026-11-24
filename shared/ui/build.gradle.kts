@@ -87,6 +87,9 @@ kotlin {
     }
 }
 
+// The host tests' Robolectric gets its Android jars from Gradle, not from the network at test time.
+apply(from = rootProject.file("gradle/robolectric.gradle.kts"))
+
 // Lint only ever gets this module's test sources, and the app's lint ignores those (see androidApp).
 tasks.matching { it.name == "lintAnalyzeAndroidHostTest" }.configureEach { enabled = false }
 
