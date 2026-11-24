@@ -109,6 +109,57 @@ class ChatSessionTest {
     }
 
     @Test
+    fun thumbsUpSavesTheReactionAndSubmitsTheAcknowledgmentPrompt() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"👍"}]}""",
+            "prompt.submit" to """{"status":"started"}""",
+        ))
+
+        chat.react("row-2", ReplyReaction.Acknowledge) { true }
+
+        val call = transport.awaitSent { it.isCall("message.react") }
+        assertEquals("rt1", call.param("session_id"))
+        assertEquals("2", call.param("row_id"))
+        assertEquals("👍", call.param("emoji"))
+        val reply = chat.state.value.messages.filterIsInstance<ChatMessage.Assistant>().single { it.key == "row-2" }
+        assertEquals("👍", reply.userReaction)
+        val prompt = transport.sent.value.single { it.isCall("prompt.submit") }
+        assertEquals(
+            "I’ve read this. If we already agreed on a next step and it’s still pending, carry it out. " +
+                "Otherwise, end the turn silently with a no-op.\n\n" +
+                "Assistant message #2 (excerpt): \"Hi! What next?\"",
+            prompt.param("text"),
+        )
+    }
+
+    @Test
+    fun removingAReactionDoesNotSubmitAPrompt() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "message.react" to """{"row_id":2,"reactions":[]}""",
+        ))
+
+        chat.react("row-2", ReplyReaction.Acknowledge) { true }
+
+        transport.awaitSent { it.isCall("message.react") }
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+    }
+
+    @Test
+    fun verifySubmitsAVisiblePromptAboutTheReactedReply() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"🔍"}]}""",
+            "prompt.submit" to """{"status":"started"}""",
+        ))
+
+        chat.react("row-2", ReplyReaction.Verify) { true }
+
+        val call = transport.awaitSent { it.isCall("prompt.submit") }
+        assertTrue(call.param("text").orEmpty().contains("Verify the claims"))
+        assertTrue(call.param("text").orEmpty().contains("message #2"))
+        assertTrue(call.param("text").orEmpty().contains("Hi! What next?"))
+    }
+
+    @Test
     fun activeSubagentRosterRetainsActivityAndDropsFinishedAgents() = runTest {
         val live = """{"subagents":[{"subagent_id":"child-1","goal":"Read fixture","status":"running","last_tool":"read_file"}]}"""
         val (chat, transport) = resumedChat(backgroundScope, mapOf(

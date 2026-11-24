@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
@@ -2202,6 +2203,7 @@ private fun Messages(
                                     readingPaused = readingPaused,
                                     onReadAloud = if (canReadAloud) ({ text -> actions.readAloud(message.key, text) }) else null,
                                     onStopReading = actions::stopReading,
+                                    onReact = ({ reaction: ReplyReaction -> actions.reactToReply(message.key, reaction) }).takeIf { connected },
                                     onPauseReading = actions::pauseReading,
                                     onResumeReading = actions::resumeReading,
                                 )
@@ -2917,6 +2919,7 @@ internal fun AssistantReply(
     /** Reads the reply's text, as shown, aloud; null when it can't be now. */
     onReadAloud: ((String) -> Unit)? = null,
     onStopReading: () -> Unit = {},
+    onReact: ((ReplyReaction) -> Unit)? = null,
     onPauseReading: () -> Unit = {},
     onResumeReading: () -> Unit = {},
 ) {
@@ -3029,7 +3032,9 @@ internal fun AssistantReply(
                 else -> null
             },
         ) else emptyList()
-        if (actionable || usage != null) {
+        val react = onReact.takeIf { !message.streaming && message.reactionRowId != null }
+        val reaction = message.userReaction.takeUnless { message.streaming }
+        if (actionable || usage != null || react != null || reaction != null) {
             var keysInside by remember { mutableStateOf(false) }
             val shown = !isDesktop || last || hovered || keysInside
             val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
@@ -3054,7 +3059,8 @@ internal fun AssistantReply(
                     Spacer(Modifier.weight(1f))
                 }
                 if (actionable) CopyButton(text, modifier = actionVisibility, visibleLabel = copyLabel)
-                if (actions.isNotEmpty()) ReplyMoreMenu(actions, actionVisibility)
+                if (reaction != null) Text(reaction, modifier = actionVisibility.padding(horizontal = 6.dp))
+                if (actions.isNotEmpty() || react != null) ReplyMoreMenu(actions, actionVisibility, onReact = react)
             }
         }
     }

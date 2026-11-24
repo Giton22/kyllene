@@ -213,7 +213,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Journey: learned skills and memories by month, with their text (`/api/learning/graph`, `/api/learning/node`; `/journey`)
 - [x] BTW side questions (`/btw` → `prompt.btw`, answered in place by `btw.complete`)
 - [x] Background prompts: `/bg <prompt>` (or `/background`) runs it on a fresh agent beside the chat (`prompt.background`), and the answer fills its card when `background.complete` arrives, also for one started on Desktop; a crashed task shows as failed. A gateway without the method runs `/bg` on the slash worker as before
-- [ ] Message reactions (`message.react`)
+- [x] Message reactions (`message.react`): Got it, Continue, Verify and Explain on saved bot replies, with a follow-up prompt in the same chat
 - [x] Drafts: each chat keeps its unsent text (stored, survives a restart) and picked files (in memory) when you switch chats; the session list marks it "Draft"
 - [x] Suggested replies: with the community Next Prompt plugin on the gateway (`GET /api/plugins/next-prompt/suggestion`, `POST …/dismiss`), the reply the agent expects next sits as a chip above an empty composer; a tap puts it in the composer without sending, × dismisses it for every client. Settings → Chat → Suggested replies turns it off, shows whether the plugin is there, and offers to install it at a pinned commit (`plugins.manage`); a gateway that only serves new plugins' routes after a restart says so
 - [ ] Suggested replies as quick-reply choices in reply notifications

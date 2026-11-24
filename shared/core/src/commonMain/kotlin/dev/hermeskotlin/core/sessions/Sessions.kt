@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.sessions
 
+import dev.hermeskotlin.core.chat.userReactionEmoji
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -147,7 +148,10 @@ data class SessionMessage(
     @Serializable(with = LenientBooleanSerializer::class) val compacted: Boolean = false,
     @SerialName("display_reasoning") val displayReasoning: String? = null,
     @SerialName("display_commentary") val displayCommentary: List<String>? = null,
+    @SerialName("display_metadata") val displayMetadata: JsonElement? = null,
 ) {
+    val userReaction: String? get() = userReactionEmoji((displayMetadata as? JsonObject)?.get("reactions"))
+
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
 

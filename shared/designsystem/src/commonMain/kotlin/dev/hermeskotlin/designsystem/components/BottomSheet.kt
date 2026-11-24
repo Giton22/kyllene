@@ -81,6 +81,7 @@ import dev.hermeskotlin.designsystem.danger
 import dev.hermeskotlin.designsystem.dangerSoft
 import dev.hermeskotlin.designsystem.surface2
 import dev.hermeskotlin.designsystem.title as titleStyle
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -409,6 +410,7 @@ fun MenuRow(
     enabled: Boolean = true,
     destructive: Boolean = false,
     keys: String? = null,
+    leadingEmoji: String? = null,
 ) {
     val tint = when {
         !enabled -> Theme[colors][textTertiary]
@@ -444,8 +446,17 @@ fun MenuRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val iconTint = if (destructive || !enabled) tint else Theme[colors][textSecondary]
-            if (icon != null) UnstyledIcon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
-            else Spacer(Modifier.size(16.dp))
+            when {
+                leadingEmoji != null -> Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) {
+                    // The emoji is the row icon. The action label still follows the system font scale.
+                    val emojiStyle = with(LocalDensity.current) {
+                        Theme[typography][bodySmall].copy(fontSize = 12.dp.toSp(), lineHeight = 16.dp.toSp())
+                    }
+                    Text(leadingEmoji, style = emojiStyle, modifier = Modifier.clearAndSetSemantics {}, maxLines = 1)
+                }
+                icon != null -> UnstyledIcon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
+                else -> Spacer(Modifier.size(16.dp))
+            }
             Text(
                 text,
                 style = Theme[typography][bodySmall],

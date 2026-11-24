@@ -129,6 +129,8 @@ sealed interface ChatMessage {
          * (live events carry no time). Null while it streams.
          */
         val timestamp: Double? = null,
+        val reactionRowId: Long? = null,
+        val userReaction: String? = null,
     ) : ChatMessage
 
     /**

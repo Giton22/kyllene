@@ -105,6 +105,7 @@ class ChatSession(
 
     /** Held by a [submit] from its uploads until its prompt is settled; see there. */
     private val sendMutex = Mutex()
+    private val reactionMutex = Mutex()
 
     /**
      * The socket [ChatState.runtimeSessionId] was attached on. Runtime ids belong to the
@@ -237,6 +238,45 @@ class ChatSession(
         queue: Boolean = false,
         voiceLive: VoiceLiveTurn? = null,
     ): SendOutcome = submitPrompt(text, attachments, display, queue, voiceLive, resent = emptyList())
+
+    /** Use the stored row address; the newest row can change while a menu is open. */
+    suspend fun react(replyKey: String, reaction: ReplyReaction, stillOpen: () -> Boolean) {
+        if (!reactionMutex.tryLock()) return
+        try {
+            val reply = _state.value.messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey }
+                ?.takeUnless { it.streaming } ?: return
+            val rowId = reply.reactionRowId ?: return
+            if (!stillOpen()) return
+            val client = connectedClient() ?: throw RpcException(0, "Connect to the gateway to react.")
+            val runtimeId = ensureAttached(client)
+            if (!stillOpen() || _state.value.messages.none {
+                    it is ChatMessage.Assistant && it.key == replyKey && it.reactionRowId == rowId
+                }) return
+            val result = client.request("message.react", buildJsonObject {
+                put("session_id", runtimeId)
+                put("row_id", rowId)
+                put("emoji", reaction.emoji)
+            }) as? JsonObject
+            val returned = result?.get("reactions") as? JsonArray
+                ?: throw RpcException(0, "The gateway did not confirm the reaction.")
+            if (!stillOpen() || liveRuntimeId(client) != runtimeId) return
+            val emoji = userReactionEmoji(returned)
+            _state.update { state ->
+                state.copy(messages = state.messages.map {
+                    if (it is ChatMessage.Assistant && it.reactionRowId == rowId) it.copy(userReaction = emoji) else it
+                })
+            }
+            if (emoji == reaction.emoji) reaction.prompt(rowId, reply.text)?.let { prompt ->
+                submit(prompt, queue = _state.value.running)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (stillOpen()) _state.update { it.copy(error = e.message ?: "Could not save the reaction.") }
+        } finally {
+            reactionMutex.unlock()
+        }
+    }
 
     /** [submit], with [resent]: the `@file:` references, and their cards, of a prompt sent again ([resend]). */
     private suspend fun submitPrompt(

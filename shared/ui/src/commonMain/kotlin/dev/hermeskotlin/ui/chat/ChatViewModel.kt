@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.core.voice.ReadAloudVoices
 import dev.hermeskotlin.core.voice.InMemoryReadAloudVoices
 import androidx.compose.foundation.text.input.TextFieldState
@@ -964,6 +965,11 @@ class ChatViewModel(
     }
 
     override fun removeComment(id: Long) = _comments.update { tray -> tray.filterNot { it.id == id } }
+
+    override fun reactToReply(key: String, reaction: ReplyReaction) {
+        val chat = session.value ?: return
+        viewModelScope.launch { chat.react(key, reaction) { session.value === chat } }
+    }
 
     override fun explain(source: CommentSource, anchor: SelectionAnchor) {
         val chat = session.value
