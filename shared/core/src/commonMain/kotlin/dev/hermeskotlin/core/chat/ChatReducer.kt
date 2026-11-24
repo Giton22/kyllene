@@ -11,8 +11,9 @@ import kotlinx.serialization.json.contentOrNull
  * Folds one live session event (tui_gateway/contracts/events.py) into the chat. Events for other
  * sessions must be filtered out by the caller. Unknown event types leave the state unchanged.
  * Events carry no time, so [now] (epoch seconds, when it arrived) stamps the reply it finishes.
+ * [toolStartedAt] is null for delayed or replayed events whose original receipt time is unavailable.
  */
-fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
+fun ChatState.reduce(event: GatewayEvent, now: Double? = null, toolStartedAt: Double? = now): ChatState {
     val payload = event.payload as? JsonObject
     return when (event.type) {
         "message.start" -> releaseQueued().withOpenReply { it }.copy(
@@ -44,7 +45,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
                 name = payload.string("name") ?: "tool",
                 detail = payload.string("context") ?: payload.string("preview"),
                 running = true,
-                startedAt = now,
+                startedAt = toolStartedAt,
                 input = ToolDetails.input(payload?.get("args"), payload.string("args_text")),
                 agentScreen = AgentScreen.from(payload.string("name") ?: "", payload?.get("args")),
             ).let { if (it.name == DELEGATE_TOOL) it.copy(tasks = delegatedTasks(payload?.get("args"), null)) else it }
@@ -59,6 +60,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
                 reply.copy(tools = reply.tools.map {
                     if (it.id != id) it else it.copy(
                         running = false,
+                        completed = true,
                         summary = payload.string("summary"),
                         durationSeconds = payload.double("duration_s"),
                         input = it.input ?: ToolDetails.input(payload?.get("args")),
@@ -375,12 +377,13 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                 // A step of the running turn is saved before its calls end: one with no result row yet still runs.
                 val runningTurn = turnStartedAt != null && row.timestamp != null && row.timestamp >= turnStartedAt
                 val tools = row.storedToolCalls.mapIndexed { i, call ->
-                    val result = call.id?.let(results::get)?.content
+                    val resultRow = call.id?.let(results::get)
+                    val result = resultRow?.content
                     ToolActivity(
                         id = call.id ?: "$key-$i",
                         name = call.name,
-                        running = runningTurn && call.id != null && call.id !in results,
-                        startedAt = row.timestamp,
+                        running = runningTurn && call.id != null && resultRow == null,
+                        completed = resultRow != null,
                         input = ToolDetails.input(call.arguments),
                         output = ToolDetails.output(result),
                         failed = ToolDetails.failed(result),

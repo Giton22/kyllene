@@ -169,10 +169,34 @@ class ChatReducerTest {
         val reply = assertIs<ChatMessage.Assistant>(done.messages.last())
         assertEquals("There are 3 files.", reply.text)
         assertEquals("Let me look.", reply.reasoning)
-        assertEquals(ToolActivity("t1", "terminal", "ls -la", running = false, summary = "3 files", durationSeconds = 0.4), reply.tools.single())
+        assertEquals(ToolActivity("t1", "terminal", "ls -la", running = false, summary = "3 files", durationSeconds = 0.4, completed = true), reply.tools.single())
         assertFalse(reply.streaming)
         assertFalse(done.running)
         assertEquals(null, done.status)
+    }
+
+    @Test
+    fun interruptionDoesNotMarkAnUnfinishedCallCompleted() {
+        val state = ChatState()
+            .reduce(event("tool.start", """{"tool_id":"running","name":"terminal"}"""), now = 101.0)
+            .reduce(event("message.complete", """{"status":"interrupted"}"""), now = 102.0)
+        val tool = assertIs<ChatMessage.Assistant>(state.messages.single()).tools.single()
+        assertEquals(101.0, tool.startedAt)
+        assertFalse(tool.running)
+        assertFalse(tool.completed)
+    }
+
+    @Test
+    fun storedCallsNeedAResultForCompletionAndHaveNoPerCallStartTime() {
+        val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","timestamp":105,"tool_calls":[
+            {"id":"finished","type":"function","function":{"name":"terminal","arguments":"{}"}},
+            {"id":"missing","type":"function","function":{"name":"read_file","arguments":"{}"}}]}""")
+        val result = HermesJson.decodeFromString<SessionMessage>(
+            """{"role":"tool","tool_call_id":"finished","content":""}""",
+        )
+        val tools = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row, result)).single()).tools
+        assertEquals(listOf(true, false), tools.map { it.completed })
+        assertEquals(listOf(null, null), tools.map { it.startedAt })
     }
 
     @Test

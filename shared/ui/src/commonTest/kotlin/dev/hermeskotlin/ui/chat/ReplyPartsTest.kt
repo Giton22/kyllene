@@ -24,6 +24,16 @@ class ReplyPartsTest {
     }
 
     @Test
+    fun toolOffsetsStayHiddenWhenTheFirstCallHasNoReliableStart() {
+        val tools = listOf(
+            ToolActivity("replayed", "terminal"),
+            ToolActivity("live", "read_file", startedAt = 106.0),
+        )
+
+        assertEquals(listOf(null, null), toolTimelineOffsets(tools))
+    }
+
+    @Test
     fun toolsGetTheIconOfTheirKind() {
         assertEquals(Lucide.SquareTerminal, toolIcon("terminal"))
         assertEquals(Lucide.FileDiff, toolIcon("patch"))

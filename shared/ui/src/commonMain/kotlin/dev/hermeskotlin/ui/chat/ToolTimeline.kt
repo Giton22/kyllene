@@ -130,7 +130,8 @@ private fun ToolTimelineRow(tool: ToolActivity, offset: String?, hasPrevious: Bo
     val status = when {
         tool.running -> Theme[colors][accentText]
         tool.failed -> Theme[colors][danger]
-        else -> Theme[colors][success]
+        tool.completed -> Theme[colors][success]
+        else -> Theme[colors][textTertiary]
     }
     val rail = Theme[colors][strokeStrong]
     val title = tool.detail?.lineSequence()?.firstOrNull()?.trim().takeIf { it?.isNotEmpty() == true } ?: tool.name
@@ -208,12 +209,12 @@ internal fun ToolResultsSheet(tool: ToolActivity, messageKey: String, visible: B
     }
 }
 
-/** Use recorded start times so a gap or concurrent calls do not create fictional durations. */
+/** A relative offset needs the live receipt time of both this call and the first listed call. */
 internal fun toolTimelineOffsets(tools: List<ToolActivity>): List<String?> {
-    val origin = tools.mapNotNull { it.startedAt?.takeIf(Double::isFinite) }.minOrNull()
+    val origin = tools.firstOrNull()?.startedAt?.takeIf(Double::isFinite)
     return tools.map { tool ->
         val start = tool.startedAt?.takeIf(Double::isFinite)
-        if (origin == null || start == null) null else {
+        if (origin == null || start == null || start < origin) null else {
             val tenths = ((start - origin) * 10).roundToLong()
             "+${tenths / 10}.${tenths % 10}s"
         }

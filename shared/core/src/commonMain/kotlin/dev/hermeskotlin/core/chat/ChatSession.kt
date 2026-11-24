@@ -1990,7 +1990,7 @@ class ChatSession(
      * Applies a live event in order: one already applied (replayed, or sent twice) is skipped, and one past a gap
      * waits, with those after it, while [catchUp] fills the gap. Called under [streamMutex].
      */
-    private fun deliver(event: GatewayEvent) {
+    private fun deliver(event: GatewayEvent, timelyToolStart: Boolean = true) {
         held?.let {
             it += event
             return
@@ -2007,7 +2007,7 @@ class ChatSession(
                 return
             }
         }
-        apply(event)
+        apply(event, timelyToolStart)
     }
 
     /**
@@ -2043,7 +2043,7 @@ class ChatSession(
                 return
             }
             if (missed != null) {
-                missed.forEach(::apply)
+                missed.forEach { apply(it, timelyToolStart = false) }
             } else if (!keep) {
                 lastSeq = null
                 val streamed = inflightText
@@ -2063,11 +2063,11 @@ class ChatSession(
             }
             val waiting = held.orEmpty()
             held = null
-            waiting.forEach(::deliver)
+            waiting.forEach { deliver(it, timelyToolStart = false) }
         }
     }
 
-    private fun apply(event: GatewayEvent) {
+    private fun apply(event: GatewayEvent, timelyToolStart: Boolean) {
         event.seq?.let { lastSeq = it }
         (event.payload as? JsonObject).long("execution_generation")?.let { executionGeneration = it }
         if (event.type == "session.info" || event.type == "session.updated") {
@@ -2083,7 +2083,7 @@ class ChatSession(
             turnStartedAt = null
             turnReplyKey = null
         }
-        _state.update { it.reduce(event, now) }
+        _state.update { it.reduce(event, now, toolStartedAt = now.takeIf { timelyToolStart }) }
         when (event.type) {
             // Timed here, not on screen, so it ends on time even while the chat isn't showing. A notice that
             // replaced this one by the time it runs out has its own timer.
@@ -2724,9 +2724,9 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
             when {
                 shown == null -> tool
                 // The saved call has its result row (empty ones included): its end, missed while the link was down.
-                shown.running && !tool.running -> tool
-                // An end the live copy got itself carries its time or summary; one folded from older rows has neither.
-                tool.running && !shown.running && shown.output == null && shown.durationSeconds == null && shown.summary == null -> tool
+                !shown.completed && tool.completed -> tool.copy(startedAt = shown.startedAt)
+                // The live copy can look stopped if it was folded before the turn start was known.
+                tool.running && !shown.running && !shown.completed -> tool.copy(startedAt = shown.startedAt)
                 else -> shown
             }
         } +

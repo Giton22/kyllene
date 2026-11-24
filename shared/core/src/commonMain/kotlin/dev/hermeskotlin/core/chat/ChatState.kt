@@ -29,8 +29,10 @@ data class ToolActivity(
     val generatedImage: GeneratedImage? = null,
     /** For `phone_show_ui`: the screen the agent drew in the chat. */
     val agentScreen: AgentScreen? = null,
-    /** Epoch seconds when the call started, or its batch was recorded in saved history. */
+    /** Client receipt time for a live start. Replay and history lack this timing. */
     val startedAt: Double? = null,
+    /** A completion event or a saved result confirms that the tool ended. */
+    val completed: Boolean = false,
 )
 
 /** Why a tool's output was flagged (`tool.output_risk`): the scanner's finding ids. Advisory; nothing was blocked. */
