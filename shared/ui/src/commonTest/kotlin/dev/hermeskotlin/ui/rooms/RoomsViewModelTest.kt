@@ -603,6 +603,18 @@ class RoomsViewModelTest {
     }
 
     @Test
+    fun anEmptyListItemLeftAtTheEndIsntSent() = runTest(dispatcher) {
+        val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p -> attachmentReply(m, p) ?: "{}" }
+        val vm = attachmentRoom(socket)
+        try {
+            // What Enter after the last item leaves behind.
+            vm.composer.setTextAndPlaceCursorAtEnd("- milk\n- eggs\n- "); vm.send(); runCurrent()
+            val payload = socket.sent("groups.send").single()["payload"]!!.jsonObject
+            assertEquals("- milk\n- eggs", payload["text"]!!.jsonPrimitive.content)
+        } finally { vm.close(); vm.setVisible(false) }
+    }
+
+    @Test
     fun anUnknownFileSendKeepsOnlyReceiptsNotTheBytes() = runTest(dispatcher) {
         val held = CompletableDeferred<Unit>()
         val socket = RoomsGateway(CoroutineScope(dispatcher)) { m, p ->

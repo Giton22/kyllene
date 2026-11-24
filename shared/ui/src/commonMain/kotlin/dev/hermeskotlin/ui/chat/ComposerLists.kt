@@ -3,7 +3,6 @@ package dev.hermeskotlin.ui.chat
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
-import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.ui.text.TextRange
 
 /** What a line break after a list item does: [start] until [end] becomes [text], with the cursor after it. */
@@ -14,6 +13,12 @@ internal data class ListEdit(val start: Int, val end: Int, val text: String)
 private val listItem = Regex("""([ \t]*)(?:(\d{1,9})([.)])|([-*+]))([ \t]+)(\[[ xX]](?:[ \t]+|$))?(.*)""")
 // A code fence: three or more backticks or tildes, then the rest of the line.
 private val fence = Regex("""[ \t]*(`{3,}|~{3,})([\s\S]*)""")
+// A thematic break like `* * *` or `- - -`, which reads as a bullet but isn't one.
+private val thematicBreak = Regex("""[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*""")
+
+/** [line] as a list item, or null when it isn't one. */
+private fun listItemOf(line: CharSequence): MatchResult? =
+    if (thematicBreak.matches(line)) null else listItem.matchEntire(line)
 
 /**
  * Carries a Markdown list on after the line break at [newLine] in [text]. After `1. buy milk` it puts `2. `
@@ -25,7 +30,7 @@ internal fun listContinuation(text: CharSequence, newLine: Int): ListEdit? {
     if (newLine !in text.indices || text[newLine] != '\n') return null
     val lineStart = text.lastIndexOf('\n', newLine - 1) + 1
     val line = text.substring(lineStart, newLine).removeSuffix("\r")
-    val item = listItem.matchEntire(line) ?: return null
+    val item = listItemOf(line) ?: return null
     if (insideFence(text, lineStart)) return null
     val (indent, number, delimiter, bullet, space, box, content) = item.destructured
     if (content.isBlank()) {
@@ -34,9 +39,13 @@ internal fun listContinuation(text: CharSequence, newLine: Int): ListEdit? {
         if (text.substring(newLine + 1, restEnd).isNotBlank()) return null
         return ListEdit(lineStart, newLine + 1, "")
     }
-    val marker = if (number.isNotEmpty()) "${number.toLong() + 1}$delimiter" else bullet
+    // `09.` goes on as `10.`, `01.` as `02.`.
+    val marker = if (number.isNotEmpty()) "${(number.toLong() + 1).toString().padStart(number.length, '0')}$delimiter" else bullet
     val nextBox = if (box.isNotEmpty()) "[ ] " else ""
-    return ListEdit(newLine + 1, newLine + 1, indent + marker + space + nextBox)
+    // Splitting `1. foo| bar` moves `bar` without its space, so the new item doesn't start with two.
+    var restStart = newLine + 1
+    while (restStart < text.length && (text[restStart] == ' ' || text[restStart] == '\t')) restStart++
+    return ListEdit(newLine + 1, restStart, indent + marker + space + nextBox)
 }
 
 /**
@@ -82,17 +91,19 @@ internal fun TextFieldBuffer.continueList() {
 }
 
 /**
- * Takes off a last line that is only a list marker, as a line break after the last item leaves it, so the
- * message doesn't go out with an empty item. Call before reading the text to send. A marker alone stays.
+ * [text] to send, without a last line that is only a list marker under another list item, as a line break
+ * after the last item leaves it, so the message doesn't go out with an empty item. It leaves the composer as
+ * it is, so a send that doesn't go ahead changes nothing. A marker alone, or under other text, stays.
  */
-internal fun TextFieldState.dropEmptyListItem() {
-    val text = text
+internal fun withoutEmptyListItem(text: CharSequence): String {
     val lineStart = text.lastIndexOf('\n') + 1
-    if (lineStart == 0) return
-    val item = listItem.matchEntire(text.subSequence(lineStart, text.length)) ?: return
-    if (item.groupValues[7].isNotBlank() || insideFence(text, lineStart)) return
+    if (lineStart == 0) return text.toString()
+    val item = listItemOf(text.subSequence(lineStart, text.length)) ?: return text.toString()
+    if (item.groupValues[7].isNotBlank() || insideFence(text, lineStart)) return text.toString()
     val cut = (lineStart - 1).let { if (it > 0 && text[it - 1] == '\r') it - 1 else it }
-    edit { replace(cut, length, "") }
+    val above = text.subSequence(text.lastIndexOf('\n', cut - 1) + 1, cut)
+    if (listItemOf(above) == null) return text.toString()
+    return text.substring(0, cut)
 }
 
 /** The composers' list continuation, for a field's `inputTransformation`. See [continueList]. */

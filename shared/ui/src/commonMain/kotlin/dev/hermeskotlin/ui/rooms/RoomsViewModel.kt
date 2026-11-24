@@ -30,7 +30,7 @@ import dev.hermeskotlin.ui.inbox.Words
 import dev.hermeskotlin.ui.inbox.words
 import dev.hermeskotlin.ui.inbox.wordsThen
 import dev.hermeskotlin.ui.resources.*
-import dev.hermeskotlin.ui.chat.dropEmptyListItem
+import dev.hermeskotlin.ui.chat.withoutEmptyListItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -387,8 +387,7 @@ class RoomsViewModel(
     override fun send() {
         val open = _opened.value ?: return
         if (open.sending) return
-        composer.dropEmptyListItem()
-        val text = composer.text.toString().trim()
+        val text = withoutEmptyListItem(composer.text).trim()
         if (text.isEmpty() && open.attachments.isEmpty()) return
         if (open.attachments.isNotEmpty() && !open.attachmentsSupported) return
         val roomId = open.room.roomId

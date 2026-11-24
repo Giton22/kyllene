@@ -58,6 +58,16 @@ class ComposerListsTest {
     @Test
     fun splittingAnItemStartsTheNextWithItsRest() {
         assertTyped("1. foo\n2. |bar", "1. foo|bar")
+        // The space before the rest goes, so the new item doesn't start with two.
+        assertTyped("1. foo\n2. |bar", "1. foo| bar")
+        assertTyped("- foo\n- |bar\n- baz", "- foo|  bar\n- baz")
+    }
+
+    @Test
+    fun zeroPaddedNumbersKeepTheirWidth() {
+        assertTyped("01. a\n02. |", "01. a|")
+        assertTyped("09) a\n10) |", "09) a|")
+        assertTyped("99. a\n100. |", "99. a|")
     }
 
     @Test
@@ -74,6 +84,10 @@ class ComposerListsTest {
         assertTyped("-1 degrees\n|", "-1 degrees|")
         assertTyped("1.5 kg\n|", "1.5 kg|")
         assertTyped("\n|", "|")
+        // A thematic break reads as a bullet but isn't one.
+        assertTyped("Intro\n* * *\n|", "Intro\n* * *|")
+        assertTyped("- - -\n|", "- - -|")
+        assertTyped("  _ _ _\n|", "  _ _ _|")
     }
 
     @Test
@@ -122,7 +136,7 @@ class ComposerListsTest {
         assertNull(listContinuation("1. a", 2))
     }
 
-    private fun dropped(text: String): String = TextFieldState(text).apply { dropEmptyListItem() }.text.toString()
+    private fun dropped(text: String): String = withoutEmptyListItem(text)
 
     @Test
     fun anEmptyLastItemIsDroppedBeforeSending() {
@@ -141,5 +155,9 @@ class ComposerListsTest {
         assertEquals("```\r\n- a\r\n- ", dropped("```\r\n- a\r\n- "))
         assertEquals("````\n```\n- a\n- ", dropped("````\n```\n- a\n- "))
         assertEquals("```\n~~~\n- a\n- ", dropped("```\n~~~\n- a\n- "))
+        // Only Enter after an item leaves an empty one; a marker under other text was typed on purpose.
+        assertEquals("Which option do you want?\n2. ", dropped("Which option do you want?\n2. "))
+        assertEquals("* * *\n- ", dropped("* * *\n- "))
+        assertEquals("a\n\n- ", dropped("a\n\n- "))
     }
 }
