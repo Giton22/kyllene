@@ -22,6 +22,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.em
 import com.composables.icons.lucide.ChevronDown
+import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.ChevronUp
 import com.composables.icons.lucide.ChevronsUpDown
 import com.composables.icons.lucide.Folder
@@ -47,7 +48,6 @@ import com.composables.icons.lucide.MessageCircle
 import com.composables.icons.lucide.MessageCircleQuestion
 import com.composables.icons.lucide.MessageSquare
 import com.composables.icons.lucide.PencilLine
-import com.composables.icons.lucide.ShieldAlert
 import dev.hermeskotlin.core.chat.Waiting
 import dev.hermeskotlin.designsystem.code
 import dev.hermeskotlin.designsystem.display
@@ -81,6 +81,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -110,6 +111,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.Layout
@@ -123,6 +126,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.drawBehind
 import dev.hermeskotlin.core.settings.AppSettings
 import androidx.compose.ui.unit.Dp
 import dev.hermeskotlin.core.settings.SettingsStore
@@ -132,6 +136,8 @@ import org.koin.compose.koinInject
 import dev.hermeskotlin.designsystem.components.LocalOpenModals
 import androidx.compose.runtime.mutableIntStateOf
 import dev.hermeskotlin.core.chat.ChatHost
+import dev.hermeskotlin.core.chat.AttentionTracker
+import dev.hermeskotlin.core.sessions.ActiveSessions
 import com.composables.icons.lucide.Inbox
 import dev.hermeskotlin.core.inbox.InboxLink
 import dev.hermeskotlin.core.inbox.InboxStore
@@ -173,6 +179,7 @@ import com.composables.icons.lucide.History
 import com.composables.icons.lucide.Target
 import com.composables.icons.lucide.LogOut
 import com.composables.icons.lucide.Ellipsis
+import com.composables.icons.lucide.Wrench
 import com.composables.icons.lucide.FolderPlus
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Hash
@@ -181,6 +188,7 @@ import com.composables.icons.lucide.ArrowUp
 import com.composables.icons.lucide.ArrowDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.key
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -199,6 +207,9 @@ import com.composables.icons.lucide.SearchX
 import com.composables.icons.lucide.SquarePen
 import com.composables.icons.lucide.Trash2
 import com.composables.icons.lucide.X
+import com.composables.icons.lucide.Activity
+import com.composables.icons.lucide.CircleAlert
+import com.composables.icons.lucide.TriangleAlert
 import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
@@ -223,6 +234,7 @@ import dev.hermeskotlin.core.sessions.SessionListFilter
 import dev.hermeskotlin.core.sessions.SessionSummary
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.LayoutDirection
 import dev.hermeskotlin.designsystem.accent
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
@@ -309,6 +321,9 @@ import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import dev.hermeskotlin.core.cron.CronJob
 
 /**
  * The sessions sidebar beside the chat, laid out like ChatGPT's: a title with a search button,
@@ -386,7 +401,12 @@ fun SessionsSidebar(
     val user by viewModel.user.collectAsStateWithLifecycle()
     val roster by viewModel.roster.collectAsStateWithLifecycle()
     val statuses by viewModel.statuses.collectAsStateWithLifecycle()
-    val attentionFilter by viewModel.attentionFilter.collectAsStateWithLifecycle()
+    val attentionTracker = koinInject<AttentionTracker>()
+    val waiting by attentionTracker.waiting.collectAsStateWithLifecycle()
+    val requests by attentionTracker.requestsByChat.collectAsStateWithLifecycle()
+    val liveSessions by koinInject<ActiveSessions>().live.collectAsStateWithLifecycle()
+    val sidebarAcknowledgements = koinInject<SidebarChatAcknowledgements>()
+    val selectedAttention by viewModel.attentionFilter.collectAsStateWithLifecycle()
     val drafts by viewModel.draftChats.collectAsStateWithLifecycle()
     val settingsStore = koinInject<SettingsStore>()
     val settings = settingsStore.settings.collectAsStateWithLifecycle().value
@@ -447,6 +467,7 @@ fun SessionsSidebar(
     var insightsOpen by remember { mutableStateOf(false) }
     /** The bot whose routines are showing. */
     var routinesOf by remember { mutableStateOf<Bot?>(null) }
+    var routineToOpen by remember(gateway.gatewayUrl) { mutableStateOf<String?>(null) }
     var actionTarget by remember { mutableStateOf<SessionSummary?>(null) }
     var renameTarget by remember { mutableStateOf<SessionSummary?>(null) }
     var deleteTarget by remember { mutableStateOf<SessionSummary?>(null) }
@@ -500,6 +521,7 @@ fun SessionsSidebar(
         inboxOpen = false
         if (routinesOf != null) {
             routinesOf = null
+            routineToOpen = null
             // What was fixed there shows on the roster at once.
             bots.refreshRoutines()
         }
@@ -547,7 +569,39 @@ fun SessionsSidebar(
         threadSections(threads, state.listed, state.sessions, state.project, projectIndex)
     }
     // The thread rows as the section shows them; moving one goes past its neighbour here, not in the whole list.
-    val shownThreads = sections.threads.filter { attentionFilter.keeps(statuses[it.session.id]) }
+    val scopedChats = (sections.threads.map { it.session } + sections.others).distinctBy { it.id }
+    val (chatsBadge, botsBadge) = sidebarTabCounts(
+        gateway = gateway.gatewayUrl,
+        profile = profile ?: roster?.launch ?: Bot.DEFAULT,
+        launchProfile = roster?.launch ?: Bot.DEFAULT,
+        sessions = state.sessions,
+        statuses = statuses,
+        bots = botsState,
+        waiting = waiting,
+        requests = requests,
+        live = liveSessions,
+        nonChatAlerts = troubles.keys + failingRoutines.keys,
+        acknowledgements = sidebarAcknowledgements,
+    )
+    val attention = AttentionCounts(
+        running = scopedChats.count { statuses[it.id]?.running == true },
+        needsYou = scopedChats.count { statuses[it.id]?.needsAttention == true },
+    )
+    val attentionFilter = attention.availableSelection(selectedAttention)
+    val projectLoading = state.project != null && state.projectSessions == null
+    LaunchedEffect(attentionFilter, selectedAttention, state.loading, state.error, projectLoading) {
+        if (!state.loading && state.error == null && !projectLoading && attentionFilter != selectedAttention) {
+            viewModel.setAttentionFilter(attentionFilter)
+        }
+    }
+    val prioritizeAttention = attentionFilter != AttentionFilter.NeedsAttention
+    val shownThreads = sections.threads.filter { attentionFilter.keeps(statuses[it.session.id]) }.let { rows ->
+        if (prioritizeAttention && !reorderingThreads) rows.sortedBy { sidebarAttentionOrder(statuses[it.session.id]) }
+        else rows
+    }
+    val shownSessions = sections.others.filter { attentionFilter.keeps(statuses[it.id]) }.let { rows ->
+        if (prioritizeAttention) rows.sortedBy { sidebarAttentionOrder(statuses[it.id]) } else rows
+    }
     val openHere: (SessionSummary) -> Unit = {
         // The viewport decides when the new messages have actually been read.
         val readUpTo = viewModel.readUpTo(it)
@@ -579,12 +633,12 @@ fun SessionsSidebar(
         }
     }
     // The desktop's keys for the list: search, and stepping through the chats in the order they're listed.
-    val listed = shownThreads.map { it.session } + sections.others.filter { attentionFilter.keeps(statuses[it.id]) }
+    val listed = shownThreads.map { it.session } + shownSessions
     // The chats as the list in view shows them, top to bottom, read when one is deleted for the chat to open in
     // its place. With none in view (the Bots side, a phone's search before a word is typed), the Chats side's.
     SideEffect {
         shownChats.rows = {
-            val (pinned, rest) = sections.others.filter { attentionFilter.keeps(statuses[it.id]) }.partition { it.pinned }
+            val (pinned, rest) = shownSessions.partition { it.pinned }
             chatsInView(
                 recent = visibleThreads(shownThreads, threadsCollapsed, selectedId, statuses, drafts).map { it.session } +
                     visiblePinned(pinned, pinnedCollapsed, selectedId, statuses, drafts) + rest,
@@ -622,6 +676,7 @@ fun SessionsSidebar(
                 scheduledOpen = false
                 inboxOpen = false
                 routinesOf = null
+                routineToOpen = null
                 capabilitiesOpen = false
                 configOpen = false
                 pluginsOpen = false
@@ -707,6 +762,9 @@ fun SessionsSidebar(
                 onOpenRun = { run -> onOpenBotSession(bot, run.id, run.title?.takeIf { it.isNotBlank() } ?: bot.label) },
                 onSessionExpired = onSessionExpired,
                 owner = RoutineOwner(bot.name, bot.label),
+                shortcutJobId = routineToOpen,
+                onShortcutOpened = { routineToOpen = null },
+                onJobOpened = { job -> bots.acknowledgeRoutine(bot.name, job) },
             )
             capabilitiesOpen -> CapabilitiesPage(
                 gateway = gateway,
@@ -736,30 +794,27 @@ fun SessionsSidebar(
             )
         }
     }
-    // The page buttons left on in Settings › Sidebar pages, over the chats; over the bots too while the switch is
-    // hidden, since the Chats side, where they'd otherwise be, can't be reached then. [inset] lines them up with the list.
-    val navGrid: @Composable (inset: Dp) -> Unit = { inset ->
-        if (navPages.isNotEmpty()) NavGrid(
-            navPages.mapNotNull { page ->
-                val icon = navIcon(page)
-                val label = stringResource(navLabel(page))
-                when (page) {
-                    SidebarPage.Inbox -> NavLink(icon, label, badge = inboxUnread) { inboxOpen = true }
-                    SidebarPage.Scheduled -> NavLink(icon, label, selected = pageInMain && scheduledOpen) { closePages(); scheduledOpen = true }
-                    SidebarPage.Insights -> NavLink(icon, label, selected = pageInMain && insightsOpen) { closePages(); insightsOpen = true }
-                    SidebarPage.Capabilities -> NavLink(icon, label, selected = pageInMain && capabilitiesOpen) { closePages(); capabilitiesOpen = true }
-                    SidebarPage.Plugins -> NavLink(icon, label, selected = pageInMain && pluginsOpen) { closePages(); pluginsOpen = true }
-                    SidebarPage.Config -> NavLink(icon, label, selected = pageInMain && configOpen) { closePages(); configOpen = true }
-                    SidebarPage.Archived -> NavLink(icon, label, selected = isDesktop && state.filter == SessionListFilter.Archived) {
-                        viewModel.setFilter(SessionListFilter.Archived)
-                    }
-                    // The two sides are the switch's, not pages with a button here.
-                    SidebarPage.Chats, SidebarPage.Bots -> null
-                }
-            },
-            inset = inset,
-        )
+    val navLinks = navPages.mapNotNull { page ->
+        val icon = navIcon(page)
+        val label = stringResource(navLabel(page))
+        when (page) {
+            SidebarPage.Inbox -> NavLink(icon, label, badge = inboxUnread) { inboxOpen = true }
+            SidebarPage.Scheduled -> NavLink(icon, label, selected = pageInMain && scheduledOpen) { closePages(); scheduledOpen = true }
+            SidebarPage.Insights -> NavLink(icon, label, selected = pageInMain && insightsOpen) { closePages(); insightsOpen = true }
+            SidebarPage.Capabilities -> NavLink(icon, label, selected = pageInMain && capabilitiesOpen) { closePages(); capabilitiesOpen = true }
+            SidebarPage.Plugins -> NavLink(icon, label, selected = pageInMain && pluginsOpen) { closePages(); pluginsOpen = true }
+            SidebarPage.Config -> NavLink(icon, label, selected = pageInMain && configOpen) { closePages(); configOpen = true }
+            SidebarPage.Archived -> NavLink(icon, label, selected = isDesktop && state.filter == SessionListFilter.Archived) {
+                viewModel.setFilter(SessionListFilter.Archived)
+            }
+            // The two sides are the switch's, not pages with a button here.
+            SidebarPage.Chats, SidebarPage.Bots -> null
+        }
     }
+
+    val showDrawerNav = (pageKey == null || pageInMain) && !searchOpen && state.filter == SessionListFilter.Recent
+    var drawerFooterHeight by remember { mutableIntStateOf(0) }
+    val drawerBottomInset = with(LocalDensity.current) { drawerFooterHeight.toDp().coerceAtLeast(96.dp) }
     if (pageInMain && mainPage != null) {
         val latest by rememberUpdatedState(pageView)
         DisposableEffect(pageKey) {
@@ -802,8 +857,8 @@ fun SessionsSidebar(
                         openAccount()
                     },
                     onSettings = onOpenSettings,
-                    // Without the switch, search is the Bots side's only way to the chats, so it keeps the pill.
-                    onSearch = { searchOpen = true }.takeIf { mode == SidebarMode.Chats || !modeSwitch },
+                    onSearch = null,
+                    reserveSearchSpace = false,
                     profiles = roster?.profiles.orEmpty(),
                     activeProfile = roster?.active(profile)?.name,
                     // Profiles made or removed on the host since show up, as the account sheet's do.
@@ -814,18 +869,14 @@ fun SessionsSidebar(
             }
             if (!searchOpen && state.filter == SessionListFilter.Recent) {
                 if (modeSwitch) {
-                    val modeNames = sidebarModeNames()
-                    SegmentedControl(
-                        options = SidebarMode.entries,
-                        selected = mode,
-                        onSelect = pickMode,
-                        // How many bots need the user, readable from the Chats side too.
-                        optionLabel = { modeLabel(it, modeNames, needsYou.size) },
-                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-                    )
+                    SidebarModeSwitch(mode, chatsBadge, botsBadge, pickMode)
                 }
                 RenameBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
                 UpdateBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
+                // With the switch hidden, search is also the Bots side's way to the chats.
+                if (mode == SidebarMode.Chats || !modeSwitch) {
+                    SearchPill(onClick = { searchOpen = true })
+                }
                 // A desktop starts a chat from the top of its sidebar, as desktop chat apps do; the footer
                 // keeps the account. A phone keeps the pill under the thumb.
                 if (isDesktop) {
@@ -864,16 +915,19 @@ fun SessionsSidebar(
                                     override fun delete(bot: Bot) = bots.delete(bot) { onBotDeleted(bot) }
                                     override fun checkAgain(bot: Bot) = bots.checkAgain(bot)
                                     override fun routines(bot: Bot) {
+                                        routineToOpen = null
+                                        routinesOf = bot
+                                    }
+                                    override fun openRoutine(bot: Bot, job: CronJob) {
+                                        routineToOpen = job.id
                                         routinesOf = bot
                                     }
                                 }
                             },
                             onRetry = bots::refresh,
                             onDismissNotice = bots::dismissNotice,
-                            // The roster's own 14dp margin already lines the buttons up with its cards. Empty while
-                            // the switch shows, not left out: the list holds on to the first row it shows, so buttons
-                            // the switch going away brings in would otherwise come in above it, out of sight.
-                            top = { if (!modeSwitch) navGrid(0.dp) },
+                            compactRows = true,
+                            bottomInset = if (showDrawerNav) drawerBottomInset else 96.dp,
                             troubles = troubles,
                             failingRoutines = failingRoutines,
                             needsYou = needsYou,
@@ -939,7 +993,7 @@ fun SessionsSidebar(
                         )
                     }
                     state.filter == SessionListFilter.Recent -> SessionList(
-                        sessions = sections.others.filter { attentionFilter.keeps(statuses[it.id]) },
+                        sessions = shownSessions,
                         selectedId = selectedId,
                         onOpen = click,
                         onActions = rowActions,
@@ -969,6 +1023,7 @@ fun SessionsSidebar(
                         onTogglePinned = { settingsStore.update { it.copy(pinnedCollapsed = !it.pinnedCollapsed) } },
                         threadsCollapsed = threadsCollapsed,
                         onToggleThreads = { settingsStore.update { it.copy(threadsCollapsed = !it.threadsCollapsed) } },
+                        bottomInset = if (showDrawerNav) drawerBottomInset else 96.dp,
                         status = {
                             if (!state.loading && state.error == null && (state.projects.isNotEmpty() || state.canMakeProjects)) {
                                 item(key = "projects") {
@@ -985,15 +1040,8 @@ fun SessionsSidebar(
                                     )
                                 }
                             }
-                            if (!state.loading && state.error == null && state.listed.isNotEmpty()) {
-                                item(key = "filters") {
-                                    AttentionFilters(
-                                        selected = attentionFilter,
-                                        running = state.listed.count { statuses[it.id]?.running == true },
-                                        needsAttention = state.listed.count { statuses[it.id]?.needsAttention == true },
-                                        onSelect = viewModel::setAttentionFilter,
-                                    )
-                                }
+                            item(key = "attention-filters") {
+                                SidebarAttentionRows(attentionFilter, attention, viewModel::setAttentionFilter)
                             }
                             state.savedCopyAt?.takeIf { state.project == null }?.let { savedAt ->
                                 item(key = "saved-copy") {
@@ -1021,19 +1069,10 @@ fun SessionsSidebar(
                                         stringResource(if (state.project != null) Res.string.sessions_empty_project else Res.string.sessions_empty),
                                     )
                                 }
-                                attentionFilter == AttentionFilter.Running && state.listed.none { statuses[it.id]?.running == true } -> item(key = "none-running") {
-                                    ListNotice(stringResource(Res.string.sessions_none_running))
-                                }
-                                attentionFilter == AttentionFilter.NeedsAttention && state.listed.none { statuses[it.id]?.needsAttention == true } ->
-                                    item(key = "none-waiting") { ListNotice(stringResource(Res.string.sessions_none_waiting)) }
+
                             }
                         },
-                    ) {
-                        // The pages left on in Settings › Sidebar pages; with none, no room is kept for them. The item
-                        // stays when it's empty: the list holds on to the first row it shows, so pages turned back on
-                        // would otherwise come in above it, out of sight.
-                        item(key = "nav") { navGrid(6.dp) }
-                    }
+                    )
                     state.loading -> ListSkeleton()
                     state.error != null -> EmptyState(Lucide.CloudOff, stringResource(Res.string.sessions_load_failed), state.error, error = true) {
                         Button(stringResource(Res.string.sessions_try_again), onClick = viewModel::refresh, variant = ButtonVariant.Secondary, leadingIcon = Lucide.RefreshCw)
@@ -1074,7 +1113,8 @@ fun SessionsSidebar(
                 openAccount()
             },
             onAccountBounds = { accountRow[0] = it },
-            modifier = Modifier.align(Alignment.BottomCenter),
+            navigation = if (showDrawerNav && navLinks.isNotEmpty()) ({ DrawerNavigation(mode, navLinks) }) else null,
+            modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { drawerFooterHeight = it.height },
         )
     }
 
@@ -1261,10 +1301,12 @@ internal fun SessionsSidebarSample(
                             }
                         }
                         item(key = "filters") {
-                            AttentionFilters(
+                            SidebarAttentionRows(
                                 selected = AttentionFilter.All,
-                                running = sessions.count { statuses[it.id]?.running == true },
-                                needsAttention = sessions.count { statuses[it.id]?.needsAttention == true },
+                                counts = AttentionCounts(
+                                    running = sessions.count { statuses[it.id]?.running == true },
+                                    needsYou = sessions.count { statuses[it.id]?.needsAttention == true },
+                                ),
                                 onSelect = {},
                             )
                         }
@@ -1314,14 +1356,7 @@ internal fun BotsSidebarSample(
     ) {
         Column(Modifier.fillMaxSize()) {
             MainHeader(gatewayLabel = "homelab", connection = null, onAccount = {}, onSettings = {}, onSearch = null)
-            val modeNames = sidebarModeNames()
-            SegmentedControl(
-                options = SidebarMode.entries,
-                selected = SidebarMode.Bots,
-                onSelect = {},
-                optionLabel = { modeLabel(it, modeNames, needsYou.size) },
-                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
-            )
+            SidebarModeSwitch(SidebarMode.Bots, 0, needsYou.size, onSelect = {})
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 BotsRoster(
                     state = state,
@@ -1335,6 +1370,7 @@ internal fun BotsSidebarSample(
                     needsYou = needsYou,
                     rooms = rooms,
                     roomsAvailable = rooms.isNotEmpty(),
+                    compactRows = true,
                 )
             }
         }
@@ -1371,21 +1407,23 @@ private val SessionListFilter.label: StringResource
         SessionListFilter.Archived -> Res.string.sessions_nav_archived
     }
 
-/** Each side of the Chats / Bots switch by name, read once in composition for the switch's plain label lambda. */
+/** Each tab’s unseen count stays visible from either tab. */
 @Composable
-private fun sidebarModeNames(): Map<SidebarMode, String> = SidebarMode.entries.associateWith {
-    stringResource(
-        when (it) {
-            SidebarMode.Chats -> Res.string.sessions_mode_chats
-            SidebarMode.Bots -> Res.string.sessions_mode_bots
+internal fun SidebarModeSwitch(mode: SidebarMode, chatsCount: Int, botsCount: Int, onSelect: (SidebarMode) -> Unit) {
+    val chats = stringResource(Res.string.sessions_mode_chats)
+    val bots = stringResource(Res.string.sessions_mode_bots)
+    SegmentedControl(
+        options = SidebarMode.entries,
+        selected = mode,
+        onSelect = onSelect,
+        optionLabel = { if (it == SidebarMode.Chats) chats else bots },
+        modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+        highlightOnHover = false,
+        trailingContent = { option ->
+            val count = if (option == SidebarMode.Chats) chatsCount else botsCount
+            if (count > 0) SidebarCountBadge(count, selected = mode == option)
         },
     )
-}
-
-/** A side of the switch, Bots with how many bots need the user. */
-private fun modeLabel(mode: SidebarMode, names: Map<SidebarMode, String>, needsYou: Int): String {
-    val name = names[mode] ?: mode.name
-    return if (mode == SidebarMode.Bots && needsYou > 0) "$name · $needsYou" else name
 }
 
 /**
@@ -1400,6 +1438,7 @@ internal fun MainHeader(
     onAccount: () -> Unit,
     onSettings: () -> Unit,
     onSearch: (() -> Unit)?,
+    reserveSearchSpace: Boolean = isDesktop,
     /** The gateway's profiles; with more than one, the header names the active one and opens them in a menu. */
     profiles: List<Profile> = emptyList(),
     /** The active profile's name, the launch profile's included. */
@@ -1518,9 +1557,8 @@ internal fun MainHeader(
                 tint = Theme[colors][textSecondary],
             )
         }
-        // Search looks through chats; the bot roster is short enough to read. The header keeps its height
-        // without the pill, so switching sides doesn't move the switch under the finger.
-        if (onSearch != null) SearchPill(onSearch) else Spacer(Modifier.height(maxOf(MinTouchTarget, SEARCH_PILL_HEIGHT)))
+        // The phone puts search beneath the mode switch. The desktop keeps a fixed header across modes.
+        if (onSearch != null) SearchPill(onSearch) else if (reserveSearchSpace) Spacer(Modifier.height(maxOf(MinTouchTarget, SEARCH_PILL_HEIGHT)))
     }
 }
 
@@ -1838,12 +1876,52 @@ private fun NavGrid(links: List<NavLink>, inset: Dp = 6.dp) {
     }
 }
 
+@Composable
+internal fun DrawerNavigation(mode: SidebarMode, links: List<NavLink>) {
+    var expanded by rememberSaveable(mode) { mutableStateOf(false) }
+    val inbox = links.firstOrNull { it.icon == Lucide.Inbox }
+    val tools = if (inbox == null) links else links.filter { it !== inbox }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
+        inbox?.let { NavTile(it, Modifier.fillMaxWidth(), compact = true) }
+        if (tools.isNotEmpty()) {
+            val state = stringResource(if (expanded) Res.string.sessions_expanded else Res.string.sessions_collapsed)
+            NavTile(
+                NavLink(Lucide.Wrench, stringResource(Res.string.sessions_drawer_tools)) { expanded = !expanded },
+                Modifier.fillMaxWidth().semantics { stateDescription = state },
+                compact = true,
+                trailing = if (expanded) Lucide.ChevronDown else Lucide.ChevronRight,
+            )
+            if (expanded) {
+                val room = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
+                val limit = (room * 0.3f).coerceIn(48.dp, 224.dp)
+                Column(Modifier.fillMaxWidth().heightIn(max = limit).verticalScrollWithBar().padding(start = 12.dp)) {
+                    tools.forEach { link ->
+                        NavTile(
+                            NavLink(link.icon, link.label, link.badge, link.selected) {
+                                if (!isDesktop) expanded = false
+                                link.onClick()
+                            },
+                            Modifier.fillMaxWidth(),
+                            compact = true,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 /**
  * A 44dp tile, an accent icon and its label, inside a full-height touch target. On the desktop a flat row, as a
  * desktop sidebar lists its places: filled only under the mouse.
  */
 @Composable
-private fun NavTile(link: NavLink, modifier: Modifier = Modifier) {
+private fun NavTile(
+    link: NavLink,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    trailing: ImageVector? = null,
+) {
     val interaction = remember { MutableInteractionSource() }
     val shape = RoundedCornerShape(Theme[radii][if (isDesktop) radiusSmall else radiusMedium])
     Box(
@@ -1857,11 +1935,11 @@ private fun NavTile(link: NavLink, modifier: Modifier = Modifier) {
         Row(
             Modifier
                 // A phone's tile fills its grid cell; a desktop row is as tall as its own line, outside a grid too.
-                .then(if (isDesktop) Modifier.fillMaxWidth().heightIn(min = DESKTOP_NAV_ROW) else Modifier.fillMaxSize())
+                .then(if (isDesktop || compact) Modifier.fillMaxWidth().heightIn(min = if (compact) MinTouchTarget else DESKTOP_NAV_ROW) else Modifier.fillMaxSize())
                 .padding(vertical = if (isDesktop) 1.dp else 2.dp)
                 .clip(shape)
                 // On the desktop the page that's open beside the sidebar stays marked, as a chat row does.
-                .background(if (isDesktop && !link.selected) Color.Transparent else Theme[colors][surface2], shape)
+                .background(if ((isDesktop || compact) && !link.selected) Color.Transparent else Theme[colors][surface2], shape)
                 .indication(interaction, rememberHoverIndication(Theme[colors][text]))
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1875,7 +1953,7 @@ private fun NavTile(link: NavLink, modifier: Modifier = Modifier) {
                 // Large text wraps rather than cutting the name off; the tile grows.
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = isDesktop && link.keys != null),
+                modifier = Modifier.weight(1f, fill = compact || isDesktop && link.keys != null),
             )
             if (isDesktop && link.keys != null) {
                 Text(keysLabel(link.keys), style = Theme[typography][caption], color = Theme[colors][textTertiary], maxLines = 1)
@@ -1891,6 +1969,9 @@ private fun NavTile(link: NavLink, modifier: Modifier = Modifier) {
                         .padding(horizontal = 6.dp, vertical = 1.dp)
                         .semantics { contentDescription = unread },
                 )
+            }
+            trailing?.let { icon ->
+                UnstyledIcon(icon, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -1912,6 +1993,7 @@ private fun BottomBar(
     modifier: Modifier = Modifier,
     /** Where the desktop's account row is, for its menu to open over it. */
     onAccountBounds: (Rect) -> Unit = {},
+    navigation: (@Composable () -> Unit)? = null,
 ) {
     val ground = Theme[colors][sidebarColor]
     Column(modifier.fillMaxWidth()) {
@@ -1919,6 +2001,7 @@ private fun BottomBar(
         // Opaque under the banner too, so no row shows around it.
         Column(Modifier.fillMaxWidth().background(ground)) {
             if (message != null) MessageBanner(message.text(), onDismiss = onDismissMessage, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+            navigation?.invoke()
             if (isDesktop) {
                 AccountRow(userLabel, connection, onClick = onAccount, modifier = Modifier.onGloballyPositioned { onAccountBounds(it.boundsInWindow()) })
                 return@Column
@@ -2143,6 +2226,7 @@ private fun SessionList(
     /** Given a way to focus the first chat listed, for a field above the list. */
     focus: ListFocus? = null,
     status: LazyListScope.() -> Unit = {},
+    bottomInset: Dp = 96.dp,
     header: LazyListScope.() -> Unit = {},
 ) {
     val listState = rememberLazyListState()
@@ -2228,6 +2312,7 @@ private fun SessionList(
             }
         }
         if (sectioned) {
+            status()
             if (threads.isNotEmpty()) {
                 if (reorderingThreads) {
                     // One item, so a dragged row moves among the others without the list recycling it.
@@ -2291,8 +2376,6 @@ private fun SessionList(
                     contentType = { SessionRowType },
                 ) { row(it) }
             }
-            // The filter chips head the rest, with no label of their own.
-            status()
             items(rest, key = { it.id }, contentType = { SessionRowType }) { row(it) }
             if (loadingMore) item(key = "loading-more") { ListSpinner() }
             return@rows
@@ -2305,13 +2388,13 @@ private fun SessionList(
             state = listState,
             modifier = Modifier.fillMaxSize().arrowFocus().then(if (isDesktop) Modifier.onKeyEvent(jump) else Modifier),
             // Room to scroll the last rows out from under the floating footer.
-            contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = bottomInset),
             content = {
                 positions.clear()
                 PositionsScope(this, positions).rows()
             },
         )
-        VerticalScrollbar(listState, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = 96.dp, end = 1.dp))
+        VerticalScrollbar(listState, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = bottomInset, end = 1.dp))
     }
 }
 
@@ -2672,13 +2755,13 @@ internal enum class RowTone { Approval, Question, Running, Reply, Draft, Idle }
 internal fun rowTone(status: RowStatus?, draft: Boolean): RowTone = when {
     status?.waiting == Waiting.Approval || status?.waiting == Waiting.Unknown -> RowTone.Approval
     status?.waiting != null -> RowTone.Question
-    status?.running == true -> RowTone.Running
     status?.unread == true -> RowTone.Reply
+    status?.running == true -> RowTone.Running
     draft -> RowTone.Draft
     else -> RowTone.Idle
 }
 
-/** The row's second line: everything [status] and [draft] say, as words to join, or empty for an idle chat. */
+/** Localized status announcements for the chat row. */
 internal fun rowStatusWords(status: RowStatus?, draft: Boolean): List<StringResource> = listOfNotNull(
     status?.waiting?.let(::waitingWord),
     Res.string.sessions_status_running.takeIf { status?.running == true },
@@ -2694,13 +2777,13 @@ internal fun waitingWord(waiting: Waiting): StringResource = when (waiting) {
     Waiting.Unknown -> Res.string.sessions_waiting_unknown
 }
 
-/** [rowStatusWords] as the row shows them, or null for an idle chat. */
+/** The row’s accessibility status, or null for an idle chat. */
 @Composable
 private fun rowStatusLine(status: RowStatus?, draft: Boolean): String? =
     rowStatusWords(status, draft).map { stringResource(it) }.joinToString(" · ").ifEmpty { null }
 
 /**
- * A session row: a status disc, the title over what the chat is doing, and its age in mono. A pinned
+ * A session row: a status disc, a title, and its age in mono. A pinned
  * chat with nothing going on shows a pin instead of the disc. Long-press for actions.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -2826,6 +2909,7 @@ private fun SessionRowContent(
                     else -> Modifier
                 },
             )
+            .semantics { if (line != null) stateDescription = line }
             .handCursor()
             .combinedClickable(
                 onClick = onClick,
@@ -2868,10 +2952,6 @@ private fun SessionRowContent(
                     UnstyledIcon(mark, contentDescription = markLabel, tint = Theme[colors][textMuted], modifier = Modifier.size(12.dp))
                 }
             }
-            // Said in words as well as by the disc.
-            line?.let {
-                Text(it, style = Theme[typography][caption].copy(fontSize = 12.sp), color = toneColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
             if (showSnippet) {
                 val detail = session.snippet?.replace('\n', ' ')?.takeIf { it.isNotBlank() } ?: shortAge(session.activityAt)
                 if (detail.isNotEmpty()) {
@@ -2885,8 +2965,6 @@ private fun SessionRowContent(
                 style = Theme[typography][code].copy(fontSize = 11.5.sp),
                 color = Theme[colors][textMuted],
                 maxLines = 1,
-                // Level with the title when a status line follows it.
-                modifier = if (line != null) Modifier.align(Alignment.Top).padding(top = 2.dp) else Modifier,
             )
         }
     }
@@ -2955,7 +3033,7 @@ private fun StatusDisc(tone: RowTone, color: Color) {
             RowTone.Running -> Spinner(Modifier.size(if (isDesktop) 11.dp else 13.dp), color = color)
             else -> UnstyledIcon(
                 when (tone) {
-                    RowTone.Approval -> Lucide.ShieldAlert
+                    RowTone.Approval -> Lucide.TriangleAlert
                     RowTone.Question -> Lucide.MessageCircleQuestion
                     RowTone.Reply -> Lucide.MessageCircle
                     RowTone.Draft -> Lucide.PencilLine
@@ -2977,27 +3055,85 @@ internal fun ListSpinner() {
     Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { Spinner(Modifier.size(20.dp)) }
 }
 
-/** All / Running / Needs attention over the recent list, with how many each holds. */
+internal data class AttentionCounts(val running: Int, val needsYou: Int) {
+    fun count(filter: AttentionFilter): Int? = when (filter) {
+        AttentionFilter.All -> null
+        AttentionFilter.NeedsAttention -> needsYou
+        AttentionFilter.Running -> running
+    }
+
+    fun availableSelection(filter: AttentionFilter): AttentionFilter =
+        if (count(filter) == 0) AttentionFilter.All else filter
+}
+
 @Composable
-private fun AttentionFilters(selected: AttentionFilter, running: Int, needsAttention: Int, onSelect: (AttentionFilter) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 6.dp, end = 6.dp, bottom = 2.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        AttentionFilter.entries.forEach { filter ->
-            val (count, color) = when (filter) {
-                AttentionFilter.All -> null to Theme[colors][textTertiary]
-                AttentionFilter.Running -> running to Theme[colors][accentText]
-                AttentionFilter.NeedsAttention -> needsAttention to Theme[colors][warning]
+internal fun SidebarAttentionRows(
+    selected: AttentionFilter,
+    counts: AttentionCounts,
+    onSelect: (AttentionFilter) -> Unit,
+) {
+    val accentColor = Theme[colors][accent]
+    val selectedFill = Theme[colors][accentSoft]
+    val foreground = Theme[colors][text]
+    val shape = RoundedCornerShape(Theme[radii][radiusSmall])
+    val rowHeight = if (isDesktop) DESKTOP_NAV_ROW else MinTouchTarget
+    Column(Modifier.fillMaxWidth().selectableGroup().padding(horizontal = 6.dp, vertical = 4.dp)) {
+        listOf(AttentionFilter.All, AttentionFilter.NeedsAttention, AttentionFilter.Running).forEach { filter ->
+            val count = counts.count(filter)
+            if (count == 0) return@forEach
+            val active = filter == selected
+            val icon = when (filter) {
+                AttentionFilter.All -> Lucide.MessagesSquare
+                AttentionFilter.NeedsAttention -> Lucide.CircleAlert
+                AttentionFilter.Running -> Lucide.Activity
             }
-            Chip(
-                text = stringResource(filter.label),
-                selected = filter == selected,
-                onClick = { onSelect(filter) },
-                count = count?.takeIf { it > 0 },
-                countColor = color,
-            )
+            val interaction = remember(filter) { MutableInteractionSource() }
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = rowHeight).clip(shape)
+                    .background(if (active) selectedFill else Color.Transparent)
+                    .drawBehind {
+                        if (active) {
+                            val width = 3.dp.toPx()
+                            val x = if (layoutDirection == LayoutDirection.Ltr) 0f else size.width - width
+                            drawRect(accentColor, topLeft = Offset(x, 0f), size = Size(width, size.height))
+                        }
+                    }
+                    .handCursor()
+                    .selectable(active, interaction, null, role = Role.Tab, onClick = { onSelect(filter) })
+                    .indication(interaction, rememberHoverIndication(foreground))
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                UnstyledIcon(icon, contentDescription = null, tint = Theme[colors][accentText], modifier = Modifier.size(16.dp))
+                Text(
+                    stringResource(if (filter == AttentionFilter.All) Res.string.sessions_filter_all_chats else filter.label),
+                    modifier = Modifier.weight(1f),
+                    style = Theme[typography][label],
+                    color = foreground,
+                )
+                if (count != null) {
+                    SidebarCountBadge(count, selected = active)
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun SidebarCountBadge(count: Int, selected: Boolean) {
+    Box(
+        Modifier.sizeIn(minWidth = 24.dp, minHeight = 24.dp)
+            .background(Theme[colors][if (selected) surface3 else accentSoft], CircleShape)
+            .padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (count > 99) "99+" else count.toString(),
+            style = Theme[typography][code].copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+            color = Theme[colors][accentText],
+            maxLines = 1,
+        )
     }
 }
 
@@ -3118,13 +3254,8 @@ private fun ProjectDropdown(
     onOptions: (Project, Rect?) -> Unit = { _, _ -> },
 ) {
     Row(Modifier.fillMaxWidth().padding(start = 6.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (projects.isEmpty()) {
-            if (onNew != null) Chip(text = stringResource(Res.string.sessions_new_project), selected = false, onClick = onNew)
-        } else {
-            ProjectMenuButton(projects, selected, onSelect)
-            // Beside the button, so they stay in reach.
-            ProjectActions(selected, onNew, onOptions)
-        }
+        ProjectMenuButton(projects, selected, onSelect)
+        ProjectActions(selected, onNew, onOptions)
     }
 }
 
@@ -3132,17 +3263,17 @@ private fun ProjectDropdown(
 @Composable
 private fun RowScope.ProjectMenuButton(projects: List<Project>, selected: Project?, onSelect: (Project?) -> Unit) {
     var open by remember { mutableStateOf(false) }
-    val shape = CircleShape
+    val shape = RoundedCornerShape(Theme[radii][radiusSmall])
     val chooseLabel = stringResource(Res.string.sessions_choose_project)
     val menuState = stringResource(if (open) Res.string.sessions_expanded else Res.string.sessions_collapsed)
     val shown = selected?.label ?: stringResource(Res.string.sessions_all_projects)
-    // Takes all the room the buttons beside it leave, with the pill hugging the start: a long name gets that
-    // room before it is cut short, and the buttons stay at the end.
+    // The weighted selector leaves the adjacent project actions their full touch targets.
     Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
         DropdownMenu(
             expanded = open,
             onExpandedChange = { open = it },
             alignment = AnchorAlignment.Start,
+            modifier = Modifier.fillMaxWidth(),
             maxHeight = PROJECT_MENU_MAX_HEIGHT,
             items = {
                 MenuChoice(stringResource(Res.string.sessions_all_projects), projectIcon(null), selected = selected == null, onClick = { onSelect(null) })
@@ -3159,10 +3290,10 @@ private fun RowScope.ProjectMenuButton(projects: List<Project>, selected: Projec
         ) {
             val interaction = remember { MutableInteractionSource() }
             val content = Theme[colors][textSecondary]
-            // A 32dp pill drawn inside a full-height touch target, as a Chip is.
+            // The visible selector sits inside a full-height touch target.
             Box(
                 Modifier
-                    .heightIn(min = MinTouchTarget)
+                    .fillMaxWidth().heightIn(min = MinTouchTarget)
                     .handCursor()
                     .clickable(interaction, indication = null, role = Role.DropdownList, onClickLabel = chooseLabel) { open = !open }
                     // The name and count are read from the pill's text; the state says whether the menu shows.
@@ -3171,7 +3302,7 @@ private fun RowScope.ProjectMenuButton(projects: List<Project>, selected: Projec
             ) {
                 Row(
                     Modifier
-                        .heightIn(min = 32.dp)
+                        .fillMaxWidth().heightIn(min = 32.dp)
                         .clip(shape)
                         .border(1.dp, Theme[colors][stroke], shape)
                         .background(Theme[colors][surface2], shape)
@@ -3188,7 +3319,7 @@ private fun RowScope.ProjectMenuButton(projects: List<Project>, selected: Projec
                         color = content,
                         singleLine = true,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+                        modifier = Modifier.weight(1f),
                     )
                     selected?.let {
                         Text(

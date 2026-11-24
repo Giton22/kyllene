@@ -42,19 +42,32 @@ fun rememberHoverIndication(color: Color): IndicationNodeFactory = rememberHover
  * rounded button's ring has its corners rather than a square cut off by the clip.
  */
 @Composable
-fun rememberHoverIndication(color: Color, shape: Shape): IndicationNodeFactory = rememberHoverIndication(color, Theme[colors][accent], shape)
+fun rememberHoverIndication(color: Color, shape: Shape, highlightOnHover: Boolean = true): IndicationNodeFactory =
+    rememberHoverIndication(color, Theme[colors][accent], shape, highlightOnHover)
 
-/** The same with the focus ring's [ring] color given, for the theme's own default, set before the theme is. */
+/**
+ * The same with the focus ring's [ring] color given, for the theme's own default, set before the theme is.
+ * [highlightOnHover] controls the resting pointer tint independently of press and keyboard focus.
+ */
 @Composable
-fun rememberHoverIndication(color: Color, ring: Color, shape: Shape? = null): IndicationNodeFactory =
-    remember(color, ring, shape) { HoverIndication(color.copy(alpha = color.alpha * HOVER_ALPHA), ring, shape) }
+fun rememberHoverIndication(
+    color: Color,
+    ring: Color,
+    shape: Shape? = null,
+    highlightOnHover: Boolean = true,
+): IndicationNodeFactory =
+    remember(color, ring, shape, highlightOnHover) {
+        HoverIndication(color.copy(alpha = color.alpha * HOVER_ALPHA), ring, shape, highlightOnHover)
+    }
 
-private class HoverIndication(private val hover: Color, private val ring: Color, private val shape: Shape?) : IndicationNodeFactory {
-    override fun create(interactionSource: InteractionSource): DelegatableNode = HoverIndicationNode(interactionSource, hover, ring, shape)
-
-    override fun equals(other: Any?) = other is HoverIndication && other.hover == hover && other.ring == ring && other.shape == shape
-
-    override fun hashCode() = 31 * (31 * hover.hashCode() + ring.hashCode()) + shape.hashCode()
+private data class HoverIndication(
+    private val hover: Color,
+    private val ring: Color,
+    private val shape: Shape?,
+    private val highlightOnHover: Boolean,
+) : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): DelegatableNode =
+        HoverIndicationNode(interactionSource, hover, ring, shape, highlightOnHover)
 }
 
 private class HoverIndicationNode(
@@ -62,6 +75,7 @@ private class HoverIndicationNode(
     private val hover: Color,
     private val ring: Color,
     private val shape: Shape?,
+    private val highlightOnHover: Boolean,
 ) : Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
     // What is hovering, pressed or focused now, each Enter, Press or Focus until its own end. A node made while the
     // pointer was already on the control (a theme change remakes them) sees only the Exit, which finds nothing.
@@ -98,7 +112,7 @@ private class HoverIndicationNode(
         val desktop = currentValueOf(LocalDesktopLayout)
         // A desktop's mouse press darkens the tint a step, so a click is seen landing; a phone keeps none, as ever.
         if (desktop && presses.isNotEmpty()) drawRect(hover.copy(alpha = hover.alpha * PRESS_FACTOR))
-        else if (hovers.isNotEmpty()) drawRect(hover)
+        else if (highlightOnHover && hovers.isNotEmpty()) drawRect(hover)
         // Only with a desktop's keyboard: a phone draws no focus, as it never has, and focus a click moved (a sheet
         // opened with the mouse focusing its first row) shows none.
         val keyboard = currentValueOf(LocalInputModeManager).inputMode == InputMode.Keyboard

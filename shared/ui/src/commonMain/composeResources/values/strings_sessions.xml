@@ -46,6 +46,8 @@
     <string name="sessions_nothing_archived">Nothing archived</string>
     <string name="sessions_nothing_archived_detail">Archived sessions are hidden from Recent but stay resumable.</string>
     <string name="sessions_filter_all">All</string>
+    <string name="sessions_filter_all_chats">All chats</string>
+    <string name="sessions_drawer_tools">Tools</string>
     <string name="sessions_filter_needs_you">Needs you</string>
     <string name="sessions_section_threads">Threads</string>
     <string name="sessions_section_pinned">Pinned</string>

@@ -135,6 +135,9 @@ internal fun ScheduledPage(
     owner: RoutineOwner? = null,
     /** Opens a run in a window of its own (a desktop's Ctrl+click or menu), where one can open. */
     onPopOutRun: ((SessionSummary) -> Unit)? = null,
+    shortcutJobId: String? = null,
+    onShortcutOpened: () -> Unit = {},
+    onJobOpened: (CronJob) -> Unit = {},
     // Each bot's routines keep their own page state, apart from the full list's.
     viewModel: ScheduledViewModel = koinViewModel(key = owner?.let { "routines-${it.profile}" }),
 ) {
@@ -143,6 +146,16 @@ internal fun ScheduledPage(
 
     LaunchedEffect(gateway, owner) { viewModel.bind(gateway, owner) }
     LaunchedEffect(Unit) { viewModel.refresh() }
+    LaunchedEffect(shortcutJobId, state.jobs) {
+        val id = shortcutJobId ?: return@LaunchedEffect
+        if (viewModel.state.value.jobs.any { it.id == id }) {
+            viewModel.openJob(id)
+            onShortcutOpened()
+        }
+    }
+    LaunchedEffect(visible, job) {
+        if (visible && job != null && viewModel.state.value.openJob == job) onJobOpened(job)
+    }
     // Consume before the callback: the route changes on it, and the view model outlives the screen,
     // so a stale flag must not bounce the next mount after a fresh sign-in.
     LaunchedEffect(state.sessionExpired) {

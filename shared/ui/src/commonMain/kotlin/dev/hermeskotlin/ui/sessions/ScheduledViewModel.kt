@@ -120,7 +120,7 @@ class ScheduledViewModel(
         val owner = owner
         viewModelScope.launch {
             val result = api.jobs(url)
-            if (this@ScheduledViewModel.owner != owner) return@launch
+            if (this@ScheduledViewModel.owner != owner || gateway?.gatewayUrl != url) return@launch
             _state.update { state ->
                 when (result) {
                     is ApiResult.Success -> state.copy(

@@ -39,6 +39,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
@@ -51,6 +54,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -103,8 +107,6 @@ import dev.hermeskotlin.designsystem.components.MenuAction
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
 import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.designsystem.eyebrow
-import dev.hermeskotlin.designsystem.inverse
-import dev.hermeskotlin.designsystem.onInverse
 import dev.hermeskotlin.designsystem.radii
 import dev.hermeskotlin.designsystem.radiusLarge
 import dev.hermeskotlin.designsystem.radiusMedium
@@ -165,11 +167,12 @@ interface BotActions {
 
     /** The bot's scheduled routines. */
     fun routines(bot: Bot)
+    fun openRoutine(bot: Bot, job: CronJob) = routines(bot)
 }
 
 /**
  * The Bots side of the sidebar: what needs the user first, as cards, then a card per bot with its face,
- * name and what it's up to, two to a row, then the rooms. Tapping a bot opens its one permanent chat;
+ * name and what it's up to, then the rooms. Tapping a bot opens its one permanent chat;
  * a long press offers the rest.
  */
 @Composable
@@ -209,6 +212,8 @@ fun BotsRoster(
     /** Why a room's rename or delete didn't work. */
     roomsNotice: Words? = null,
     onDismissRoomsNotice: () -> Unit = {},
+    bottomInset: Dp = 96.dp,
+    compactRows: Boolean = !isDesktop,
 ) {
     val heldUp = remember(needsYou) { needsYou.filterIsInstance<NeedsYou.Answer>().associate { it.bot.name to it.waiting } }
     var roomAsk by remember { mutableStateOf<RoomAsk?>(null) }
@@ -242,6 +247,7 @@ fun BotsRoster(
             onStartOver = { startOver = bot },
             onDelete = { deleting = bot },
             modifier = modifier,
+            compact = compactRows,
         )
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -249,6 +255,12 @@ fun BotsRoster(
         val columns = if (fontScale > 1.3f || maxWidth < 300.dp) 1 else 2
         // A grid's rows: the bots in [columns], each row keyed by its first bot.
         fun LazyListScope.grid(bots: List<Bot>, prefix: String, hidden: Boolean) {
+            if (compactRows) {
+                items(bots, key = { "$prefix:${it.name}" }) { bot ->
+                    card(bot, hidden, Modifier.fillMaxWidth().padding(bottom = 3.dp))
+                }
+                return
+            }
             items(bots.chunked(columns), key = { "$prefix:${it.first().name}" }) { row ->
                 Row(
                     Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(bottom = 8.dp),
@@ -265,7 +277,7 @@ fun BotsRoster(
             modifier = Modifier.fillMaxSize(),
             state = list,
             // Room to scroll the last cards out from under the floating footer.
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = bottomInset),
         ) {
             if (top != null) item(key = "top") { top() }
             // Row keys carry a ':', which no profile name has, so a bot named like a key can't collide.
@@ -274,7 +286,7 @@ fun BotsRoster(
                     item,
                     picture = avatars[item.bot.name]?.takeIf { showsPicture(item.bot, it) },
                     // A failing routine is mended on its page; anything else in the bot's chat.
-                    onClick = { if (item is NeedsYou.Routine) actions.routines(item.bot) else actions.open(item.bot) },
+                    onClick = { if (item is NeedsYou.Routine) actions.openRoutine(item.bot, item.job) else actions.open(item.bot) },
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
             }
@@ -363,9 +375,9 @@ fun BotsRoster(
                 }
             }
         }
-        VerticalScrollbar(list, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = 96.dp, end = 1.dp))
+        VerticalScrollbar(list, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = bottomInset, end = 1.dp))
         state.notice?.let { message ->
-            MessageBanner(message.text(), onDismiss = onDismissNotice, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            MessageBanner(message.text(), onDismiss = onDismissNotice, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomInset))
         }
     }
     StartOverDialog(startOver, onDismiss = { startOver = null }, onConfirm = actions::startFresh)
@@ -436,6 +448,7 @@ private fun BotCard(
     onStartOver: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     val haptics = LocalHapticFeedback.current
@@ -449,14 +462,17 @@ private fun BotCard(
         else -> BotTone.Idle
     }
     val preview = bot.rosterPreview()
+    val warningReason = trouble?.problem?.hint
+        ?: failingRoutine?.let { stringResource(Res.string.bots_routine_failed, it.displayName) }
+    val compactWarning = compact && tone == BotTone.Attention
     val (line, italic) = when {
         // Held up on the user beats everything: nothing moves until they answer.
         waiting != null -> waiting.label to false
+        compact && warningReason != null -> warningReason to false
         thinking -> stringResource(Res.string.bots_thinking) to false
         working -> stringResource(Res.string.bots_working) to false
         // What's wrong outranks the last line: a phone has no hover to say it.
-        trouble != null -> trouble.problem.hint to false
-        failingRoutine != null -> stringResource(Res.string.bots_routine_failed, failingRoutine.displayName) to false
+        warningReason != null -> warningReason to false
         preview?.fromBot != null -> "${preview.fromBot}: ${preview.text}" to true
         preview != null -> preview.text to false
         else -> (bot.description?.takeIf { it.isNotBlank() } ?: stringResource(Res.string.bots_say_hello)) to false
@@ -496,41 +512,55 @@ private fun BotCard(
     ) {
         // A desktop's way to the same actions: a right-click, with the menu at the pointer.
         RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }, items = menuItems)
-        Column(
-            Modifier
-                .fillMaxSize()
-                .clip(shape)
-                .background(if (selected) Theme[colors][accentSoft] else Theme[colors][surface])
-                // Lit as under the pointer while its right-click menu is open, so it's clear which bot that is.
-                .then(if (contextMenuOpen) Modifier.background(Theme[colors][text].copy(alpha = 0.08f)) else Modifier)
-                .border(1.dp, if (selected) Theme[colors][accentText].copy(alpha = 0.5f) else Theme[colors][stroke], shape)
-                .handCursor()
-                .combinedClickable(
-                    onClick = { actions.open(bot) },
-                    onClickLabel = stringResource(Res.string.bots_open_chat_of, bot.label),
-                    onLongClick = {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        menuOpen = true
-                    },
-                    onLongClickLabel = stringResource(Res.string.bots_actions_of, bot.label),
-                    interactionSource = null,
-                    indication = rememberHoverIndication(Theme[colors][text]),
-                )
-                .then(if (isDesktop) Modifier.onSecondaryPress { contextMenuOpen = true } else Modifier)
-                .semantics { this.selected = selected }
-                .alpha(if (hidden) 0.6f else 1f)
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                BotAvatar(bot, picture, size = 44.dp)
-                Spacer(Modifier.weight(1f))
-                when {
-                    opening -> Spinner(Modifier.size(14.dp))
-                    else -> StatusDot(tone, unread)
+        val warningColor = Theme[colors][warning]
+        val cardModifier = (if (compact) Modifier.fillMaxWidth().heightIn(min = MinTouchTarget) else Modifier.fillMaxSize())
+            .clip(shape)
+            .background(if (selected) Theme[colors][accentSoft] else if (compact) Color.Transparent else Theme[colors][surface])
+            .drawBehind {
+                if (selected && compactWarning) {
+                    val edge = 3.dp.toPx()
+                    val left = if (layoutDirection == LayoutDirection.Ltr) 0f else size.width - edge
+                    drawRect(warningColor, topLeft = Offset(left, 0f), size = Size(edge, size.height))
                 }
             }
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                // Lit as under the pointer while its right-click menu is open, so it's clear which bot that is.
+            .then(if (contextMenuOpen) Modifier.background(Theme[colors][text].copy(alpha = 0.08f)) else Modifier)
+            .then(if (compact) Modifier else Modifier.border(1.dp, if (selected) Theme[colors][accentText].copy(alpha = 0.5f) else Theme[colors][stroke], shape))
+            .handCursor()
+            .combinedClickable(
+                onClick = { actions.open(bot) },
+                onClickLabel = stringResource(Res.string.bots_open_chat_of, bot.label),
+                onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    menuOpen = true
+                },
+                onLongClickLabel = stringResource(Res.string.bots_actions_of, bot.label),
+                interactionSource = null,
+                indication = rememberHoverIndication(Theme[colors][text]),
+                )
+            .then(if (isDesktop) Modifier.onSecondaryPress { contextMenuOpen = true } else Modifier)
+            .semantics { this.selected = selected }
+            .alpha(if (hidden) 0.6f else 1f)
+            .padding(horizontal = if (compact) 8.dp else 14.dp, vertical = if (compact) 7.dp else 14.dp)
+
+        val status: @Composable () -> Unit = {
+            when {
+                opening -> Spinner(Modifier.size(14.dp))
+                compactWarning -> {
+                    val label = stringResource(Res.string.bots_needs_attention)
+                    val unreadLabel = stringResource(Res.string.bots_unread)
+                    UnstyledIcon(
+                        Lucide.TriangleAlert,
+                        contentDescription = if (unread) "$label. $unreadLabel" else label,
+                        tint = Theme[colors][warning],
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+                else -> StatusDot(tone, unread)
+            }
+        }
+        val details: @Composable (Modifier) -> Unit = { detailsModifier ->
+            Column(detailsModifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (pinned) UnstyledIcon(Lucide.Pin, contentDescription = stringResource(Res.string.bots_pinned), tint = Theme[colors][textTertiary], modifier = Modifier.size(12.dp))
                     Text(
@@ -541,7 +571,7 @@ private fun BotCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    if (trouble != null || failingRoutine != null) {
+                    if (!compact && warningReason != null) {
                         UnstyledIcon(Lucide.TriangleAlert, contentDescription = stringResource(Res.string.bots_needs_attention), tint = Theme[colors][warning], modifier = Modifier.size(13.dp))
                     }
                 }
@@ -552,16 +582,32 @@ private fun BotCard(
                     line,
                     style = Theme[typography][bodySmall].copy(fontSize = 12.5.sp, lineHeight = 17.sp, fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal),
                     color = when (tone) {
-                        BotTone.Attention -> Theme[colors][warning]
+                        BotTone.Attention -> Theme[colors][if (compactWarning) textSecondary else warning]
                         BotTone.Active -> Theme[colors][accentText]
                         BotTone.Idle -> Theme[colors][textTertiary]
                     },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                bot.lastActivity()?.let { relativeTime(it) }?.takeIf { it.isNotBlank() }?.let {
+                if (!compact) bot.lastActivity()?.let { relativeTime(it) }?.takeIf { it.isNotBlank() }?.let {
                     Text(it, style = Theme[typography][code].copy(fontSize = 11.sp), color = Theme[colors][textMuted], maxLines = 1)
                 }
+            }
+        }
+        if (compact) {
+            Row(cardModifier, horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                BotAvatar(bot, picture, size = 32.dp)
+                details(Modifier.weight(1f))
+                status()
+            }
+        } else {
+            Column(cardModifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    BotAvatar(bot, picture, size = 44.dp)
+                    Spacer(Modifier.weight(1f))
+                    status()
+                }
+                details(Modifier)
             }
         }
     }
@@ -591,17 +637,15 @@ private fun StatusDot(tone: BotTone, unread: Boolean) {
     }
 }
 
-/** One bot needing the user, as a warning card: its face, what it needs, and a pill saying what tapping does. */
+/** A shortcut to the bot's chat or to the routine that needs attention. */
 @Composable
 private fun NeedsYouCard(item: NeedsYou, picture: ByteArray?, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
-    val answer = item is NeedsYou.Answer
+    val shape = RoundedCornerShape(Theme[radii][radiusMedium])
     Row(
         modifier
             .fillMaxWidth()
             .heightIn(min = MinTouchTarget)
             .clip(shape)
-            .background(Theme[colors][warningSoft])
             .handCursor()
             .clickable(
                 onClickLabel = stringResource(
@@ -610,33 +654,30 @@ private fun NeedsYouCard(item: NeedsYou, picture: ByteArray?, onClick: () -> Uni
                 ),
                 onClick = onClick,
             )
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        BotAvatar(item.bot, picture, size = 36.dp)
+        Box {
+            BotAvatar(item.bot, picture, size = 30.dp)
+            Box(
+                Modifier.align(Alignment.BottomEnd).size(14.dp).background(Theme[colors][surface], CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                UnstyledIcon(Lucide.TriangleAlert, contentDescription = null, tint = Theme[colors][warning], modifier = Modifier.size(11.dp))
+            }
+        }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
                 stringResource(Res.string.bots_needs_you, item.bot.label),
-                style = Theme[typography][body].copy(fontSize = 14.5.sp, fontWeight = FontWeight.Medium),
+                style = Theme[typography][body].copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
                 color = Theme[colors][text],
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(item.reason.text(), style = Theme[typography][bodySmall].copy(fontSize = 12.5.sp), color = Theme[colors][textSecondary], maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        // Not a button of its own: the whole card is the one target, and this says where it goes. A large
-        // font leaves it out, so the words keep the room.
-        if (LocalDensity.current.fontScale <= 1.3f) Text(
-            stringResource(if (answer) Res.string.bots_review else Res.string.bots_open),
-            style = Theme[typography][caption].copy(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold),
-            color = Theme[colors][onInverse],
-            maxLines = 1,
-            modifier = Modifier
-                .background(Theme[colors][inverse], CircleShape)
-                .padding(horizontal = 12.dp, vertical = 7.dp)
-                .clearAndSetSemantics {},
-        )
+        UnstyledIcon(Lucide.ChevronRight, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))
     }
 }
 

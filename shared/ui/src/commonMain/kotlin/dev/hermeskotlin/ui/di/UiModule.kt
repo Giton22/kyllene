@@ -17,6 +17,7 @@ import dev.hermeskotlin.ui.inbox.InboxViewModel
 import dev.hermeskotlin.core.inbox.InboxNotices
 import dev.hermeskotlin.core.inbox.NoInboxNotices
 import dev.hermeskotlin.ui.sessions.ScheduledViewModel
+import dev.hermeskotlin.ui.sessions.SidebarChatAcknowledgements
 import dev.hermeskotlin.ui.rooms.RoomsViewModel
 import dev.hermeskotlin.ui.sessions.OtherChatsViewModel
 import dev.hermeskotlin.ui.sessions.SessionsViewModel
@@ -78,6 +79,7 @@ val uiModule = module {
     }
     viewModelOf(::SettingsViewModel)
     single { ReplySpeakerSource() }
+    single { SidebarChatAcknowledgements(get()) }
     // Watched places are the platform's; one without them shows none.
     viewModel { PhoneToolsViewModel(get(), get(), getOrNull<WatchedPlaces>() ?: NoWatchedPlaces) }
 }

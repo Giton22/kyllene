@@ -41,6 +41,8 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.foundation.layout.width
 import org.koin.compose.koinInject
+import dev.hermeskotlin.ui.sessions.SidebarChatAcknowledgements
+import dev.hermeskotlin.ui.sessions.SidebarChatViewer
 import com.composables.icons.lucide.File
 import com.composables.icons.lucide.Folder
 import androidx.compose.foundation.text.input.TextFieldState
@@ -416,6 +418,8 @@ fun ChatScreen(
     /** Switches profile (`/profile`); null is the gateway's launch profile. */
     onSwitchProfile: (String?) -> Unit,
     viewModel: ChatViewModel = koinViewModel(),
+    /** Whether the transcript is in view for the sidebar’s unseen badges. */
+    attentionVisible: Boolean = true,
     /** The desktop's keys reach the chat; off while something covers it. */
     keysEnabled: Boolean = true,
     /** What the Sessions button says about the other chats. */
@@ -474,6 +478,36 @@ fun ChatScreen(
     // Esc in the rail is the viewer's own: back a file, then closed.
     ShortcutHandler(enabled = keysEnabled && docked) { shortcut ->
         (shortcut == Shortcut.ToggleRail).also { if (it) railShown = !railShown }
+    }
+    val sidebarAcknowledgements = koinInject<SidebarChatAcknowledgements>()
+    val attentionWindow = remember { Any() }
+    val windowFocused = LocalWindowInfo.current.isWindowFocused
+    val viewedSession = state.storedSessionId.takeIf {
+        attentionVisible && screenShown && !dialogOpen && ownsTranscript && state.historyLoaded &&
+            windowFocused
+    }
+    val visibleRequestIds = state.inputRequests.map { it.id }.toSet()
+    val viewer = remember(target.gateway, target.profile, target.storedSessionId, viewedSession, visibleRequestIds) {
+        viewedSession?.let {
+            SidebarChatViewer(
+                target.gateway.gatewayUrl,
+                target.profile,
+                setOfNotNull(it, target.storedSessionId),
+                visibleRequestIds,
+                kotlin.time.Clock.System.now().toEpochMilliseconds(),
+            )
+        }
+    }
+    DisposableEffect(sidebarAcknowledgements, attentionWindow, viewer) {
+        if (viewer != null) sidebarAcknowledgements.show(attentionWindow, viewer)
+        onDispose { sidebarAcknowledgements.hide(attentionWindow) }
+    }
+    // A desktop chat window can be visible even while the main sidebar is suspended.
+    val transcriptActivity = remember(state.messages) {
+        state.messages.mapNotNull { it.sentAt ?: (it as? ChatMessage.Event)?.timestamp }.maxOrNull()
+    }
+    LaunchedEffect(viewer, transcriptActivity) {
+        if (viewer != null) sidebarAcknowledgements.acknowledgeTranscript(viewer, transcriptActivity)
     }
     var notice by remember { mutableStateOf<String?>(null) }
     // The notices below are set from callbacks, outside composition, so their words are read here first.

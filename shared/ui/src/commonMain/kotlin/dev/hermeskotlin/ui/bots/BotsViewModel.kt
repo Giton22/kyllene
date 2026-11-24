@@ -62,6 +62,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import dev.hermeskotlin.core.storage.KeyValueStore
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.time.Clock
@@ -111,6 +114,7 @@ class BotsViewModel(
     private val models: ModelsApi,
     private val host: ChatHost,
     attention: AttentionTracker,
+    store: KeyValueStore,
     /** The chats saved on this device, which go with their bot. */
     private val cache: OfflineCache? = null,
 ) : ViewModel() {
@@ -120,6 +124,10 @@ class BotsViewModel(
 
     /** Bots that can't work until something is fixed, by profile: the roster's ⚠. */
     val troubles: StateFlow<Map<String, BotTrouble>> = health.troubles
+
+    private val routineAcknowledgements = RoutineAcknowledgements(store)
+    private val routineLock = Mutex()
+    private var unseenRoutineJobs = emptyMap<String, List<CronJob>>()
 
     private val _failingRoutines = MutableStateFlow<Map<String, CronJob>>(emptyMap())
 
@@ -218,6 +226,7 @@ class BotsViewModel(
         gateway.value = url
         _state.value = BotsUiState()
         _failingRoutines.value = emptyMap()
+        unseenRoutineJobs = emptyMap()
         routinesReadAt = 0L
         _avatars.value = emptyMap()
         avatarsAsked.clear()
@@ -549,11 +558,38 @@ class BotsViewModel(
         if (now - routinesReadAt < ROUTINES_EVERY_MS) return
         routinesReadAt = now
         val jobs = (cron.jobs(url) as? ApiResult.Success)?.value ?: return
-        if (gateway.value != url) return
-        _failingRoutines.value = bots.mapNotNull { bot ->
-            // One the user paused is set aside, not failing; one the scheduler paused over a problem says why.
-            jobs.firstOrNull { it.isRoutineOf(bot.name) && it.problem != null && (!it.paused || !it.pausedReason.isNullOrBlank()) }
-                ?.let { bot.name to it }
+        routineLock.withLock {
+            if (gateway.value != url) return
+            val unseen = bots.mapNotNull { bot ->
+                val matches = jobs.filter {
+                    it.isRoutineOf(bot.name) && it.problem != null && (!it.paused || !it.pausedReason.isNullOrBlank()) &&
+                        !routineAcknowledgements.isSeen(url, bot.name, it)
+                }
+                if (matches.isEmpty()) null else bot.name to matches
+            }.toMap()
+            if (gateway.value == url) publishRoutineWarnings(unseen)
+        }
+    }
+
+    fun acknowledgeRoutine(profile: String, job: CronJob) {
+        val url = gateway.value ?: return
+        if (job.problem == null || !job.isRoutineOf(profile)) return
+        viewModelScope.launch {
+            routineLock.withLock {
+                routineAcknowledgements.markSeen(url, profile, job)
+                if (gateway.value != url) return@withLock
+                val remaining = unseenRoutineJobs[profile].orEmpty().filterNot {
+                    it.id == job.id && routineFailureVersion(it) == routineFailureVersion(job)
+                }
+                publishRoutineWarnings(unseenRoutineJobs + (profile to remaining))
+            }
+        }
+    }
+
+    private fun publishRoutineWarnings(jobs: Map<String, List<CronJob>>) {
+        unseenRoutineJobs = jobs
+        _failingRoutines.value = jobs.mapNotNull { (profile, matches) ->
+            matches.firstOrNull()?.let { profile to it }
         }.toMap()
     }
 
