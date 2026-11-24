@@ -1130,20 +1130,54 @@ class ChatSession(
         return null
     }
 
-    /** `/stop`: stops the reply, then the background processes the agent left running (`process.stop`). */
+    /**
+     * `/stop`: stops the reply, then the background processes this chat's agent left running. Other chats' processes
+     * are left alone. When the reply was stopped but the processes couldn't be, the card says both.
+     */
     suspend fun stopEverything() = runOnGateway("/stop") { client, runtimeId ->
         val lines = mutableListOf<String>()
+        var sessionId = runtimeId
         if (_state.value.running) {
-            interruptOnGateway(client, runtimeId)
+            sessionId = interruptOnGateway(client, runtimeId)
             lines += "Stopped the reply."
         }
-        val killed = (client.request("process.stop", JsonObject(emptyMap())) as? JsonObject).int("killed") ?: 0
-        lines += when (killed) {
-            0 -> "No background processes were running."
-            1 -> "Stopped 1 background process."
-            else -> "Stopped $killed background processes."
+        lines += try {
+            when (val killed = stopProcesses(client, sessionId)) {
+                0 -> "No background processes were running."
+                1 -> "Stopped 1 background process."
+                else -> "Stopped $killed background processes."
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (lines.isEmpty()) throw e
+            "Couldn't stop the background processes: ${e.message ?: "the gateway didn't say why."}"
         }
         lines.joinToString("\n")
+    }
+
+    /**
+     * Stops the background processes of chat [sessionId], and counts them. On the session authority that is
+     * `process.stop` (gateway/session_ancillary.py stop_processes). The legacy sidecar's `process.stop` is the
+     * registry-wide `kill_all`, every chat's processes, so there it's this chat's `process.list` and a `process.kill`
+     * for each running one.
+     */
+    private suspend fun stopProcesses(client: JsonRpcClient, sessionId: String): Int {
+        if (client.sessionAuthority) {
+            val result = client.request("process.stop", buildJsonObject { put("session_id", sessionId) }) as? JsonObject
+            return result.int("killed") ?: 0
+        }
+        val listed = client.request("process.list", buildJsonObject { put("session_id", sessionId) }) as? JsonObject
+        return BackgroundProcess.parseList(listed).filter { it.running }.count { process ->
+            val result = client.request(
+                "process.kill",
+                buildJsonObject {
+                    put("session_id", sessionId)
+                    put("process_id", process.id)
+                },
+            ) as? JsonObject
+            result.string("status") == "killed"
+        }
     }
 
     /**
@@ -1779,9 +1813,10 @@ class ChatSession(
 
     /**
      * Sends `session.interrupt` with `execution_generation` when known (required by canonical session authority).
-     * If a session-authority socket lacks the generation, re-attaches first to fetch it.
+     * If a session-authority socket lacks the generation, re-attaches first to fetch it. Returns the chat id the
+     * interrupt went to, which the re-attach can change.
      */
-    private suspend fun interruptOnGateway(client: JsonRpcClient, runtimeId: String) {
+    private suspend fun interruptOnGateway(client: JsonRpcClient, runtimeId: String): String {
         val targetId = if (executionGeneration == null && client.sessionAuthority && rowExists) {
             attach(client, reconnected = true)
         } else {
@@ -1795,6 +1830,7 @@ class ChatSession(
                 gen?.let { put("execution_generation", it) }
             },
         )
+        return targetId
     }
 
     /** Stops one running subagent (`subagent.interrupt`); its `subagent.complete` follows. */
