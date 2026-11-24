@@ -178,7 +178,9 @@
         <item quantity="one">%1$d subagent</item>
         <item quantity="other">%1$d subagents</item>
     </plurals>
-    <string name="chat_subagent_task_details">Task details</string>
+    <string name="chat_subagent_transcript">Subagent transcript</string>
+    <string name="chat_subagent_open_transcript">Open transcript</string>
+    <string name="chat_subagent_instructions">Task instructions</string>
     <string name="chat_subagent_transcript_unavailable">Full transcript unavailable</string>
     <string name="chat_subagent_transcript_empty">No transcript messages yet</string>
     <string name="chat_subagent_activity">Activity</string>

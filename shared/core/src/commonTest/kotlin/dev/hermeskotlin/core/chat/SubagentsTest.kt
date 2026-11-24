@@ -3,6 +3,7 @@ package dev.hermeskotlin.core.chat
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.sessions.SessionMessage
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -80,6 +81,52 @@ class SubagentsTest {
         assertEquals(2, tools.map { it.id }.distinct().size)
         assertEquals(listOf("first write", "second write"), tools.map { it.output })
         assertEquals("a", tools.first().input)
+    }
+
+    @Test
+    fun transcriptPollingRecoversWithTheLastCursorAndMergesReplayedRows() = runTest {
+        val first = SessionMessage(id = 10, role = "assistant", content = JsonPrimitive("First"))
+        val updated = first.copy(content = JsonPrimitive("Updated"))
+        val second = SessionMessage(id = 11, role = "assistant", content = JsonPrimitive("Second"))
+        val tool = SessionMessage(role = "tool", toolName = "read_file", content = JsonPrimitive("Result"))
+        fun page(cursor: String?, running: Boolean, vararg rows: SessionMessage) =
+            SubagentTranscriptPage(rows.toList(), cursor, reset = false, available = true, running = running, hasRows = rows.isNotEmpty())
+        val reads = listOf(
+            page("first", true, first, tool),
+            SubagentTranscriptRead.Retryable,
+            page(null, true, first, tool),
+            page("first", true, updated),
+            page("last", false, second),
+            page("last", false, second),
+        ).iterator()
+        val cursors = mutableListOf<String?>()
+        var rows = emptyList<SessionMessage>()
+        pollSubagentTranscript(
+            load = { cursor ->
+                cursors += cursor
+                reads.next()
+            },
+            isChildLive = { true },
+        ) { available, current ->
+            assertTrue(available)
+            rows = current
+        }
+
+        assertEquals(listOf(null, "first", "first", "first", "first", "last"), cursors)
+        assertEquals(listOf(updated, tool, second), rows)
+    }
+
+    @Test
+    fun pollingRetriesAnInitialTransientFailureButStopsOnUnsupported() = runTest {
+        var attempts = 0
+        var result: Boolean? = null
+        pollSubagentTranscript(
+            load = { if (++attempts == 1) SubagentTranscriptRead.Retryable else SubagentTranscriptRead.Unsupported },
+            isChildLive = { true },
+        ) { available, _ -> result = available }
+
+        assertEquals(2, attempts)
+        assertEquals(false, result)
     }
 
     @Test

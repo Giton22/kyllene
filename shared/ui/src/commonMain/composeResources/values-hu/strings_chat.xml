@@ -160,7 +160,9 @@
         <item quantity="one">%1$d alügynök</item>
         <item quantity="other">%1$d alügynök</item>
     </plurals>
-    <string name="chat_subagent_task_details">Feladat részletei</string>
+    <string name="chat_subagent_transcript">Alügynök átirata</string>
+    <string name="chat_subagent_open_transcript">Átirat megnyitása</string>
+    <string name="chat_subagent_instructions">Feladatutasítások</string>
     <string name="chat_subagent_transcript_unavailable">A teljes átirat nem érhető el</string>
     <string name="chat_subagent_transcript_empty">Még nincs üzenet az átiratban</string>
     <string name="chat_subagent_activity">Tevékenység</string>

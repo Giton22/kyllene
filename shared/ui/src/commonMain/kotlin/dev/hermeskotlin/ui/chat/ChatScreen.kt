@@ -22,6 +22,8 @@ import dev.hermeskotlin.ui.hasSpeechPlayback
 import dev.hermeskotlin.ui.hasVoice
 import dev.hermeskotlin.ui.windowControlsHeight
 import dev.hermeskotlin.ui.isDesktop
+import dev.hermeskotlin.ui.fullScreenDialogProperties
+import dev.hermeskotlin.ui.DialogStatusBarAppearance
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
 import dev.hermeskotlin.core.bots.MentionQuery
@@ -36,6 +38,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import dev.hermeskotlin.core.media.GatewayFileKind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
@@ -275,7 +278,7 @@ import dev.hermeskotlin.core.chat.Attachment
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.TranscriptEvent
 import dev.hermeskotlin.core.chat.GatewayNotice
-import dev.hermeskotlin.core.chat.SubagentTranscriptPage
+import dev.hermeskotlin.core.chat.SubagentTranscriptRead
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.OutgoingAttachment
 import dev.hermeskotlin.core.chat.SendCheck
@@ -345,8 +348,8 @@ import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
 import dev.hermeskotlin.designsystem.components.CopyButton
-import dev.hermeskotlin.designsystem.components.BottomSheet
 import dev.hermeskotlin.designsystem.components.Dialog
+import androidx.compose.ui.window.Dialog as WindowDialog
 import dev.hermeskotlin.designsystem.components.DropdownMenu
 import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.MenuAction
@@ -632,7 +635,9 @@ fun ChatScreen(
         placeholder = stringResource(remember(target.copy(cwd = null, draft = null)) { (if (target.storedSessionId == null) NEW_CHAT_PROMPTS else FOLLOW_UP_PROMPTS).random() }),
         notice = notice,
         actions = viewModel,
-        subagentRailWidth = (paneWidth * 0.44f).coerceIn(200.dp, 520.dp).coerceAtMost(paneWidth * 0.62f),
+        dockSubagentTranscript = isDesktop && wide,
+        subagentRailWidth = (paneWidth * 0.44f).coerceIn(200.dp, 520.dp),
+        onOpenSubagentTranscript = { if (docked) previewing = null },
         loadSubagentTranscript = { id, cursor ->
             if (ownsTranscript) viewModel.loadSubagentTranscript(target, id, cursor) else null
         },
@@ -847,8 +852,10 @@ internal fun ChatView(
     attachmentPicker: AttachmentPicker? = null,
     /** A panel at the right, beside the conversation: the desktop's file rail. */
     rail: (@Composable () -> Unit)? = null,
+    dockSubagentTranscript: Boolean = false,
     subagentRailWidth: Dp = RAIL_WIDTH,
-    loadSubagentTranscript: suspend (String, String?) -> SubagentTranscriptPage? = { _, _ -> null },
+    onOpenSubagentTranscript: () -> Unit = {},
+    loadSubagentTranscript: suspend (String, String?) -> SubagentTranscriptRead? = { _, _ -> null },
 ) {
     val composerFocus = remember { FocusRequester() }
     var focusComment by remember { mutableStateOf<Long?>(null) }
@@ -894,24 +901,37 @@ internal fun ChatView(
     val subagentInspector: (@Composable () -> Unit)? = inspected?.let { row ->
         {
             key(conversationKey, selectedDelegationReply, selectedSubagentKey) {
-                CompositionLocalProvider(LocalCommentHost provides commentHost) {
+                CompositionLocalProvider(
+                    LocalCommentHost provides commentHost,
+                    LocalMediaLoader provides actions::loadMedia,
+                    LocalOpenImage provides onViewImage,
+                    LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
+                ) {
                     SubagentInspector(
                         selected = row,
                         runtimeId = state.runtimeSessionId.takeIf { connected },
                         load = loadSubagentTranscript,
                         onStop = actions::stopSubagent,
                         onDismiss = ::closeSubagents,
-                        desktop = isDesktop,
-                        modifier = if (isDesktop) Modifier.fillMaxSize() else Modifier.fillMaxHeight(0.88f),
+                        desktop = dockSubagentTranscript,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
         }
     }
-    val desktopRail = if (isDesktop) subagentInspector ?: rail else rail
-    val railWidth = if (isDesktop && subagentInspector != null) subagentRailWidth else RAIL_WIDTH
-    if (!isDesktop) {
-        BottomSheet(visible = subagentInspector != null, onDismiss = ::closeSubagents) { subagentInspector?.invoke() }
+    val inspectorInRail = dockSubagentTranscript && rail == null && subagentInspector != null
+    val desktopRail = if (inspectorInRail) subagentInspector else rail
+    val railWidth = if (inspectorInRail) subagentRailWidth else RAIL_WIDTH
+    val fullTranscriptOpen = !dockSubagentTranscript && subagentInspector != null
+    if (fullTranscriptOpen) {
+        WindowDialog(onDismissRequest = ::closeSubagents, properties = fullScreenDialogProperties()) {
+            val backgroundColor = Theme[colors][background]
+            DialogStatusBarAppearance(lightBackground = backgroundColor.luminance() > 0.5f)
+            Box(Modifier.fillMaxSize().background(backgroundColor).windowInsetsPadding(WindowInsets.safeDrawing)) {
+                subagentInspector?.invoke()
+            }
+        }
     }
     val canAttach = attachmentPicker != null && connected && attachments.size < OutgoingAttachment.MAX_COUNT
     var dropping by remember { mutableStateOf(false) }
@@ -1073,7 +1093,7 @@ internal fun ChatView(
             }
             val shortcutScope = rememberCoroutineScope()
             // The desktop's keys for the chat; a voice chat over it has the screen.
-            ShortcutHandler(enabled = keysEnabled && !voiceFull) { shortcut ->
+            ShortcutHandler(enabled = keysEnabled && !fullTranscriptOpen && !voiceFull) { shortcut ->
                 when (shortcut) {
                     Shortcut.FocusComposer -> composerShown.also { if (it) composerFocus.requestFocus() }
                     Shortcut.FindInChat -> true.also {
@@ -1153,7 +1173,11 @@ internal fun ChatView(
                             LocalOpenImage provides onViewImage,
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
-                            LocalSubagents provides SubagentContext(subagents) { reply, selected ->
+                            LocalSubagents provides SubagentContext(
+                                subagents,
+                                onStop = (actions::stopSubagent).takeIf { connected && state.runtimeSessionId != null },
+                            ) { reply, selected ->
+                                onOpenSubagentTranscript()
                                 selectedDelegationReply = reply
                                 selectedSubagentKey = selected
                             },

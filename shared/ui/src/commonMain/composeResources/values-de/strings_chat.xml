@@ -160,7 +160,9 @@
         <item quantity="one">%1$d Unteragent</item>
         <item quantity="other">%1$d Unteragenten</item>
     </plurals>
-    <string name="chat_subagent_task_details">Aufgabendetails</string>
+    <string name="chat_subagent_transcript">Subagenten-Transkript</string>
+    <string name="chat_subagent_open_transcript">Transkript öffnen</string>
+    <string name="chat_subagent_instructions">Aufgabenanweisungen</string>
     <string name="chat_subagent_transcript_unavailable">Vollständiges Transkript nicht verfügbar</string>
     <string name="chat_subagent_transcript_empty">Noch keine Transkriptnachrichten</string>
     <string name="chat_subagent_activity">Aktivität</string>

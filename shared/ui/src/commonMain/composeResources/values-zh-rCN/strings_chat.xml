@@ -155,7 +155,9 @@
     <plurals name="chat_subagent_count">
         <item quantity="other">%1$d 个子代理</item>
     </plurals>
-    <string name="chat_subagent_task_details">任务详情</string>
+    <string name="chat_subagent_transcript">子代理对话记录</string>
+    <string name="chat_subagent_open_transcript">打开对话记录</string>
+    <string name="chat_subagent_instructions">任务指令</string>
     <string name="chat_subagent_transcript_unavailable">无法获取完整记录</string>
     <string name="chat_subagent_transcript_empty">暂无记录消息</string>
     <string name="chat_subagent_activity">活动</string>

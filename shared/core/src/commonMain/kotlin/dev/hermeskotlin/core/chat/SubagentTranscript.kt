@@ -2,12 +2,18 @@ package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.sessions.SessionMessage
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.put
+
+sealed interface SubagentTranscriptRead {
+    data object Unsupported : SubagentTranscriptRead
+    data object Retryable : SubagentTranscriptRead
+}
 
 data class SubagentTranscriptPage(
     val rows: List<SessionMessage>,
@@ -16,7 +22,74 @@ data class SubagentTranscriptPage(
     val available: Boolean,
     val running: Boolean,
     val hasRows: Boolean,
-)
+) : SubagentTranscriptRead
+
+/** Poll until a finished child is caught up, or until the attachment or method is unavailable. */
+suspend fun pollSubagentTranscript(
+    load: suspend (String?) -> SubagentTranscriptRead?,
+    isChildLive: () -> Boolean,
+    onUpdate: (available: Boolean, rows: List<SessionMessage>) -> Unit,
+) {
+    var cursor: String? = null
+    var rows = emptyList<SessionMessage>()
+    var running = false
+    while (true) {
+        when (val read = load(cursor)) {
+            null, SubagentTranscriptRead.Unsupported -> {
+                onUpdate(false, rows)
+                return
+            }
+            SubagentTranscriptRead.Retryable -> {
+                if (!running && !isChildLive()) {
+                    onUpdate(false, rows)
+                    return
+                }
+            }
+            is SubagentTranscriptPage -> {
+                running = read.running
+                val next = read.nextCursor
+                val advancing = next != null && next != cursor && read.hasRows
+                if (read.available) {
+                    val replace = read.reset || (cursor == null && read.hasRows)
+                    rows = mergeSubagentRows(if (replace) emptyList() else rows, read.rows, advancing || replace)
+                    cursor = next ?: cursor
+                }
+                onUpdate(read.available, rows)
+                if (read.available && advancing) continue
+                if (!running) return
+            }
+        }
+        delay(2_000)
+    }
+}
+
+private fun mergeSubagentRows(
+    earlier: List<SessionMessage>,
+    incoming: List<SessionMessage>,
+    advancing: Boolean,
+): List<SessionMessage> {
+    if (incoming.isEmpty()) return earlier
+    val rows = earlier.toMutableList()
+    val byId = mutableMapOf<Long, Int>()
+    rows.forEachIndexed { index, row -> row.id?.let { byId[it] = index } }
+    // Some projected tool rows have no row ID. Treat repeated rows as replay only on a stalled page.
+    val replayed = if (advancing) emptySet() else earlier.filter { it.id == null }.toHashSet()
+    for (row in incoming) {
+        val id = row.id
+        if (id == null) {
+            if (row !in replayed) rows += row
+        } else {
+            val index = byId[id]
+            if (index == null) {
+                byId[id] = rows.size
+                rows += row
+            } else {
+                rows[index] = row
+            }
+        }
+    }
+    return rows
+}
 
 internal fun decodeSubagentTranscript(
     result: JsonObject,

@@ -14,6 +14,9 @@ internal actual val hardwareKeyboard: Boolean
 
 internal actual fun fullScreenDialogProperties() = DialogProperties(usePlatformDefaultWidth = false)
 
+@Composable
+internal actual fun DialogStatusBarAppearance(lightBackground: Boolean) = Unit
+
 internal actual val enterSends: Boolean = true
 
 internal actual val macKeys: Boolean = System.getProperty("os.name").orEmpty().startsWith("Mac")
