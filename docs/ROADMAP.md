@@ -289,7 +289,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Foreground service that keeps the WS alive during long runs
 - [x] One constant, quiet ongoing notification ("Kyllene · Connected to Hermes") in place of a Live Update; what a turn does shows in the app
 - [x] Local notifications: approval waiting, run finished; tapping one opens its chat
-- [x] Session list filters All / Running / Needs attention, with text labels for a waiting approval or question (tracked across chats this phone has opened), "Running" and "New reply" (read state kept per gateway and profile)
+- [x] Session list filters All / Running / Needs attention, with text labels for a waiting approval or question (tracked across chats this phone has opened), "Running" and "New reply" (read state kept per gateway and profile); a running chat shows under Running only, not Needs attention, and becomes a "New reply" once its turn ends unread
 - [x] Answer from the notification: approve/deny, clarify answers, inline reply to a finished turn (each asks for an unlock first)
 - [x] Notification toggles in Settings; permission asked on the first turn
 - [x] Notifications anywhere is the one background mode: it keeps Kyllene up (quiet notification) and comes back after a reboot or update. Stay connected was removed
