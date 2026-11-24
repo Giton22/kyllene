@@ -38,7 +38,6 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.foundation.layout.width
 import org.koin.compose.koinInject
 import com.composables.icons.lucide.File
@@ -276,6 +275,7 @@ import dev.hermeskotlin.core.chat.Attachment
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.TranscriptEvent
 import dev.hermeskotlin.core.chat.GatewayNotice
+import dev.hermeskotlin.core.chat.SubagentTranscriptPage
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.OutgoingAttachment
 import dev.hermeskotlin.core.chat.SendCheck
@@ -345,6 +345,7 @@ import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
 import dev.hermeskotlin.designsystem.components.CopyButton
+import dev.hermeskotlin.designsystem.components.BottomSheet
 import dev.hermeskotlin.designsystem.components.Dialog
 import dev.hermeskotlin.designsystem.components.DropdownMenu
 import dev.hermeskotlin.designsystem.components.IconButton
@@ -631,6 +632,10 @@ fun ChatScreen(
         placeholder = stringResource(remember(target.copy(cwd = null, draft = null)) { (if (target.storedSessionId == null) NEW_CHAT_PROMPTS else FOLLOW_UP_PROMPTS).random() }),
         notice = notice,
         actions = viewModel,
+        subagentRailWidth = (paneWidth * 0.44f).coerceIn(200.dp, 520.dp).coerceAtMost(paneWidth * 0.62f),
+        loadSubagentTranscript = { id, cursor ->
+            if (ownsTranscript) viewModel.loadSubagentTranscript(target, id, cursor) else null
+        },
         widgetFiles = transcript.widgetFiles,
         editing = viewModel.editing.collectAsStateWithLifecycle().value,
         // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
@@ -842,7 +847,76 @@ internal fun ChatView(
     attachmentPicker: AttachmentPicker? = null,
     /** A panel at the right, beside the conversation: the desktop's file rail. */
     rail: (@Composable () -> Unit)? = null,
+    subagentRailWidth: Dp = RAIL_WIDTH,
+    loadSubagentTranscript: suspend (String, String?) -> SubagentTranscriptPage? = { _, _ -> null },
 ) {
+    val composerFocus = remember { FocusRequester() }
+    var focusComment by remember { mutableStateOf<Long?>(null) }
+    val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
+    val commentHost = remember(comments, actions, composerShown) {
+        if (!composerShown) return@remember null
+        object : CommentHost {
+            override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
+                when (action) {
+                    SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
+                    SelectionAction.Explain -> actions.explain(source, anchor)
+                    SelectionAction.AskAside -> {
+                        actions.askAside(source, anchor)
+                        composerFocus.requestFocus()
+                    }
+                }
+            }
+
+            override fun highlights(messageKey: String) =
+                comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
+        }
+    }
+    var delegationIds by rememberSaveable(conversationKey) { mutableStateOf<ArrayList<String>?>(null) }
+    var selectedSubagentKey by rememberSaveable(conversationKey) { mutableStateOf<String?>(null) }
+    fun closeSubagents() {
+        delegationIds = null
+        selectedSubagentKey = null
+    }
+    val subagents = remember(state.messages, state.subagents) {
+        if (state.subagents.isEmpty()) state.subagents else {
+            val owners = state.messages.asSequence().filterIsInstance<ChatMessage.Assistant>()
+                .flatMap { it.tools.asSequence() }.filter { it.name == "delegate_task" }
+                .flatMap { call -> call.tasks.mapNotNull { task -> task.transcriptId?.let { it to call.id } } }
+                .toMap()
+            state.subagents.map { child -> owners[child.id]?.let { child.copy(toolId = it) } ?: child }
+        }
+    }
+    val inspectedCalls = remember(delegationIds, state.messages) {
+        val ids = delegationIds ?: return@remember emptyList()
+        state.messages.asSequence().filterIsInstance<ChatMessage.Assistant>()
+            .map { reply -> reply.tools.filter { it.name == "delegate_task" } }
+            .firstOrNull { calls -> calls.any { it.id in ids } }.orEmpty()
+    }
+    val inspected = remember(inspectedCalls, subagents, selectedSubagentKey) {
+        selectedSubagentKey?.let { selected -> delegationRows(inspectedCalls, subagents).firstOrNull { it.key == selected } }
+    }
+    val subagentInspector: (@Composable () -> Unit)? = inspected?.let { row ->
+        {
+            key(conversationKey, row.key) {
+                CompositionLocalProvider(LocalCommentHost provides commentHost) {
+                    SubagentInspector(
+                        selected = row,
+                        runtimeId = state.runtimeSessionId.takeIf { connected },
+                        load = loadSubagentTranscript,
+                        onStop = actions::stopSubagent,
+                        onDismiss = ::closeSubagents,
+                        desktop = isDesktop,
+                        modifier = if (isDesktop) Modifier.fillMaxSize() else Modifier.fillMaxHeight(0.88f),
+                    )
+                }
+            }
+        }
+    }
+    val desktopRail = if (isDesktop) subagentInspector ?: rail else rail
+    val railWidth = if (isDesktop && subagentInspector != null) subagentRailWidth else RAIL_WIDTH
+    if (!isDesktop) {
+        BottomSheet(visible = subagentInspector != null, onDismiss = ::closeSubagents) { subagentInspector?.invoke() }
+    }
     val canAttach = attachmentPicker != null && connected && attachments.size < OutgoingAttachment.MAX_COUNT
     var dropping by remember { mutableStateOf(false) }
     // A chat that stops taking files mid-drag takes its drop target away, which then says nothing more.
@@ -880,19 +954,19 @@ internal fun ChatView(
             if (state.historyLoaded && state.messages.none { it.key == key }) actions.stopReading()
         }
         // The rail takes the right of the screen; the conversation centres in what's left.
-        if (rail != null) {
+        if (desktopRail != null) {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
-                    .width(RAIL_WIDTH)
+                    .width(railWidth)
                     .fillMaxHeight()
                     .background(Theme[colors][background])
                     .border(1.dp, Theme[colors][stroke]),
-            ) { rail() }
+            ) { desktopRail() }
         }
         Column(
             Modifier
-                .padding(end = if (rail != null) RAIL_WIDTH else 0.dp)
+                .padding(end = if (desktopRail != null) railWidth else 0.dp)
                 // A desktop window's chat takes its whole width, so the bar's buttons sit at its edges and the
                 // scrollbar and the wheel work at the window's side; the reading column inside keeps to READING_WIDTH.
                 .then(if (isDesktop) Modifier else Modifier.widthIn(max = READING_WIDTH))
@@ -937,7 +1011,6 @@ internal fun ChatView(
             val composerFold = remember { ComposerFold() }
             // Ctrl+F: the matches for what's typed, from the newest back, each brought on screen and marked.
             var findOpen by remember { mutableStateOf(false) }
-            val composerFocus = remember { FocusRequester() }
             val focusHeld = LocalFocusHeld.current
             // Closing the find bar hands the keyboard back to the composer rather than to nothing.
             var findClosed by remember { mutableStateOf(0) }
@@ -989,8 +1062,6 @@ internal fun ChatView(
             // What scrolls under the composer is captured here and frosted behind it.
             val hazeState = rememberHazeState()
             // Comments wait in the composer, so the selection menus offer them only while it shows.
-            var focusComment by remember { mutableStateOf<Long?>(null) }
-            val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
             // Type on the voice screen ends the call; the composer takes the keyboard once it's back.
             // Once the call is over the wish is spent either way: a question waiting in the composer's place
             // mustn't hand the keyboard over minutes later when it's answered.
@@ -1074,24 +1145,7 @@ internal fun ChatView(
             }
             // A new loader each time the link comes back, so cards that failed offline try again; good ones come from the cache.
             val linkPreviewLoader = remember<suspend (String) -> LinkPreview?>(actions, connected) { { url -> actions.loadLinkPreview(url) } }
-            val commentHost = remember(comments, actions, composerShown) {
-                if (!composerShown) return@remember null
-                object : CommentHost {
-                    override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
-                        when (action) {
-                            SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
-                            SelectionAction.Explain -> actions.explain(source, anchor)
-                            SelectionAction.AskAside -> {
-                                actions.askAside(source, anchor)
-                                composerFocus.requestFocus()
-                            }
-                        }
-                    }
 
-                    override fun highlights(messageKey: String) =
-                        comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
-                }
-            }
             Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { paneHeight = it.height; paneWidth = it.width }) {
                 Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
                     if (wallpaper != null) ChatWallpaper(wallpaper, LocalAppSettings.current.wallpaperStrength, Modifier.fillMaxSize())
@@ -1103,7 +1157,10 @@ internal fun ChatView(
                             LocalOpenImage provides onViewImage,
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
-                            LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
+                            LocalSubagents provides SubagentContext(subagents) { calls, selected ->
+                                delegationIds = ArrayList(calls.map { it.id })
+                                selectedSubagentKey = selected
+                            },
                             LocalAgentScreenChat provides state.storedSessionId,
                             LocalScreenViews provides LocalAgentScreens.current.let { screens ->
                                 // Worked out again when a tool call changes, not on every token of a reply.
@@ -2971,7 +3028,7 @@ internal fun AssistantReply(
         if (showTools) if (message.streaming) LiveSteps(listedTools, message.key) else Tools(listedTools, message.key)
         if (generated.isNotEmpty()) ReplyMediaList(remember(generated) { generated.map { it.asMedia() } })
         // Shown whatever the tool-activity setting: the work happens out of sight, in other agents.
-        message.tools.filter { it.name == "delegate_task" }.forEach { DelegationCard(it) }
+        DelegationActivity(message.tools.filter { it.name == "delegate_task" }, message.key)
         // Messages to other bots, said whatever the tool-activity setting: they're part of the conversation.
         message.tools.filter { it.name == MESSAGE_AGENT_TOOL }.forEach { MessagedLine(it) }
         if (text.isNotBlank()) {

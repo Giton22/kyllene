@@ -49,6 +49,7 @@ data class DelegatedTask(
     val summary: String? = null,
     val durationSeconds: Double? = null,
     val model: String? = null,
+    val transcriptId: String? = null,
 )
 
 /** One row of a delegation: a task, what its subagent is doing, and the subagents it spawned in turn. */
@@ -67,6 +68,7 @@ data class SubagentRow(
     /** The live subagent's id, to stop it; null when only the transcript knows of it. */
     val subagentId: String? = null,
     val children: List<SubagentRow> = emptyList(),
+    val transcriptId: String? = null,
 )
 
 internal const val DELEGATE_TOOL = "delegate_task"
@@ -86,7 +88,12 @@ internal fun delegatedTasks(args: JsonElement?, result: JsonElement?, knownGoals
         .ifEmpty { if (dispatched) answer?.get("goals").strings() else emptyList() }
     val entries = answer?.get("results").asObjectList()
     val failure = answer.string("error")?.trim()?.ifEmpty { null }
+    // IDs are in accepted-child order. Refused tasks never received a child, and null slots matter.
+    val refused = answer?.get("refused").asObjectList().mapNotNull { it.int("task_index") }.toSet()
+    val ids = (answer?.get("subagent_ids") as? JsonArray).orEmpty()
     val titles = goals.ifEmpty { entries.map { "Delegated task" } }
+    val idsByTask = titles.indices.filterNot { it in refused }.takeIf { it.size == ids.size }
+        ?.zip(ids)?.toMap().orEmpty()
     return titles.mapIndexed { i, goal ->
         val entry = entries.firstOrNull { it.int("task_index") == i } ?: entries.getOrNull(i)?.takeIf { it.int("task_index") == null }
         when {
@@ -96,8 +103,12 @@ internal fun delegatedTasks(args: JsonElement?, result: JsonElement?, knownGoals
                 summary = (entry.string("summary") ?: entry.string("error"))?.trim()?.ifEmpty { null },
                 durationSeconds = entry.double("duration_seconds"),
                 model = entry.string("model")?.ifBlank { null },
+                transcriptId = entry.string("subagent_id")?.ifBlank { null },
             )
-            dispatched -> DelegatedTask(goal, SubagentStatus.Unwatched)
+            dispatched -> DelegatedTask(
+                goal, SubagentStatus.Unwatched,
+                transcriptId = (idsByTask[i] as? JsonPrimitive)?.takeIf { it.isString }?.content?.ifBlank { null },
+            )
             answer == null && result == null -> DelegatedTask(goal, SubagentStatus.Running)
             failure != null -> DelegatedTask(goal, SubagentStatus.Failed, summary = failure)
             else -> DelegatedTask(goal, SubagentStatus.Unwatched)
@@ -326,15 +337,22 @@ private fun List<Subagent>.trimFinished(): List<Subagent> {
 fun subagentRows(call: ToolActivity, subagents: List<Subagent>): List<SubagentRow> {
     val goals = call.tasks.mapTo(HashSet()) { it.goal.normalized() }
     // One not tied to a call yet (listed before the transcript loaded) is claimed by its goal.
+    val storedIds = call.tasks.mapNotNull { it.transcriptId }.toSet()
     val unclaimed = subagents.filter {
-        it.parentId == null && (it.toolId == call.id || (it.toolId == null && it.goal.normalized() in goals))
+        it.parentId == null && (it.id in storedIds || it.toolId == call.id ||
+            (it.toolId == null && it.goal.normalized() in goals))
     }.toMutableList()
     // Task order is only trusted when both sides agree on how many tasks there are.
     val sameShape = call.tasks.size == unclaimed.size
     fun claim(predicate: (Subagent) -> Boolean): Subagent? = unclaimed.firstOrNull(predicate)?.also { unclaimed.remove(it) }
-    val byGoal = call.tasks.map { task -> claim { it.goal.normalized() == task.goal.normalized() } }
+    val byId = call.tasks.map { task -> task.transcriptId?.let { id -> claim { it.id == id } } }
+    val byGoal = call.tasks.map { task ->
+        if (task.transcriptId != null) null else claim { it.goal.normalized() == task.goal.normalized() }
+    }
     val rows = call.tasks.mapIndexed { i, task ->
-        val live = byGoal[i] ?: if (sameShape) claim { it.taskIndex == i } else null
+        val live = byId[i] ?: byGoal[i] ?: if (sameShape && task.transcriptId == null) {
+            claim { it.taskIndex == i }
+        } else null
         if (live != null) {
             row(live, subagents, depth = 0).let { row ->
                 row.copy(
@@ -352,6 +370,7 @@ fun subagentRows(call: ToolActivity, subagents: List<Subagent>): List<SubagentRo
                 model = task.model,
                 durationSeconds = task.durationSeconds,
                 summary = task.summary,
+                transcriptId = task.transcriptId,
             )
         }
     }
@@ -390,6 +409,7 @@ private fun row(subagent: Subagent, all: List<Subagent>, depth: Int): SubagentRo
     toolCount = subagent.toolCount,
     filesWritten = subagent.filesWritten,
     subagentId = subagent.id.takeIf { subagent.status.live },
+    transcriptId = subagent.id,
     // Bounded, in case a malformed parent chain loops.
     children = if (depth >= MAX_DEPTH) emptyList() else all.filter { it.parentId == subagent.id }.map { row(it, all, depth + 1) },
 )

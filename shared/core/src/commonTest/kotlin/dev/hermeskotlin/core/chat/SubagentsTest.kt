@@ -27,6 +27,38 @@ class SubagentsTest {
     private fun ChatState.rows() = subagentRows(call(), subagents)
 
     @Test
+    fun backgroundDispatchKeepsTranscriptIdsEvenWhenOneTaskWasRefused() {
+        val result = HermesJson.parseToJsonElement(
+            """{"status":"dispatched","goals":["Refused","Read","Write"],"subagent_ids":[null,"child-b"],"refused":[{"task_index":0,"status":"error"}]}""",
+        )
+        val tasks = delegatedTasks(null, result)
+        val rows = subagentRows(ToolActivity("delegate", "delegate_task", running = false, tasks = tasks), emptyList())
+        assertEquals(listOf(null, null, "child-b"), rows.map { it.transcriptId })
+        assertTrue(rows.all { it.subagentId == null })
+    }
+
+    @Test
+    fun onlyTheRequestedChildIsAcceptedAndProjectedToolRowsAreShown() {
+        val wire = HermesJson.parseToJsonElement(
+            """{"session_id":"parent","subagent_id":"child","available":true,"running":false,"reset":true,"next_cursor":"opaque","rows":[
+                {"row_kind":"message","role":"user","text":"Read the docs","row_id":1},
+                {"row_kind":"message","role":"tool","name":"terminal","args":{"command":"ls"},"tool_call_id":"call-a"},
+                {"row_kind":"message","role":"assistant","text":"Done","display_commentary":["I found the file."]},
+                {"row_kind":"compaction","role":"system","text":"Internal summary"}]}""",
+        ) as JsonObject
+        assertNull(decodeSubagentTranscript(wire, "parent", "other"))
+        val page = requireNotNull(decodeSubagentTranscript(wire, "parent", "child"))
+        assertEquals("opaque", page.nextCursor)
+        val messages = historyToMessages(page.rows)
+        assertEquals("Read the docs", (messages[0] as ChatMessage.User).text)
+        val reply = messages[1] as ChatMessage.Assistant
+        assertEquals("Done", reply.text)
+        assertEquals("I found the file.", reply.reasoning)
+        assertEquals("terminal", reply.tools.single().name)
+        assertEquals(2, messages.size)
+    }
+
+    @Test
     fun aDelegationListsItsTasksBeforeAnySubagentStarts() {
         val rows = delegating.rows()
         assertEquals(listOf("Read the docs", "Write tests"), rows.map { it.goal })

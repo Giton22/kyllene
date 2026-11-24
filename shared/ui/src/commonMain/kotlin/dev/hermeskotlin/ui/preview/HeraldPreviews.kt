@@ -29,6 +29,7 @@ import dev.hermeskotlin.ui.connect.ConnectionChecklist
 import dev.hermeskotlin.ui.signin.SignInMethods
 import dev.hermeskotlin.ui.signin.SignInUiState
 import dev.hermeskotlin.ui.signin.SignInView
+import dev.hermeskotlin.core.chat.SubagentTranscriptPage
 import dev.hermeskotlin.core.gateway.GatewayStatus
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.gateway.ProbeResult
@@ -252,7 +253,7 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                 PreviewScene.VaultCode -> SampleChat(ChatSamples.vaultCode)
                 PreviewScene.VaultSaveLogin -> SampleChat(ChatSamples.vaultSaveLogin)
                 PreviewScene.Undelivered -> SampleChat(ChatSamples.undelivered)
-                PreviewScene.Subagents -> SampleChat(ChatSamples.subagents)
+                PreviewScene.Subagents -> SampleChat(ChatSamples.subagents, loadSubagentTranscript = { id, _ -> ChatSamples.subagentTranscript(id) })
                 PreviewScene.AgentScreen -> CompositionLocalProvider(
                     LocalAgentScreens provides AgentScreenContext(
                         live = listOf(AgentScreens.Live(null, setOf(ChatSamples.SCREEN_SURFACE))),
@@ -765,6 +766,7 @@ private fun SampleChat(
     places: GreetingPlaces? = null,
     cwd: String? = null,
     onAttach: () -> Unit = {},
+    loadSubagentTranscript: suspend (String, String?) -> SubagentTranscriptPage? = { _, _ -> null },
 ) {
     ChatView(
         title = state.title ?: "New chat",
@@ -797,6 +799,7 @@ private fun SampleChat(
         place = "homelab",
         places = places,
         cwd = cwd,
+        loadSubagentTranscript = loadSubagentTranscript,
     )
 }
 

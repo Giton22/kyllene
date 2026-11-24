@@ -1,6 +1,9 @@
 package dev.hermeskotlin.ui.preview
 
 import androidx.compose.foundation.text.input.TextFieldState
+import dev.hermeskotlin.core.chat.SubagentTranscriptPage
+import dev.hermeskotlin.core.sessions.SessionMessage
+import kotlinx.serialization.json.JsonPrimitive
 import dev.hermeskotlin.core.chat.ApprovalChoice
 import dev.hermeskotlin.core.chat.Attachment
 import dev.hermeskotlin.core.chat.TranscriptEvent
@@ -367,6 +370,18 @@ internal object ChatSamples {
             ),
         ),
     )
+
+    fun subagentTranscript(id: String): SubagentTranscriptPage? {
+        val task = subagents.subagents.firstOrNull { it.id == id } ?: return null
+        val reply = task.summary ?: task.thinking ?: "I started checking the backup files."
+        return SubagentTranscriptPage(
+            rows = listOf(
+                SessionMessage(role = "user", content = JsonPrimitive(task.goal)),
+                SessionMessage(role = "assistant", content = JsonPrimitive(reply)),
+            ),
+            nextCursor = null, reset = true, available = true, running = task.status.live, hasRows = true,
+        )
+    }
 
     /** A hands-free voice chat, a live call listening, so Mute shows. */
     val voice: ChatState = reply

@@ -1816,6 +1816,25 @@ class ChatSession(
         }
     }
 
+    /** Read a delegated child's stored transcript through this chat's attached parent session. */
+    suspend fun subagentTranscript(subagentId: String, cursor: String?): SubagentTranscriptPage? {
+        val client = connectedClient() ?: return null
+        val runtimeId = liveRuntimeId(client) ?: return null
+        val result = try {
+            client.request("session.transcript", buildJsonObject {
+                put("session_id", runtimeId)
+                put("subagent_id", subagentId)
+                cursor?.let { put("cursor", it) }
+            }) as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (connectedClient() !== client || liveRuntimeId(client) != runtimeId) return null
+        return result?.let { decodeSubagentTranscript(it, runtimeId, subagentId) }
+    }
+
     /** The link on which `subagent.list` came back "no such method": that gateway only sends subagent events. */
     private var rosterUnsupportedOn: JsonRpcClient? = null
 

@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -51,11 +50,8 @@ import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.rememberHoverIndication
-import dev.hermeskotlin.core.chat.Subagent
 import dev.hermeskotlin.core.chat.SubagentRow
 import dev.hermeskotlin.core.chat.SubagentStatus
-import dev.hermeskotlin.core.chat.ToolActivity
-import dev.hermeskotlin.core.chat.subagentRows
 import dev.hermeskotlin.core.models.displayModelName
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
@@ -88,28 +84,6 @@ import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
-
-/** The chat's subagents and a way to stop one, for the delegation cards in its replies. */
-internal class SubagentContext(val subagents: List<Subagent>, val onStop: (String) -> Unit)
-
-internal val LocalSubagents = compositionLocalOf { SubagentContext(emptyList()) {} }
-
-/**
- * A `delegate_task` call as the agents it started: one card per task with what it's doing now, and
- * any subagents it started in turn nested beneath. Tap a card for its full activity and result.
- */
-@Composable
-internal fun DelegationCard(call: ToolActivity) {
-    val context = LocalSubagents.current
-    val rows = remember(call, context.subagents) { subagentRows(call, context.subagents) }
-    if (rows.isEmpty()) return
-    // A little more room than the glow's spread would like, so a live card's glow doesn't wash over the next.
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        rows.forEach { row ->
-            key(row.key) { SubagentCard(row, context.onStop) }
-        }
-    }
-}
 
 /** A surface card; a live one has an accent edge and a soft accent glow, a finished one a hairline. */
 @Composable
@@ -188,7 +162,7 @@ private fun SubagentRowView(row: SubagentRow, onStop: ((String) -> Unit)?) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            meta(row).takeIf { it.isNotEmpty() }?.let {
+            subagentMeta(row).takeIf { it.isNotEmpty() }?.let {
                 Text(
                     it,
                     style = Theme[typography][code].copy(fontSize = 11.5.sp, lineHeight = 16.sp),
@@ -200,38 +174,7 @@ private fun SubagentRowView(row: SubagentRow, onStop: ((String) -> Unit)?) {
         }
         }
         AnimatedVisibility(visible = expanded) {
-            Column(Modifier.padding(start = 34.dp, end = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (row.activity.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(stringResource(Res.string.chat_subagent_activity), style = Theme[typography][caption], color = Theme[colors][textSecondary])
-                        CommentableSelection(CommentSource(row.key, "the activity of the subagent working on “${row.goal.take(80)}”", code = true)) {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                row.activity.forEach { line ->
-                                    Text(line, style = Theme[typography][code], color = Theme[colors][textSecondary])
-                                }
-                            }
-                        }
-                    }
-                }
-                row.summary?.let { summary ->
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(stringResource(if (row.status == SubagentStatus.Failed) Res.string.chat_subagent_what_went_wrong else Res.string.chat_subagent_result), style = Theme[typography][caption], color = Theme[colors][textSecondary])
-                        CommentableSelection(CommentSource(row.key, "the result of the subagent working on “${row.goal.take(80)}”")) {
-                            Text(summary, style = Theme[typography][bodySmall], color = if (row.status == SubagentStatus.Failed) Theme[colors][danger] else Theme[colors][text])
-                        }
-                    }
-                }
-                if (row.filesWritten.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(stringResource(Res.string.chat_subagent_files_written), style = Theme[typography][caption], color = Theme[colors][textSecondary])
-                        CopyableOnDesktop {
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                row.filesWritten.forEach { Text(it, style = Theme[typography][code], color = Theme[colors][textSecondary]) }
-                            }
-                        }
-                    }
-                }
-            }
+            SubagentDetails(row, Modifier.padding(start = 34.dp, end = 8.dp))
         }
         if (row.children.isNotEmpty()) {
             val line = Theme[colors][stroke]
@@ -244,6 +187,42 @@ private fun SubagentRowView(row: SubagentRow, onStop: ((String) -> Unit)?) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 row.children.forEach { child -> key(child.key) { SubagentRowView(child, onStop) } }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun SubagentDetails(row: SubagentRow, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (row.activity.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(Res.string.chat_subagent_activity), style = Theme[typography][caption], color = Theme[colors][textSecondary])
+                CommentableSelection(CommentSource(row.key, "the activity of the subagent working on “${row.goal.take(80)}”", code = true)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        row.activity.forEach { line ->
+                            Text(line, style = Theme[typography][code], color = Theme[colors][textSecondary])
+                        }
+                    }
+                }
+            }
+        }
+        row.summary?.let { summary ->
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(if (row.status == SubagentStatus.Failed) Res.string.chat_subagent_what_went_wrong else Res.string.chat_subagent_result), style = Theme[typography][caption], color = Theme[colors][textSecondary])
+                CommentableSelection(CommentSource(row.key, "the result of the subagent working on “${row.goal.take(80)}”")) {
+                    Text(summary, style = Theme[typography][bodySmall], color = if (row.status == SubagentStatus.Failed) Theme[colors][danger] else Theme[colors][text])
+                }
+            }
+        }
+        if (row.filesWritten.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(stringResource(Res.string.chat_subagent_files_written), style = Theme[typography][caption], color = Theme[colors][textSecondary])
+                CopyableOnDesktop {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        row.filesWritten.forEach { Text(it, style = Theme[typography][code], color = Theme[colors][textSecondary]) }
+                    }
+                }
             }
         }
     }
@@ -271,7 +250,7 @@ private fun StatusDisc(status: SubagentStatus) {
 }
 
 /** The disc's icon (null for the spinner) and what it says aloud. */
-private fun statusIcon(status: SubagentStatus): Pair<ImageVector?, StringResource> = when (status) {
+internal fun statusIcon(status: SubagentStatus): Pair<ImageVector?, StringResource> = when (status) {
     SubagentStatus.Running -> null to Res.string.chat_subagent_running
     SubagentStatus.Queued -> Lucide.Clock to Res.string.chat_subagent_waiting
     SubagentStatus.Done -> Lucide.Check to Res.string.chat_subagent_done
@@ -283,7 +262,7 @@ private fun statusIcon(status: SubagentStatus): Pair<ImageVector?, StringResourc
 
 /** A 30dp round stop in a full-size touch target. */
 @Composable
-private fun StopButton(onClick: () -> Unit) = Tooltip(stringResource(Res.string.chat_subagent_stop)) {
+internal fun StopButton(onClick: () -> Unit) = Tooltip(stringResource(Res.string.chat_subagent_stop)) {
     val interaction = remember { MutableInteractionSource() }
     val label = stringResource(Res.string.chat_subagent_stop)
     Box(
@@ -309,9 +288,9 @@ private fun StopButton(onClick: () -> Unit) = Tooltip(stringResource(Res.string.
 
 /** "model · 12s · 5 tools", whichever are known. */
 @Composable
-private fun meta(row: SubagentRow): String = listOfNotNull(
+internal fun subagentMeta(row: SubagentRow, includeStatus: Boolean = true): String = listOfNotNull(
     row.model?.let(::displayModelName),
-    when (row.status) {
+    when (row.status.takeIf { includeStatus }) {
         SubagentStatus.Queued -> stringResource(Res.string.chat_subagent_waiting)
         SubagentStatus.Interrupted -> stringResource(Res.string.chat_process_stopped)
         SubagentStatus.Unwatched -> stringResource(Res.string.chat_subagent_in_background)

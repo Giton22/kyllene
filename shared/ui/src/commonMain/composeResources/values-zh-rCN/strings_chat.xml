@@ -152,6 +152,12 @@
     <string name="chat_plan_done_of">已完成 %1$d / %2$d</string>
     <string name="chat_stop_task">停止任务</string>
 
+    <plurals name="chat_subagent_count">
+        <item quantity="other">%1$d 个子代理</item>
+    </plurals>
+    <string name="chat_subagent_task_details">任务详情</string>
+    <string name="chat_subagent_transcript_unavailable">无法获取完整记录</string>
+    <string name="chat_subagent_transcript_empty">暂无记录消息</string>
     <string name="chat_subagent_activity">活动</string>
     <string name="chat_subagent_result">结果</string>
     <string name="chat_subagent_what_went_wrong">出了什么问题</string>
