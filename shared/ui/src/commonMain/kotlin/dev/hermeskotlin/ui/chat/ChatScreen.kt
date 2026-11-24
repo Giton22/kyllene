@@ -2967,7 +2967,7 @@ internal fun AssistantReply(
         ReplyHeader(message.timestamp.takeUnless { message.streaming })
         // What's happening now is said once, above the composer; the reply keeps only what it's made of.
         if (showReasoning) Reasoning(message.reasoning, message.streaming)
-        // While the turn runs its finished steps are listed as they land; once it ends they fold into the pill.
+        // While the turn runs its finished steps are listed as they land; once it ends they fold into the timeline.
         if (showTools) if (message.streaming) LiveSteps(listedTools, message.key) else Tools(listedTools, message.key)
         if (generated.isNotEmpty()) ReplyMediaList(remember(generated) { generated.map { it.asMedia() } })
         // Shown whatever the tool-activity setting: the work happens out of sight, in other agents.

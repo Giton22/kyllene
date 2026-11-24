@@ -32,6 +32,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
@@ -135,12 +136,18 @@ private fun ToolTimelineRow(tool: ToolActivity, offset: String?, hasPrevious: Bo
     val title = tool.detail?.lineSequence()?.firstOrNull()?.trim().takeIf { it?.isNotEmpty() == true } ?: tool.name
     val summary = tool.summary?.trim()?.takeIf { it.isNotEmpty() && it != title }
     Box {
-        Canvas(Modifier.matchParentSize().padding(start = 2.dp)) {
-            val dot = Offset(10.dp.toPx(), 15.dp.toPx())
-            if (hasPrevious) drawLine(rail, Offset(dot.x, 0f), dot, 1.dp.toPx())
-            if (hasNext) drawLine(rail, dot, Offset(dot.x, size.height), 1.dp.toPx())
-            drawCircle(status, radius = 3.5.dp.toPx(), center = dot)
+        Canvas(Modifier.matchParentSize()) {
+            val inset = 12.dp.toPx()
+            val x = if (layoutDirection == LayoutDirection.Ltr) inset else size.width - inset
+            if (hasPrevious) drawLine(rail, Offset(x, 0f), Offset(x, 6.dp.toPx()), 1.dp.toPx())
+            if (hasNext) drawLine(rail, Offset(x, 24.dp.toPx()), Offset(x, size.height), 1.dp.toPx())
         }
+        UnstyledIcon(
+            toolIcon(tool.name),
+            contentDescription = null,
+            tint = status,
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 5.dp, top = 8.dp).size(14.dp),
+        )
         Row(
             Modifier.fillMaxWidth()
                 .heightIn(min = MinTouchTarget)
