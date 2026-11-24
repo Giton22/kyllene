@@ -12,7 +12,8 @@ enum class ReplyReaction(val emoji: String, private val instruction: String? = n
     Explain("❓", "Explain this reply in plain language.");
 
     fun prompt(rowId: Long, reply: String): String? = instruction?.let {
-        val quote = reply.trim().takeLast(600)
+        val tail = reply.trim().takeLast(600)
+        val quote = if (tail.firstOrNull()?.isLowSurrogate() == true) tail.drop(1) else tail
         "$it\n\nAssistant message #$rowId (excerpt): ${JsonPrimitive(quote)}"
     }
 }

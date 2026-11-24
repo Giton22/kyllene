@@ -1,6 +1,5 @@
 package dev.hermeskotlin.ui.chat
 
-import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
@@ -26,6 +25,7 @@ import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
 import dev.hermeskotlin.core.bots.MentionQuery
+import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.core.chat.PathRefKind
 import dev.hermeskotlin.core.chat.PathRefQuery
 import dev.hermeskotlin.core.chat.completion
@@ -89,6 +89,7 @@ import androidx.compose.ui.layout.layout
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.draw.dropShadow
@@ -345,7 +346,9 @@ import dev.hermeskotlin.ui.CopyableOnDesktop
 import dev.hermeskotlin.designsystem.components.VerticalScrollbar
 import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
+import dev.hermeskotlin.designsystem.LocalDesignWords
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
+import dev.hermeskotlin.designsystem.components.labelledIconWidth
 import dev.hermeskotlin.designsystem.components.CopyButton
 import dev.hermeskotlin.designsystem.components.Dialog
 import dev.hermeskotlin.designsystem.components.DropdownMenu
@@ -2203,7 +2206,9 @@ private fun Messages(
                                     readingPaused = readingPaused,
                                     onReadAloud = if (canReadAloud) ({ text -> actions.readAloud(message.key, text) }) else null,
                                     onStopReading = actions::stopReading,
-                                    onReact = ({ reaction: ReplyReaction -> actions.reactToReply(message.key, reaction) }).takeIf { connected },
+                                    onReact = if (connected && chat.replyReactionsSupported) {
+                                        { reaction -> actions.reactToReply(message.key, reaction) }
+                                    } else null,
                                     onPauseReading = actions::pauseReading,
                                     onResumeReading = actions::resumeReading,
                                 )
@@ -3021,46 +3026,75 @@ internal fun AssistantReply(
         val actions = if (actionable) listOfNotNull(
             onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
             onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
-            when {
-                readingPaused && reading -> RowMenuItem(resumeReadingLabel, Lucide.Play, run = onResumeReading)
-                reading -> RowMenuItem(pauseReadingLabel, Lucide.Pause, run = onPauseReading)
-                else -> null
-            },
-            when {
-                reading -> RowMenuItem(stopReadingLabel, Lucide.Square, run = onStopReading)
-                speakable && onReadAloud != null -> RowMenuItem(readAloudLabel, Lucide.Volume2) { onReadAloud(text) }
-                else -> null
-            },
+            onReadAloud?.takeIf { !reading && speakable }?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
         ) else emptyList()
         val react = onReact.takeIf { !message.streaming && message.reactionRowId != null }
         val reaction = message.userReaction.takeUnless { message.streaming }
+        val hasMore = actions.isNotEmpty() || react != null
         if (actionable || usage != null || react != null || reaction != null) {
             var keysInside by remember { mutableStateOf(false) }
-            val shown = !isDesktop || last || hovered || keysInside
-            val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
-            val actionVisibility = Modifier.alpha(alpha)
-            Row(
-                Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)
-                    .onFocusChanged { keysInside = it.hasFocus }.focusGroup(),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (usage != null) {
-                    val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
-                    Text(
-                        replyUsage(usage.input, usage.output),
-                        style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
-                        color = Theme[colors][textMuted],
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).then(actionVisibility).semantics { contentDescription = spoken },
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
+            var moreOpen by remember { mutableStateOf(false) }
+            LaunchedEffect(hasMore) { if (!hasMore) moreOpen = false }
+            val shown = !isDesktop || last || hovered || keysInside || (moreOpen && hasMore) || reading
+            val iconSize = if (isDesktop) 32.dp else MinTouchTarget
+            if (shown) {
+                val moreLabel = stringResource(Res.string.chat_reply_more)
+                val usageText = usage?.let { replyUsage(it.input, it.output) }
+                val usageStyle = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily)
+                val badgeStyle = Theme[typography][body]
+                val badgePadding = 6.dp
+                BoxWithConstraints(Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)) {
+                    val copyWidth = if (actionable) {
+                        val size = ButtonSize.Small
+                        maxOf(size.labelledIconWidth(copyLabel), size.labelledIconWidth(LocalDesignWords.current.copied)) + 2.dp
+                    } else 0.dp
+                    val moreWidth = if (hasMore) ButtonSize.Small.labelledIconWidth(moreLabel) + 2.dp else 0.dp
+                    val usageMeasurer = rememberTextMeasurer()
+                    val usageWidth = if (usageText != null) with(LocalDensity.current) {
+                        usageMeasurer.measure(usageText, style = usageStyle, maxLines = 1, softWrap = false).size.width.toDp()
+                    } else 0.dp
+                    val badgeWidth = if (reaction != null) with(LocalDensity.current) {
+                        usageMeasurer.measure(reaction, style = badgeStyle, maxLines = 1, softWrap = false).size.width.toDp() +
+                            badgePadding * 2 + 2.dp
+                    } else 0.dp
+                    val playbackWidth = if (reading) (iconSize + 2.dp) * 2 else 0.dp
+                    val labelled = copyWidth + moreWidth + usageWidth + badgeWidth + playbackWidth <= maxWidth
+                    Row(
+                        Modifier.fillMaxWidth().onFocusChanged { keysInside = it.hasFocus }.focusGroup(),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (usage != null && usageText != null) {
+                            val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
+                            Text(
+                                usageText,
+                                style = usageStyle,
+                                color = Theme[colors][textMuted],
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).semantics { contentDescription = spoken },
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
+                        if (reading) {
+                            if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, Modifier.size(iconSize))
+                            else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, Modifier.size(iconSize))
+                            ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, Modifier.size(iconSize))
+                        }
+                        if (actionable) {
+                            if (labelled) CopyButton(text, visibleLabel = copyLabel)
+                            else CopyButton(text, modifier = Modifier.size(iconSize), label = copyLabel)
+                        }
+                        if (reaction != null) Text(reaction, style = badgeStyle, modifier = Modifier.padding(horizontal = badgePadding))
+                        if (hasMore) ReplyMoreMenu(
+                            actions, moreLabel, labelled, moreOpen, { moreOpen = it },
+                            onReact = react, selectedReaction = reaction,
+                        )
+                    }
                 }
-                if (actionable) CopyButton(text, modifier = actionVisibility, visibleLabel = copyLabel)
-                if (reaction != null) Text(reaction, modifier = actionVisibility.padding(horizontal = 6.dp))
-                if (actions.isNotEmpty() || react != null) ReplyMoreMenu(actions, actionVisibility, onReact = react)
+            } else {
+                Spacer(Modifier.height(iconSize).trimEndTop(end = 0.dp, top = 4.dp))
             }
         }
     }

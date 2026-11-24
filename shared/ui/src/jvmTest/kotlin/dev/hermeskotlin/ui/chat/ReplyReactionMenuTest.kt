@@ -3,6 +3,9 @@ package dev.hermeskotlin.ui.chat
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
@@ -28,17 +31,24 @@ class ReplyReactionMenuTest {
                     onBranch = null,
                     onRegenerate = null,
                     last = true,
-                    onReact = { selected.value = it },
+                    onReact = { selected.value = it.takeUnless { selected.value == it } },
                 )
             }
         }
 
-        onNodeWithText("More").performClick()
+        onNodeWithContentDescription("More").performClick()
         for (label in listOf("Got it", "Continue", "Verify", "Explain")) {
             onNodeWithText(label).assertIsDisplayed()
         }
         onNodeWithText("Got it").performClick()
         runOnIdle { assertEquals(ReplyReaction.Acknowledge, selected.value) }
         onNodeWithText("👍").assertIsDisplayed()
+
+        onNodeWithContentDescription("More").performClick()
+        onNodeWithText("Got it").assertIsSelected()
+        onNodeWithText("Continue").assertIsNotSelected()
+        onNodeWithText("Got it").performClick()
+        runOnIdle { assertEquals(null, selected.value) }
+        onNodeWithText("👍").assertDoesNotExist()
     }
 }

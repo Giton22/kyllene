@@ -391,12 +391,16 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         agentScreen = AgentScreen.from(call.name, call.arguments),
                     )
                 }
-                val reactionRow = row.id?.takeIf { text.isNotBlank() }
                 val reasoning = row.reasoningText
                 val previous = (messages.lastOrNull() as? ChatMessage.Assistant)?.takeUnless { before ->
                     val at = row.timestamp
                     val ended = before.timestamp
                     turnStartedAt != null && at != null && ended != null && at >= turnStartedAt && ended < turnStartedAt
+                }
+                // Like the completing receipt: use the final assistant row without calls. A silence marker
+                // can close the reply after visible text, but cannot make a standalone reply reactable.
+                val reactionRow = row.id?.takeIf {
+                    it > 0 && tools.isEmpty() && (text.isNotEmpty() || (silent && previous?.text?.isNotEmpty() == true))
                 }
                 if (previous != null) {
                     messages[messages.lastIndex] = previous.copy(

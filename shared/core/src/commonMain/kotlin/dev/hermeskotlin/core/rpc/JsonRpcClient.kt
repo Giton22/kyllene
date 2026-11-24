@@ -9,8 +9,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -155,6 +157,14 @@ class JsonRpcClient(
      */
     @kotlin.concurrent.Volatile var sessionAuthority = false
         private set
+
+    /** Older gateways can reject reactions. Remember the verdict for all chats on this socket. */
+    private val _replyReactionsSupported = MutableStateFlow(true)
+    internal val replyReactionsSupported = _replyReactionsSupported.asStateFlow()
+
+    internal fun markReplyReactionsUnsupported() {
+        _replyReactionsSupported.value = false
+    }
 
     private val authorityRequests = AuthorityRequests()
 

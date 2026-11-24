@@ -23,6 +23,7 @@ import io.ktor.client.engine.mock.toByteArray
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -133,6 +134,23 @@ class ChatSessionTest {
     }
 
     @Test
+    fun anOlderGatewayHidesReactionsAfterTheFirstUnsupportedRequest() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf("message.react" to "error:-32601"))
+
+        chat.react("row-2", ReplyReaction.Acknowledge) { true }
+        chat.react("row-2", ReplyReaction.Verify) { true }
+        val otherChat = ChatSession(url, "stored-1", "Greeting", gateway.connection, SessionsApi(client()), backgroundScope)
+        otherChat.start()
+        testScheduler.runCurrent()
+
+        assertFalse(chat.state.value.replyReactionsSupported)
+        assertFalse(otherChat.state.value.replyReactionsSupported)
+        assertNull(chat.state.value.error)
+        assertEquals(1, transport.sent.value.count { it.isCall("message.react") })
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+    }
+
+    @Test
     fun removingAReactionDoesNotSubmitAPrompt() = runTest {
         val (chat, transport) = resumedChat(backgroundScope, mapOf(
             "message.react" to """{"row_id":2,"reactions":[]}""",
@@ -198,6 +216,38 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aSlowSavedCopyRefreshDoesNotBlockAnotherReaction() = runTest {
+        val cache = OfflineCache(InMemoryOfflineDao(), PlainSealer, EmptyCoroutineContext) { 5_000L }
+        val (connection, _) = setup(backgroundScope, mapOf(
+            "session.resume" to """{"session_id":"rt1","running":false}""",
+            "message.react" to """{"row_id":2,"reactions":[]}""",
+        ))
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope, cache = cache)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+        testScheduler.runCurrent()
+
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val reply = gateway.http
+        gateway.http = { request ->
+            if (started.complete(Unit)) release.await()
+            reply(this, request)
+        }
+
+        chat.react("row-2", ReplyReaction.Acknowledge) { true }
+        started.await()
+        val reacting = async { chat.react("row-2", ReplyReaction.Verify) { true } }
+        testScheduler.runCurrent()
+        try {
+            assertTrue(reacting.isCompleted, "A cache refresh should not hold up a reaction")
+        } finally {
+            release.complete(Unit)
+        }
+        reacting.await()
+    }
+
+    @Test
     fun aRejectedReactionFollowUpCanBeResentWithoutTogglingTheEmoji() = runTest {
         val (chat, transport) = resumedChat(backgroundScope, mapOf(
             "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"👍"}]}""",
@@ -219,6 +269,28 @@ class ChatSessionTest {
         assertNull(chat.resend(failed.key))
         assertEquals(listOf(firstPrompt, firstPrompt), transport.sent.value.filter { it.isCall("prompt.submit") }.map { it.param("text") })
         assertEquals(1, transport.sent.value.count { it.isCall("message.react") })
+    }
+
+    @Test
+    fun anEarlierIdenticalPromptDoesNotHideAnUnconfirmedReactionFollowUp() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"👍"}]}""",
+            "prompt.submit" to SILENT,
+        ))
+        historyFails = true
+        val reacting = backgroundScope.async { chat.react("row-2", ReplyReaction.Acknowledge) { true } }
+        transport.awaitSent { it.isCall("prompt.submit") }
+        transport.serverClose(1006)
+        reacting.await()
+        val uncertain = chat.state.value.messages.filterIsInstance<ChatMessage.User>().single { it.check == SendCheck.Unknown }
+
+        history = history.removeSuffix("]}") + """,{"id":3,"role":"user","content":${JsonPrimitive(uncertain.text)}}]}"""
+        historyFails = false
+        chat.retry()
+        testScheduler.runCurrent()
+
+        assertTrue(chat.state.value.messages.any { it.key == "row-3" })
+        assertTrue(chat.state.value.messages.any { it.key == uncertain.key && it is ChatMessage.User && it.check == SendCheck.Unknown })
     }
 
     @Test

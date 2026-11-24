@@ -202,6 +202,7 @@ data class ChatState(
     val loadingOlder: Boolean = false,
     val messages: List<ChatMessage> = emptyList(),
     val attachment: Attachment = Attachment.Detached,
+    val replyReactionsSupported: Boolean = true,
     /** A turn is running on the gateway (ours or one started elsewhere). */
     val running: Boolean = false,
     /** Transient `status.update` line while a turn runs. */

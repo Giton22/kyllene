@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -624,13 +625,17 @@ fun CopyButton(
     val (copied, copy) = rememberCopy(text)
     val words = LocalDesignWords.current
     if (visibleLabel != null) {
+        val size = ButtonSize.Small
+        val width = maxOf(size.labelledIconWidth(visibleLabel), size.labelledIconWidth(words.copied))
+        val touch = if (LocalDesktopLayout.current) Modifier else Modifier.heightIn(min = MinTouchTarget)
         Button(
             text = if (copied) words.copied else visibleLabel,
             onClick = copy,
-            modifier = modifier.heightIn(min = MinTouchTarget),
+            modifier = modifier.widthIn(min = width).then(touch),
             variant = ButtonVariant.Ghost,
-            size = ButtonSize.Small,
+            size = size,
             leadingIcon = if (copied) Lucide.Check else Lucide.Copy,
+            accessibleLabel = if (copied) words.copied else label ?: visibleLabel,
         )
         return
     }

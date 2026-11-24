@@ -195,6 +195,7 @@ class ChatSession(
         jobs = listOf(
             scope.launch { if (rowExists) loadHistory() else _state.update { it.copy(historyLoaded = true) } },
             scope.launch { followConnection() },
+            scope.launch { followReactionSupport() },
             scope.launch { followEvents() },
             scope.launch { followServerRequests() },
         ) + _state.value.messages.mapNotNull { card ->
@@ -256,20 +257,27 @@ class ChatSession(
         try {
             if (!stillOpen()) return
             val client = connectedClient() ?: throw RpcException(0, "Connect to the gateway to react.")
+            if (!client.replyReactionsSupported.value) return
             val runtimeId = ensureAttached(client)
-            if (!stillOpen() || _state.value.messages.none {
+            if (!stillOpen() || connectedClient() !== client || _state.value.messages.none {
                     it is ChatMessage.Assistant && !it.streaming && it.key == reply.key && it.reactionRowId == rowId
                 }) return
-            val result = client.request("message.react", buildJsonObject {
-                put("session_id", runtimeId)
-                put("row_id", rowId)
-                put("emoji", reaction.emoji)
-            }) as? JsonObject
+            val result = try {
+                client.request("message.react", buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("row_id", rowId)
+                    put("emoji", reaction.emoji)
+                }) as? JsonObject
+            } catch (e: RpcException) {
+                if (e.code != METHOD_NOT_FOUND) throw e
+                client.markReplyReactionsUnsupported()
+                return
+            }
             val returned = result?.get("reactions") as? JsonArray
                 ?: throw RpcException(0, "The gateway did not confirm the reaction.")
             val emoji = userReactionEmoji(returned)
             historyMutex.withLock {
-                if (!stillOpen() || liveRuntimeId(client) != runtimeId) return
+                if (!stillOpen() || connectedClient() !== client || liveRuntimeId(client) != runtimeId) return
                 rows = rows.map { row ->
                     if (row.id == rowId) {
                         val metadata = (row.displayMetadata as? JsonObject).orEmpty()
@@ -2038,6 +2046,15 @@ class ChatSession(
         }
     }
 
+    private suspend fun followReactionSupport() {
+        connection.state.collectLatest { state ->
+            val client = (state as? ConnectionState.Connected)?.client ?: return@collectLatest
+            client.replyReactionsSupported.collect { supported ->
+                _state.update { it.copy(replyReactionsSupported = supported) }
+            }
+        }
+    }
+
     private suspend fun followEvents() {
         connection.events.collect { event ->
             val runtimeId = _state.value.runtimeSessionId ?: return@collect
@@ -2285,6 +2302,7 @@ class ChatSession(
     /** The last saved copy's row count, newest row ID and user reactions. */
     private var savedCopyKey: Triple<Int, Long?, List<Pair<Long?, String>>>? = null
     private var saveJob: Job? = null
+    private val savedCopyRefreshMutex = Mutex()
 
     /** Writes [saved] as the device's copy of chat [id], off the history lock; a newer copy replaces one still being written. */
     private fun saveCopy(id: String, saved: List<SessionMessage>, savedSessionId: String?) {
@@ -2302,15 +2320,19 @@ class ChatSession(
      * loaded rows don't have. Nothing shown changes.
      */
     private suspend fun refreshSavedCopy() {
-        val id = _state.value.storedSessionId ?: return
-        historyMutex.withLock {
-            if (!_state.value.historyRead || _state.value.storedSessionId != id) return
+        savedCopyRefreshMutex.withLock {
+            val id = _state.value.storedSessionId ?: return
+            if (!_state.value.historyRead) return
+            // A newer saved copy (from a history load) can land while the refresh reads the gateway.
+            val previousSave = historyMutex.withLock { saveJob }
             val page = (sessions.messages(gateway, id, limit = HISTORY_PAGE, profile = profile) as? ApiResult.Success)?.value ?: return
-            if (_state.value.storedSessionId != id) return
-            val full = page.messages.size >= HISTORY_PAGE
-            val newest = if (full) page.messages.fromFirstTurn() else page.messages
-            val joined = (if (full) rows.withNewestFull(page.messages) else null) ?: newest
-            saveCopy(id, joined, page.sessionId)
+            historyMutex.withLock {
+                if (!_state.value.historyRead || _state.value.storedSessionId != id || saveJob !== previousSave) return
+                val full = page.messages.size >= HISTORY_PAGE
+                val newest = if (full) page.messages.fromFirstTurn() else page.messages
+                val joined = (if (full) rows.withNewestFull(page.messages) else null) ?: newest
+                saveCopy(id, joined, page.sessionId)
+            }
         }
     }
 
@@ -2404,9 +2426,8 @@ class ChatSession(
         val unsettled = if (savedCopyAt != null) live else {
             live.filterNot { message ->
                 if (message !is ChatMessage.User || message.check == null) return@filterNot false
-                // An identical earlier reaction prompt is not evidence that this rejected attempt arrived.
-                val rejectedReaction = message.check == SendCheck.NotReceived && unsettled[message.key]?.keepRejected == true
-                !rejectedReaction && storedPrompts.any { it.contains(message.text) }
+                // Reactions can submit the same prompt verbatim. Let the delivery check establish which attempt arrived.
+                unsettled[message.key]?.keepRejected != true && storedPrompts.any { it.contains(message.text) }
             }
         }
         // Steps of the running turn are saved as it goes, and the live copy repeats them: show them once.
