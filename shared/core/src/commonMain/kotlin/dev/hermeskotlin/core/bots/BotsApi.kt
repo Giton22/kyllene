@@ -236,7 +236,7 @@ class BotsApi(private val connection: GatewayConnection) : BotChatBackend {
     }
 
     private suspend fun startChat(profile: String): Pair<String, String> =
-        client().createTitledChat(profile, BOT_CHAT_TITLE, taken = { BotChatTakenException() }) {
+        client().createTitledChat(profile, BOT_CHAT_TITLE, taken = { BotChatTakenException() }, reuse = true) {
             put("hidden", true)
             put("follow_profile_config", true)
         }

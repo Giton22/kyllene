@@ -26,12 +26,21 @@ import kotlin.uuid.Uuid
  * - Every request about a chat opened with a `profile` carries that profile. The gateway routes a named profile's
  *   chat to that profile's own connection, which is the only one that holds it: a send without the profile is
  *   `permission_denied`.
+ *
+ * It also keeps the `subscription_id` each chat was attached to this socket with, which `session.detach` (the
+ * authority's `session.close`) names.
  */
 internal class AuthorityRequests(private val newId: () -> String = ::randomId) {
     private val lock = Mutex()
 
     /** Chat id → the profile it was opened with, for the chats opened on this socket with one. */
     private val profiles = mutableMapOf<String, String>()
+
+    /** Chat id → the subscription `session.create` or `session.resume` attached it to this socket with. */
+    private val subscriptions = mutableMapOf<String, String>()
+
+    /** The subscription the chat [sessionId] is attached to this socket with; null if none is known. */
+    suspend fun subscription(sessionId: String): String? = lock.withLock { subscriptions[sessionId] }
 
     /** [params] for [method] as this gateway takes them. */
     suspend fun prepare(method: String, params: JsonObject): JsonObject {
@@ -48,10 +57,23 @@ internal class AuthorityRequests(private val newId: () -> String = ::randomId) {
 
     /** Notes the chat [method] opened with [params] (as sent) and answered with [result]. */
     suspend fun answered(method: String, params: JsonObject, result: JsonElement) {
-        if (method != "session.create" && method != "session.resume") return
-        val profile = params.text("profile") ?: return
-        val sessionId = (result as? JsonObject)?.text("session_id") ?: return
-        lock.withLock { profiles[sessionId] = profile }
+        val reply = result as? JsonObject ?: return
+        when (method) {
+            "session.create", "session.resume" -> {
+                val sessionId = reply.text("session_id") ?: return
+                val profile = params.text("profile")
+                val subscription = reply.text("subscription_id")
+                lock.withLock {
+                    profile?.let { profiles[sessionId] = it }
+                    subscription?.let { subscriptions[sessionId] = it }
+                }
+            }
+            "session.detach" -> {
+                val sessionId = params.text("session_id") ?: return
+                val subscription = params.text("subscription_id")
+                lock.withLock { if (subscriptions[sessionId] == subscription) subscriptions.remove(sessionId) }
+            }
+        }
     }
 
     private fun create(params: JsonObject): JsonObject = buildJsonObject {

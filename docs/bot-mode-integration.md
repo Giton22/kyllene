@@ -41,6 +41,9 @@ on top of profiles:
    - If the title is taken, the error is code **4022** `Title 'Bot Chat' is already in use by session <id>`
      (`hermes_state_titles.py:119`). Then `session.close` our runtime, `session.delete` our row (the gateway
      never prunes a non-`tui` row), and adopt the existing chat. *(Done.)*
+   - On a session-authority gateway (`gateway.ready` `session_authority`) there is no `session.title`. The titled
+     `session.create` itself titles the row, and it answers with the existing Bot Chat when the profile has one
+     (gateway/session_controls.py `create`), so nothing follows it. *(Done.)*
 3. **Never touch the chat's identity.** No rename, no `/title`, no unhide (`session.set_hidden false` disables the
    rename guard), and no archive unless the user means to retire the chat (archiving frees the title).
    - In a Bot Chat, `/new` and `/reset` compress instead.
