@@ -3,8 +3,6 @@ package dev.hermeskotlin.core.voice
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.Build
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
@@ -66,14 +64,12 @@ class AndroidLiveCall(context: Context) : LiveCall {
         this.adm = adm
         val factory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(adm)
-            .setOptions(liveCallOptions(vpnUp = hasVpn(appContext)))
+            .setOptions(liveCallOptions())
             .createPeerConnectionFactory()
         this.factory = factory
 
         val gathered = CompletableDeferred<Unit>()
-        val config = PeerConnection.RTCConfiguration(emptyList()).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        }
+        val config = PeerConnection.RTCConfiguration(emptyList()).apply { sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN }
         val peer = factory.createPeerConnection(
             config,
             object : PeerConnection.Observer {
@@ -183,15 +179,6 @@ class AndroidLiveCall(context: Context) : LiveCall {
         unrouteAudio()
     }
 
-    /** True when a VpnService (Tailscale, OpenVPN, WireGuard, …) is up. */
-    @Suppress("DEPRECATION")
-    private fun hasVpn(context: Context): Boolean {
-        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
-        return manager.allNetworks.any { network ->
-            manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-        }
-    }
-
     /** A call goes to the speaker (or the headset when one is in), with the phone's call processing. */
     @Suppress("DEPRECATION")
     private fun routeAudio() {
@@ -252,14 +239,16 @@ class AndroidLiveCall(context: Context) : LiveCall {
 }
 
 /**
- * While a VpnService (Tailscale, OpenVPN, WireGuard, …) is up, Android's NetworkMonitor hides the interfaces WebRTC
- * needs: the offer goes out with zero ICE candidates and the call never connects. So the monitor is off only then;
- * everywhere else it keeps picking up network changes. Passing options at all drops WebRTC's default of ignoring
- * loopback, which would put 127.0.0.1 and ::1 in the offer, so that is set again here.
+ * The offer goes out once, with the candidates gathered by then. Android's NetworkMonitor reports the networks a
+ * moment after it starts, and gathering can finish before that: the offer then has zero ICE candidates and the call
+ * never connects. That happens now and then on any network, and nearly always while a VpnService (Tailscale,
+ * OpenVPN, WireGuard, …) is up. Without the monitor WebRTC reads the interfaces itself, before it gathers. Passing
+ * options at all drops WebRTC's default of ignoring loopback, which would put 127.0.0.1 and ::1 in the offer, so
+ * that is set again here.
  */
-internal fun liveCallOptions(vpnUp: Boolean) = PeerConnectionFactory.Options().apply {
+internal fun liveCallOptions() = PeerConnectionFactory.Options().apply {
     networkIgnoreMask = PeerConnectionFactory.Options.ADAPTER_TYPE_LOOPBACK
-    disableNetworkMonitor = vpnUp
+    disableNetworkMonitor = true
 }
 
 /** Creates an SDP and waits for it. */
