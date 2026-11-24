@@ -438,10 +438,10 @@ class ChatSession(
             messages.take(index).count { m -> m is ChatMessage.User && !m.pending && m.check == null }
         }
         val arrived = findInTranscript(bubble.text, key, before)
+        // A steer the agent read is kept in no user row, so a miss can't say it's safe to send again, mid-turn or after.
+        val steerUnseen = arrived == false && unsettled[key]?.steer == true
         // A correction or a queued prompt is written only once the turn takes it in, so mid-turn a miss proves nothing.
-        val mayBeWaiting = arrived == false && unsettled[key]?.startsTurn == false && _state.value.running
-        // A steer the agent read is kept in no user row, so a miss can't say it's safe to send again.
-        val steerUnseen = arrived == false && !mayBeWaiting && unsettled[key]?.steer == true
+        val mayBeWaiting = arrived == false && !steerUnseen && unsettled[key]?.startsTurn == false && _state.value.running
         when {
             arrived == true -> {
                 rowExists = true

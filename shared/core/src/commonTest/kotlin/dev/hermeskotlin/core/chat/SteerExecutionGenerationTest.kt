@@ -164,6 +164,23 @@ class SteerExecutionGenerationTest {
     }
 
     @Test
+    fun aSteerCheckedMidTurnSaysItCantBeCheckedNotToWait() = runTest(timeout = 5.seconds) {
+        val authority = Authority().apply {
+            steerReply = { """{"status":"rejected","text":"use tabs","execution_generation":$it,"authority_epoch":3}""" }
+        }
+        val (chat, _) = authorityChat(authority)
+        chat.steer("use tabs")
+        val key = chat.state.value.messages.single { (it as? ChatMessage.User)?.text == "use tabs" }.key
+
+        chat.checkDelivery(key)
+
+        // "Check again once the turn ends" would send them to a check that can't settle it either.
+        assertTrue(chat.state.value.running)
+        assertEquals(SendCheck.Unknown, assertIs<ChatMessage.User>(chat.state.value.messages.single { it.key == key }).check)
+        assertEquals("A steer isn't saved in the conversation, so it can't be checked. See whether the reply followed it.", chat.state.value.error)
+    }
+
+    @Test
     fun withoutAKnownGenerationTheTurnIsReadFirst() = runTest(timeout = 5.seconds) {
         val authority = Authority().apply { resumeGeneration = { if (it == 1) null else 1L } }
         val (chat, gw) = authorityChat(authority)
