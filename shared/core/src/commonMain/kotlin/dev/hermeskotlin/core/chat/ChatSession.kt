@@ -1719,7 +1719,7 @@ class ChatSession(
         return send(fresh, generation)
     }
 
-    /** A steer that never went out: the running turn's generation couldn't be read again ([cause]). */
+    /** A steer that never went out: the running turn's generation couldn't be read ([cause]). */
     private class SteerNotSent(cause: Throwable) : Exception(cause.message, cause)
 
     /**
