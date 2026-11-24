@@ -230,6 +230,22 @@ enum class ControlAction(val wire: String) {
     SubgoalClear("subgoal.clear"),
 }
 
+/**
+ * The typed command (name, argument) the button stands for, as the gateway's `/goal`, `/loop`, `/heartbeat` and
+ * `/subgoal` take it; v0.22.3's `session.control` maps them the same way (gateway/session_control_actions.py).
+ * Null for a sub-goal `/subgoal` would read as its own `remove` or `clear`.
+ */
+internal fun ControlAction.command(text: String?, index: Int?): Pair<String, String>? = when (this) {
+    ControlAction.SubgoalAdd -> text?.trim()
+        ?.takeIf { it.split(Regex("\\s+"), limit = 2)[0].lowercase() !in SUBGOAL_VERBS }
+        ?.let { "subgoal" to it }
+    ControlAction.SubgoalRemove -> index?.let { "subgoal" to "remove $it" }
+    ControlAction.SubgoalClear -> "subgoal" to "clear"
+    else -> wire.substringBefore('.') to wire.substringAfter('.')
+}
+
+private val SUBGOAL_VERBS = setOf("remove", "clear")
+
 /** What to say the action does when the gateway's own message can't be had. */
 internal val ControlAction.verb: String
     get() = when (this) {
