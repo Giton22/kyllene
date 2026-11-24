@@ -43,6 +43,8 @@
     <string name="sessions_nothing_archived">Rien d’archivé</string>
     <string name="sessions_nothing_archived_detail">Les sessions archivées sont masquées des récentes mais peuvent être reprises.</string>
     <string name="sessions_filter_all">Toutes</string>
+    <string name="sessions_filter_all_chats">Toutes les conversations</string>
+    <string name="sessions_drawer_tools">Outils</string>
     <string name="sessions_filter_needs_you">Vous attendent</string>
     <string name="sessions_section_threads">Fils</string>
     <string name="sessions_section_pinned">Épinglées</string>

@@ -43,6 +43,8 @@
     <string name="sessions_nothing_archived">Nada archivado</string>
     <string name="sessions_nothing_archived_detail">Las sesiones archivadas no salen en Recientes, pero se pueden retomar.</string>
     <string name="sessions_filter_all">Todos</string>
+    <string name="sessions_filter_all_chats">Todos los chats</string>
+    <string name="sessions_drawer_tools">Herramientas</string>
     <string name="sessions_filter_needs_you">Te esperan</string>
     <string name="sessions_section_threads">Hilos</string>
     <string name="sessions_section_pinned">Fijados</string>
