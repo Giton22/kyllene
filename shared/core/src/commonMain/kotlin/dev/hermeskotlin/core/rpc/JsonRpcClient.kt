@@ -37,6 +37,11 @@ data class GatewayEvent(
     val payload: JsonElement?,
     val sessionId: String?,
     val seq: Long?,
+    /**
+     * The session authority's `execution_generation` of the turn the event belongs to, which it puts beside the
+     * payload rather than in it. Null on other gateways and on events outside a turn.
+     */
+    val executionGeneration: Long? = null,
 )
 
 /**
@@ -291,6 +296,7 @@ class JsonRpcClient(
                 payload = payload,
                 sessionId = params["session_id"]?.jsonPrimitive?.contentOrNull,
                 seq = params["seq"]?.jsonPrimitive?.longOrNull,
+                executionGeneration = (params["execution_generation"] as? JsonPrimitive)?.longOrNull,
             ),
         )
     }
