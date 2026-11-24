@@ -574,6 +574,12 @@ class ChatSessionTest {
         val bubble = assertIs<ChatMessage.User>(chat.state.value.messages.single { it is ChatMessage.User && it.text == "use tabs" })
         assertEquals(SendCheck.Unknown, bubble.check)
         assertFalse(bubble.pending)
+
+        // Its check can't call it missing either: a steer the agent read leaves no user row in the transcript.
+        chat.checkDelivery(bubble.key)
+        assertEquals(SendCheck.Unknown, assertIs<ChatMessage.User>(chat.state.value.messages.single { it.key == bubble.key }).check)
+        assertEquals("A steer isn't saved in the conversation, so it can't be checked. See whether the reply followed it.", chat.state.value.error)
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
     }
 
     @Test
