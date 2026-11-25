@@ -19,11 +19,50 @@ import dev.hermeskotlin.core.chat.Subagent
 import dev.hermeskotlin.core.chat.SubagentStatus
 import dev.hermeskotlin.core.chat.ToolActivity
 import dev.hermeskotlin.designsystem.HermesTheme
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.v2.runDesktopComposeUiTest
+import dev.hermeskotlin.core.chat.ChatState
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
+import dev.hermeskotlin.ui.preview.PreviewChatActions
+import dev.hermeskotlin.ui.voice.DictationState
+import dev.hermeskotlin.ui.voice.VoiceChatState
+import kotlin.test.assertTrue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 @OptIn(ExperimentalTestApi::class)
 class SubagentActivityTest {
+    @Test
+    fun narrowDesktopKeepsTheChatBesideTheSubagentTranscript() = runDesktopComposeUiTest(width = 800, height = 750) {
+        val task = DelegatedTask("Audit the records", SubagentStatus.Done, transcriptId = "child")
+        val call = ToolActivity("call", "delegate_task", tasks = listOf(task))
+        val chat = ChatState(historyLoaded = true, messages = listOf(
+            ChatMessage.Assistant("reply", text = "The audit is complete.", tools = listOf(call)),
+        ))
+        setContent {
+            HermesTheme(ColorScheme.Dark) {
+                CompositionLocalProvider(LocalDesktopLayout provides true) {
+                    ChatView(
+                        title = "Audit", state = chat, picker = ModelPickerState(), connected = true,
+                        attachments = emptyList(), attachmentError = null, voiceChat = VoiceChatState(),
+                        dictation = DictationState(), suggestions = emptyList(), sprite = null,
+                        placeholder = "Message", notice = null, actions = PreviewChatActions(),
+                        onOpenSidebar = {}, onNewChat = null, onOpenMenu = null, onOpenModels = {},
+                        onAttach = {}, onDictate = {}, onVoiceChat = {}, onOpenPets = {}, onViewImage = {}, onNotice = {},
+                    )
+                }
+            }
+        }
+
+        onNodeWithText("1 subagent").performClick()
+        onNodeWithText("Audit the records").performClick()
+        onNodeWithContentDescription("Open transcript").performClick()
+        val reply = onNodeWithText("The audit is complete.").assertIsDisplayed().getUnclippedBoundsInRoot()
+        val details = onNodeWithText("Subagent transcript").assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue(details.left > reply.right, "The transcript should open to the right of the chat")
+    }
+
     @Test
     fun countsAllTasksAndOpensTheSelectedRow() = runComposeUiTest {
         val tasks = (1..5).map { index ->
