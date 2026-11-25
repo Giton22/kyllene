@@ -925,7 +925,7 @@ class ChatSession(
         }
         // A command may have set or moved the goal, loop or heartbeat: `/goal`, `/hb`, or a quick alias the session
         // authority resolves itself, so the name typed doesn't tell. v0.22.1's authority sends no update for it.
-        if (client.sessionAuthority && result !is SlashResult.Alias) scope.launch { refreshControl() }
+        if (result !is SlashResult.Alias && controlUnpublished(anyChat = true)) scope.launch { refreshControl() }
         return when (result) {
             is SlashResult.Output -> {
                 val text = result.text.ifBlank { "Done." }
@@ -1163,8 +1163,16 @@ class ChatSession(
     /**
      * The link a `session.control.update` came in on. A session authority of Hermes v0.22.1 sends none, not after a
      * typed `/goal` nor after the goal's judge; v0.22.3 and later do (gateway/session_commands.py, run_goals.py).
+     * Those send one only when something changes, so a new link to them is read after each turn until one comes.
      */
     private var controlPublishedOn: JsonRpcClient? = null
+
+    /** Writes to the state that aren't reads (`session.control.update`, a [runControl] answer); a read out meanwhile yields. */
+    private var controlWrites = 0
+
+    /** The last `session.control.read` sent, and the last whose answer was taken: an earlier read's answer is older. */
+    private var controlReadsSent = 0
+    private var controlReadTaken = 0
 
     /**
      * Whether the attached link is a session authority that hasn't shown it sends `session.control.update`, while the
@@ -1180,13 +1188,16 @@ class ChatSession(
      * Reads the session's goal, loop and heartbeat once (`session.control.read`), since `session.resume`
      * doesn't carry them; later changes arrive as `session.control.update` events. Best effort: a gateway
      * that doesn't know the method hides the feature, and any other failure leaves the state as it is.
+     * Returns whether its answer was taken: not when it failed, or a newer update or read had come in.
      */
     suspend fun refreshControl(): Boolean {
         val client = connectedClient() ?: return false
         if (client === controlUnsupportedOn) return false
         val runtimeId = liveRuntimeId(client) ?: return false
-        // An update that lands while the read is out is newer than the read's answer, so the answer yields to it.
-        val before = _state.value.control
+        // An update that lands while the read is out is newer than the read's answer, so the answer yields to it, as it
+        // does to a later read's answer: reads after a turn's end and after the judge's status can overlap.
+        val writes = controlWrites
+        val read = ++controlReadsSent
         val result = try {
             client.request("session.control.read", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
         } catch (e: CancellationException) {
@@ -1198,7 +1209,9 @@ class ChatSession(
             return false
         }
         if (result == null || "control" !in result) return false
-        _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        if (controlWrites != writes || read < controlReadTaken) return false
+        controlReadTaken = read
+        _state.update { it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
         return true
     }
 
@@ -1302,6 +1315,7 @@ class ChatSession(
         }
         if (result != null && "control" in result) {
             _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+            controlWrites++
         }
         val dispatch = result?.get("dispatch") as? JsonObject
         if (dispatch.string("type") == "send") {
@@ -2599,6 +2613,7 @@ class ChatSession(
         }
         val now = nowSeconds()
         val noticesBefore = _state.value.notices
+        if (event.type == "session.control.update") controlWrites++
         // Cleared before the turn's end lands, so no rows laid out meanwhile still take it as running.
         if (event.type == "message.complete") {
             turnStartedAt = null
@@ -2629,6 +2644,8 @@ class ChatSession(
             } else {
                 foreignTurn = true
                 scope.launch { loadHistory() }
+                // The kickoff of a goal another client just typed: v0.22.1 stored it before the turn, unpublished.
+                if (controlUnpublished(anyChat = true)) scope.launch { refreshControl() }
             }
             // Swap the live copy for the stored rows, which now hold the other client's prompt for sure.
             "message.complete" -> {
