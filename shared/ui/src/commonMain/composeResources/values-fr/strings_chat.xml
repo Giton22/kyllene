@@ -242,6 +242,9 @@
 
     <string name="chat_event_compaction">Messages précédents résumés</string>
     <string name="chat_event_routine">Routine « %1$s » exécutée</string>
+    <string name="chat_event_routine_unnamed">Une routine a été exécutée</string>
+    <string name="chat_event_routine_problem">La routine « %1$s » a signalé un problème</string>
+    <string name="chat_event_routine_problem_unnamed">Une routine a signalé un problème</string>
     <string name="chat_event_failed_turn">Ce tour ne s’est pas terminé.</string>
     <string name="chat_event_system_messages">Messages système · %1$d</string>
     <string name="chat_event_other_bot">l’autre bot</string>

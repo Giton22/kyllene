@@ -264,6 +264,9 @@
     <!-- Rows the machinery writes into the chat -->
     <string name="chat_event_compaction">Earlier messages summarized</string>
     <string name="chat_event_routine">Routine “%1$s” ran</string>
+    <string name="chat_event_routine_unnamed">A routine ran</string>
+    <string name="chat_event_routine_problem">Routine “%1$s” reported a problem</string>
+    <string name="chat_event_routine_problem_unnamed">A routine reported a problem</string>
     <string name="chat_event_failed_turn">This turn did not complete.</string>
     <string name="chat_event_system_messages">System messages · %1$d</string>
     <string name="chat_event_other_bot">the other bot</string>

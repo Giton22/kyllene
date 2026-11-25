@@ -244,6 +244,56 @@ sealed interface InputRequest {
             else -> null
         }
 
+        /**
+         * The [respondMethod] params for a [InputRequestDelivery.PendingControl] [request] answered with [result]
+         * (an [InputAnswers] object): the ids and the one answer key, nothing else. `clarify.respond` takes exactly
+         * `session_id`, `execution_generation`, `prompt_id` and `answer` (hermes-agent `ClarifyRespondParams`, closed
+         * and all required) and refuses anything else with 4001, so [InputAnswers.clarify]'s batch `answers` and
+         * [InputAnswers.clarifyCancel]'s `{}`, shaped for the classic `clarify` request, are mapped here: one batch
+         * answer goes as `answer`, a cancel as `answer: ""` (a skip, the only thing the method can say). An answer
+         * to a prompt of two or more questions can't be carried ([pendingControlRefusal]) and throws
+         * [IllegalArgumentException] without sending anything. An approval sends only `choice`. A null generation is
+         * left out, as before.
+         */
+        fun pendingControlParams(request: InputRequest, sessionId: String, result: JsonObject): JsonObject {
+            pendingControlRefusal(request, result)?.let { throw IllegalArgumentException(it) }
+            val delivery = request.delivery as? InputRequestDelivery.PendingControl
+            return buildJsonObject {
+                put("session_id", sessionId)
+                delivery?.executionGeneration?.let { put("execution_generation", it) }
+                put("prompt_id", request.id)
+                when (request) {
+                    is Clarify -> put("answer", clarifyAnswer(result))
+                    is Approval -> result["choice"]?.let { put("choice", it) }
+                    else -> Unit
+                }
+            }
+        }
+
+        /**
+         * Why [result] can't go to the pending-controls [request] (see [pendingControlParams]), checked before
+         * anything is sent; null when it can, or when [request] isn't a pending-controls one. `clarify.respond`
+         * carries one answer, so only a cancel (a skip) fits a prompt of two or more questions: counting the
+         * questions, not the answers, since a notification or the watch answers only the first.
+         */
+        fun pendingControlRefusal(request: InputRequest, result: JsonObject): String? {
+            if (request !is Clarify || request.delivery !is InputRequestDelivery.PendingControl) return null
+            val cancel = "answer" !in result && "answers" !in result
+            val answers = (result["answers"] as? JsonObject)?.size ?: 1
+            return if (!cancel && (request.questions.size > 1 || answers > 1)) {
+                "This gateway takes one answer at a time, so these questions can't be answered here."
+            } else {
+                null
+            }
+        }
+
+        private fun clarifyAnswer(result: JsonObject): JsonElement {
+            result["answer"]?.let { return it }
+            val answers = result["answers"] as? JsonObject ?: return JsonPrimitive("")
+            val only = answers.values.firstOrNull() as? JsonPrimitive
+            return JsonPrimitive(only?.contentOrNull.orEmpty())
+        }
+
         /** The payload's own `choices` when present, else the gateway's rule (`_approval_request_payload`). */
         private fun approvalChoices(params: JsonObject): List<ApprovalChoice> {
             val offered = (params["choices"] as? JsonArray)
@@ -301,7 +351,10 @@ object InputAnswers {
         }
     }
 
-    /** `{}` (neither `answer` nor `answers`) cancels every question at once. */
+    /**
+     * `{}` (neither `answer` nor `answers`) cancels every question of a classic `clarify` request at once. A
+     * pending-controls prompt has no cancel: it goes as a skip (see [InputRequest.Companion.pendingControlParams]).
+     */
     val clarifyCancel: JsonObject = JsonObject(emptyMap())
 
     /** An empty [value] declines the prompt. */

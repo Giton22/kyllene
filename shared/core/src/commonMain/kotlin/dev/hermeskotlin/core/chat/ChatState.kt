@@ -84,6 +84,8 @@ internal class UnsettledPrompt(
     val files: List<Pair<String, ShownAttachment>> = emptyList(),
     val images: List<Pair<StagedImage, ShownAttachment>> = emptyList(),
     val keepRejected: Boolean = false,
+    /** Went by `session.steer`: the agent reads it into the turn, so no user row of the transcript shows it. */
+    val steer: Boolean = false,
 )
 
 sealed interface ChatMessage {
@@ -108,6 +110,10 @@ sealed interface ChatMessage {
         val timestamp: Double? = null,
         /** A large attachment going up over HTTP before the prompt is sent; null once it's up. */
         val upload: UploadProgress? = null,
+        /** The `submission_id` it went out with on the session authority, which names it when its turn reports its row. */
+        val submissionId: String? = null,
+        /** The `admission_id` the session authority gave it, which its turn's events carry; null elsewhere. */
+        val admissionId: String? = null,
     ) : ChatMessage
 
     /** One reply: streamed text, reasoning and the tools it ran. [streaming] until `message.complete`. */
@@ -229,6 +235,11 @@ data class ChatState(
     val subagents: List<Subagent> = emptyList(),
     /** The part of the running turn's reply shown before a mid-turn correction; the turn continues below it. */
     val correctedReplyKey: String? = null,
+    /**
+     * The session authority's latest admissions whose turns have started, so a prompt whose `prompt.submit` reply
+     * ("queued") is read after its own turn began isn't marked queued.
+     */
+    val startedAdmissions: List<String> = emptyList(),
     /** The session's goal, loop and heartbeat, null when it has none (`session.control.update`). */
     val control: SessionControl? = null,
     /** Source of unique keys for messages created on this device. */
