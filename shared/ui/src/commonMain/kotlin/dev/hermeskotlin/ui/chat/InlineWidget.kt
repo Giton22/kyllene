@@ -1,17 +1,11 @@
 package dev.hermeskotlin.ui.chat
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -21,7 +15,6 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -41,8 +34,6 @@ import dev.hermeskotlin.designsystem.background
 import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.Spinner
-import dev.hermeskotlin.designsystem.radii
-import dev.hermeskotlin.designsystem.radiusMedium
 import dev.hermeskotlin.designsystem.stroke
 import dev.hermeskotlin.designsystem.surface
 import dev.hermeskotlin.designsystem.text
@@ -148,13 +139,7 @@ private fun WidgetFrame(item: ReplyMedia, file: GatewayFile, files: WidgetFiles,
         css(Theme[colors][stroke]), css(Theme[colors][surface]), Theme[colors][background].luminance() < 0.5f,
         Theme[typography][bodySmall].fontSize.value * LocalDensity.current.fontScale,
     )
-    val shape = RoundedCornerShape(Theme[radii][radiusMedium])
-    Column(
-        Modifier.widthIn(max = READING_WIDTH).fillMaxWidth()
-            .clip(shape).border(1.dp, Theme[colors][stroke], shape).background(Theme[colors][surface]),
-    ) {
-        ReplyFile(item, download = { downloadWidget(files, file) }, insidePreview = true)
-        Spacer(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
+    InlineFilePreviewFrame(item, maxWidth = READING_WIDTH, download = { downloadWidget(files, file) }) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val width = maxWidth
             val restored = remember(attempt, width, theme) { files.cache.height(previewKey, width, theme) }

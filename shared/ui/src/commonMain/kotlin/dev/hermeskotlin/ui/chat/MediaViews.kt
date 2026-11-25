@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -52,6 +53,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.composables.icons.lucide.Download
@@ -166,38 +168,40 @@ private fun ReplyImage(item: ReplyMedia) {
     }
     val decoded = bytes?.let { rememberDecodedImage(it, maxEdge = INLINE_EDGE) }
     val bitmap = decoded?.bitmap
-    Box(
-        Modifier
-            .widthIn(max = 420.dp)
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, Theme[colors][stroke], shape)
-            .background(Theme[colors][surface])
-            .handCursor(bitmap != null || failed)
-            .clickable(enabled = bitmap != null || failed) {
-                if (bitmap != null) open(ViewerImage(item.name, source = item.source)) else attempt++
-            },
-        contentAlignment = Alignment.Center,
+    InlineFilePreviewFrame(
+        item,
+        maxWidth = 420.dp,
+        download = bytes?.let { loaded -> suspend { FileDownload.Ready(loaded) } },
     ) {
-        when {
-            bitmap != null -> Image(
-                bitmap = bitmap,
-                contentDescription = item.name,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)).heightIn(max = 480.dp),
-            )
-            failed || decoded?.decoding == false -> Row(
-                Modifier.padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                UnstyledIcon(Lucide.ImageOff, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(18.dp))
-                Column {
-                    Text(stringResource(Res.string.chat_load_failed_named, item.name), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
-                    if (failed) Text(stringResource(if (isDesktop) Res.string.chat_retry_click else Res.string.chat_retry_tap), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .handCursor(bitmap != null || failed)
+                .clickable(enabled = bitmap != null || failed) {
+                    if (bitmap != null) open(ViewerImage(item.name, source = item.source)) else attempt++
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                bitmap != null -> Image(
+                    bitmap = bitmap,
+                    contentDescription = item.name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)).heightIn(max = 480.dp),
+                )
+                failed || decoded?.decoding == false -> Row(
+                    Modifier.padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    UnstyledIcon(Lucide.ImageOff, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(18.dp))
+                    Column {
+                        Text(stringResource(Res.string.chat_load_failed_named, item.name), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
+                        if (failed) Text(stringResource(if (isDesktop) Res.string.chat_retry_click else Res.string.chat_retry_tap), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+                    }
                 }
+                else -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { Spinner() }
             }
-            else -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { Spinner() }
         }
     }
 }
@@ -209,6 +213,25 @@ private fun ReplyImage(item: ReplyMedia) {
 internal fun webHost(source: String): String? {
     if (!source.startsWith("http://") && !source.startsWith("https://")) return null
     return source.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
+}
+
+/** The shared frame and file actions for a preview rendered in the chat. */
+@Composable
+internal fun InlineFilePreviewFrame(
+    item: ReplyMedia,
+    maxWidth: Dp,
+    download: (suspend () -> FileDownload)?,
+    content: @Composable () -> Unit,
+) {
+    val shape = RoundedCornerShape(Theme[radii][radiusMedium])
+    Column(
+        Modifier.widthIn(max = maxWidth).fillMaxWidth()
+            .clip(shape).border(1.dp, Theme[colors][stroke], shape).background(Theme[colors][surface]),
+    ) {
+        ReplyFile(item, download = download, insidePreview = true)
+        Spacer(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
+        content()
+    }
 }
 
 /** A delivered file: its name, with Save and Share. */
