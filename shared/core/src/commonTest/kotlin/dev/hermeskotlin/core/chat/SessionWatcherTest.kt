@@ -25,6 +25,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.buildJsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -174,6 +175,54 @@ class SessionWatcherTest {
         val response = sockets.last().awaitSent { it["id"]?.jsonPrimitive?.contentOrNull == "srq-1" && "result" in it }
         assertEquals("once", (response["result"] as JsonObject)["choice"]?.jsonPrimitive?.contentOrNull)
         assertNull(watcher.find("srq-1"))
+    }
+
+    /**
+     * A pending-controls clarify waiting in watched chat `a`, answered from a notification with [result]. Returns
+     * whether it went out. `clarify.respond` takes exactly these four keys (hermes-agent `ClarifyRespondParams`).
+     */
+    private suspend fun TestScope.answerPendingClarify(questions: String, result: (InputRequest.Clarify) -> JsonObject): Boolean {
+        live.value = listOf(Row("a", "working"))
+        val watcher = setup().watcher
+        watcher.chats.first { "a" in it }
+        sockets.last().push(event("clarify.request", "rt-a", """{"prompt_id":"prm-1","execution_generation":4,"questions":[$questions]}"""))
+        watcher.chats.first { it["a"]?.requests?.isNotEmpty() == true }
+        val clarify = watcher.find("prm-1")?.second as InputRequest.Clarify
+        val sent = watcher.answer("prm-1", result(clarify))
+        assertEquals(!sent, watcher.find("prm-1") != null)
+        return sent
+    }
+
+    private fun clarifyRespond(): JsonObject = sentMethods("clarify.respond").single()["params"]!!.jsonObject
+
+    private fun assertClarifyRespond(answer: String) {
+        val params = clarifyRespond()
+        assertEquals(setOf("session_id", "execution_generation", "prompt_id", "answer"), params.keys)
+        assertEquals("rt-a", params["session_id"]?.jsonPrimitive?.contentOrNull)
+        assertEquals("4", params["execution_generation"]?.jsonPrimitive?.contentOrNull)
+        assertEquals("prm-1", params["prompt_id"]?.jsonPrimitive?.contentOrNull)
+        assertEquals(answer, params["answer"]?.jsonPrimitive?.contentOrNull)
+    }
+
+    private val q1 = """{"qid":"q1","question":"Name?"}"""
+    private val q2 = """{"qid":"q2","question":"Colour?","choices":["Red","Blue"]}"""
+
+    @Test
+    fun aPendingClarifyBatchOfOneGoesAsItsAnswer() = runTest {
+        assertTrue(answerPendingClarify(q1) { InputAnswers.clarify(it, listOf(listOf("Ada"))) })
+        assertClarifyRespond("Ada")
+    }
+
+    @Test
+    fun aPendingClarifyCancelGoesAsAnEmptyAnswer() = runTest {
+        assertTrue(answerPendingClarify("$q1,$q2") { InputAnswers.clarifyCancel })
+        assertClarifyRespond("")
+    }
+
+    @Test
+    fun aPendingClarifyBatchOfTwoIsNotSent() = runTest {
+        assertFalse(answerPendingClarify("$q1,$q2") { InputAnswers.clarify(it, listOf(listOf("Ada"), listOf("Red"))) })
+        assertTrue(sentMethods("clarify.respond").isEmpty())
     }
 
     @Test

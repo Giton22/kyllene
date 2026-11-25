@@ -148,15 +148,7 @@ class SessionWatcher(
             val delivery = found?.second?.delivery
             val method = found?.second?.let(InputRequest::respondMethod)
             if (delivery is InputRequestDelivery.PendingControl && method != null) {
-                client.request(
-                    method,
-                    buildJsonObject {
-                        put("session_id", found.first.runtimeId)
-                        delivery.executionGeneration?.let { put("execution_generation", it) }
-                        put("prompt_id", found.second.id)
-                        result.forEach { (k, v) -> put(k, v) }
-                    },
-                )
+                client.request(method, InputRequest.pendingControlParams(found.second, found.first.runtimeId, result))
             } else {
                 client.respond(requestId, result)
             }
