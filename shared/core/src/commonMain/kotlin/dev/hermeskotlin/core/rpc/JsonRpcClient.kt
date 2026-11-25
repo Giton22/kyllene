@@ -163,6 +163,13 @@ class JsonRpcClient(
 
     private val authorityRequests = AuthorityRequests()
 
+    /**
+     * The `subscription_id` the session authority attached the chat [sessionId] to this socket with, which
+     * `session.detach` names; null off the authority, or for a chat this socket hasn't opened.
+     */
+    suspend fun subscriptionOf(sessionId: String): String? =
+        if (sessionAuthority) authorityRequests.subscription(sessionId) else null
+
     suspend fun run(): Nothing = coroutineScope {
         try {
             transport.incoming.collect { text ->
