@@ -192,6 +192,18 @@ class ModelSwitchTest {
     }
 
     @Test
+    fun aStaleFenceWithoutTheCurrentOnesRollsBackWithAReadableError() = runTest {
+        // hermes-agent v0.22.1 refuses a stale fence without the current revision and generation (v0.22.3 on add them).
+        val (chat, gateway) = chat(backgroundScope, authority = true, mutate = { "error:4001:revision_conflict" })
+
+        assertEquals(ModelSwitch.Failed, chat.setModel("m2", "p2"))
+        assertEquals(1, gateway.sent("session.mutate").size)
+        val state = chat.state.value
+        assertEquals("m1" to "p1", state.model to state.provider)
+        assertEquals("The chat changed on the gateway while switching the model. Try again.", state.error)
+    }
+
+    @Test
     fun aPickDuringATurnOnAnEarlySessionAuthorityIsExplained() = runTest {
         // hermes-agent v0.22.1 has no deferred pick: a turn in progress refuses it as session_busy.
         val (chat, _) = chat(backgroundScope, authority = true, mutate = { "error:4001:session_busy" })

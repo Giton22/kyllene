@@ -1473,7 +1473,9 @@ class ChatSession(
         } catch (e: RpcException) {
             val fresh = e.data.long("revision")
             val generation = e.data.long("execution_generation")
-            if (e.reason !in FENCE_REFUSALS || fresh == null || generation == null) throw e
+            if (e.reason !in FENCE_REFUSALS) throw e
+            // hermes-agent v0.22.1 refuses without the current ones, so there is nothing to retry with.
+            if (fresh == null || generation == null) throw RpcException(e.code, changed, e.reason, e.data)
             revision = fresh
             executionGeneration = generation
             try {
