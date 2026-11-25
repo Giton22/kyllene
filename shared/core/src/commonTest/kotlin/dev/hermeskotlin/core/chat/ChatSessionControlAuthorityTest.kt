@@ -161,6 +161,12 @@ class ChatSessionControlAuthorityTest {
         assertTrue(gw.sent("session.control.read").isEmpty())
     }
 
+    /** Waits for [count] calls in [held], failing rather than hanging when they don't come. */
+    private suspend fun awaitHeld(held: List<FakeGateway.Call>, count: Int) {
+        repeat(10_000) { if (held.size >= count) return else kotlinx.coroutines.yield() }
+        assertEquals(count, held.size, "calls held")
+    }
+
     /** A stored chat with no goal yet, open here; `session.control.read` answers with [goalRead]. */
     private suspend fun openGoallessChat(scope: kotlinx.coroutines.CoroutineScope): Pair<FakeGateway, ChatSession> {
         val gw = FakeGateway(scope, reconnects = false).apply {
@@ -198,13 +204,37 @@ class ChatSessionControlAuthorityTest {
         val (gw, chat) = openGoallessChat(backgroundScope)
         val reads = gw.sent("session.control.read").size
 
-        // The goal is set only after the other client's turn began, as a typed `/goal` mid-turn would be.
+        // The goal is set only after the other client's turn began, as a typed `/goal` mid-turn would be: the read at
+        // the turn's start finds none.
+        val held = mutableListOf<FakeGateway.Call>()
+        val answers = gw.answer
+        gw.answer = { call -> if (call.method == "session.control.read") null.also { held += call } else answers(call) }
         gw.socket.push(event("message.start", "rt1", "{}"))
-        gw.socket.awaitSent { it.isCall("session.control.read") && gw.sent("session.control.read").size > reads }
+        awaitHeld(held, 1)
+        gw.socket.push(held[0].reply("""{"control":null}"""))
+        gw.answer = answers
         goalRead = ControlFixtures.GOAL_ACTIVE
         gw.socket.push(event("message.complete", "rt1", """{"text":"Step done","status":"complete"}"""))
 
         assertEquals("active", chat.state.first { it.control != null }.control?.goal?.status)
+        assertEquals(reads + 2, gw.sent("session.control.read").size)
+    }
+
+    @Test
+    fun aLinkThatPublishedIsNotReadAfterACommandNorATurn() = runTest {
+        val (gw, chat) = openGoallessChat(backgroundScope)
+        gw.socket.push(event("session.control.update", "rt1", """{"control":${ControlFixtures.GOAL_ACTIVE}}"""))
+        chat.state.first { it.control != null }
+        val reads = gw.sent("session.control.read").size
+
+        chat.runCommand(SlashCommand("goal", "pause"))
+        gw.socket.push(event("message.start", "rt1", "{}"))
+        gw.socket.push(event("message.complete", "rt1", """{"text":"Step done","status":"complete"}"""))
+        // A later frame, so the turn has been handled when it lands.
+        gw.socket.push(event("session.control.update", "rt1", """{"control":${ControlFixtures.GOAL_PAUSED}}"""))
+
+        chat.state.first { it.control?.goal?.status == "paused" }
+        assertEquals(reads, gw.sent("session.control.read").size)
     }
 
     @Test
@@ -224,10 +254,10 @@ class ChatSessionControlAuthorityTest {
         val held = mutableListOf<FakeGateway.Call>()
         gw.answer = { call -> if (call.method == "session.control.read") null.also { held += call } else "{}" }
 
-        // A turn's end and then the judge's status each send a read; the judge's verdict is in the later one only.
+        // Two of the judge's statuses close together each send a read; the verdict is in the later one only.
         gw.socket.push(event("status.update", "rt1", """{"kind":"goal","text":"Working."}"""))
         gw.socket.push(event("status.update", "rt1", """{"kind":"goal","text":"Goal paused."}"""))
-        while (held.size < 2) kotlinx.coroutines.yield()
+        awaitHeld(held, 2)
         val (earlier, later) = held
 
         gw.socket.push(earlier.reply("""{"control":${ControlFixtures.GOAL_ACTIVE}}"""))

@@ -1188,7 +1188,7 @@ class ChatSession(
      * Reads the session's goal, loop and heartbeat once (`session.control.read`), since `session.resume`
      * doesn't carry them; later changes arrive as `session.control.update` events. Best effort: a gateway
      * that doesn't know the method hides the feature, and any other failure leaves the state as it is.
-     * Returns whether its answer was taken: not when it failed, or a newer update or read had come in.
+     * Returns whether the gateway answered; an answer older than an update or read that came in meanwhile yields to it.
      */
     suspend fun refreshControl(): Boolean {
         val client = connectedClient() ?: return false
@@ -1209,9 +1209,10 @@ class ChatSession(
             return false
         }
         if (result == null || "control" !in result) return false
-        if (controlWrites != writes || read < controlReadTaken) return false
-        controlReadTaken = read
-        _state.update { it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        if (controlWrites == writes && read > controlReadTaken) {
+            controlReadTaken = read
+            _state.update { it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        }
         return true
     }
 
@@ -1286,8 +1287,9 @@ class ChatSession(
         } catch (e: Exception) {
             return e.message ?: "Couldn't open the session."
         }
-        // As with the read: an update from another client that lands first is newer than this answer.
-        val before = _state.value.control
+        // As with the read: an update from another client that lands first is newer than this answer. A read's answer
+        // that lands first isn't: it may have been sent before this action.
+        val writes = controlWrites
         val result = try {
             if (client === controlByCommandOn) {
                 controlByCommand(client, runtimeId, action, text, index)
@@ -1313,9 +1315,11 @@ class ChatSession(
         } catch (e: Exception) {
             return e.message ?: "Couldn't ${action.verb}."
         }
-        if (result != null && "control" in result) {
-            _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        if (result != null && "control" in result && controlWrites == writes) {
             controlWrites++
+            // Reads still out were sent before this answer, so theirs are no newer.
+            controlReadTaken = controlReadsSent
+            _state.update { it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
         }
         val dispatch = result?.get("dispatch") as? JsonObject
         if (dispatch.string("type") == "send") {
@@ -2613,7 +2617,8 @@ class ChatSession(
         }
         val now = nowSeconds()
         val noticesBefore = _state.value.notices
-        if (event.type == "session.control.update") controlWrites++
+        // Only an update that carries the state moves it (ChatReducer), so only that one outdates a read that's out.
+        if (event.type == "session.control.update" && (event.payload as? JsonObject)?.get("control") is JsonObject) controlWrites++
         // Cleared before the turn's end lands, so no rows laid out meanwhile still take it as running.
         if (event.type == "message.complete") {
             turnStartedAt = null
