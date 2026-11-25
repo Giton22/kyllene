@@ -367,10 +367,11 @@ class ChatSession(
             _state.update { state ->
                 // The session authority answers every prompt "queued", one that starts a turn too. Marked so, a prompt
                 // whose turn began before this read the reply would wait for a start that has already come.
-                val held = status == "queued" && !(client.sessionAuthority && startsTurn) &&
-                    (admissionId == null || admissionId !in state.startedAdmissions)
+                val started = admissionId != null && admissionId in state.startedAdmissions
+                val held = status == "queued" && !(client.sessionAuthority && startsTurn) && !started
                 val sent = state.copy(
-                    running = true,
+                    // A turn whose start was read first has said whether it still runs, its end too.
+                    running = state.running || !started,
                     messages = state.messages.updateUser(key) {
                         it.copy(pending = false, queued = held, rowId = rowId ?: it.rowId, sentText = sentText, admissionId = admissionId)
                     },

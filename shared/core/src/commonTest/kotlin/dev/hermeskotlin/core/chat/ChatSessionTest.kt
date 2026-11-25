@@ -3180,6 +3180,37 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aFollowUpWhoseOwnTurnEndsBeforeItsQueuedReplyIsReadLeavesTheChatIdle() = runTest {
+        val (chat, transport) = authorityChat(backgroundScope) { it.rewound() }
+        fun ended(admission: String, text: String, user: Int, submission: String?) = authorityEvent(
+            "message.complete",
+            admission,
+            """{"text":"$text","status":"complete","persisted_turn":{"row_ids":[$user,${user + 1}],"complete":true,"user_row_id":$user,"submission_id":"$submission"}}""",
+        )
+        historyFails = true
+        assertTrue(chat.send("one"))
+        val first = transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id")
+        transport.push(authorityEvent("message.start", "a1"))
+        chat.state.first { s -> s.messages.any { it is ChatMessage.Assistant && it.streaming } }
+        val canned = gateway.answer
+        gateway.answer = { call -> if (call.method == "prompt.submit") null else canned(call) }
+
+        // Both turns end before the follow-up's "queued" reply is read.
+        val sending = backgroundScope.async { chat.send("two", queue = true) }
+        val submit = transport.awaitSent { it.isCall("prompt.submit") && it.param("text") == "two" }
+        transport.push(ended("a1", "First", 3, first))
+        transport.push(authorityEvent("message.start", "a2"))
+        transport.push(ended("a2", "Second", 5, submit.param("submission_id")))
+        chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Assistant && it.text == "Second" } }
+        transport.push("""{"jsonrpc":"2.0","id":${submit["id"]},"result":{"admission_id":"a2","status":"queued"}}""")
+        assertTrue(sending.await())
+
+        val done = chat.state.value
+        assertFalse(done.running, "a late reply made the ended turn look running")
+        assertFalse(done.messages.filterIsInstance<ChatMessage.User>().single { it.text == "two" }.queued)
+    }
+
+    @Test
     fun aPromptQueuedBehindATurnThatEndedBeforeTheResumeIsReadIsNotLeftQueued() = runTest {
         // A new bot's Bot Chat, opened while its intro runs (v0.23.4 session authority). The intro's
         // message.complete goes out before the session.resume reply, which still says running: true.
