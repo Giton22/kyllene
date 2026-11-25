@@ -948,8 +948,22 @@ class ChatSession(
         }
     }
 
-    /** `/compress`: summarizes older turns through `session.compress` (the slash worker times out on it). */
+    /**
+     * `/compress`: summarizes older turns through `session.compress` (the slash worker times out on it). The
+     * session authority has none: there it is a `session.mutate` `compress`.
+     */
     suspend fun compress(focus: String) = runOnGateway("/compress", COMPRESS_TIMEOUT_MS) { client, runtimeId ->
+        if (client.sessionAuthority) {
+            val result = mutateFenced(client, runtimeId, "compress", CHANGED_WHILE_COMPRESSING, COMPRESS_TIMEOUT_MS) {
+                if (focus.isNotBlank()) put("focus", focus.trim())
+            }
+            // gateway/session_mutation_compress.py: a compress that removed nothing says `noop`; the summary words
+            // the outcome as /compress does.
+            val summary = result?.get("summary") as? JsonObject
+            if (result.string("status") != "noop" && summary.boolean("noop") != true) scope.launch { loadHistory() }
+            return@runOnGateway listOfNotNull(summary.string("headline"), summary.string("token_line"), summary.string("note"))
+                .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n").ifEmpty { "Compressed." }
+        }
         val result = client.request(
             "session.compress",
             buildJsonObject {
@@ -972,22 +986,41 @@ class ChatSession(
         }
     }
 
-    /** `/status`: the session report from `session.status`. */
+    /**
+     * `/status`: the session report from `session.status`, or on the session authority, which has none, from
+     * `slash.exec status` (the same report, gateway/session_commands.py).
+     */
     suspend fun status() = runOnGateway("/status") { client, runtimeId ->
-        val result = client.request("session.status", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+        val result = if (client.sessionAuthority) {
+            client.request(
+                "slash.exec",
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("command", "status")
+                },
+                timeoutMs = COMMAND_TIMEOUT_MS,
+            ) as? JsonObject
+        } else {
+            client.request("session.status", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+        }
         result.string("output") ?: "No status."
     }
 
     /**
-     * The provider account's limits and credits as the gateway words them (`session.usage`
-     * `account_lines` / `credits_lines`, e.g. a quota window); empty when there are none or offline.
+     * The provider account's limits and credits as the gateway words them (`session.usage` `account_lines` /
+     * `credits_lines`, or on the session authority `session.account_usage` `lines` / `nous_lines`, e.g. a quota
+     * window); empty when there are none, offline, or on a gateway without the call (an authority before
+     * hermes-agent v0.23.2).
      */
     suspend fun accountLimits(): List<String> {
         val client = connectedClient() ?: return emptyList()
         val runtimeId = liveRuntimeId(client) ?: return emptyList()
         return try {
-            val result = client.request("session.usage", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
-            listOf("account_lines", "credits_lines").flatMap { key ->
+            val authority = client.sessionAuthority
+            val method = if (authority) "session.account_usage" else "session.usage"
+            val result = client.request(method, buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+            val keys = if (authority) listOf("lines", "nous_lines") else listOf("account_lines", "credits_lines")
+            keys.flatMap { key ->
                 (result?.get(key) as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty) }
             }
         } catch (e: CancellationException) {
@@ -1500,8 +1533,24 @@ class ChatSession(
         if (on) "YOLO on: this chat runs tools without asking for approval." else "YOLO off: risky tools ask for approval again."
     }
 
-    /** `/title <name>`: renames the chat through `session.title` (REST can't address a live session's row yet). */
+    /**
+     * `/title <name>`: renames the chat through `session.title` (REST can't address a live session's row yet). The
+     * session authority has none: there it is a `session.mutate` `rename`.
+     */
     suspend fun retitle(title: String) = runOnGateway("/title") { client, runtimeId ->
+        if (client.sessionAuthority) {
+            val result = try {
+                mutateFenced(client, runtimeId, "rename", CHANGED_WHILE_RENAMING) { put("title", title.trim()) }
+            } catch (e: RpcException) {
+                // hermes-agent (v0.23.4) answers a title another chat has with a bare internal error: the store's
+                // "already in use" isn't mapped to a refusal (persistence/sqlite/conversation/_store/titles.py).
+                if (e.code != INTERNAL_ERROR) throw e
+                throw RpcException(e.code, RENAME_FAILED, e.reason, e.data)
+            }
+            val final = (if (result?.containsKey("title") == true) result.string("title") else title).orEmpty().trim()
+            _state.update { it.copy(title = final.ifEmpty { null }) }
+            return@runOnGateway if (final.isEmpty()) "Title cleared." else "Title set: $final"
+        }
         val result = client.request(
             "session.title",
             buildJsonObject {
@@ -1624,9 +1673,10 @@ class ChatSession(
     }
 
     /**
-     * A `session.mutate` [operation] on the session authority (gateway/session_mutations.py), as Hermes Desktop
-     * sends it: fenced by the session's revision and execution generation. A refusal for stale ones carries the
-     * current ones, so it goes once more with those; a second refusal is the error, as [changed].
+     * A `session.mutate` [operation] (`branch`, `model`, `rename`, `compress`) on the session authority
+     * (gateway/session_mutations.py), as Hermes Desktop sends it: fenced by the session's revision and execution
+     * generation. A refusal for stale ones carries the current ones, so it goes once more with those; a second refusal
+     * is the error, as [changed].
      */
     @OptIn(ExperimentalUuidApi::class)
     private suspend fun mutateFenced(
@@ -1634,6 +1684,7 @@ class ChatSession(
         runtimeId: String,
         operation: String,
         changed: String,
+        timeoutMs: Long = 30_000,
         payload: JsonObjectBuilder.() -> Unit,
     ): JsonObject? {
         suspend fun send(expectedRevision: Long, expectedGeneration: Long) = client.request(
@@ -1647,6 +1698,7 @@ class ChatSession(
                 put("operation", operation)
                 putJsonObject("payload", payload)
             },
+            timeoutMs = timeoutMs,
         ) as? JsonObject
         return try {
             // Unknown only if the gateway sent neither; its refusal then says what they are.
@@ -3019,6 +3071,15 @@ class ChatSession(
         const val CHANGED_WHILE_SWITCHING = "The chat changed on the gateway while switching the model. Try again."
 
         const val SWITCH_WHEN_DONE = "The model can't change while a reply is running. Switch it when this one is done."
+
+        const val CHANGED_WHILE_RENAMING = "The chat changed on the gateway while renaming. Try again."
+
+        const val CHANGED_WHILE_COMPRESSING = "The chat changed on the gateway while compressing. Try again."
+
+        /** JSON-RPC "internal error". */
+        const val INTERNAL_ERROR = -32603
+
+        const val RENAME_FAILED = "The gateway couldn't rename the chat. Another chat may have this title already."
 
         /** A REST read of a session the gateway no longer has. */
         const val HTTP_NOT_FOUND = 404
