@@ -1151,14 +1151,21 @@ class ChatSession(
     private var controlUnsupportedOn: JsonRpcClient? = null
 
     /**
+     * The session-authority link whose `session.control` came back "no such method" (Hermes v0.22.1 serves only
+     * `.read` there): a button runs as its typed command instead, as v0.22.3's own `session.control` does. A new
+     * link may be to an updated gateway, so it asks once more.
+     */
+    private var controlByCommandOn: JsonRpcClient? = null
+
+    /**
      * Reads the session's goal, loop and heartbeat once (`session.control.read`), since `session.resume`
      * doesn't carry them; later changes arrive as `session.control.update` events. Best effort: a gateway
      * that doesn't know the method hides the feature, and any other failure leaves the state as it is.
      */
-    suspend fun refreshControl() {
-        val client = connectedClient() ?: return
-        if (client === controlUnsupportedOn) return
-        val runtimeId = liveRuntimeId(client) ?: return
+    suspend fun refreshControl(): Boolean {
+        val client = connectedClient() ?: return false
+        if (client === controlUnsupportedOn) return false
+        val runtimeId = liveRuntimeId(client) ?: return false
         // An update that lands while the read is out is newer than the read's answer, so the answer yields to it.
         val before = _state.value.control
         val result = try {
@@ -1167,13 +1174,13 @@ class ChatSession(
             throw e
         } catch (e: RpcException) {
             if (e.code == METHOD_NOT_FOUND) controlUnsupportedOn = client
-            return
+            return false
         } catch (_: Exception) {
-            return
+            return false
         }
-        if (result != null && "control" in result) {
-            _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
-        }
+        if (result == null || "control" !in result) return false
+        _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        return true
     }
 
     /**
@@ -1250,15 +1257,25 @@ class ChatSession(
         // As with the read: an update from another client that lands first is newer than this answer.
         val before = _state.value.control
         val result = try {
-            client.request(
-                "session.control",
-                buildJsonObject {
-                    put("session_id", runtimeId)
-                    put("action", action.wire)
-                    if (text != null) put("args", buildJsonObject { put("text", text) })
-                    else if (index != null) put("args", buildJsonObject { put("index", index) })
-                },
-            ) as? JsonObject
+            if (client === controlByCommandOn) {
+                controlByCommand(client, runtimeId, action, text, index)
+            } else {
+                try {
+                    client.request(
+                        "session.control",
+                        buildJsonObject {
+                            put("session_id", runtimeId)
+                            put("action", action.wire)
+                            if (text != null) put("args", buildJsonObject { put("text", text) })
+                            else if (index != null) put("args", buildJsonObject { put("index", index) })
+                        },
+                    ) as? JsonObject
+                } catch (e: RpcException) {
+                    if (e.code != METHOD_NOT_FOUND || !client.sessionAuthority) throw e
+                    controlByCommandOn = client
+                    controlByCommand(client, runtimeId, action, text, index)
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1279,6 +1296,72 @@ class ChatSession(
             }
         }
         return null
+    }
+
+    /**
+     * [action] as its typed command (`command.dispatch`), for the session-authority gateway of
+     * [controlByCommandOn]. Its answer is the `dispatch` that `session.control` would carry; that gateway
+     * publishes no `session.control.update`, so the state is read again. Throws with a user-readable
+     * reason when the command fails as well. The command answers a refusal ("No goal set.", a sub-goal
+     * number that's gone) as its plain output, so output with a state that didn't move is that reason.
+     * The state is read before the command too: with no updates, the one on screen may be stale.
+     */
+    private suspend fun controlByCommand(
+        client: JsonRpcClient,
+        runtimeId: String,
+        action: ControlAction,
+        text: String?,
+        index: Int?,
+    ): JsonObject {
+        if (action == ControlAction.SubgoalAdd && text.orEmpty().all { it.isPythonSpace() }) {
+            throw IllegalStateException(SUBGOAL_TEXT_MISSING)
+        }
+        val (name, arg) = action.command(text, index) ?: throw IllegalStateException(SUBGOAL_READS_AS_VERB)
+        val readBefore = refreshControl()
+        val revision = _state.value.control?.revision
+        val dispatch = try {
+            client.request(
+                "command.dispatch",
+                // Only what Hermes v0.22.1 takes here (gateway/session_commands.py `_parse`): strings, no more.
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("name", name)
+                    put("arg", arg)
+                },
+                timeoutMs = COMMAND_TIMEOUT_MS,
+            ) as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RpcException) {
+            throw IllegalStateException(commandRefusal(action, e))
+        } catch (_: RpcTimeoutException) {
+            // It may have gone through all the same, and no update will say so.
+            refreshControl()
+            throw IllegalStateException("Couldn't ${action.verb}: the gateway didn't answer in time.")
+        }
+        val output = dispatch.string("output")?.trim()
+        if (dispatch.string("type") == "exec" && !output.isNullOrEmpty() && refreshControl() && readBefore &&
+            _state.value.control?.revision == revision
+        ) {
+            throw IllegalStateException(output)
+        }
+        return buildJsonObject { dispatch?.let { put("dispatch", it) } }
+    }
+
+    /** Why `command.dispatch` refused [action]: the session authority answers with a bare code (gateway/session_controls.py). */
+    private fun commandRefusal(action: ControlAction, e: RpcException): String {
+        val code = e.reason ?: e.message
+        val why = when {
+            // Only a gateway without the command is helped by an update.
+            e.code == METHOD_NOT_FOUND || code == "unsupported_command" -> return "Couldn't ${action.verb} on this gateway. Update Hermes to use goals."
+            code == "permission_denied" || code == "profile_mismatch" -> "the gateway didn't allow it."
+            code == "not_found" -> "the chat isn't open on the gateway any more."
+            code == "runtime_draining" -> "the gateway is restarting. Try again in a moment."
+            code == "session_busy" -> "the chat is busy. Try again in a moment."
+            code.isBlank() -> "the gateway refused it."
+            else -> "the gateway refused it ($code)."
+        }
+        return "Couldn't ${action.verb}: $why"
     }
 
     /**
@@ -2527,6 +2610,9 @@ class ChatSession(
                 // Nothing can still wait on a person once the turn is over; this also clears a
                 // clarify answered on another client, which gets no request.cancel.
                 _state.update { it.copy(inputRequests = emptyList()) }
+                // A gateway without `session.control` sends no update either: a resumed goal's turn and its judge
+                // move the goal on unseen, so it's read again.
+                if (controlByCommandOn != null && controlByCommandOn === attachedClient) scope.launch { refreshControl() }
                 if (foreignTurn || rewound) {
                     foreignTurn = false
                     rewound = false
@@ -3045,6 +3131,17 @@ class ChatSession(
         const val CHANGED_ELSEWHERE = "The chat changed somewhere else meanwhile. It's up to date now; try again."
 
         const val NOT_CONNECTED = "Not connected to the gateway."
+
+        /**
+         * A sub-goal Hermes v0.22.1's `/subgoal` would take for its own `remove` or `clear`
+         * (gateway/slash_commands_goals.py), so it isn't sent as that command.
+         */
+        const val SUBGOAL_READS_AS_VERB =
+            "This gateway would read a sub-goal starting with \"remove\" or \"clear\" as a command. " +
+                "Reword it, or update Hermes."
+
+        /** A sub-goal with no text, which `/subgoal` would answer with the goal's status instead of adding it. */
+        const val SUBGOAL_TEXT_MISSING = "Write the sub-goal first."
 
         /** Looks at the transcript for a prompt sent without a reply: about 7 s in all. */
         const val DELIVERY_LOOKS = 4
