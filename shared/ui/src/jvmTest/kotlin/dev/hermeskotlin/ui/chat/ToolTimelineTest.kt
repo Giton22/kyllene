@@ -31,6 +31,7 @@ import dev.hermeskotlin.ui.preview.PreviewChatActions
 import dev.hermeskotlin.ui.voice.DictationState
 import dev.hermeskotlin.ui.voice.VoiceChatState
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
@@ -125,10 +126,15 @@ class ToolTimelineTest {
         val collapsed = onNode(action("Show details") and hasText("Ran Check backup snapshots"))
         val expanded = onNode(action("Tool details") and hasText("Ran Check backup snapshots"))
         val chevron = onNodeWithContentDescription("Hide details")
+        val duration = onNodeWithText("2.0s", useUnmergedTree = true)
+        val durationRight = duration.getUnclippedBoundsInRoot().right
         chevron.assertDoesNotExist()
         collapsed.performTouchInput { click() }
         onNodeWithText("Snapshot check timed out.").assertExists()
         onNodeWithText("Snapshot listing timed out").assertDoesNotExist()
+        val expandedDuration = duration.getUnclippedBoundsInRoot()
+        assertEquals(durationRight, expandedDuration.right, "The duration column should stay fixed")
+        assertTrue(chevron.getUnclippedBoundsInRoot().right <= expandedDuration.left)
 
         chevron.performTouchInput { click() }
         chevron.assertDoesNotExist()
