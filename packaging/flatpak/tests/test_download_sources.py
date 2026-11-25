@@ -114,6 +114,11 @@ class DownloadSourcesTest(unittest.TestCase):
             self.assertEqual(len(build), 1, name)
             self.assertIn('--disable-download', build[0], name)
 
+    def test_the_release_only_restores_the_download_cache(self):
+        workflow = (WORKFLOWS / 'release.yml').read_text()
+        self.assertIn('uses: actions/cache/restore@', workflow)
+        self.assertNotIn('uses: actions/cache@', workflow)
+
 
 if __name__ == '__main__':
     unittest.main()
