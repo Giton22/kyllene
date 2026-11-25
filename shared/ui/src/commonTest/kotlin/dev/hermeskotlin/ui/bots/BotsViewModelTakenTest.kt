@@ -82,6 +82,8 @@ class BotsViewModelTakenTest {
         private val authority: Boolean,
         /** Whether the roster lists the other client's chat yet. */
         private val listed: Boolean = true,
+        /** Whether our `session.create` fails outright instead (and no other client takes the chat). */
+        private val createFails: Boolean = false,
     ) : RpcTransport {
         private val inbound = Channel<String>(Channel.UNLIMITED).apply {
             val payload = if (authority) """{"session_authority":true}""" else "{}"
@@ -116,7 +118,7 @@ class BotsViewModelTakenTest {
             "profiles.list" -> roster()
             "profiles.configure" -> """{"applied":{"ui_meta":true}}"""
             "setup.runtime_check" -> """{"ok":true}"""
-            "session.create" -> {
+            "session.create" -> if (createFails) Refused(5000, "Session store is busy") else {
                 // The other client's titled create lands first.
                 theirs = true
                 """{"session_id":"rt-new","stored_session_id":"stored-new","revision":3,"execution_generation":1,"subscription_id":"sub-1"}"""
@@ -223,6 +225,27 @@ class BotsViewModelTakenTest {
         assertNull(opened)
         // Each chat we started was removed again when its title was taken.
         assertEquals(socket.sent("session.create").size, socket.sent("session.delete").size)
+        assertEquals(1, done)
+    }
+
+    /** The bot is made but its chat can't be started for another reason: the editor, already closed, isn't closed twice. */
+    @Test
+    fun aNewBotWhoseChatFailsToStartClosesTheEditorOnce() = runTest(dispatcher) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, createFails = true)
+        val vm = viewModel(socket)
+        vm.bind(gateway.gatewayUrl)
+        runCurrent()
+
+        var opened: Pair<Bot, String>? = null
+        var done = 0
+        vm.create(BotDraft(profile = "work", title = "Work"), onDone = { done++ }, onOpened = { bot, id -> opened = bot to id })
+        runCurrent()
+        vm.busy.first { it == null }
+        runCurrent()
+
+        assertTrue(socket.sent("prompt.submit").isEmpty(), "intro sent: ${socket.sent("prompt.submit")}")
+        assertNull(opened)
+        assertTrue(vm.state.value.notice != null, "no notice")
         assertEquals(1, done)
     }
 

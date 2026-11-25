@@ -341,10 +341,12 @@ class BotsViewModel(
         if (_busy.value != null) return
         _busy.value = words(Res.string.bots_making, displayNameFor(draft.profile, draft.title))
         viewModelScope.launch {
+            var done = false
             try {
                 val made = api.createBot(draft)
                 refreshNow()
                 onDone()
+                done = true
                 val bot = _state.value.all.firstOrNull { it.name == made.profile } ?: Bot(name = made.profile)
                 if (!made.readyToChat) {
                     _state.update { it.copy(notice = wordsThen(Res.string.bots_made_without_model, made.problem, bot.label)) }
@@ -365,7 +367,8 @@ class BotsViewModel(
                 _state.update { it.copy(notice = e.message?.let(Words::Raw)) }
             } catch (e: Exception) {
                 _state.update { it.copy(notice = wordsThen(Res.string.bots_make_failed, e.message)) }
-                onDone()
+                // The editor is closed once, even when the bot was made and only its chat failed.
+                if (!done) onDone()
             } finally {
                 _busy.value = null
             }
