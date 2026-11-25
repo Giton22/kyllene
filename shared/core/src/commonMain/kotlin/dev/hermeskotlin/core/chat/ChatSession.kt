@@ -320,11 +320,18 @@ class ChatSession(
             uploadRuntimeId = runtimeId
             attachments.forEach { a -> upload(client, runtimeId, a, queuedImages, stagedImages, key)?.let { files += it to a.toShown() } }
             val refs = files.map { (ref, _) -> ref }
+            // The session authority answers before the prompt's row is written; its turn's end names the row by this id.
+            // On the bubble before it goes: a short turn can end before this reads the reply.
+            val submissionId = if (client.sessionAuthority) newRequestId() else null
+            if (submissionId != null) {
+                _state.update { it.copy(messages = it.messages.updateUser(key) { u -> u.copy(submissionId = submissionId) }) }
+            }
             submitted = true
             val result = client.request(
                 "prompt.submit",
                 buildJsonObject {
                     put("session_id", runtimeId)
+                    submissionId?.let { put("submission_id", it) }
                     // Like Desktop: the file references first, then what was typed.
                     put("text", (refs + visible).filter { it.isNotEmpty() }.joinToString("\n\n"))
                     if (client.sessionAuthority && stagedImages.isNotEmpty()) {
@@ -352,11 +359,14 @@ class ChatSession(
             // The row written for it, so it can be regenerated or edited before the transcript is read again.
             val rowId = result.long("user_row_id")
             val sentText = visible.takeIf { attachments.isEmpty() && resent.isEmpty() && display == null && it.isNotEmpty() }
+            // The session authority answers every prompt "queued", one that starts a turn too. Marked so, a prompt whose
+            // turn began before this read the reply would wait for a start that has already come.
+            val held = status == "queued" && !(client.sessionAuthority && startsTurn)
             _state.update { state ->
                 val sent = state.copy(
                     running = true,
                     messages = state.messages.updateUser(key) {
-                        it.copy(pending = false, queued = status == "queued", rowId = rowId, sentText = sentText)
+                        it.copy(pending = false, queued = held, rowId = rowId ?: it.rowId, sentText = sentText)
                     },
                 )
                 // What streamed before the correction stays above it; the rest of the turn continues below.
@@ -517,11 +527,13 @@ class ChatSession(
     /**
      * Rewinds the chat to prompt [key] and sends [text] in its place: a regenerate sends the prompt's own text
      * again, an edit a new one. The prompt and everything after it go, here and on the gateway, in one
-     * `prompt.submit` that cuts the stored transcript before the prompt's row, as Desktop's rewind does. Only
+     * `prompt.submit` that cuts the stored transcript before the prompt's row, as Desktop's rewind does. The session
+     * authority takes the cut and the prompt apart instead ([mutateRewind], then a plain `prompt.submit`). Only
      * between turns, and only for a prompt with a stored row ([ChatMessage.User.rowId]).
      *
-     * Refused (busy, or the gateway can't find the row any more): nothing changed, and [SendOutcome.NotSent].
-     * When the link drops before the answer, the stored transcript says whether it went.
+     * Refused (busy, the chat changed elsewhere, or the gateway can't find the row any more): nothing changed, and
+     * [SendOutcome.NotSent]. When the link drops before the answer, the stored transcript says whether it went. On
+     * the session authority the prompt can fail after the cut is made: it stays, marked, as [SendOutcome.Unsettled].
      */
     suspend fun rewind(key: String, text: String): SendOutcome {
         val trimmed = text.trim()
@@ -550,20 +562,38 @@ class ChatSession(
         }
         ownTurnsPending++
         var submitted = false
+        // The session authority cut the chat in a request of its own, before the prompt's.
+        var cut = false
         return try {
             val runtimeId = ensureAttached(client)
             submitted = true
-            val result = client.request(
-                "prompt.submit",
-                buildJsonObject {
-                    put("session_id", runtimeId)
-                    put("text", trimmed)
-                    put("truncate_before_row_id", rowId)
-                    put("confirm_truncate", true)
-                    // Cutting at the first prompt can empty the transcript (all but a hidden starting instruction), which the gateway wants said outright.
-                    put("confirm_empty_truncate", true)
-                },
-            ) as? JsonObject
+            val result = if (client.sessionAuthority) {
+                mutateRewind(client, runtimeId, rowId)
+                cut = true
+                // Its row comes with its turn's end, named by this id (as for a prompt sent from the composer).
+                val submissionId = newRequestId()
+                _state.update { it.copy(messages = it.messages.updateUser(newKey) { u -> u.copy(submissionId = submissionId) }) }
+                (client.request(
+                    "prompt.submit",
+                    buildJsonObject {
+                        put("session_id", runtimeId)
+                        put("submission_id", submissionId)
+                        put("text", trimmed)
+                    },
+                ) as? JsonObject)?.also { reply -> reply.long("execution_generation")?.let { executionGeneration = it } }
+            } else {
+                client.request(
+                    "prompt.submit",
+                    buildJsonObject {
+                        put("session_id", runtimeId)
+                        put("text", trimmed)
+                        put("truncate_before_row_id", rowId)
+                        put("confirm_truncate", true)
+                        // Cutting at the first prompt can empty the transcript (all but a hidden starting instruction), which the gateway wants said outright.
+                        put("confirm_empty_truncate", true)
+                    },
+                ) as? JsonObject
+            }
             if (result.string("status") !in TURN_STARTING_STATUSES) ownTurnsPending = (ownTurnsPending - 1).coerceAtLeast(0)
             // The stored rows decide once the turn is over, so what shows matches the gateway's transcript.
             rewound = true
@@ -571,7 +601,8 @@ class ChatSession(
                 state.copy(
                     running = true,
                     messages = state.messages.updateUser(newKey) {
-                        it.copy(pending = false, rowId = result.long("user_row_id"), sentText = trimmed)
+                        // The session authority's reply has no row; a short turn may have given it one already.
+                        it.copy(pending = false, rowId = result.long("user_row_id") ?: it.rowId, sentText = trimmed)
                     },
                 )
             }
@@ -580,11 +611,13 @@ class ChatSession(
             throw e
         } catch (e: Exception) {
             ownTurnsPending = (ownTurnsPending - 1).coerceAtLeast(0)
+            if (cut) return keepPromptAfterCut(newKey, trimmed, e)
             if (submitted && e !is RpcException) {
                 // No answer: the cut may have happened. The transcript shows which, and its last prompt says whether this went.
                 _state.update { state -> state.copy(messages = state.messages.filterNot { it.key == newKey }) }
                 loadHistory()
-                val arrived = _state.value.historyRead &&
+                // The session authority's prompt never went: its cut got no answer.
+                val arrived = !client.sessionAuthority && _state.value.historyRead &&
                     (_state.value.messages.lastOrNull { it is ChatMessage.User } as? ChatMessage.User)?.text == trimmed
                 if (arrived) {
                     rewound = true
@@ -593,7 +626,14 @@ class ChatSession(
                 _state.update { it.copy(error = "Lost the connection while sending. The chat shows what Hermes has.") }
                 return SendOutcome.NotSent
             }
-            val stale = (e as? RpcException)?.code in STALE_REWIND_CODES
+            val rpc = e as? RpcException
+            // The session authority's refusals of the cut, which wrote nothing: they come by reason, under one code.
+            val fenced = client.sessionAuthority && rpc?.reason in FENCE_REFUSALS
+            val busy = rpc?.code == BUSY || (client.sessionAuthority && rpc?.reason == "session_busy")
+            val stale = rpc?.code in STALE_REWIND_CODES ||
+                (client.sessionAuthority && rpc?.reason == "invalid_params" && rpc?.data.string("field") == "target_message_id")
+            // A session authority without `session.mutate` has no other way to cut: its `prompt.submit` refuses the keys.
+            val noCut = client.sessionAuthority && rpc?.code == METHOD_NOT_FOUND
             val refused = SessionRefusal.of(e)
             _state.update { state ->
                 state.copy(
@@ -601,17 +641,78 @@ class ChatSession(
                     refused = refused,
                     error = when {
                         refused != null -> null
-                        (e as? RpcException)?.code == BUSY -> BUSY_MESSAGE
+                        busy -> BUSY_MESSAGE
                         stale -> "This message can't be changed any more."
+                        fenced -> CHANGED_ELSEWHERE
+                        noCut -> "This gateway can't cut a chat back. Update Hermes to edit or regenerate here."
                         else -> e.message ?: "Couldn't send the message."
                     },
                 )
             }
             // The gateway's transcript isn't what this chat shows; show it as it is.
-            if (stale) loadHistory()
+            if (stale || fenced || (busy && client.sessionAuthority)) loadHistory()
             SendOutcome.NotSent
         }
     }
+
+    /**
+     * A rewind's cut on the session authority, whose `prompt.submit` takes no truncation keys: a `rewind` through
+     * `session.mutate` at the prompt's row [rowId], fenced by the session's revision and execution generation as
+     * Hermes Desktop sends it. The prompt goes after, in a plain `prompt.submit`. A refusal wrote nothing; one for
+     * stale fences carries the current ones, kept for the next try rather than sent again here, since the chat it
+     * would cut is no longer the one shown.
+     */
+    private suspend fun mutateRewind(client: JsonRpcClient, runtimeId: String, rowId: Long) {
+        val receipt = try {
+            client.request(
+                "session.mutate",
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("request_id", newRequestId())
+                    // Unknown only if the gateway sent neither; its refusal then says what they are.
+                    put("expected_revision", revision ?: 0)
+                    put("expected_generation", executionGeneration ?: 0)
+                    put("operation", "rewind")
+                    putJsonObject("payload") { put("target_message_id", rowId) }
+                },
+            ) as? JsonObject
+        } catch (e: RpcException) {
+            if (e.reason in FENCE_REFUSALS) {
+                e.data.long("revision")?.let { revision = it }
+                e.data.long("execution_generation")?.let { executionGeneration = it }
+            }
+            throw e
+        }
+        receipt.long("revision")?.let { seen -> revision = maxOf(revision ?: seen, seen) }
+        receipt.long("execution_generation")?.let { executionGeneration = it }
+    }
+
+    /**
+     * The session authority cut the chat, but the prompt [key] that was to follow didn't go ([e]). The chat shows the
+     * cut, and the prompt stays under it to send again: turned down, Hermes hasn't got it; with no answer, it may have.
+     */
+    private suspend fun keepPromptAfterCut(key: String, text: String, e: Exception): SendOutcome {
+        loadHistory()
+        val refused = SessionRefusal.of(e)
+        unsettled[key] = UnsettledPrompt(text, display = null, startsTurn = true)
+        _state.update { state ->
+            state.copy(
+                refused = refused,
+                error = when {
+                    refused != null -> null
+                    e is RpcException -> "The chat was cut back, but your message didn't go. Send it again."
+                    else -> "Lost the connection while sending. Check that it isn't running before you send it again."
+                },
+                messages = state.messages.updateUser(key) {
+                    it.copy(pending = false, check = if (e is RpcException) SendCheck.NotReceived else SendCheck.Unknown)
+                },
+            )
+        }
+        return SendOutcome.Unsettled
+    }
+
+    @OptIn(ExperimentalUuidApi::class)
+    private fun newRequestId(): String = Uuid.random().toString()
 
     /**
      * Whether the transcript has a prompt more than the [before] shown ahead of the send, the latest being
@@ -2844,6 +2945,8 @@ class ChatSession(
          * away, cut elsewhere), the prompt count drifted (4030), or the target was malformed (4004).
          */
         val STALE_REWIND_CODES = setOf(4018, 4030, 4004)
+
+        const val CHANGED_ELSEWHERE = "The chat changed somewhere else meanwhile. It's up to date now; try again."
 
         const val NOT_CONNECTED = "Not connected to the gateway."
 

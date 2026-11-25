@@ -2431,10 +2431,14 @@ class ChatSessionTest {
      * A chat resumed on the session authority (the gateway-hosted Webapp listener) at revision 4 and execution
      * generation 2, whose `session.mutate` calls [mutate] answers.
      */
-    private suspend fun authorityChat(scope: CoroutineScope, mutate: (FakeGateway.Call) -> String?): Pair<ChatSession, FakeTransport> {
+    private suspend fun authorityChat(
+        scope: CoroutineScope,
+        results: Map<String, String> = emptyMap(),
+        mutate: (FakeGateway.Call) -> String?,
+    ): Pair<ChatSession, FakeTransport> {
         val (connection, transport) = setup(
             scope,
-            mapOf("session.resume" to """{"session_id":"stored-1","running":false,"revision":4,"execution_generation":2}"""),
+            mapOf("session.resume" to """{"session_id":"stored-1","running":false,"revision":4,"execution_generation":2}""") + results,
             ready = AUTHORITY_READY,
         )
         val canned = gateway.answer
@@ -2757,6 +2761,403 @@ class ChatSessionTest {
         val prompt = assertIs<ChatMessage.User>(chat.state.value.messages.last())
         assertEquals(9L, prompt.rowId)
         assertEquals("plain words", prompt.sentText)
+    }
+
+    /** What a legacy rewind's `prompt.submit` sends, deep cut or not: the same three keys as before the session authority. */
+    private val legacyRewindKeys = setOf("session_id", "text", "truncate_before_row_id", "confirm_truncate", "confirm_empty_truncate")
+
+    /** What the session authority's `prompt.submit` after a cut sends: none of the truncation keys (CanonicalSubmitParams). */
+    private val authorityPromptKeys = setOf("session_id", "text", "submission_id")
+
+    private fun JsonObject.paramKeys() = this["params"]!!.jsonObject.keys
+
+    @Test
+    fun aLegacyEditOfAnEarlierPromptSendsTheTruncationKeysAsBefore() = runTest {
+        history = threeTurns
+        val (chat, transport) = resumedChat(backgroundScope, mapOf("prompt.submit" to """{"status":"streaming","user_row_id":7}"""))
+        assertTrue(chat.state.value.canEdit("row-3"))
+
+        // "three" and its reply go too, which the app asked about first (`discardedAfter`): no key says so on the wire.
+        assertEquals(2, chat.state.value.discardedAfter("row-3"))
+        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two, edited"))
+
+        val submit = transport.sent.value.single { it.isCall("prompt.submit") }
+        assertEquals(legacyRewindKeys, submit.paramKeys())
+        assertEquals("3", submit.param("truncate_before_row_id"))
+        assertTrue(transport.sent.value.none { it.isCall("session.mutate") })
+        assertEquals(listOf("one", "First", "two, edited"), chat.state.value.messages.map { it.textOf() })
+    }
+
+    @Test
+    fun aLegacyRegenerateSendsThePromptsOwnTextWithTheTruncationKeys() = runTest {
+        history = threeTurns
+        val (chat, transport) = resumedChat(backgroundScope, mapOf("prompt.submit" to """{"status":"streaming","user_row_id":7}"""))
+        // As the view model regenerates: the prompt the reply answered, with the text it went out with.
+        val prompt = assertNotNull(chat.state.value.regenerateTarget("row-6"))
+
+        assertEquals(SendOutcome.Sent, chat.rewind(prompt.key, assertNotNull(prompt.sentText)))
+
+        val submit = transport.sent.value.single { it.isCall("prompt.submit") }
+        assertEquals(legacyRewindKeys, submit.paramKeys())
+        assertEquals("5", submit.param("truncate_before_row_id"))
+        assertEquals("three", submit.param("text"))
+        assertTrue(transport.sent.value.none { it.isCall("session.mutate") })
+    }
+
+    @Test
+    fun aLegacyRewindAtTheFirstPromptSaysTheCutMayEmptyTheChat() = runTest {
+        history = threeTurns
+        val (chat, transport) = resumedChat(backgroundScope, mapOf("prompt.submit" to """{"status":"streaming","user_row_id":7}"""))
+
+        assertEquals(SendOutcome.Sent, chat.rewind("row-1", "one"))
+
+        val submit = transport.sent.value.single { it.isCall("prompt.submit") }
+        assertEquals(legacyRewindKeys, submit.paramKeys())
+        assertEquals("true", submit.param("confirm_empty_truncate"))
+        assertEquals("1", submit.param("truncate_before_row_id"))
+    }
+
+    @Test
+    fun aSessionAuthorityEditOfAnEarlierPromptCutsTheLaterTurnsWithoutAConfirmKey() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+        assertTrue(chat.state.value.canEdit("row-3"))
+        // The authority has no confirmation gate on the wire; the app's own dialog is the only one.
+        assertEquals(2, chat.state.value.discardedAfter("row-3"))
+
+        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two, edited"))
+
+        val mutate = transport.sent.value.single { it.isCall("session.mutate") }
+        assertEquals(setOf("session_id", "request_id", "expected_revision", "expected_generation", "operation", "payload"), mutate.paramKeys())
+        assertEquals("""{"target_message_id":3}""", mutate.mutatePayload().toString())
+        val submit = transport.sent.value.single { it.isCall("prompt.submit") }
+        assertEquals(authorityPromptKeys, submit.paramKeys())
+        assertEquals("two, edited", submit.param("text"))
+        assertEquals(listOf("one", "First", "two, edited"), chat.state.value.messages.map { it.textOf() })
+    }
+
+    @Test
+    fun aSessionAuthorityRegenerateSendsThePromptsOwnTextAfterTheCut() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+        val prompt = assertNotNull(chat.state.value.regenerateTarget("row-6"))
+
+        assertEquals(SendOutcome.Sent, chat.rewind(prompt.key, assertNotNull(prompt.sentText)))
+
+        val calls = transport.sent.value.filter { it.isCall("session.mutate") || it.isCall("prompt.submit") }
+        assertEquals(listOf("session.mutate", "prompt.submit"), calls.map { it["method"]!!.jsonPrimitive.content })
+        assertEquals("""{"target_message_id":5}""", calls[0].mutatePayload().toString())
+        assertEquals(authorityPromptKeys, calls[1].paramKeys())
+        assertEquals("three", calls[1].param("text"))
+        assertTrue(chat.state.value.running)
+    }
+
+    @Test
+    fun aSessionAuthorityRewindAtTheFirstPromptEmptiesTheChatBeforeTheNewOne() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+
+        assertEquals(SendOutcome.Sent, chat.rewind("row-1", "uno"))
+
+        // No `confirm_empty_truncate` anywhere: the authority's rewind takes only the target row.
+        assertEquals("""{"target_message_id":1}""", transport.sent.value.single { it.isCall("session.mutate") }.mutatePayload().toString())
+        assertEquals(authorityPromptKeys, transport.sent.value.single { it.isCall("prompt.submit") }.paramKeys())
+        assertEquals("uno", assertIs<ChatMessage.User>(chat.state.value.messages.single()).text)
+    }
+
+    @Test
+    fun aSessionAuthorityWithoutSessionMutateCutsNothingAndSaysWhy() = runTest {
+        history = threeTurns
+        // Its `prompt.submit` refuses the legacy truncation keys, so there is nothing to fall back to.
+        val (chat, transport) = authorityChat(backgroundScope) { it.error(-32601, "unknown method: session.mutate") }
+        val before = chat.state.value.messages
+
+        assertEquals(SendOutcome.NotSent, chat.rewind("row-3", "two, edited"))
+
+        assertEquals(1, transport.sent.value.count { it.isCall("session.mutate") })
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+        assertEquals(before, chat.state.value.messages)
+        assertTrue(chat.state.value.error!!.contains("can't cut a chat back"))
+        assertFalse(chat.state.value.running)
+    }
+
+    private fun FakeGateway.Call.rewound() =
+        reply("""{"session_id":"stored-1","revision":5,"execution_generation":3,"operation":"rewind","rewound_count":4}""")
+
+    @Test
+    fun theSessionAuthorityRewindsWithAMutationThenAPlainPrompt() = runTest {
+        history = threeTurns
+        // Its `prompt.submit` takes no truncation keys (CanonicalSubmitParams): Desktop cuts with a fenced `rewind` first.
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+
+        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two, edited"))
+
+        val calls = transport.sent.value.filter { it.isCall("session.mutate") || it.isCall("prompt.submit") }
+        assertEquals(listOf("session.mutate", "prompt.submit"), calls.map { it["method"]!!.jsonPrimitive.content })
+        val (mutate, submit) = calls
+        assertEquals("stored-1", mutate.param("session_id"))
+        assertEquals("rewind", mutate.param("operation"))
+        assertEquals("4", mutate.param("expected_revision"))
+        assertEquals("2", mutate.param("expected_generation"))
+        assertNotNull(mutate.param("request_id"))
+        assertEquals("""{"target_message_id":3}""", mutate.mutatePayload().toString())
+        assertEquals(setOf("session_id", "text", "submission_id"), submit["params"]!!.jsonObject.keys)
+        assertEquals("two, edited", submit.param("text"))
+        assertEquals(listOf("one", "First", "two, edited"), chat.state.value.messages.map { it.textOf() })
+        assertTrue(chat.state.value.running)
+
+        // The stored rows take over once the turn ends, and a later cut presents the receipt's fences.
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
+            {"id":7,"role":"user","content":"two, edited"},{"id":8,"role":"assistant","content":"Second, again"}]}"""
+        transport.push(event("message.start", "stored-1"))
+        transport.push(event("message.complete", "stored-1", """{"text":"Second, again","status":"complete"}"""))
+        chat.state.first { s -> !s.running && s.messages.lastOrNull()?.key == "row-8" }
+        assertEquals(SendOutcome.Sent, chat.rewind("row-7", "two, once more"))
+        val again = transport.sent.value.last { it.isCall("session.mutate") }
+        assertEquals("5", again.param("expected_revision"))
+        assertEquals("3", again.param("expected_generation"))
+        assertEquals("""{"target_message_id":7}""", again.mutatePayload().toString())
+    }
+
+    @Test
+    fun aRewindTheSessionAuthorityFencesOffCutsNothingAndIsReadyToTryAgain() = runTest {
+        history = threeTurns
+        var refuse = true
+        val (chat, transport) = authorityChat(backgroundScope) { call -> if (refuse) call.fenceRefusal(revision = 9, generation = 3) else call.rewound() }
+        val before = chat.state.value.messages
+
+        assertEquals(SendOutcome.NotSent, chat.rewind("row-3", "two"))
+
+        // Not sent again by itself: what changed elsewhere may be turns the cut would take.
+        assertEquals(1, transport.sent.value.count { it.isCall("session.mutate") })
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+        assertEquals(before, chat.state.value.messages)
+        assertTrue(chat.state.value.error!!.contains("changed somewhere else"))
+        assertFalse(chat.state.value.running)
+
+        refuse = false
+        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two"))
+        val second = transport.sent.value.last { it.isCall("session.mutate") }
+        assertEquals("9", second.param("expected_revision"))
+        assertEquals("3", second.param("expected_generation"))
+    }
+
+    @Test
+    fun aBusySessionAuthorityLeavesTheChatAsItWas() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope) { it.error(4001, "session_busy", "session_busy") }
+        val before = chat.state.value.messages
+
+        assertEquals(SendOutcome.NotSent, chat.rewind("row-3", "two"))
+
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+        assertEquals(before, chat.state.value.messages)
+        assertTrue(chat.state.value.error!!.contains("Wait"))
+    }
+
+    @Test
+    fun aRowTheSessionAuthorityCantPlaceShowsItsTranscriptAgain() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope) { call ->
+            """{"jsonrpc":"2.0","id":${call.id},"error":{"code":4001,"message":"invalid_params","data":{"reason":"invalid_params","field":"target_message_id","detail":"target user message is no longer in session history"}}}"""
+        }
+        // Another client cut the chat meanwhile.
+        history = """{"session_id":"stored-1","messages":[{"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"}]}"""
+
+        assertEquals(SendOutcome.NotSent, chat.rewind("row-3", "two"))
+
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+        assertEquals(listOf("row-1", "row-2"), chat.state.value.messages.map { it.key })
+        assertTrue(chat.state.value.error!!.contains("can't be changed"))
+    }
+
+    @Test
+    fun aPromptRefusedAfterTheSessionAuthorityCutStaysToSendAgain() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to "error:5000")) { it.rewound() }
+        // The cut went through; the gateway's transcript ends before "two".
+        history = """{"session_id":"stored-1","messages":[{"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"}]}"""
+
+        assertEquals(SendOutcome.Unsettled, chat.rewind("row-3", "two, edited"))
+
+        val shown = chat.state.value
+        assertEquals(listOf("one", "First", "two, edited"), shown.messages.map { it.textOf() })
+        assertEquals(SendCheck.NotReceived, assertIs<ChatMessage.User>(shown.messages.last()).check)
+        assertTrue(shown.error!!.contains("cut back"))
+        assertFalse(shown.running)
+
+        // Sent again from its bubble, it goes as an ordinary prompt: the cut is already made.
+        gateway.answer = { """{"admission_id":"a2","status":"queued"}""" }
+        assertNull(chat.resend(shown.messages.last().key))
+        assertEquals(1, transport.sent.value.count { it.isCall("session.mutate") })
+        assertEquals("two, edited", transport.sent.value.last { it.isCall("prompt.submit") }.param("text"))
+    }
+
+    @Test
+    fun aSessionAuthorityCutWithNoAnswerShowsTheTranscriptAndSendsNothing() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope) { null }
+
+        val rewinding = backgroundScope.async { chat.rewind("row-3", "one") }
+        transport.awaitSent { it.isCall("session.mutate") }
+        // The cut went through. What's left ends on a prompt with the same words, which is not this one arriving.
+        history = """{"session_id":"stored-1","messages":[{"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"}]}"""
+        transport.serverClose(1006)
+
+        assertEquals(SendOutcome.NotSent, rewinding.await())
+        assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
+        assertEquals(listOf("row-1", "row-2"), chat.state.value.messages.map { it.key })
+        assertTrue(chat.state.value.error!!.contains("Lost the connection"))
+    }
+
+    @Test
+    fun aPromptWithNoAnswerAfterTheSessionAuthorityCutStaysToCheck() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to SILENT)) { it.rewound() }
+
+        val rewinding = backgroundScope.async { chat.rewind("row-3", "two, edited") }
+        transport.awaitSent { it.isCall("prompt.submit") }
+        history = """{"session_id":"stored-1","messages":[{"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"}]}"""
+        transport.serverClose(1006)
+
+        assertEquals(SendOutcome.Unsettled, rewinding.await())
+        val shown = chat.state.value
+        assertEquals(listOf("one", "First", "two, edited"), shown.messages.map { it.textOf() })
+        // It may be running: the authority writes the prompt's row only once its turn starts.
+        assertEquals(SendCheck.Unknown, assertIs<ChatMessage.User>(shown.messages.last()).check)
+        assertTrue(shown.error!!.contains("Check that it isn't running"))
+    }
+
+    @Test
+    fun aPromptSentOnTheSessionAuthorityGetsItsRowWhenItsTurnEnds() = runTest {
+        // Its `prompt.submit` answers before the row is written, with no `user_row_id`; `message.complete` names it.
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+
+        assertTrue(chat.send("three"))
+        val submission = assertNotNull(transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id"))
+        val key = chat.state.value.messages.last().key
+        assertFalse(chat.state.value.canEdit(key))
+        transport.push(event("message.start", "stored-1"))
+        transport.push(event("message.delta", "stored-1", """{"text":"Third"}"""))
+        transport.push(
+            event(
+                "message.complete",
+                "stored-1",
+                """{"text":"Third","status":"complete","persisted_turn":{"row_ids":[9,10],"complete":true,"user_row_id":9,"submission_id":"$submission"}}""",
+            ),
+        )
+
+        val done = chat.state.first { !it.running && it.messages.last() is ChatMessage.Assistant }
+        val prompt = assertIs<ChatMessage.User>(done.messages.first { it.key == key })
+        assertEquals(9L, prompt.rowId)
+        assertTrue(done.canEdit(key))
+        assertEquals(prompt, done.regenerateTarget(done.messages.last().key))
+
+        assertEquals(SendOutcome.Sent, chat.rewind(key, "three, edited"))
+        assertEquals("""{"target_message_id":9}""", transport.sent.value.single { it.isCall("session.mutate") }.mutatePayload().toString())
+    }
+
+    @Test
+    fun aSessionAuthorityRewindsPromptGetsItsRowWhenItsTurnEndsAndKeepsTheNewGeneration() = runTest {
+        history = threeTurns
+        // Admitting the prompt moves the generation on again, after the cut's receipt gave 3.
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued","execution_generation":4}""")) { it.rewound() }
+
+        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two, edited"))
+        val submission = assertNotNull(transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id"))
+        val key = chat.state.value.messages.last().key
+        // The transcript can't be read when the turn ends: the turn's end alone gives the prompt its row.
+        historyFails = true
+        transport.push(event("message.start", "stored-1"))
+        transport.push(
+            event(
+                "message.complete",
+                "stored-1",
+                """{"text":"Second, again","status":"complete","persisted_turn":{"row_ids":[7,8],"complete":true,"user_row_id":7,"submission_id":"$submission"}}""",
+            ),
+        )
+
+        val done = chat.state.first { !it.running && it.messages.last() is ChatMessage.Assistant }
+        assertEquals(7L, assertIs<ChatMessage.User>(done.messages.first { it.key == key }).rowId)
+        assertTrue(done.canEdit(key))
+        assertEquals(SendOutcome.Sent, chat.rewind(key, "two, once more"))
+        val again = transport.sent.value.last { it.isCall("session.mutate") }
+        assertEquals("""{"target_message_id":7}""", again.mutatePayload().toString())
+        assertEquals("4", again.param("expected_generation"))
+    }
+
+    @Test
+    fun aSessionAuthorityRewindWhoseTurnEndsBeforeItsReplyIsReadKeepsItsRow() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to SILENT)) { it.rewound() }
+        // The transcript can't be read afterwards, so only the turn's end gives the row.
+        historyFails = true
+
+        val rewinding = backgroundScope.async { chat.rewind("row-3", "two, edited") }
+        val submit = transport.awaitSent { it.isCall("prompt.submit") }
+        // A quick turn: it has started and ended, row and all, before the `prompt.submit` reply is read.
+        transport.push(event("message.start", "stored-1"))
+        transport.push(
+            event(
+                "message.complete",
+                "stored-1",
+                """{"text":"Second, again","status":"complete","persisted_turn":{"row_ids":[7,8],"complete":true,"user_row_id":7,"submission_id":"${submit.param("submission_id")}"}}""",
+            ),
+        )
+        chat.state.first { s -> s.messages.any { it is ChatMessage.User && it.rowId == 7L } }
+        transport.push("""{"jsonrpc":"2.0","id":${submit["id"]},"result":{"admission_id":"a1","status":"queued"}}""")
+
+        assertEquals(SendOutcome.Sent, rewinding.await())
+        val prompt = chat.state.value.messages.filterIsInstance<ChatMessage.User>().last()
+        assertEquals("two, edited", prompt.text)
+        assertEquals(7L, prompt.rowId)
+    }
+
+    @Test
+    fun aPromptWhoseTurnStartsBeforeItsReplyIsReadIsNotLeftQueued() = runTest {
+        val (chat, transport) = authorityChat(backgroundScope) { it.rewound() }
+        val canned = gateway.answer
+        // A quick turn: its start is on the wire ahead of the `prompt.submit` reply, which says "queued" for every prompt.
+        gateway.answer = { call ->
+            if (call.method != "prompt.submit") canned(call) else {
+                call.socket.push(event("message.start", "stored-1"))
+                """{"admission_id":"a1","status":"queued"}"""
+            }
+        }
+
+        assertTrue(chat.send("three"))
+        val submission = transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id")
+        transport.push(
+            event(
+                "message.complete",
+                "stored-1",
+                """{"text":"Third","status":"complete","persisted_turn":{"row_ids":[9,10],"complete":true,"user_row_id":9,"submission_id":"$submission"}}""",
+            ),
+        )
+
+        val done = chat.state.first { !it.running && it.messages.last() is ChatMessage.Assistant }
+        val prompt = done.messages.filterIsInstance<ChatMessage.User>().last()
+        assertFalse(prompt.queued)
+        assertEquals(prompt, done.regenerateTarget(done.messages.last().key))
+    }
+
+    @Test
+    fun aTurnEndNamingAnotherSubmissionGivesNoRow() = runTest {
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued"}""")) { it.rewound() }
+
+        assertTrue(chat.send("three"))
+        transport.push(event("message.start", "stored-1"))
+        transport.push(
+            event(
+                "message.complete",
+                "stored-1",
+                """{"text":"Third","status":"complete","persisted_turn":{"row_ids":[9,10],"complete":true,"user_row_id":9,"submission_id":"someone-elses"}}""",
+            ),
+        )
+
+        val done = chat.state.first { !it.running && it.messages.last() is ChatMessage.Assistant }
+        assertNull(done.messages.filterIsInstance<ChatMessage.User>().last().rowId)
     }
 
     private companion object {
