@@ -86,7 +86,7 @@ compose.desktop {
             // The JDK modules the app reaches: the default set misses DPAPI's JNA, SQLite and the JDK's own HTTP bits.
             // jdk.accessibility carries the Java Access Bridge that Windows screen readers (NVDA, JAWS) talk to; jcef
             // the Chromium that shows widgets and plugin pages, with its own files.
-            modules("java.naming", "java.net.http", "java.sql", "jdk.unsupported", "jdk.accessibility", "jcef")
+            modules("java.management", "java.naming", "java.net.http", "java.sql", "jdk.unsupported", "jdk.accessibility", "jcef")
             // D-Bus EXTERNAL authentication reads UnixSystem from this module.
             if (System.getProperty("os.name").startsWith("Linux")) modules("jdk.security.auth")
             windows {
