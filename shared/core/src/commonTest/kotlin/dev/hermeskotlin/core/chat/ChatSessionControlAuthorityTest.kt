@@ -6,6 +6,7 @@ import dev.hermeskotlin.core.rpc.isCall
 import dev.hermeskotlin.core.rpc.json
 import dev.hermeskotlin.core.rpc.param
 import dev.hermeskotlin.core.sessions.SessionsApi
+import dev.hermeskotlin.core.slash.SlashCommand
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.jsonObject
@@ -59,6 +60,140 @@ class ChatSessionControlAuthorityTest {
         chat.start()
         chat.state.first { it.control != null }
         return gw to chat
+    }
+
+    /**
+     * A new chat on the session authority, whose first words are a typed command. `session.control.read` answers with
+     * [goalRead] (null: no goal yet); with [publishes] the gateway also sends `session.control.update` after `/goal`, as
+     * v0.22.3+ do (gateway/session_commands.py); v0.22.1 sends none.
+     */
+    private var goalRead: String? = null
+
+    private suspend fun newChat(
+        scope: kotlinx.coroutines.CoroutineScope,
+        authority: Boolean = true,
+        publishes: Boolean = false,
+    ): Pair<FakeGateway, ChatSession> {
+        lateinit var gw: FakeGateway
+        gw = FakeGateway(scope, reconnects = false).apply {
+            if (authority) ready = { authorityReady }
+            answer = { call ->
+                when (call.method) {
+                    "session.create" -> """{"session_id":"rt1","stored_session_id":"stored-1"}"""
+                    "slash.exec" -> {
+                        goalRead = ControlFixtures.GOAL_ACTIVE
+                        if (publishes) gw.socket.push(event("session.control.update", "rt1", """{"control":$goalRead}"""))
+                        """{"type":"send","message":"Tidy the docs.","display":"/goal Tidy the docs.","notice":"Goal set."}"""
+                    }
+                    "prompt.submit" -> """{"status":"streaming","user_row_id":7}"""
+                    "session.control.read" -> """{"control":${goalRead ?: "null"}}"""
+                    else -> "{}"
+                }
+            }
+            http = { json("""{"session_id":"stored-1","messages":[]}""") }
+            start(awaitConnected = true)
+        }
+        val chat = ChatSession(url, null, null, gw.connection, SessionsApi(gw.client), scope)
+        chat.start()
+        return gw to chat
+    }
+
+    @Test
+    fun aGoalTypedInANewChatShowsWithoutAResume() = runTest {
+        val (gw, chat) = newChat(backgroundScope)
+
+        chat.runCommand(SlashCommand("goal", "Tidy the docs."))
+
+        assertEquals("active", chat.state.first { it.control != null }.control?.goal?.status)
+        assertTrue(gw.sent("session.resume").isEmpty())
+    }
+
+    @Test
+    fun withNoUpdatesTheTypedGoalIsReadAgainAfterEachTurn() = runTest {
+        val (gw, chat) = newChat(backgroundScope)
+        chat.runCommand(SlashCommand("goal", "Tidy the docs."))
+        chat.state.first { it.control != null }
+        val reads = gw.sent("session.control.read").size
+
+        // The judge paused the goal at the kickoff turn's end, unpublished on v0.22.1.
+        goalRead = ControlFixtures.GOAL_PAUSED
+        gw.socket.push(event("message.complete", "rt1", """{"text":"Step done","status":"complete"}"""))
+
+        chat.state.first { it.control?.goal?.status == "paused" }
+        assertEquals(reads + 1, gw.sent("session.control.read").size)
+    }
+
+    @Test
+    fun withNoUpdatesTheJudgesVerdictIsRead() = runTest {
+        val (gw, chat) = newChat(backgroundScope)
+        chat.runCommand(SlashCommand("goal", "Tidy the docs."))
+        chat.state.first { it.control != null }
+
+        // v0.22.1 judges after the turn's end, then says so in a `status.update {kind: goal}` (gateway/run_goals.py).
+        goalRead = ControlFixtures.GOAL_PAUSED
+        gw.socket.push(event("status.update", "rt1", """{"kind":"goal","text":"Goal paused."}"""))
+
+        chat.state.first { it.control?.goal?.status == "paused" }
+    }
+
+    @Test
+    fun aGatewayThatPublishesUpdatesIsNotReadAfterEachTurn() = runTest {
+        val (gw, chat) = newChat(backgroundScope, publishes = true)
+        chat.runCommand(SlashCommand("goal", "Tidy the docs."))
+        chat.state.first { it.control != null }
+        gw.socket.awaitSent { it.isCall("session.control.read") }
+        val reads = gw.sent("session.control.read").size
+
+        gw.socket.push(event("message.complete", "rt1", """{"text":"Step done","status":"complete"}"""))
+        // A later frame, so the turn's end has been handled when it lands.
+        gw.socket.push(event("session.control.update", "rt1", """{"control":${ControlFixtures.GOAL_PAUSED}}"""))
+
+        chat.state.first { it.control?.goal?.status == "paused" }
+        assertEquals(reads, gw.sent("session.control.read").size)
+    }
+
+    @Test
+    fun aLegacyGatewaysTypedGoalIsNotReadAgain() = runTest {
+        val (gw, chat) = newChat(backgroundScope, authority = false)
+
+        chat.runCommand(SlashCommand("goal", "Tidy the docs."))
+        gw.socket.awaitSent { it.isCall("prompt.submit") }
+
+        assertTrue(gw.sent("session.control.read").isEmpty())
+    }
+
+    /** Opening a stored chat that has a goal shows it with no send: `session.control.read` follows the resume. */
+    @Test
+    fun openingAStoredChatShowsItsGoalWithoutASend() = runTest {
+        val gw = FakeGateway(backgroundScope, reconnects = false).apply {
+            ready = {
+                """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"change_events":true,"heartbeat":true,"replay_epoch":"e1","session_authority":true}}}"""
+            }
+            answer = { call ->
+                when (call.method) {
+                    "session.resume" -> """{"session_id":"stored-1","stored_session_id":"stored-1",
+                        "messages":[{"role":"user","content":"hello","row_id":43},
+                                    {"role":"assistant","content":"Test reply.","row_id":44}],
+                        "message_count":2,"running":false,"authority_epoch":4,"replay_epoch":"e0","last_sequence":14,
+                        "subscription_id":"sub-1","revision":0,"execution_generation":0,"pending":[],"prompts":[],
+                        "info":{"source":"gui","model":"test-model","lazy":false,"desktop_protocol":"hermes-gateway-v1",
+                                "profile_name":"default","reasoning_effort":"","reasoning_effort_wire":"","service_tier":"",
+                                "fast":false,"title":"Greeting","yolo":false}}"""
+                    "session.control.read" -> """{"control":${ControlFixtures.GOAL_ACTIVE}}"""
+                    else -> "{}"
+                }
+            }
+            http = { json("""{"session_id":"stored-1","messages":[]}""") }
+            start(awaitConnected = true)
+        }
+        val chat = ChatSession(url, "stored-1", "Greeting", gw.connection, SessionsApi(gw.client), backgroundScope)
+        chat.start()
+
+        chat.state.first { it.runtimeSessionId == "stored-1" && it.historyLoaded }
+        gw.socket.awaitSent { it.isCall("session.control.read") }
+
+        assertEquals("active", chat.state.first { it.control != null }.control?.goal?.status)
+        assertTrue(gw.sent("prompt.submit").isEmpty())
     }
 
     @Test

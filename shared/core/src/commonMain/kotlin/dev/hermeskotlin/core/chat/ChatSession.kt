@@ -923,6 +923,9 @@ class ChatSession(
             finishCommand(key, shown.message ?: "/${command.name} failed.", failed = true)
             return null
         }
+        // A command may have set or moved the goal, loop or heartbeat: `/goal`, `/hb`, or a quick alias the session
+        // authority resolves itself, so the name typed doesn't tell. v0.22.1's authority sends no update for it.
+        if (client.sessionAuthority && result !is SlashResult.Alias) scope.launch { refreshControl() }
         return when (result) {
             is SlashResult.Output -> {
                 val text = result.text.ifBlank { "Done." }
@@ -1156,6 +1159,21 @@ class ChatSession(
      * link may be to an updated gateway, so it asks once more.
      */
     private var controlByCommandOn: JsonRpcClient? = null
+
+    /**
+     * The link a `session.control.update` came in on. A session authority of Hermes v0.22.1 sends none, not after a
+     * typed `/goal` nor after the goal's judge; v0.22.3 and later do (gateway/session_commands.py, run_goals.py).
+     */
+    private var controlPublishedOn: JsonRpcClient? = null
+
+    /**
+     * Whether the attached link is a session authority that hasn't shown it sends `session.control.update`, while the
+     * chat has a goal, loop or heartbeat: its state is read again when a turn ends or the judge speaks.
+     */
+    private fun controlUnpublished(): Boolean {
+        val client = attachedClient ?: return false
+        return client.sessionAuthority && client !== controlPublishedOn && _state.value.control != null
+    }
 
     /**
      * Reads the session's goal, loop and heartbeat once (`session.control.read`), since `session.resume`
@@ -2599,6 +2617,12 @@ class ChatSession(
             "tool.output_risk" -> flaggedOutput(event.payload as? JsonObject)?.let { (id, risk) ->
                 risks?.let { scope.launch { it.remember(id, risk) } }
             }
+            "session.control.update" -> controlPublishedOn = attachedClient
+            // The goal's judge runs after the turn ends and can finish after the read on `message.complete`, so its
+            // verdict is read again on the status it sends (v0.22.1 gateway/run_goals.py `_send_goal_status_notice`).
+            "status.update" -> if ((event.payload as? JsonObject).string("kind") == "goal" && controlUnpublished()) {
+                scope.launch { refreshControl() }
+            }
             "message.start" -> if (ownTurnsPending > 0) {
                 ownTurnsPending--
             } else {
@@ -2610,9 +2634,9 @@ class ChatSession(
                 // Nothing can still wait on a person once the turn is over; this also clears a
                 // clarify answered on another client, which gets no request.cancel.
                 _state.update { it.copy(inputRequests = emptyList()) }
-                // A gateway without `session.control` sends no update either: a resumed goal's turn and its judge
-                // move the goal on unseen, so it's read again.
-                if (controlByCommandOn != null && controlByCommandOn === attachedClient) scope.launch { refreshControl() }
+                // A gateway that sends no `session.control.update` (v0.22.1's authority): the goal's turn moved it on
+                // unseen, so it's read again.
+                if (controlUnpublished()) scope.launch { refreshControl() }
                 if (foreignTurn || rewound) {
                     foreignTurn = false
                     rewound = false
