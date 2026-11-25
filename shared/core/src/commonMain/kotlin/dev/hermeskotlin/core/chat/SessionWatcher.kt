@@ -225,8 +225,12 @@ class SessionWatcher(
             all + (storedId to (chat ?: WatchedChat(storedId, row.runtimeId, row.title)))
         }
         val result = try {
+            // The session authority has no `session.activate`. Its attach is `session.resume`, which subscribes this
+            // socket to the chat's events too, as Hermes Desktop's warm re-attach does
+            // (apps/desktop/src/api/canonical-protocol.ts). Its reply's replay fields stay here: an open chat reads
+            // its own resume.
             client.request(
-                "session.activate",
+                if (client.sessionAuthority) "session.resume" else "session.activate",
                 buildJsonObject {
                     put("session_id", row.runtimeId)
                     put("omit_messages", true)
