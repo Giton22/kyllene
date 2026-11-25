@@ -1,6 +1,7 @@
 package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.rpc.FakeGateway
+import dev.hermeskotlin.core.rpc.event
 import dev.hermeskotlin.core.rpc.isCall
 import dev.hermeskotlin.core.rpc.json
 import dev.hermeskotlin.core.rpc.param
@@ -157,6 +158,26 @@ class ChatSessionControlAuthorityTest {
         assertEquals("resume", gw.sent("command.dispatch").single().param("arg"))
         assertEquals("Kick off the goal work now.", gw.sent("prompt.submit").single().param("text"))
         assertEquals("/goal resume", assertIs<ChatMessage.User>(chat.state.value.messages.last()).text)
+    }
+
+    @Test
+    fun withoutSessionControlTheGoalIsReadAgainAfterATurn() = runTest {
+        val (gw, chat) = setup(backgroundScope, authority = true) { call ->
+            when (call.method) {
+                "session.control" -> call.unknownMethod()
+                "command.dispatch" -> """{"type":"exec","output":""}"""
+                else -> null
+            }
+        }
+        assertNull(chat.runControl(ControlAction.GoalUnwait))
+        val reads = gw.sent("session.control.read").size
+
+        // The goal's judge paused it at the turn's end; v0.22.1 sends no `session.control.update` for that.
+        paused = true
+        gw.socket.push(event("message.complete", "rt1", """{"text":"Step done","status":"complete"}"""))
+
+        chat.state.first { it.control?.goal?.status == "paused" }
+        assertEquals(reads + 1, gw.sent("session.control.read").size)
     }
 
     @Test

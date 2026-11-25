@@ -2514,6 +2514,9 @@ class ChatSession(
                 // Nothing can still wait on a person once the turn is over; this also clears a
                 // clarify answered on another client, which gets no request.cancel.
                 _state.update { it.copy(inputRequests = emptyList()) }
+                // A gateway without `session.control` sends no update either: a resumed goal's turn and its judge
+                // move the goal on unseen, so it's read again.
+                if (controlByCommandOn != null && controlByCommandOn === attachedClient) scope.launch { refreshControl() }
                 if (foreignTurn || rewound) {
                     foreignTurn = false
                     rewound = false
