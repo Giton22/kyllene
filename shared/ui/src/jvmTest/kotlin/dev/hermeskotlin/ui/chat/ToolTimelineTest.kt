@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
@@ -39,9 +40,11 @@ class ToolTimelineTest {
         ),
     )
 
-    private fun opensDetails(name: String) = hasText(name) and SemanticsMatcher("opens tool details") {
+    private val opensToolDetails = SemanticsMatcher("opens tool details") {
         it.config.getOrNull(SemanticsActions.OnClick)?.label == "Tool details"
     }
+
+    private fun opensDetails(name: String) = hasText(name) and opensToolDetails
 
     private fun expandsCall(name: String) = hasText(name) and SemanticsMatcher("expands an individual call") {
         it.config.getOrNull(SemanticsActions.OnClick)?.label == "Show details"
@@ -77,6 +80,31 @@ class ToolTimelineTest {
         onNodeWithContentDescription("Back").performClick()
         onNodeWithText("Tool details").assertDoesNotExist()
         onNode(opensDetails("Check backup snapshots")).assertExists()
+    }
+
+    @Test
+    fun onlyTheLatestTenCallsAreInlineAndEarlierCallsAreInDetails() = runComposeUiTest {
+        val calls = (1..12).map { index ->
+            ToolActivity("call-$index", "terminal", detail = "Call $index", startedAt = index.toDouble(), output = "Result $index")
+        }
+        setContent {
+            HermesTheme(ColorScheme.Dark) { Tools(calls, "many-tools") }
+        }
+
+        onNodeWithText("Ran 12 tools").performClick()
+        onAllNodes(opensToolDetails).assertCountEquals(10)
+        onNodeWithText("Call 1").assertDoesNotExist()
+        onNodeWithText("Call 2").assertDoesNotExist()
+        onNodeWithText("+0.0s").assertDoesNotExist()
+        onNodeWithText("+2.0s").assertExists()
+        onNode(opensDetails("Call 12")).assertExists()
+        onNode(opensDetails("Call 3")).performClick()
+
+        onNodeWithText("Tool details").assertExists()
+        onNodeWithText("Result 3").assertExists()
+        onNode(expandsCall("Call 1")).performClick()
+        onNodeWithText("Result 1").assertExists()
+        onNode(expandsCall("Call 12")).assertExists()
     }
 
     @Test

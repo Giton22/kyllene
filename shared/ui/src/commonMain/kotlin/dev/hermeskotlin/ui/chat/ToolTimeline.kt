@@ -70,6 +70,8 @@ import kotlin.math.roundToLong
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
+private const val INLINE_TOOL_LIMIT = 10
+
 internal val LocalOpenToolDetails = staticCompositionLocalOf<((String, String) -> Unit)?> { null }
 
 /** Completed tools read like the other disclosures in the reply. The list itself is a flat timeline. */
@@ -116,11 +118,13 @@ internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
             )
         }
         if (expanded) {
-            val offsets = remember(tools) { toolTimelineOffsets(tools) }
+            val visibleCalls = tools.takeLast(INLINE_TOOL_LIMIT)
+            // Keep each visible call's offset relative to the first call in the turn.
+            val offsets = remember(tools) { toolTimelineOffsets(tools).takeLast(INLINE_TOOL_LIMIT) }
             val showOffsets = offsets.any { it != null }
-            tools.forEachIndexed { index, tool ->
+            visibleCalls.forEachIndexed { index, tool ->
                 key(tool.id) {
-                    ToolTimelineRow(tool, offsets[index], showOffsets, index > 0, index < tools.lastIndex) {
+                    ToolTimelineRow(tool, offsets[index], showOffsets, index > 0, index < visibleCalls.lastIndex) {
                         if (openDockedDetails != null) openDockedDetails(messageKey, tool.id)
                         else selectedToolId = tool.id
                     }
@@ -213,9 +217,6 @@ private fun ToolTimelineRow(
             Text(tool.title(), Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
                 maxLines = 2, overflow = TextOverflow.Ellipsis)
             ToolDuration(tool)
-            if (tool.failed) {
-                UnstyledIcon(Lucide.X, null, tint = status, modifier = Modifier.size(14.dp))
-            }
             if (tool.risk != null) {
                 UnstyledIcon(Lucide.ShieldAlert, stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
             }
