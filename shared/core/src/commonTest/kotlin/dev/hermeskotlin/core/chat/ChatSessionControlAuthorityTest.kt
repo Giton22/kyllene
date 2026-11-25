@@ -162,6 +162,52 @@ class ChatSessionControlAuthorityTest {
         assertTrue(gw.sent("session.control.read").isEmpty())
     }
 
+    /** A stored chat with no goal yet, open here; `session.control.read` answers with [goalRead]. */
+    private suspend fun openGoallessChat(scope: kotlinx.coroutines.CoroutineScope): Pair<FakeGateway, ChatSession> {
+        val gw = FakeGateway(scope, reconnects = false).apply {
+            ready = { authorityReady }
+            answer = { call ->
+                when (call.method) {
+                    "session.resume" -> """{"session_id":"rt1","running":false}"""
+                    "session.control.read" -> """{"control":${goalRead ?: "null"}}"""
+                    else -> "{}"
+                }
+            }
+            http = { json("""{"session_id":"stored-1","messages":[]}""") }
+            start(awaitConnected = true)
+        }
+        val chat = ChatSession(url, "stored-1", "Greeting", gw.connection, SessionsApi(gw.client), scope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" }
+        gw.socket.awaitSent { it.isCall("session.control.read") }
+        return gw to chat
+    }
+
+    @Test
+    fun aGoalAnotherClientSetsInAChatWithNoneShowsWhenItsTurnEnds() = runTest {
+        val (gw, chat) = openGoallessChat(backgroundScope)
+        val reads = gw.sent("session.control.read").size
+
+        // Another client typed `/goal` and sent its kickoff; v0.22.1 publishes no update, only the turn.
+        goalRead = ControlFixtures.GOAL_ACTIVE
+        gw.socket.push(event("message.start", "rt1", "{}"))
+        gw.socket.push(event("message.complete", "rt1", """{"text":"Step done","status":"complete"}"""))
+
+        assertEquals("active", chat.state.first { it.control != null }.control?.goal?.status)
+        assertEquals(reads + 1, gw.sent("session.control.read").size)
+    }
+
+    @Test
+    fun aGoalStatusInAChatWithNoGoalIsRead() = runTest {
+        val (gw, chat) = openGoallessChat(backgroundScope)
+
+        // A goal status means there is a goal, whoever set it.
+        goalRead = ControlFixtures.GOAL_PAUSED
+        gw.socket.push(event("status.update", "rt1", """{"kind":"goal","text":"Goal paused."}"""))
+
+        assertEquals("paused", chat.state.first { it.control != null }.control?.goal?.status)
+    }
+
     /** Opening a stored chat that has a goal shows it with no send: `session.control.read` follows the resume. */
     @Test
     fun openingAStoredChatShowsItsGoalWithoutASend() = runTest {

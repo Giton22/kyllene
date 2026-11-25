@@ -1168,11 +1168,12 @@ class ChatSession(
 
     /**
      * Whether the attached link is a session authority that hasn't shown it sends `session.control.update`, while the
-     * chat has a goal, loop or heartbeat: its state is read again when a turn ends or the judge speaks.
+     * chat has a goal, loop or heartbeat: its state is read again when a turn ends or the judge speaks. With
+     * [anyChat] it holds for a chat with none yet, as another client may just have set one.
      */
-    private fun controlUnpublished(): Boolean {
+    private fun controlUnpublished(anyChat: Boolean = false): Boolean {
         val client = attachedClient ?: return false
-        return client.sessionAuthority && client !== controlPublishedOn && _state.value.control != null
+        return client.sessionAuthority && client !== controlPublishedOn && (anyChat || _state.value.control != null)
     }
 
     /**
@@ -2620,7 +2621,7 @@ class ChatSession(
             "session.control.update" -> controlPublishedOn = attachedClient
             // The goal's judge runs after the turn ends and can finish after the read on `message.complete`, so its
             // verdict is read again on the status it sends (v0.22.1 gateway/run_goals.py `_send_goal_status_notice`).
-            "status.update" -> if ((event.payload as? JsonObject).string("kind") == "goal" && controlUnpublished()) {
+            "status.update" -> if ((event.payload as? JsonObject).string("kind") == "goal" && controlUnpublished(anyChat = true)) {
                 scope.launch { refreshControl() }
             }
             "message.start" -> if (ownTurnsPending > 0) {
@@ -2635,8 +2636,9 @@ class ChatSession(
                 // clarify answered on another client, which gets no request.cancel.
                 _state.update { it.copy(inputRequests = emptyList()) }
                 // A gateway that sends no `session.control.update` (v0.22.1's authority): the goal's turn moved it on
-                // unseen, so it's read again.
-                if (controlUnpublished()) scope.launch { refreshControl() }
+                // unseen, so it's read again. A turn from another client may be the kickoff of a goal it just typed
+                // into a chat that had none, so that one is read whatever the strip shows.
+                if (controlUnpublished(anyChat = foreignTurn)) scope.launch { refreshControl() }
                 if (foreignTurn || rewound) {
                     foreignTurn = false
                     rewound = false
