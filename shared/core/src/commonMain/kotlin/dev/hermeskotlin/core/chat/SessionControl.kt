@@ -237,7 +237,8 @@ enum class ControlAction(val wire: String) {
  */
 internal fun ControlAction.command(text: String?, index: Int?): Pair<String, String>? = when (this) {
     ControlAction.SubgoalAdd -> text?.trim()
-        ?.takeIf { it.split(Regex("\\s+"), limit = 2)[0].lowercase() !in SUBGOAL_VERBS }
+        // Any Unicode space ends the word, as Python's `str.split()` there has it (a keyboard's no-break space too).
+        ?.takeIf { it.takeWhile { c -> !c.isWhitespace() && c != '\u0085' }.lowercase() !in SUBGOAL_VERBS }
         ?.let { "subgoal" to it }
     ControlAction.SubgoalRemove -> index?.let { "subgoal" to "remove $it" }
     ControlAction.SubgoalClear -> "subgoal" to "clear"

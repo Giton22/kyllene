@@ -90,7 +90,11 @@ class ChatSessionControlAuthorityTest {
         val (gw, chat) = setup(backgroundScope, authority = true) { call ->
             when (call.method) {
                 "session.control" -> call.unknownMethod()
-                "command.dispatch" -> """{"type":"exec","output":"⏸ Goal paused"}""".also { paused = true }
+                "command.dispatch" -> if (call.param("name") == "goal") {
+                    """{"type":"exec","output":"⏸ Goal paused"}""".also { paused = true }
+                } else {
+                    """{"type":"exec","output":""}"""
+                }
                 else -> null
             }
         }
@@ -195,11 +199,61 @@ class ChatSessionControlAuthorityTest {
     }
 
     @Test
-    fun whenTheCommandFailsTooTheSheetSaysToUpdateHermes() = runTest {
+    fun aSubgoalStartingWithAVerbAndANoBreakSpaceIsNotSentEither() = runTest {
         val (gw, chat) = setup(backgroundScope, authority = true) { call ->
             when (call.method) {
                 "session.control" -> call.unknownMethod()
-                "command.dispatch" -> call.error(4003, "permission_denied", reason = "permission_denied")
+                "command.dispatch" -> """{"type":"exec","output":""}"""
+                else -> null
+            }
+        }
+
+        // Python's `split(None, 1)` there ends the word at any Unicode space, so this too reads as `clear`.
+        val error = chat.runControl(ControlAction.SubgoalAdd, text = "Clear the cache")
+
+        assertEquals(
+            "This gateway would read a sub-goal starting with \"remove\" or \"clear\" as a command. Reword it, or update Hermes.",
+            error,
+        )
+        assertTrue(gw.sent("command.dispatch").isEmpty())
+    }
+
+    @Test
+    fun aSubgoalWithNoTextIsNotSent() = runTest {
+        val (gw, chat) = setup(backgroundScope, authority = true) { call ->
+            when (call.method) {
+                "session.control" -> call.unknownMethod()
+                "command.dispatch" -> """{"type":"exec","output":""}"""
+                else -> null
+            }
+        }
+
+        // A bare `/subgoal` answers with the goal's status, which would pass for an added sub-goal.
+        assertEquals("Write the sub-goal first.", chat.runControl(ControlAction.SubgoalAdd, text = "  "))
+        assertTrue(gw.sent("command.dispatch").isEmpty())
+    }
+
+    @Test
+    fun aCommandThatRefusesInItsOutputShowsWhy() = runTest {
+        val (_, chat) = setup(backgroundScope, authority = true) { call ->
+            when (call.method) {
+                "session.control" -> call.unknownMethod()
+                // v0.22.1's `/subgoal remove` for a number another client already took away: text, no error.
+                "command.dispatch" -> """{"type":"exec","output":"No sub-goal 3 (there are 2)."}"""
+                else -> null
+            }
+        }
+
+        assertEquals("No sub-goal 3 (there are 2).", chat.runControl(ControlAction.SubgoalRemove, index = 3))
+        assertEquals("active", chat.state.value.control?.goal?.status)
+    }
+
+    @Test
+    fun whenTheGatewayHasNoSuchCommandTheSheetSaysToUpdateHermes() = runTest {
+        val (gw, chat) = setup(backgroundScope, authority = true) { call ->
+            when (call.method) {
+                "session.control" -> call.unknownMethod()
+                "command.dispatch" -> call.error(4001, "unsupported_command", reason = "unsupported_command")
                 else -> null
             }
         }
@@ -209,5 +263,18 @@ class ChatSessionControlAuthorityTest {
 
         assertEquals("Couldn't pause the goal on this gateway. Update Hermes to use goals.", error)
         assertEquals("active", chat.state.value.control?.goal?.status)
+    }
+
+    @Test
+    fun anotherRefusalIsNotPutDownToTheVersion() = runTest {
+        val (_, chat) = setup(backgroundScope, authority = true) { call ->
+            when (call.method) {
+                "session.control" -> call.unknownMethod()
+                "command.dispatch" -> call.error(4001, "permission_denied", reason = "permission_denied")
+                else -> null
+            }
+        }
+
+        assertEquals("Couldn't pause the goal: the gateway refused it.", chat.runControl(ControlAction.GoalPause))
     }
 }

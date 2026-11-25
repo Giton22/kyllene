@@ -1126,10 +1126,10 @@ class ChatSession(
      * doesn't carry them; later changes arrive as `session.control.update` events. Best effort: a gateway
      * that doesn't know the method hides the feature, and any other failure leaves the state as it is.
      */
-    suspend fun refreshControl() {
-        val client = connectedClient() ?: return
-        if (client === controlUnsupportedOn) return
-        val runtimeId = liveRuntimeId(client) ?: return
+    suspend fun refreshControl(): Boolean {
+        val client = connectedClient() ?: return false
+        if (client === controlUnsupportedOn) return false
+        val runtimeId = liveRuntimeId(client) ?: return false
         // An update that lands while the read is out is newer than the read's answer, so the answer yields to it.
         val before = _state.value.control
         val result = try {
@@ -1138,13 +1138,13 @@ class ChatSession(
             throw e
         } catch (e: RpcException) {
             if (e.code == METHOD_NOT_FOUND) controlUnsupportedOn = client
-            return
+            return false
         } catch (_: Exception) {
-            return
+            return false
         }
-        if (result != null && "control" in result) {
-            _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
-        }
+        if (result == null || "control" !in result) return false
+        _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        return true
     }
 
     /**
@@ -1266,7 +1266,8 @@ class ChatSession(
      * [action] as its typed command (`command.dispatch`), for the session-authority gateway of
      * [controlByCommandOn]. Its answer is the `dispatch` that `session.control` would carry; that gateway
      * publishes no `session.control.update`, so the state is read again. Throws with a user-readable
-     * reason when the command fails as well.
+     * reason when the command fails as well. The command answers a refusal ("No goal set.", a sub-goal
+     * number that's gone) as its plain output, so output with a state that didn't move is that reason.
      */
     private suspend fun controlByCommand(
         client: JsonRpcClient,
@@ -1275,7 +1276,9 @@ class ChatSession(
         text: String?,
         index: Int?,
     ): JsonObject {
+        if (action == ControlAction.SubgoalAdd && text.isNullOrBlank()) throw IllegalStateException(SUBGOAL_TEXT_MISSING)
         val (name, arg) = action.command(text, index) ?: throw IllegalStateException(SUBGOAL_READS_AS_VERB)
+        val revision = _state.value.control?.revision
         val dispatch = try {
             client.request(
                 "command.dispatch",
@@ -1289,10 +1292,21 @@ class ChatSession(
             ) as? JsonObject
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
-            throw IllegalStateException("Couldn't ${action.verb} on this gateway. Update Hermes to use goals.")
+        } catch (e: RpcException) {
+            // Only a gateway without the command is helped by an update.
+            if (e.code == METHOD_NOT_FOUND || e.reason == "unsupported_command") {
+                throw IllegalStateException("Couldn't ${action.verb} on this gateway. Update Hermes to use goals.")
+            }
+            // The authority's refusals come as a bare code (`permission_denied`, `invalid_params`).
+            if (Regex("[a-z_]+").matches(e.message)) throw IllegalStateException("Couldn't ${action.verb}: the gateway refused it.")
+            throw e
         }
-        refreshControl()
+        val output = dispatch.string("output")?.trim()
+        if (refreshControl() && dispatch.string("type") == "exec" && !output.isNullOrEmpty() &&
+            _state.value.control?.revision == revision
+        ) {
+            throw IllegalStateException(output)
+        }
         return buildJsonObject { dispatch?.let { put("dispatch", it) } }
     }
 
@@ -3008,6 +3022,9 @@ class ChatSession(
         const val SUBGOAL_READS_AS_VERB =
             "This gateway would read a sub-goal starting with \"remove\" or \"clear\" as a command. " +
                 "Reword it, or update Hermes."
+
+        /** A sub-goal with no text, which `/subgoal` would answer with the goal's status instead of adding it. */
+        const val SUBGOAL_TEXT_MISSING = "Write the sub-goal first."
 
         /** Looks at the transcript for a prompt sent without a reply: about 7 s in all. */
         const val DELIVERY_LOOKS = 4
