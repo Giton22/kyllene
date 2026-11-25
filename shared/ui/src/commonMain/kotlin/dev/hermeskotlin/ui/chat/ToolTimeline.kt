@@ -171,6 +171,7 @@ internal fun LiveSteps(tools: List<ToolActivity>, messageKey: String) {
                 ToolTimelineRow(
                     tool, offsets[index], showOffsets, row > 0, row < shown.lastIndex,
                     title = title,
+                    titleMaxLines = 1,
                     preview = if (expanded) liveToolPreview(tool, step?.detail ?: title) else null,
                     onCollapse = if (expanded) ({ expanded = false }) else null,
                     clickLabel = if (expanded) Res.string.chat_tool_details_page else Res.string.chat_show_details,
@@ -245,6 +246,7 @@ private fun ToolTimelineRow(
     hasPrevious: Boolean,
     hasNext: Boolean,
     title: String = tool.title(),
+    titleMaxLines: Int = 2,
     preview: String? = null,
     onCollapse: (() -> Unit)? = null,
     clickLabel: StringResource = Res.string.chat_tool_details_page,
@@ -286,7 +288,7 @@ private fun ToolTimelineRow(
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
                 Text(title, Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    maxLines = titleMaxLines, overflow = TextOverflow.Ellipsis)
                 if (onCollapse != null) {
                     IconButton(
                         Lucide.ChevronRight, stringResource(Res.string.chat_hide_details), onCollapse,
