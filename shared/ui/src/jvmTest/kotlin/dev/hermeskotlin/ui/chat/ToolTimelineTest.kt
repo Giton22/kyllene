@@ -11,6 +11,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -108,7 +109,23 @@ class ToolTimelineTest {
     }
 
     @Test
-    fun wideDesktopKeepsTheReplyVisibleBesideExpandedTools() = runDesktopComposeUiTest(width = 1200, height = 750) {
+    fun liveStepShowsOneLineThenOpensFullDetails() = runComposeUiTest {
+        val tool = tools.last().copy(summary = "Snapshot check timed out.", completed = true)
+        fun action(label: String) = SemanticsMatcher("tool row action $label") {
+            it.config.getOrNull(SemanticsActions.OnClick)?.label == label
+        }
+        setContent { HermesTheme(ColorScheme.Dark) { LiveSteps(listOf(tool), "live-reply") } }
+        onNodeWithText("Snapshot check timed out.").assertDoesNotExist()
+        onNode(action("Show details")).performClick()
+        onNodeWithText("Snapshot check timed out.").assertExists()
+        onNodeWithText("Snapshot listing timed out").assertDoesNotExist()
+        onNode(action("Tool details")).performClick()
+        onNodeWithText("Tool details").assertExists()
+        onNodeWithText("Snapshot listing timed out").assertExists()
+    }
+
+    @Test
+    fun narrowDesktopKeepsTheReplyVisibleBesideExpandedTools() = runDesktopComposeUiTest(width = 800, height = 750) {
         val back = DesktopBack()
         val state = ChatState(historyLoaded = true, messages = listOf(
             ChatMessage.Assistant("backup-reply", text = "The backup can be retried.", tools = tools),
@@ -132,6 +149,8 @@ class ToolTimelineTest {
         onNode(opensDetails("Check backup snapshots")).performClick()
         val reply = onNodeWithText("The backup can be retried.").assertIsDisplayed().getUnclippedBoundsInRoot()
         val details = onNodeWithText("Tool details").assertIsDisplayed().getUnclippedBoundsInRoot()
+        onAllNodesWithText("+0.2s").assertCountEquals(2)
+        onAllNodesWithText("2.0s").assertCountEquals(2)
         assertTrue(details.left > reply.right, "Tool details should be to the right of the reply")
         onNodeWithText("backupctl snapshots --latest").assertIsDisplayed()
         onNode(expandsCall("Read the backup log")).performClick()

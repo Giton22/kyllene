@@ -79,7 +79,7 @@ internal val LocalOpenToolDetails = staticCompositionLocalOf<((String, String) -
 internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
     var expanded by rememberSaveable(messageKey) { mutableStateOf(false) }
     var selectedToolId by rememberSaveable(messageKey) { mutableStateOf<String?>(null) }
-    val openDockedDetails = LocalOpenToolDetails.current
+    val openToolDetails = LocalOpenToolDetails.current
     val icons = remember(tools) { tools.map { toolIcon(it.name) }.distinct().take(3) }
     val expandedState = stringResource(if (expanded) Res.string.chat_expanded else Res.string.chat_collapsed)
     val interaction = remember { MutableInteractionSource() }
@@ -125,7 +125,7 @@ internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
             visibleCalls.forEachIndexed { index, tool ->
                 key(tool.id) {
                     ToolTimelineRow(tool, offsets[index], showOffsets, index > 0, index < visibleCalls.lastIndex) {
-                        if (openDockedDetails != null) openDockedDetails(messageKey, tool.id)
+                        if (openToolDetails != null) openToolDetails(messageKey, tool.id)
                         else selectedToolId = tool.id
                     }
                 }
@@ -133,7 +133,7 @@ internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
         }
     }
     val selected = selectedToolId
-    if (selected != null && openDockedDetails == null) key(messageKey) {
+    if (selected != null && openToolDetails == null) key(messageKey) {
         ToolDetailsViewer(tools, messageKey, selected) { selectedToolId = null }
     }
 }
@@ -245,6 +245,8 @@ internal fun ToolDetailsViewer(
 ) {
     var expandedIds by rememberSaveable { mutableStateOf(arrayOf(selectedToolId)) }
     val selectedRow = remember { BringIntoViewRequester() }
+    val offsets = remember(tools) { toolTimelineOffsets(tools) }
+    val showOffsets = offsets.any { it != null }
     LaunchedEffect(selectedToolId) {
         if (selectedToolId !in expandedIds) expandedIds = expandedIds + selectedToolId
         withFrameNanos { }
@@ -284,7 +286,7 @@ internal fun ToolDetailsViewer(
                     key(tool.id) {
                         val expanded = tool.id in expandedIds
                         ToolComparisonRow(
-                            tool, messageKey, expanded,
+                            tool, messageKey, expanded, offsets[index], showOffsets,
                             modifier = if (tool.id == selectedToolId) Modifier.bringIntoViewRequester(selectedRow) else Modifier,
                         ) {
                             expandedIds = if (expanded) expandedIds.filterNot { it == tool.id }.toTypedArray()
@@ -300,7 +302,8 @@ internal fun ToolDetailsViewer(
 
 @Composable
 private fun ToolComparisonRow(
-    tool: ToolActivity, messageKey: String, expanded: Boolean, modifier: Modifier, onToggle: () -> Unit,
+    tool: ToolActivity, messageKey: String, expanded: Boolean, offset: String?, showOffsets: Boolean,
+    modifier: Modifier, onToggle: () -> Unit,
 ) {
     val status = tool.statusLabel()
     Column {
@@ -313,7 +316,14 @@ private fun ToolComparisonRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             UnstyledIcon(toolIcon(tool.name), null, tint = tool.statusColor(), modifier = Modifier.size(16.dp))
-            Text(tool.title(), Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text])
+            if (showOffsets) Text(
+                offset.orEmpty(), Modifier.widthIn(min = 44.dp),
+                style = Theme[typography][caption], color = Theme[colors][textSecondary],
+            )
+            Text(
+                tool.title(), Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
             ToolDuration(tool)
             UnstyledIcon(
                 if (expanded) Lucide.ChevronDown else Lucide.ChevronRight,

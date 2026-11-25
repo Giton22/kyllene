@@ -860,14 +860,14 @@ internal fun ChatView(
 ) {
     val density = LocalDensity.current
     var chatPaneWidth by remember { mutableStateOf(0.dp) }
-    val canDockTools = isDesktop && chatPaneWidth >= RAIL_MIN_PANE
-    var toolSelection by remember(conversationKey) { mutableStateOf<Pair<String, String>?>(null) }
+    val canDockTools = isDesktop
+    var toolSelection by rememberSaveable(conversationKey) { mutableStateOf<Pair<String, String>?>(null) }
     val selectedTool = toolSelection
     val toolReplyKey = selectedTool?.first
     val showToolActivity = LocalAppSettings.current.showToolActivity
     val inspectedTools = remember(toolReplyKey, state.messages, showToolActivity) {
         toolReplyKey?.takeIf { showToolActivity }?.let { replyKey ->
-            state.messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey && !it.streaming }
+            state.messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey }
                 ?.tools?.filter { it.name != MESSAGE_AGENT_TOOL }?.takeIf { it.isNotEmpty() }
         }
     }
@@ -876,7 +876,7 @@ internal fun ChatView(
         if (rail != null || inspectedTools == null) toolSelection = null
     }
     val showToolDetails = inspectedTools != null && rail == null
-    val toolRailWidth = (chatPaneWidth * 0.44f).coerceIn(200.dp, 520.dp)
+    val toolRailWidth = (chatPaneWidth * 0.44f).coerceIn(200.dp, 520.dp).coerceAtMost(chatPaneWidth * 0.62f)
     val railWidth = when {
         showToolDetails && canDockTools -> toolRailWidth
         rail != null -> RAIL_WIDTH
@@ -1168,10 +1168,10 @@ internal fun ChatView(
                             },
                             LocalAgentScreenSend provides actions::sendPrompt,
                             LocalCommentHost provides commentHost,
-                            LocalOpenToolDetails provides if (isDesktop) ({ replyKey, toolId ->
+                            LocalOpenToolDetails provides { replyKey, toolId ->
                                 onOpenToolDetails()
                                 toolSelection = replyKey to toolId
-                            }) else null,
+                            },
                         ) {
                             key(conversationKey) {
                                 Messages(
@@ -3780,6 +3780,8 @@ internal fun LiveSteps(tools: List<ToolActivity>, messageKey: String) {
     val done = tools.filterNot { it.running }
     if (done.isEmpty()) return
     val shown = done.takeLast(LIVE_STEPS_SHOWN)
+    val openToolDetails = LocalOpenToolDetails.current
+    var selectedToolId by rememberSaveable(messageKey) { mutableStateOf<String?>(null) }
     Column(Modifier.padding(start = 2.dp)) {
         if (done.size > shown.size) {
             val earlier = done.size - shown.size
@@ -3790,67 +3792,88 @@ internal fun LiveSteps(tools: List<ToolActivity>, messageKey: String) {
                 modifier = Modifier.padding(start = 30.dp, bottom = 4.dp),
             )
         }
-        shown.forEach { key(it.id) { LiveStepRow(it, messageKey) } }
+        shown.forEach { tool ->
+            key(tool.id) {
+                LiveStepRow(tool) {
+                    if (openToolDetails != null) openToolDetails(messageKey, tool.id)
+                    else selectedToolId = tool.id
+                }
+            }
+        }
+    }
+    val selected = selectedToolId
+    if (selected != null && openToolDetails == null) key(messageKey) {
+        ToolDetailsViewer(tools, messageKey, selected) { selectedToolId = null }
     }
 }
 
-/** A finished step; tapped, it opens to what the tool was given and gave back, as in the pill's list. */
+/** A finished step previews its outcome first. A second tap opens the same viewer as the timeline. */
 @Composable
-private fun LiveStepRow(tool: ToolActivity, messageKey: String) {
+private fun LiveStepRow(tool: ToolActivity, onOpenDetails: () -> Unit) {
     val step = remember(tool) { toolDone(tool) }
     var open by rememberSaveable(tool.id) { mutableStateOf(false) }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 36.dp)
+    val summary = when {
+        tool.risk != null -> stringResource(Res.string.chat_tool_risk)
+        else -> sequenceOf(tool.summary, tool.output, tool.diff)
+            .mapNotNull { it?.lineSequence()?.firstOrNull(String::isNotBlank)?.trim()?.take(240) }
+            .firstOrNull { it != step.detail }
+            ?: stringResource(when {
+                tool.failed -> Res.string.chat_tool_failed
+                tool.completed -> Res.string.chat_tool_no_output
+                else -> Res.string.chat_tool_completion_unknown
+            })
+    }
+    Column(
+        Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
             .handCursor()
-            .clickable(onClickLabel = stringResource(if (open) Res.string.chat_hide_details else Res.string.chat_show_details)) { open = !open },
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .clickable(onClickLabel = stringResource(if (open) Res.string.chat_tool_details_page else Res.string.chat_show_details)) {
+                if (open) onOpenDetails() else open = true
+            },
     ) {
-        Box(
-            Modifier.size(20.dp).background(Theme[colors][if (tool.failed) dangerSoft else successSoft], CircleShape),
-            contentAlignment = Alignment.Center,
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 36.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            UnstyledIcon(
-                if (tool.failed) Lucide.X else Lucide.Check,
-                contentDescription = if (tool.failed) stringResource(Res.string.chat_tool_failed) else null,
-                tint = Theme[colors][if (tool.failed) danger else success],
-                modifier = Modifier.size(11.dp),
-            )
-        }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(step.title.text(), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary], maxLines = 1)
-            step.detail?.let {
-                Text(
-                    it,
-                    style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
-                    color = Theme[colors][textSecondary],
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .background(Theme[colors][surface], RoundedCornerShape(Theme[radii][radiusXSmall]))
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
+            Box(
+                Modifier.size(20.dp).background(Theme[colors][if (tool.failed) dangerSoft else successSoft], CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                UnstyledIcon(
+                    if (tool.failed) Lucide.X else Lucide.Check,
+                    contentDescription = if (tool.failed) stringResource(Res.string.chat_tool_failed) else null,
+                    tint = Theme[colors][if (tool.failed) danger else success],
+                    modifier = Modifier.size(11.dp),
                 )
             }
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(step.title.text(), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary], maxLines = 1)
+                step.detail?.let {
+                    Text(
+                        it,
+                        style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
+                        color = Theme[colors][textSecondary],
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .background(Theme[colors][surface], RoundedCornerShape(Theme[radii][radiusXSmall]))
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
+            // A scan flagged its output: said on the row, so it's seen while Stop is still worth pressing.
+            if (tool.risk != null) {
+                UnstyledIcon(Lucide.ShieldAlert, contentDescription = stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
+            }
+            tool.durationSeconds?.let { Text(formatDuration(it), style = Theme[typography][caption], color = Theme[colors][textMuted]) }
         }
-        // A scan flagged its output: said on the row, so it's seen while Stop is still worth pressing.
-        if (tool.risk != null) {
-            UnstyledIcon(Lucide.ShieldAlert, contentDescription = stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
-        }
-        tool.durationSeconds?.let { Text(formatDuration(it), style = Theme[typography][caption], color = Theme[colors][textMuted]) }
-    }
-    AnimatedVisibility(visible = open) {
-        Box(
-            Modifier
-                .padding(start = 30.dp, top = 2.dp, bottom = 6.dp)
-                .fillMaxWidth()
-                .border(1.dp, Theme[colors][stroke], RoundedCornerShape(Theme[radii][radiusMedium]))
-                .background(Theme[colors][surface], RoundedCornerShape(Theme[radii][radiusMedium]))
-                .padding(12.dp),
-        ) { ToolRow(tool, messageKey) }
+        if (open) Text(
+            summary, Modifier.padding(start = 30.dp, bottom = 6.dp),
+            style = Theme[typography][bodySmall], color = Theme[colors][textColor],
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
