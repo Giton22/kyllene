@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,11 @@ WORKFLOWS = FLATPAK.parents[1] / '.github/workflows'
 
 # Stands in for flatpak-builder: fails while the counter file holds a number above zero, counting it down, and logs
 # its arguments.
+POM = b'<project/>'
+JDK = b'jdk archive'
+POM_SHA512 = hashlib.sha512(POM).hexdigest()
+JDK_SHA256 = hashlib.sha256(JDK).hexdigest()
+
 FAKE_BUILDER = '''#!/bin/sh
 echo "$@" >> "$FAKE_DIR/calls"
 left=$(cat "$FAKE_DIR/failures")
@@ -32,12 +38,12 @@ class DownloadSourcesTest(unittest.TestCase):
         builder.write_text(FAKE_BUILDER)
         builder.chmod(0o755)
         (self.root / 'sources.json').write_text(json.dumps([
-            {'type': 'file', 'url': 'https://example.invalid/a.pom', 'sha512': 'a' * 128, 'dest-filename': 'a.pom'},
+            {'type': 'file', 'url': 'https://example.invalid/a.pom', 'sha512': POM_SHA512, 'dest-filename': 'a.pom'},
         ]))
         self.manifest = self.root / 'app.json'
         self.manifest.write_text(json.dumps({'modules': [{'name': 'app', 'sources': [
             {'type': 'git', 'url': 'file:///workspace', 'commit': 'c' * 40},
-            {'type': 'archive', 'url': 'https://example.invalid/jdk.tar.gz', 'sha256': 'b' * 64},
+            {'type': 'archive', 'url': 'https://example.invalid/jdk.tar.gz', 'sha256': JDK_SHA256},
             'sources.json',
         ]}]}))
         self.downloads = self.root / 'state' / 'downloads'
@@ -67,13 +73,37 @@ class DownloadSourcesTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(self.calls()), 3)
 
+    def cache(self, checksum, name, contents):
+        (self.downloads / checksum).mkdir(parents=True)
+        (self.downloads / checksum / name).write_bytes(contents)
+
     def test_cached_downloads_the_manifest_no_longer_lists_are_removed(self):
-        for name in ('a' * 128, 'b' * 64, 'd' * 64):
-            (self.downloads / name).mkdir(parents=True)
-            (self.downloads / name / 'file').write_text('x')
+        self.cache(POM_SHA512, 'a.pom', POM)
+        self.cache(JDK_SHA256, 'jdk.tar.gz', JDK)
+        old = b'old jdk'
+        self.cache(hashlib.sha256(old).hexdigest(), 'jdk.tar.gz', old)
         result = self.run_script(failures=0)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(sorted(p.name for p in self.downloads.iterdir()), ['a' * 128, 'b' * 64])
+        self.assertEqual(sorted(p.name for p in self.downloads.iterdir()), sorted([POM_SHA512, JDK_SHA256]))
+
+    # flatpak-builder uses a file it finds in downloads/ without checking it, so a damaged or tampered cache entry
+    # must be gone before the offline build.
+    def test_cached_downloads_that_do_not_match_their_checksum_are_removed(self):
+        self.cache(POM_SHA512, 'a.pom', b'<project>tampered</project>')
+        self.cache(JDK_SHA256, 'jdk.tar.gz', JDK)
+        (self.downloads / JDK_SHA256 / 'jdk.tar.gz.part').write_bytes(b'partial')
+        result = self.run_script(failures=0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(self.downloads.iterdir()), [])
+        self.assertIn('Removed 2 cached downloads', result.stdout)
+
+    def test_intact_cached_downloads_are_kept(self):
+        self.cache(POM_SHA512, 'a.pom', POM)
+        self.cache(JDK_SHA256, 'jdk.tar.gz', JDK)
+        result = self.run_script(failures=0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Removed 0 cached downloads', result.stdout)
+        self.assertEqual((self.downloads / POM_SHA512 / 'a.pom').read_bytes(), POM)
 
     def test_the_package_builds_use_the_downloaded_sources(self):
         for name in ('linux.yml', 'release.yml'):

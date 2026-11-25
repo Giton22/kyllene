@@ -113,7 +113,8 @@ jobs:
             --repository "file://$GITHUB_WORKSPACE" \
             --ref flatpak-ci-tested --commit "$GITHUB_SHA"
       # Maven Central answers a burst of requests from a shared runner address with HTTP 429. Downloads restored
-      # from an earlier run aren't fetched again; flatpak-builder still checks each against its checksum.
+      # from an earlier run aren't fetched again; download-sources.py first drops any that don't match their
+      # checksum, since flatpak-builder checks one only when it downloads it.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .flatpak-builder/downloads
