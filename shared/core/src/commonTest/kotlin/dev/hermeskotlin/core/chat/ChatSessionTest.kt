@@ -3059,6 +3059,35 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aSessionAuthorityRewindsPromptGetsItsRowWhenItsTurnEndsAndKeepsTheNewGeneration() = runTest {
+        history = threeTurns
+        // Admitting the prompt moves the generation on again, after the cut's receipt gave 3.
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to """{"admission_id":"a1","status":"queued","execution_generation":4}""")) { it.rewound() }
+
+        assertEquals(SendOutcome.Sent, chat.rewind("row-3", "two, edited"))
+        val submission = assertNotNull(transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id"))
+        val key = chat.state.value.messages.last().key
+        // The transcript can't be read when the turn ends: the turn's end alone gives the prompt its row.
+        historyFails = true
+        transport.push(event("message.start", "stored-1"))
+        transport.push(
+            event(
+                "message.complete",
+                "stored-1",
+                """{"text":"Second, again","status":"complete","persisted_turn":{"row_ids":[7,8],"complete":true,"user_row_id":7,"submission_id":"$submission"}}""",
+            ),
+        )
+
+        val done = chat.state.first { !it.running && it.messages.last() is ChatMessage.Assistant }
+        assertEquals(7L, assertIs<ChatMessage.User>(done.messages.first { it.key == key }).rowId)
+        assertTrue(done.canEdit(key))
+        assertEquals(SendOutcome.Sent, chat.rewind(key, "two, once more"))
+        val again = transport.sent.value.last { it.isCall("session.mutate") }
+        assertEquals("""{"target_message_id":7}""", again.mutatePayload().toString())
+        assertEquals("4", again.param("expected_generation"))
+    }
+
+    @Test
     fun aPromptWhoseTurnStartsBeforeItsReplyIsReadIsNotLeftQueued() = runTest {
         val (chat, transport) = authorityChat(backgroundScope) { it.rewound() }
         val canned = gateway.answer

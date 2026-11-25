@@ -556,7 +556,17 @@ class ChatSession(
             val result = if (client.sessionAuthority) {
                 mutateRewind(client, runtimeId, rowId)
                 cut = true
-                client.request("prompt.submit", buildJsonObject { put("session_id", runtimeId); put("text", trimmed) }) as? JsonObject
+                // Its row comes with its turn's end, named by this id (as for a prompt sent from the composer).
+                val submissionId = newRequestId()
+                _state.update { it.copy(messages = it.messages.updateUser(newKey) { u -> u.copy(submissionId = submissionId) }) }
+                (client.request(
+                    "prompt.submit",
+                    buildJsonObject {
+                        put("session_id", runtimeId)
+                        put("submission_id", submissionId)
+                        put("text", trimmed)
+                    },
+                ) as? JsonObject)?.also { reply -> reply.long("execution_generation")?.let { executionGeneration = it } }
             } else {
                 client.request(
                     "prompt.submit",
