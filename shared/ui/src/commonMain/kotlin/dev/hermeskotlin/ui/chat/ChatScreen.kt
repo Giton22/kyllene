@@ -25,6 +25,7 @@ import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
 import dev.hermeskotlin.core.bots.MentionQuery
+import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.core.chat.PathRefKind
 import dev.hermeskotlin.core.chat.PathRefQuery
 import dev.hermeskotlin.core.chat.completion
@@ -2201,6 +2202,9 @@ private fun Messages(
                                     readingPaused = readingPaused,
                                     onReadAloud = if (canReadAloud) ({ text -> actions.readAloud(message.key, text) }) else null,
                                     onStopReading = actions::stopReading,
+                                    onReact = if (connected && chat.replyReactionsSupported) {
+                                        { reaction -> actions.reactToReply(message.key, reaction) }
+                                    } else null,
                                     onPauseReading = actions::pauseReading,
                                     onResumeReading = actions::resumeReading,
                                 )
@@ -2916,6 +2920,8 @@ internal fun AssistantReply(
     /** Reads the reply's text, as shown, aloud; null when it can't be now. */
     onReadAloud: ((String) -> Unit)? = null,
     onStopReading: () -> Unit = {},
+    /** Sets or clears the user's reaction on this stored reply; null when it can't be now. */
+    onReact: ((ReplyReaction) -> Unit)? = null,
     onPauseReading: () -> Unit = {},
     onResumeReading: () -> Unit = {},
 ) {
@@ -3014,23 +3020,38 @@ internal fun AssistantReply(
         val actionable = !message.streaming && text.isNotBlank()
         // A reply of only code or files has nothing to say.
         val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
-        if (isDesktop && (actionable || usage != null)) {
+        // The user's reaction, saved on the reply's stored row: one of four, and the same again takes it off.
+        val react = onReact.takeIf { !message.streaming && message.reactionRowId != null }
+        val reaction = message.userReaction.takeUnless { message.streaming }
+            ?.let { emoji -> ReplyReaction.entries.firstOrNull { it.emoji == emoji } }
+        val reactable = react != null || reaction != null
+        if (isDesktop && (actionable || usage != null || reactable)) {
             // A desktop reads a reply's tools from its own start, as desktop chat apps line them up, and shows
             // them on the newest reply and under the pointer: older replies read without a row of icons each. They
-            // only fade, so nothing moves as the pointer passes; one with the keyboard in it stays shown.
+            // only fade, so nothing moves as the pointer passes; one with the keyboard in it stays shown. A chosen
+            // reaction stays shown on every reply, in its place among the four.
             var keysInside by remember { mutableStateOf(false) }
             val shown = last || hovered || keysInside
             val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
             Row(
-                Modifier.trimEndTop(end = 0.dp, top = 4.dp).offset(x = (-10).dp).alpha(alpha).onFocusChanged { keysInside = it.hasFocus },
+                Modifier.trimEndTop(end = 0.dp, top = 4.dp).offset(x = (-10).dp).onFocusChanged { keysInside = it.hasFocus },
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                val faded = Modifier.alpha(alpha)
                 if (actionable) {
                     // Pointer-sized, as the icons beside it are.
-                    CopyButton(text, Modifier.size(32.dp))
-                    onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, Modifier) }
-                    onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, Modifier) }
+                    CopyButton(text, faded.size(32.dp))
+                    onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, faded) }
+                    onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, faded) }
+                }
+                if (reactable) {
+                    if (actionable) Spacer(Modifier.width(6.dp))
+                    for (choice in ReplyReaction.entries) {
+                        if (react != null || choice == reaction) {
+                            ReplyReactionButton(choice, choice == reaction, react?.let { { it(choice) } }, alpha = alpha)
+                        }
+                    }
                 }
                 usage?.let {
                     val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(it.input), compactCount(it.output))
@@ -3041,12 +3062,24 @@ internal fun AssistantReply(
                         // On one line in a narrow window at the largest text, as on the phone.
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 8.dp).semantics { contentDescription = spoken },
+                        modifier = faded.padding(start = 8.dp).semantics { contentDescription = spoken },
                     )
                 }
             }
-        } else if (actionable || usage != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        } else if (actionable || usage != null || reactable) {
+            // On the newest reply all four reactions sit in their own row above the reply's tools, from its start; an
+            // older reply keeps only the one chosen, so the transcript doesn't fill with rows of emoji.
+            if (reactable && (last || reaction != null)) Row(
+                Modifier.offset(x = (-7).dp).trimEndTop(end = 0.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (choice in ReplyReaction.entries) {
+                    if (last && react != null || choice == reaction) {
+                        ReplyReactionButton(choice, choice == reaction, react?.let { { it(choice) } })
+                    }
+                }
+            }
+            if (actionable || usage != null) Row(verticalAlignment = Alignment.CenterVertically) {
                 // The count takes only what the actions leave: at the largest text it ellipsizes instead of squeezing them out.
                 if (usage != null) {
                     val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
