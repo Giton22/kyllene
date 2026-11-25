@@ -171,6 +171,7 @@ internal fun LiveSteps(tools: List<ToolActivity>, messageKey: String) {
                     tool, offsets[index], showOffsets, row > 0, row < shown.lastIndex,
                     title = title,
                     preview = if (expanded) liveToolPreview(tool, step?.detail ?: title) else null,
+                    onCollapse = if (expanded) ({ expanded = false }) else null,
                     clickLabel = if (expanded) Res.string.chat_tool_details_page else Res.string.chat_show_details,
                 ) {
                     if (!expanded) expanded = true
@@ -244,6 +245,7 @@ private fun ToolTimelineRow(
     hasNext: Boolean,
     title: String = tool.title(),
     preview: String? = null,
+    onCollapse: (() -> Unit)? = null,
     clickLabel: StringResource = Res.string.chat_tool_details_page,
     onClick: () -> Unit,
 ) {
@@ -263,37 +265,45 @@ private fun ToolTimelineRow(
             tint = status,
             modifier = Modifier.align(Alignment.TopStart).padding(start = 5.dp, top = 8.dp).size(14.dp),
         )
-        Column(
-            Modifier.fillMaxWidth()
-                .heightIn(min = MinTouchTarget)
-                .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
-                .handCursor()
-                .clickable(onClickLabel = stringResource(clickLabel), role = Role.Button, onClick = onClick)
-                .semantics(mergeDescendants = true) { stateDescription = statusLabel }
-                .padding(start = 26.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-        ) {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.Top,
+        Row(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.weight(1f)
+                    .heightIn(min = MinTouchTarget)
+                    .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
+                    .handCursor()
+                    .clickable(onClickLabel = stringResource(clickLabel), role = Role.Button, onClick = onClick)
+                    .semantics(mergeDescendants = true) { stateDescription = statusLabel }
+                    .padding(start = 26.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
             ) {
-                if (showOffsets) Text(
-                    offset.orEmpty(), Modifier.widthIn(min = 44.dp, max = 80.dp),
-                    style = Theme[typography][caption], color = Theme[colors][textSecondary],
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    if (showOffsets) Text(
+                        offset.orEmpty(), Modifier.widthIn(min = 44.dp, max = 80.dp),
+                        style = Theme[typography][caption], color = Theme[colors][textSecondary],
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(title, Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    ToolDuration(tool)
+                    if (tool.risk != null) {
+                        UnstyledIcon(Lucide.ShieldAlert, stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
+                    }
+                }
+                if (preview != null) Text(
+                    preview, Modifier.padding(top = 4.dp),
+                    style = Theme[typography][bodySmall], color = Theme[colors][textSecondary],
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                Text(title, Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
-                ToolDuration(tool)
-                if (tool.risk != null) {
-                    UnstyledIcon(Lucide.ShieldAlert, stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
-                }
             }
-            if (preview != null) Text(
-                preview, Modifier.padding(top = 4.dp),
-                style = Theme[typography][bodySmall], color = Theme[colors][textSecondary],
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
+            if (onCollapse != null) {
+                IconButton(
+                    Lucide.ChevronRight, stringResource(Res.string.chat_hide_details), onCollapse,
+                    iconSize = 14.dp,
+                )
+            }
         }
     }
 }

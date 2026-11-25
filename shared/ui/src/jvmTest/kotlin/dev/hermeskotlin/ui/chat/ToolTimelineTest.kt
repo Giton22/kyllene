@@ -9,12 +9,14 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.test.v2.runDesktopComposeUiTest
 import com.composeunstyled.theme.ColorScheme
@@ -109,7 +111,7 @@ class ToolTimelineTest {
     }
 
     @Test
-    fun liveStepShowsOneLineThenOpensFullDetails() = runComposeUiTest {
+    fun liveStepCanCollapseWithChevronOrOpenDetailsFromTheRow() = runComposeUiTest {
         val tool = tools.last().copy(summary = "Snapshot check timed out.", completed = true)
         val running = ToolActivity("live", "terminal", running = true, detail = "Check the backup server", startedAt = 51.0)
         fun action(label: String) = SemanticsMatcher("tool row action $label") {
@@ -120,10 +122,21 @@ class ToolTimelineTest {
         onNodeWithText("+0.8s").assertExists()
         onNodeWithText("2.0s").assertExists()
         onNodeWithText("Snapshot check timed out.").assertDoesNotExist()
-        onNode(action("Show details") and hasText("Ran Check backup snapshots")).performClick()
+        val collapsed = onNode(action("Show details") and hasText("Ran Check backup snapshots"))
+        val expanded = onNode(action("Tool details") and hasText("Ran Check backup snapshots"))
+        val chevron = onNodeWithContentDescription("Hide details")
+        chevron.assertDoesNotExist()
+        collapsed.performTouchInput { click() }
         onNodeWithText("Snapshot check timed out.").assertExists()
         onNodeWithText("Snapshot listing timed out").assertDoesNotExist()
-        onNode(action("Tool details")).performClick()
+
+        chevron.performTouchInput { click() }
+        chevron.assertDoesNotExist()
+        onNodeWithText("Snapshot check timed out.").assertDoesNotExist()
+        onNodeWithText("Tool details").assertDoesNotExist()
+
+        collapsed.performTouchInput { click() }
+        expanded.performTouchInput { click() }
         onNodeWithText("Tool details").assertExists()
         onNodeWithText("Snapshot listing timed out").assertExists()
     }
