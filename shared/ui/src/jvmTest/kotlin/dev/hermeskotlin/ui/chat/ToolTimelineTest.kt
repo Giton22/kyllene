@@ -111,12 +111,16 @@ class ToolTimelineTest {
     @Test
     fun liveStepShowsOneLineThenOpensFullDetails() = runComposeUiTest {
         val tool = tools.last().copy(summary = "Snapshot check timed out.", completed = true)
+        val running = ToolActivity("live", "terminal", running = true, detail = "Check the backup server", startedAt = 51.0)
         fun action(label: String) = SemanticsMatcher("tool row action $label") {
             it.config.getOrNull(SemanticsActions.OnClick)?.label == label
         }
-        setContent { HermesTheme(ColorScheme.Dark) { LiveSteps(listOf(tool), "live-reply") } }
+        setContent { HermesTheme(ColorScheme.Dark) { LiveSteps(listOf(tool, running), "live-reply") } }
+        onNodeWithText("Check the backup server").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Still running…"))
+        onNodeWithText("+0.8s").assertExists()
+        onNodeWithText("2.0s").assertExists()
         onNodeWithText("Snapshot check timed out.").assertDoesNotExist()
-        onNode(action("Show details")).performClick()
+        onNode(action("Show details") and hasText("Ran Check backup snapshots")).performClick()
         onNodeWithText("Snapshot check timed out.").assertExists()
         onNodeWithText("Snapshot listing timed out").assertDoesNotExist()
         onNode(action("Tool details")).performClick()

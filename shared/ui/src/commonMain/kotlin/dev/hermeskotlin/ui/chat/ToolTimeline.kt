@@ -67,6 +67,7 @@ import dev.hermeskotlin.ui.clearOfWindowControls
 import dev.hermeskotlin.ui.fullScreenDialogProperties
 import dev.hermeskotlin.ui.resources.*
 import kotlin.math.roundToLong
+import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.pluralStringResource
 import org.jetbrains.compose.resources.stringResource
 
@@ -138,6 +139,67 @@ internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
     }
 }
 
+/** Keep the current calls and a short history visible while the reply is streaming. */
+@Composable
+internal fun LiveSteps(tools: List<ToolActivity>, messageKey: String) {
+    if (tools.isEmpty()) return
+
+    val firstRecentFinished = tools.indices.filter { !tools[it].running }.takeLast(4).firstOrNull() ?: 0
+    val shown = tools.indices.filter { it >= firstRecentFinished || tools[it].running }.takeLast(INLINE_TOOL_LIMIT)
+    val offsets = remember(tools) { toolTimelineOffsets(tools) }
+    val showOffsets = shown.any { offsets[it] != null }
+    val openToolDetails = LocalOpenToolDetails.current
+    var selectedToolId by rememberSaveable(messageKey) { mutableStateOf<String?>(null) }
+
+    Column {
+        val earlier = tools.size - shown.size
+        if (earlier > 0) {
+            Text(
+                pluralStringResource(Res.plurals.chat_earlier_steps, earlier, earlier),
+                style = Theme[typography][caption],
+                color = Theme[colors][textMuted],
+                modifier = Modifier.padding(start = 26.dp, bottom = 4.dp),
+            )
+        }
+        shown.forEachIndexed { row, index ->
+            val tool = tools[index]
+            key(tool.id) {
+                var expanded by rememberSaveable { mutableStateOf(false) }
+                val step = if (tool.running) null else toolDone(tool)
+                val title = if (step != null) listOfNotNull(step.title.text(), step.detail).joinToString(" ") else tool.title()
+                ToolTimelineRow(
+                    tool, offsets[index], showOffsets, row > 0, row < shown.lastIndex,
+                    title = title,
+                    preview = if (expanded) liveToolPreview(tool, step?.detail ?: title) else null,
+                    clickLabel = if (expanded) Res.string.chat_tool_details_page else Res.string.chat_show_details,
+                ) {
+                    if (!expanded) expanded = true
+                    else if (openToolDetails != null) openToolDetails(messageKey, tool.id)
+                    else selectedToolId = tool.id
+                }
+            }
+        }
+    }
+    val selected = selectedToolId
+    if (selected != null && openToolDetails == null) key(messageKey) {
+        ToolDetailsViewer(tools, messageKey, selected) { selectedToolId = null }
+    }
+}
+
+@Composable
+private fun liveToolPreview(tool: ToolActivity, detail: String): String {
+    if (tool.risk != null) return stringResource(Res.string.chat_tool_risk)
+    return sequenceOf(tool.summary, tool.output, tool.diff)
+        .mapNotNull { it?.lineSequence()?.firstOrNull(String::isNotBlank)?.trim()?.take(240) }
+        .firstOrNull { it != detail }
+        ?: stringResource(when {
+            tool.failed -> Res.string.chat_tool_failed
+            tool.running -> Res.string.chat_tool_still_running
+            tool.completed -> Res.string.chat_tool_no_output
+            else -> Res.string.chat_tool_completion_unknown
+        })
+}
+
 /** One kind of tool, using the existing circles and overlap from the original Tools header. */
 @Composable
 private fun ToolKindIcon(icon: ImageVector) {
@@ -180,6 +242,9 @@ private fun ToolTimelineRow(
     showOffsets: Boolean,
     hasPrevious: Boolean,
     hasNext: Boolean,
+    title: String = tool.title(),
+    preview: String? = null,
+    clickLabel: StringResource = Res.string.chat_tool_details_page,
     onClick: () -> Unit,
 ) {
     val status = tool.statusColor()
@@ -198,28 +263,37 @@ private fun ToolTimelineRow(
             tint = status,
             modifier = Modifier.align(Alignment.TopStart).padding(start = 5.dp, top = 8.dp).size(14.dp),
         )
-        Row(
+        Column(
             Modifier.fillMaxWidth()
                 .heightIn(min = MinTouchTarget)
                 .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
                 .handCursor()
-                .clickable(onClickLabel = stringResource(Res.string.chat_tool_details_page), role = Role.Button, onClick = onClick)
+                .clickable(onClickLabel = stringResource(clickLabel), role = Role.Button, onClick = onClick)
                 .semantics(mergeDescendants = true) { stateDescription = statusLabel }
                 .padding(start = 26.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.Top,
         ) {
-            if (showOffsets) Text(
-                offset.orEmpty(), Modifier.widthIn(min = 44.dp, max = 80.dp),
-                style = Theme[typography][caption], color = Theme[colors][textSecondary],
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                if (showOffsets) Text(
+                    offset.orEmpty(), Modifier.widthIn(min = 44.dp, max = 80.dp),
+                    style = Theme[typography][caption], color = Theme[colors][textSecondary],
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                Text(title, Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                ToolDuration(tool)
+                if (tool.risk != null) {
+                    UnstyledIcon(Lucide.ShieldAlert, stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
+                }
+            }
+            if (preview != null) Text(
+                preview, Modifier.padding(top = 4.dp),
+                style = Theme[typography][bodySmall], color = Theme[colors][textSecondary],
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
-            Text(tool.title(), Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
-            ToolDuration(tool)
-            if (tool.risk != null) {
-                UnstyledIcon(Lucide.ShieldAlert, stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
-            }
         }
     }
 }
