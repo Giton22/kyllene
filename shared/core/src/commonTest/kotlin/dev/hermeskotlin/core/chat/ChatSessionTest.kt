@@ -3088,6 +3088,33 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aSessionAuthorityRewindWhoseTurnEndsBeforeItsReplyIsReadKeepsItsRow() = runTest {
+        history = threeTurns
+        val (chat, transport) = authorityChat(backgroundScope, mapOf("prompt.submit" to SILENT)) { it.rewound() }
+        // The transcript can't be read afterwards, so only the turn's end gives the row.
+        historyFails = true
+
+        val rewinding = backgroundScope.async { chat.rewind("row-3", "two, edited") }
+        val submit = transport.awaitSent { it.isCall("prompt.submit") }
+        // A quick turn: it has started and ended, row and all, before the `prompt.submit` reply is read.
+        transport.push(event("message.start", "stored-1"))
+        transport.push(
+            event(
+                "message.complete",
+                "stored-1",
+                """{"text":"Second, again","status":"complete","persisted_turn":{"row_ids":[7,8],"complete":true,"user_row_id":7,"submission_id":"${submit.param("submission_id")}"}}""",
+            ),
+        )
+        chat.state.first { s -> s.messages.any { it is ChatMessage.User && it.rowId == 7L } }
+        transport.push("""{"jsonrpc":"2.0","id":${submit["id"]},"result":{"admission_id":"a1","status":"queued"}}""")
+
+        assertEquals(SendOutcome.Sent, rewinding.await())
+        val prompt = chat.state.value.messages.filterIsInstance<ChatMessage.User>().last()
+        assertEquals("two, edited", prompt.text)
+        assertEquals(7L, prompt.rowId)
+    }
+
+    @Test
     fun aPromptWhoseTurnStartsBeforeItsReplyIsReadIsNotLeftQueued() = runTest {
         val (chat, transport) = authorityChat(backgroundScope) { it.rewound() }
         val canned = gateway.answer

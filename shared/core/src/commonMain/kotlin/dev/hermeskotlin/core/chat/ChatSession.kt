@@ -587,7 +587,8 @@ class ChatSession(
                 state.copy(
                     running = true,
                     messages = state.messages.updateUser(newKey) {
-                        it.copy(pending = false, rowId = result.long("user_row_id"), sentText = trimmed)
+                        // The session authority's reply has no row; a short turn may have given it one already.
+                        it.copy(pending = false, rowId = result.long("user_row_id") ?: it.rowId, sentText = trimmed)
                     },
                 )
             }
