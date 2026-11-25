@@ -15,6 +15,7 @@ import dev.hermeskotlin.core.bots.BotHealth
 import dev.hermeskotlin.core.bots.BotTrouble
 import dev.hermeskotlin.core.bots.displayNameFor
 import dev.hermeskotlin.core.profiles.ProfilesApi
+import dev.hermeskotlin.core.bots.BotChatTakenException
 import dev.hermeskotlin.core.bots.BotChatUnavailableException
 import dev.hermeskotlin.core.bots.BotChats
 import dev.hermeskotlin.core.bots.BotsApi
@@ -333,30 +334,41 @@ class BotsViewModel(
 
     /**
      * Makes a bot from [draft] and opens its new chat, where it introduces itself. A bot whose machine has
-     * no model it can use is made all the same, without the intro, and the roster says why.
+     * no model it can use is made all the same, without the intro, and the roster says why. A Bot Chat another
+     * client started in the meantime is opened instead, and isn't greeted a second time.
      */
     fun create(draft: BotDraft, onDone: () -> Unit, onOpened: (Bot, String) -> Unit) {
         if (_busy.value != null) return
         _busy.value = words(Res.string.bots_making, displayNameFor(draft.profile, draft.title))
         viewModelScope.launch {
+            var done = false
             try {
                 val made = api.createBot(draft)
                 refreshNow()
                 onDone()
+                done = true
                 val bot = _state.value.all.firstOrNull { it.name == made.profile } ?: Bot(name = made.profile)
                 if (!made.readyToChat) {
                     _state.update { it.copy(notice = wordsThen(Res.string.bots_made_without_model, made.problem, bot.label)) }
                     return@launch
                 }
-                val stored = api.startWithIntro(made.profile)
+                val stored = try {
+                    api.startWithIntro(made.profile)
+                } catch (_: BotChatTakenException) {
+                    chats.open(bot)
+                }
                 chats.note(listOf(bot.copy(canonicalSession = dev.hermeskotlin.core.bots.BotSession(id = stored))))
                 onOpened(bot, stored)
                 refreshNow()
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: BotChatUnavailableException) {
+                // Made, and its chat is another client's: say it can't be opened, as a tap on the bot would.
+                _state.update { it.copy(notice = e.message?.let(Words::Raw)) }
             } catch (e: Exception) {
                 _state.update { it.copy(notice = wordsThen(Res.string.bots_make_failed, e.message)) }
-                onDone()
+                // The editor is closed once, even when the bot was made and only its chat failed.
+                if (!done) onDone()
             } finally {
                 _busy.value = null
             }
