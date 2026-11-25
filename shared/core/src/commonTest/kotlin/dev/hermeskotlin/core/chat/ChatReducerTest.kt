@@ -152,17 +152,21 @@ class ChatReducerTest {
             usage = SessionUsage(input = 900),
             turnStartUsage = SessionUsage(input = 100),
             messages = listOf(
+                // The part a correction closed early, its tool still marked running.
+                ChatMessage.Assistant("a-1", "Looking", tools = listOf(ToolActivity("t0", "search", running = true))),
+                ChatMessage.User("c1", "shorter please"),
                 ChatMessage.Assistant("a0", "Hi, I'm", streaming = true, tools = listOf(ToolActivity("t1", "terminal", running = true))),
                 ChatMessage.User("q1", "first question", queued = true, admissionId = "ad1"),
             ),
         ).apply(GatewayEvent("message.start", HermesJson.parseToJsonElement("{}"), sessionId = "rt", seq = null, admissionId = "ad1"))
-        val intro = missed.messages.first() as ChatMessage.Assistant
+        val (early, intro) = missed.messages.filterIsInstance<ChatMessage.Assistant>().take(2)
+        assertFalse(early.tools.single().running)
         assertFalse(intro.streaming)
         assertFalse(intro.tools.single().running)
-        assertFalse((missed.messages[1] as ChatMessage.User).queued)
+        assertFalse(missed.messages.filterIsInstance<ChatMessage.User>().last().queued)
         // The new turn opens its own reply below the prompt and counts its usage from now, with no plan yet.
         assertTrue((missed.messages.last() as ChatMessage.Assistant).streaming)
-        assertEquals(3, missed.messages.size)
+        assertEquals(5, missed.messages.size)
         assertEquals(SessionUsage(input = 900), missed.turnStartUsage)
         assertFalse(missed.todosLive)
         assertTrue(missed.running)

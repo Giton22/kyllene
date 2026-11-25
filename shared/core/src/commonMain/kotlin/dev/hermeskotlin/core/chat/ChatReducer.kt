@@ -299,9 +299,13 @@ private fun ChatState.releaseQueued(admission: String?): ChatState {
             // A reply still open above it is a turn whose end was missed (a resume that said running): it ended before
             // this one began, so it ends here, tools and all, and this turn's reply goes below its prompt.
             if (open !in 0 until index) return started.copy(messages = released)
-            val ended = released.apply {
-                val reply = get(open) as ChatMessage.Assistant
-                set(open, reply.copy(streaming = false, tools = reply.tools.map { it.copy(running = false) }))
+            // As at its end: no tool runs on, including in a part a correction closed early.
+            val ended = released.mapIndexed { i, message ->
+                if (message !is ChatMessage.Assistant || (i != open && message.tools.none { it.running })) {
+                    message
+                } else {
+                    message.copy(streaming = message.streaming && i != open, tools = message.tools.map { it.copy(running = false) })
+                }
             }
             return started.endTurn(ended, finalUsage = null)
         }
