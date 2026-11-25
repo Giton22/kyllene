@@ -15,14 +15,17 @@ import kotlinx.serialization.json.contentOrNull
 fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
     val payload = event.payload as? JsonObject
     return when (event.type) {
-        "message.start" -> releaseQueued(event.admissionId).withOpenReply { it }.copy(
-            running = true,
-            error = null,
-            // A new turn hasn't planned yet; the last plan is from before (a correction keeps its turn's plan).
-            todosLive = todosLive && running,
-            // No totals yet means the agent isn't built, and a new one counts from zero.
-            turnStartUsage = turnStartUsage.takeIf { running } ?: usage ?: SessionUsage(),
-        )
+        // Read from the released state: a missed turn's end it found no longer counts as running.
+        "message.start" -> releaseQueued(event.admissionId).let { before ->
+            before.withOpenReply { it }.copy(
+                running = true,
+                error = null,
+                // A new turn hasn't planned yet; the last plan is from before (a correction keeps its turn's plan).
+                todosLive = before.todosLive && before.running,
+                // No totals yet means the agent isn't built, and a new one counts from zero.
+                turnStartUsage = before.turnStartUsage.takeIf { before.running } ?: before.usage ?: SessionUsage(),
+            )
+        }
         "session.usage" -> copy(usage = SessionUsage.parse(payload?.get("usage") as? JsonObject) ?: usage)
         "message.delta" -> appendText(payload.string("text"))
         "message.interim" ->
@@ -292,14 +295,15 @@ private fun ChatState.releaseQueued(admission: String?): ChatState {
         val index = messages.indexOfFirst { it is ChatMessage.User && it.admissionId == admission }
         if (index >= 0) {
             val open = messages.openReplyIndex()
-            return started.copy(
-                messages = messages.toMutableList().apply {
-                    set(index, (get(index) as ChatMessage.User).copy(queued = false))
-                    // A reply still open above it is a turn whose end was missed (a resume that said running): it
-                    // ended before this one began, so this turn's reply goes below its prompt.
-                    if (open in 0 until index) set(open, (get(open) as ChatMessage.Assistant).copy(streaming = false))
-                },
-            )
+            val released = messages.toMutableList().apply { set(index, (get(index) as ChatMessage.User).copy(queued = false)) }
+            // A reply still open above it is a turn whose end was missed (a resume that said running): it ended before
+            // this one began, so it ends here, tools and all, and this turn's reply goes below its prompt.
+            if (open !in 0 until index) return started.copy(messages = released)
+            val ended = released.apply {
+                val reply = get(open) as ChatMessage.Assistant
+                set(open, reply.copy(streaming = false, tools = reply.tools.map { it.copy(running = false) }))
+            }
+            return started.endTurn(ended, finalUsage = null)
         }
         // Another client's prompt, or ours before its reply is read. Only one queued without an id goes, as before:
         // one with an id waits for its own.

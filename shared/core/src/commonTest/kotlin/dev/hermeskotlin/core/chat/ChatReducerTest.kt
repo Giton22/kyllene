@@ -144,6 +144,31 @@ class ChatReducerTest {
     }
 
     @Test
+    fun aTurnStartBelowAReplyLeftOpenEndsThatTurn() {
+        // A resume said the intro ran (a tool going), and its end was missed: the queued prompt's own start ends it.
+        val missed = ChatState(
+            running = true,
+            todosLive = true,
+            usage = SessionUsage(input = 900),
+            turnStartUsage = SessionUsage(input = 100),
+            messages = listOf(
+                ChatMessage.Assistant("a0", "Hi, I'm", streaming = true, tools = listOf(ToolActivity("t1", "terminal", running = true))),
+                ChatMessage.User("q1", "first question", queued = true, admissionId = "ad1"),
+            ),
+        ).apply(GatewayEvent("message.start", HermesJson.parseToJsonElement("{}"), sessionId = "rt", seq = null, admissionId = "ad1"))
+        val intro = missed.messages.first() as ChatMessage.Assistant
+        assertFalse(intro.streaming)
+        assertFalse(intro.tools.single().running)
+        assertFalse((missed.messages[1] as ChatMessage.User).queued)
+        // The new turn opens its own reply below the prompt and counts its usage from now, with no plan yet.
+        assertTrue((missed.messages.last() as ChatMessage.Assistant).streaming)
+        assertEquals(3, missed.messages.size)
+        assertEquals(SessionUsage(input = 900), missed.turnStartUsage)
+        assertFalse(missed.todosLive)
+        assertTrue(missed.running)
+    }
+
+    @Test
     fun aQueuedPromptWhoseTurnEndedWaitsForNothing() {
         // Its start was missed or read before the "queued" reply; the turn's end names it by its submission.
         val ended = ChatState(
