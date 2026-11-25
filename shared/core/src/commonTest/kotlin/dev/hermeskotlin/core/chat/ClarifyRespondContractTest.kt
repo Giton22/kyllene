@@ -127,6 +127,17 @@ class ClarifyRespondContractTest {
         assertEquals(listOf(setup.clarify), setup.chat.state.value.inputRequests)
     }
 
+    @Test
+    fun pendingControlBatchOfTwoWithOneAnswerIsRefusedLocally() = runTest(timeout = 2.seconds) {
+        // A notification reply or the watch answers only the first question: one entry, still two questions.
+        val setup = authority(batchOfTwo)
+        val firstOnly = InputAnswers.clarify(setup.clarify, listOf(listOf("Ada")))
+        assertNotNull(InputRequest.pendingControlRefusal(setup.clarify, firstOnly))
+        assertFalse(setup.chat.answer(setup.clarify, firstOnly))
+        assertTrue(setup.gw.sent("clarify.respond").isEmpty())
+        assertEquals(listOf(setup.clarify), setup.chat.state.value.inputRequests)
+    }
+
     /** A classic `clarify` server request for [runtimeId], as `ClarifyRequestParams` has it (one `q0`). */
     private fun clarifyRequest(runtimeId: String) =
         """{"jsonrpc":"2.0","id":"srq-1","method":"clarify","params":{"session_id":"$runtimeId",""" +

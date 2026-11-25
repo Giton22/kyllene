@@ -2165,6 +2165,8 @@ class ChatSession(
             val delivery = request.delivery
             val method = InputRequest.respondMethod(request)
             if (delivery is InputRequestDelivery.PendingControl && method != null) {
+                // Refused before attaching, so nothing at all goes out.
+                InputRequest.pendingControlRefusal(request, result)?.let { throw IllegalArgumentException(it) }
                 val runtimeId = liveRuntimeId(client) ?: ensureAttached(client)
                 client.request(method, InputRequest.pendingControlParams(request, runtimeId, result))
             } else {
