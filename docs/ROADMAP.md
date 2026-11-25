@@ -210,7 +210,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [ ] Wake word (phone mic → `wake.feed`, `wake.detected`)
 
 ### Slash commands & composer
-- [x] Slash command catalog and autocomplete (`commands.catalog`, `complete.slash`, `slash.exec`, `command.dispatch`; skills, plus Desktop's own `/new`, `/model`, `/resume`, `/stop`, `/compress`, `/status`, `/btw`, `/reasoning`, `/yolo`, `/title`, `/branch`, `/profile`, `/handoff`, `/skin`)
+- [x] Slash command catalog and autocomplete (`commands.catalog`, `complete.slash`, `slash.exec`, `command.dispatch`; skills, plus Desktop's own `/new`, `/model`, `/resume`, `/stop`, `/compress`, `/status`, `/btw`, `/reasoning`, `/yolo`, `/title`, `/branch`, `/profile`, `/handoff`, `/skin`). `/stop` stops only this chat's background processes: `process.stop` with its `session_id` on the session authority, `process.list` + `process.kill` on the legacy sidecar, whose `process.stop` kills every chat's
 - [x] Pet: Petdex gallery, adopt or put away, animated on the composer by the agent's activity (`pet.gallery`, `pet.info`, `pet.select`, `pet.disable`; `/pet`)
 - [x] Journey: learned skills and memories by month, with their text (`/api/learning/graph`, `/api/learning/node`; `/journey`)
 - [x] BTW side questions (`/btw` → `prompt.btw`, answered in place by `btw.complete`)
