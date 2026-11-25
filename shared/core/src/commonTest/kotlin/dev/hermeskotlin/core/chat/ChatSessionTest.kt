@@ -2099,6 +2099,57 @@ class ChatSessionTest {
     }
 
     @Test
+    fun observedToolTimingSurvivesReplacingLiveReplyWithHistoryAndReopening() = runTest {
+        val cache = OfflineCache(InMemoryOfflineDao(), PlainSealer, EmptyCoroutineContext) { 5_000L }
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf("session.resume" to """{"session_id":"rt1","running":false}"""),
+        )
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope, cache = cache)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyRead }
+
+        // A turn sent from another client reloads the authoritative transcript at completion.
+        transport.push(event("message.start", "rt1"))
+        transport.push(event("tool.start", "rt1", """{"tool_id":"call-1","name":"terminal"}"""))
+        transport.push(event("tool.complete", "rt1", """{"tool_id":"call-1","name":"terminal","duration_s":1.4,"result":"ok"}"""))
+        fun ChatState.oneTool(): ToolActivity? = messages.filterIsInstance<ChatMessage.Assistant>()
+            .flatMap { it.tools }.singleOrNull()
+        val observed = chat.state.first { it.oneTool()?.durationSeconds == 1.4 }.oneTool()!!
+        assertNotNull(observed.startedAt)
+
+        history = """{"session_id":"stored-1","messages":[
+          {"id":1,"role":"user","content":"Check it"},
+          {"id":2,"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"terminal","arguments":"{}"}}]},
+          {"id":3,"role":"tool","tool_call_id":"call-1","content":"ok"},
+          {"id":4,"role":"assistant","content":"Finished"}
+        ]}"""
+        transport.push(event("message.complete", "rt1", """{"text":"Finished","status":"complete"}"""))
+        val stored = chat.state.first { state ->
+            !state.running && state.oneTool() != null &&
+                state.messages.any { it.key == "row-2" && it is ChatMessage.Assistant && it.tools.isNotEmpty() }
+        }
+        assertEquals(observed.startedAt, stored.oneTool()?.startedAt)
+        assertEquals(1.4, stored.oneTool()?.durationSeconds)
+        var savedTiming: ToolTiming? = null
+        repeat(100) {
+            if (savedTiming == null) {
+                testScheduler.advanceTimeBy(10)
+                testScheduler.runCurrent()
+                savedTiming = cache.savedTranscript(url, null, "stored-1")?.toolTimings?.get("call-1")
+            }
+        }
+        assertEquals(ToolTiming(observed.startedAt, 1.4), savedTiming)
+        chat.stop()
+
+        val reopened = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope, cache = cache)
+        reopened.start()
+        val fresh = reopened.state.first { it.historyRead && it.oneTool() != null }
+        assertEquals(observed.startedAt, fresh.oneTool()?.startedAt)
+        assertEquals(1.4, fresh.oneTool()?.durationSeconds)
+    }
+
+    @Test
     fun attachingWhileTheSavedCopyShowsReadsTheTranscriptOnce() = runTest {
         val cache = OfflineCache(InMemoryOfflineDao(), PlainSealer, EmptyCoroutineContext) { 5_000L }
         cache.saveTranscript(url, null, "stored-1", listOf(SessionMessage(id = 1, role = "user", content = JsonPrimitive("old"))), "stored-1")

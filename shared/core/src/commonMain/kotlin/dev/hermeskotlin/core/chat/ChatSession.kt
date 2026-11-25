@@ -2866,7 +2866,7 @@ class ChatSession(
                 rowsSessionId = saved.rowsSessionId
                 olderSkew = 0
                 // Earlier pages can't be read until the gateway can, which brings this copy up to date first.
-                showRows(risks?.all().orEmpty(), older = false, savedCopyAt = saved.savedAt)
+                showRows(risks?.all().orEmpty(), older = false, savedCopyAt = saved.savedAt, cachedTimings = saved.toolTimings)
             }
         }
         val result = sessions.messages(gateway, id, limit = HISTORY_PAGE, profile = profile)
@@ -2910,8 +2910,13 @@ class ChatSession(
         }
     }
 
-    /** The last saved copy's row count, newest row ID and user reactions. */
-    private var savedCopyKey: Triple<Int, Long?, List<Pair<Long?, String>>>? = null
+    private data class SavedCopyKey(
+        val rowCount: Int,
+        val newestRow: Long?,
+        val reactions: List<Pair<Long?, String>>,
+        val toolTimings: Map<String, ToolTiming>,
+    )
+    private var savedCopyKey: SavedCopyKey? = null
     private var saveJob: Job? = null
     private val savedCopyRefreshMutex = Mutex()
 
@@ -2919,11 +2924,14 @@ class ChatSession(
     private fun saveCopy(id: String, saved: List<SessionMessage>, savedSessionId: String?) {
         val cache = cache ?: return
         val reactions = saved.mapNotNull { row -> row.userReaction?.let { row.id to it } }
-        val key = Triple(saved.size, saved.lastOrNull()?.id, reactions)
+        val ids = saved.asSequence().filter { it.role == "tool" }.mapNotNull { it.toolCallId }
+            .groupingBy { it }.eachCount().filterValues { it == 1 }.keys
+        val timing = _state.value.messages.observedToolTimings().filterKeys { it in ids }
+        val key = SavedCopyKey(saved.size, saved.lastOrNull()?.id, reactions, timing)
         if (key == savedCopyKey) return
         savedCopyKey = key
         saveJob?.cancel()
-        saveJob = scope.launch { cache.saveTranscript(gateway, profile, id, saved, savedSessionId) }
+        saveJob = scope.launch { cache.saveTranscript(gateway, profile, id, saved, savedSessionId, timing) }
     }
 
     /**
@@ -3002,8 +3010,8 @@ class ChatSession(
                     val stored = state.messages.takeWhile { it.key in shownBefore }.size
                     state.copy(
                         // The live reply took in the turn's saved steps, which this page brings again.
-                        messages = (historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged) + state.messages.drop(stored))
-                            .withSavedStepsFolded(),
+                        messages = (historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged)
+                            .withToolTimings(state.messages.observedToolTimings()) + state.messages.drop(stored)).withSavedStepsFolded(),
                         olderMessages = full,
                     )
                 }
@@ -3018,7 +3026,13 @@ class ChatSession(
      * Shows the loaded [rows] in place of the stored messages, keeping what they can't hold yet. [savedCopyAt]: they're
      * the copy saved on this device then, not the gateway's. [relaid]: the same rows again, now that the turn's start is known.
      */
-    private fun showRows(flagged: Map<String, ToolRisk>, older: Boolean, savedCopyAt: Long? = null, relaid: Boolean = false) = _state.update { state ->
+    private fun showRows(
+        flagged: Map<String, ToolRisk>,
+        older: Boolean,
+        savedCopyAt: Long? = null,
+        relaid: Boolean = false,
+        cachedTimings: Map<String, ToolTiming> = emptyMap(),
+    ) = _state.update { state ->
         // Read again on each try of the update, so the one that lands says what the rows were laid out with.
         val startedAt = turnStartedAt.also { rowsLaidOutFor = it }
         // Keep a reply that is streaming right now; the stored rows don't have it yet. Nor do they
@@ -3031,6 +3045,7 @@ class ChatSession(
         }
         // The running turn's saved steps apart from the reply before them, to fold into its live reply below.
         val stored = historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged)
+            .withToolTimings(cachedTimings + state.messages.observedToolTimings())
         // A prompt sent without a reply that the transcript now has arrived after all.
         val storedPrompts = stored.mapNotNull { (it as? ChatMessage.User)?.text }
         // Only the gateway's transcript says a prompt arrived; the saved copy is from before it.
@@ -3618,6 +3633,34 @@ internal fun ChatState.sealReplyBefore(key: String): ChatState {
         messages = messages.toMutableList().apply { set(open, reply.copy(streaming = false)) },
         correctedReplyKey = reply.key,
     )
+}
+
+private fun List<ChatMessage>.observedToolTimings(): Map<String, ToolTiming> =
+    filterIsInstance<ChatMessage.Assistant>().flatMap { it.tools }.groupBy { it.id }
+        .mapNotNull { (id, calls) ->
+            // The open reply and the transcript can briefly show the same tool during a refresh.
+            val observed = calls.mapNotNull { tool ->
+                val start = tool.startedAt?.takeIf { it.isFinite() }
+                val duration = tool.durationSeconds?.takeIf { it.isFinite() && it >= 0 }
+                if (start == null && duration == null) null else ToolTiming(start, duration)
+            }.distinct().singleOrNull()
+            observed?.let { id to it }
+        }.toMap()
+
+/** Gateway history has results and order, but no per-call timing. Reused ids are ambiguous. */
+private fun List<ChatMessage>.withToolTimings(timings: Map<String, ToolTiming>): List<ChatMessage> {
+    if (timings.isEmpty()) return this
+    val idCounts = filterIsInstance<ChatMessage.Assistant>().flatMap { it.tools }.groupingBy { it.id }.eachCount()
+    return map { message ->
+        if (message !is ChatMessage.Assistant || message.tools.none { it.id in timings }) message
+        else message.copy(tools = message.tools.map { tool ->
+            val timing = timings[tool.id]?.takeIf { idCounts[tool.id] == 1 }
+            if (timing == null) tool else tool.copy(
+                startedAt = tool.startedAt ?: timing.startedAt,
+                durationSeconds = tool.durationSeconds ?: timing.durationSeconds,
+            )
+        })
+    }
 }
 
 /**

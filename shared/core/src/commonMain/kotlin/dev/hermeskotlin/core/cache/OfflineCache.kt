@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.cache
 
+import dev.hermeskotlin.core.chat.ToolTiming
 import dev.hermeskotlin.core.chat.fromFirstTurn
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.sessions.SessionListFilter
@@ -11,6 +12,8 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /** A chat list as last read from the gateway; [savedAt] in epoch ms. */
@@ -21,6 +24,7 @@ data class SavedTranscript(
     val rows: List<SessionMessage>,
     val rowsSessionId: String?,
     val savedAt: Long,
+    val toolTimings: Map<String, ToolTiming> = emptyMap(),
 )
 
 /**
@@ -54,11 +58,19 @@ class OfflineCache(
 
     suspend fun savedTranscript(gateway: GatewayUrl, profile: String?, sessionId: String): SavedTranscript? = quietly {
         val transcript = dao.transcript(gateway.value, profile.key, sessionId) ?: return@quietly null
+        val timings = mutableMapOf<String, ToolTiming>()
         val rows = dao.messages(gateway.value, profile.key, sessionId).map {
-            open(it.row, SessionMessage.serializer()) ?: return@quietly null
+            val cached = open(it.row, JsonObject.serializer()) ?: return@quietly null
+            val row = json.decodeFromJsonElement(SessionMessage.serializer(), cached)
+            val callId = row.toolCallId?.takeIf { row.role == "tool" }
+            if (callId != null) cached[TOOL_TIMING]?.let { value ->
+                runCatching { json.decodeFromJsonElement(ToolTiming.serializer(), value) }.getOrNull()
+                    ?.let { timing -> timings[callId] = timing }
+            }
+            row
         }
         if (rows.isEmpty()) return@quietly null
-        SavedTranscript(rows, transcript.rowsSessionId, transcript.savedAt)
+        SavedTranscript(rows, transcript.rowsSessionId, transcript.savedAt, timings)
     }
 
     /**
@@ -71,15 +83,24 @@ class OfflineCache(
         sessionId: String,
         rows: List<SessionMessage>,
         rowsSessionId: String?,
+        toolTimings: Map<String, ToolTiming> = emptyMap(),
     ) = quietly {
         val newest = if (rows.size > MAX_TRANSCRIPT_ROWS) rows.takeLast(MAX_TRANSCRIPT_ROWS).fromFirstTurn() else rows
         val sealed = newest.map { row ->
-            seal(row, SessionMessage.serializer()).takeIf { it.size <= MAX_ROW_BYTES }
+            val timing = row.toolCallId?.takeIf { row.role == "tool" }?.let(toolTimings::get)
+            suspend fun sealRow(message: SessionMessage): ByteArray {
+                if (timing == null) return seal(message, SessionMessage.serializer())
+                // Extra fields in the sealed row are ignored by older Kyllene versions.
+                val fields = json.encodeToJsonElement(SessionMessage.serializer(), message) as JsonObject
+                val withTiming = JsonObject(fields + (TOOL_TIMING to json.encodeToJsonElement(ToolTiming.serializer(), timing)))
+                return seal<JsonElement>(withTiming, JsonElement.serializer())
+            }
+            sealRow(row).takeIf { it.size <= MAX_ROW_BYTES }
                 // Too big to read back (a huge tool output): kept without its text, which says so.
-                ?: seal(row.copy(
+                ?: sealRow(row.copy(
                     content = JsonPrimitive(TOO_BIG_NOTE), displayContent = null, reasoning = null,
                     displayReasoning = null, displayCommentary = null,
-                ), SessionMessage.serializer())
+                ))
         }
         // Still too big (huge tool-call arguments): only the turns after it are kept.
         val tooBig = sealed.indexOfLast { it.size > MAX_ROW_BYTES }
@@ -140,6 +161,8 @@ class OfflineCache(
 
         /** What a row too big to keep shows instead of its text. */
         const val TOO_BIG_NOTE = "(Too long to keep on this device. Hermes has the full text.)"
+
+        private const val TOOL_TIMING = "_kyllene_tool_timing"
 
         private val json = Json { ignoreUnknownKeys = true }
     }
