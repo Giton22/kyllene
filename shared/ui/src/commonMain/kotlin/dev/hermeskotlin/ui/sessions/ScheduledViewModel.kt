@@ -11,12 +11,15 @@ import dev.hermeskotlin.core.cron.CronJobDraft
 import dev.hermeskotlin.core.cron.DeliveryTarget
 import dev.hermeskotlin.core.cron.Routines
 import dev.hermeskotlin.core.cron.isRoutineOf
+import dev.hermeskotlin.core.cron.problem
 import dev.hermeskotlin.core.cron.routineTitle
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.sessions.SessionSummary
+import dev.hermeskotlin.core.widget.NowAlertKeys
+import dev.hermeskotlin.core.widget.WidgetAlertDismissals
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,6 +30,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import dev.hermeskotlin.ui.resources.*
@@ -80,6 +84,8 @@ internal val LOCAL_DELIVERY = DeliveryTarget(id = "local", name = "Local (save o
 class ScheduledViewModel(
     private val api: CronApi,
     private val connection: GatewayConnection,
+    /** The Now widget's dismissed alerts (D27); null in previews and tests that don't dismiss. */
+    private val dismissals: WidgetAlertDismissals? = null,
 ) : ViewModel(), ScheduledActions {
 
     val name = TextFieldState()
@@ -144,6 +150,19 @@ class ScheduledViewModel(
         loadRuns(jobId)
     }
 
+    /**
+     * Applies a pending job link (D22, `docs/WIDGETS-SPEC.md`): waits for the first refresh after
+     * [bind], then opens the job's runs; a job the list doesn't have (deleted) reports false so the
+     * caller drops the link silently. The pending id lives with the caller until this runs, so
+     * [bind]'s state reset can't drop it.
+     */
+    suspend fun applyPendingOpenJob(jobId: String): Boolean {
+        state.first { !it.loading }
+        if (_state.value.jobs.none { it.id == jobId }) return false
+        openJob(jobId)
+        return true
+    }
+
     override fun closeJob() {
         runsJob?.cancel()
         _state.update { it.copy(openJobId = null, runs = emptyList(), runsLoading = false, runsError = null) }
@@ -162,6 +181,22 @@ class ScheduledViewModel(
     }
 
     fun dismissMessage() = _state.update { it.copy(message = null) }
+
+    /**
+     * Clears the open job's Now alert (D27): the dismissal is keyed by the job's newest failure
+     * stamp, so a later run that fails again raises a fresh alert. The job's own status is the
+     * gateway's and stays as it is; only the attention item goes away.
+     */
+    override fun dismissAlert() {
+        val url = gateway?.gatewayUrl ?: return
+        val job = _state.value.openJob ?: return
+        if (job.problem == null) return
+        val store = dismissals ?: return
+        viewModelScope.launch {
+            store.dismiss(url.value, NowAlertKeys.cron(job))
+            _state.update { it.copy(message = said(Res.string.sessions_alert_dismissed)) }
+        }
+    }
 
     /** Clears the expiry flag once a screen has acted on it; the view model outlives the screen, so
      *  leaving it set would bounce the next mount after a fresh sign-in. */

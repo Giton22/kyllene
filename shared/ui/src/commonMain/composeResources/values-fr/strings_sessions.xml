@@ -476,4 +476,6 @@
     <string name="sessions_config_refresh_failed">Actualisation impossible</string>
     <string name="sessions_config_save_failed">Impossible d’enregistrer %1$s</string>
     <string name="sessions_config_yaml_saved">config.yaml enregistré</string>
+    <string name="sessions_dismiss_alert">Ignorer l\'alerte</string>
+    <string name="sessions_alert_dismissed">Alerte ignorée</string>
 </resources>
