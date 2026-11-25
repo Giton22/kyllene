@@ -61,7 +61,10 @@ class AuthorityReplayEpochTest {
 
     private fun delta(text: String) = publish("message.delta", """{"text":"$text"}""")
 
-    /** The ring evicted the session: SessionEvents.watermark starts a new epoch counting from 1. */
+    /**
+     * The session's replay keys were released (SessionEvents.release, once no viewer was left): watermark starts a
+     * new epoch counting from 1. The shared ring's cap alone never does that; it drops frames and keeps the count.
+     */
     private fun startAnew(epoch: String) {
         sessionEpoch = epoch
         sequence = 0
@@ -284,7 +287,8 @@ class AuthorityReplayEpochTest {
         socket.push(delta("old"))
         socket.push(publish("message.complete", """{"text":"old","status":"complete"}"""))
         chat.state.first { !it.running && it.reply()?.text == "old" }
-        // Evicted from the shared ring: the next turn's seqs count from 1 again, in a new epoch.
+        // The next turn's seqs count from 1 again, in a new epoch. The gateway reports that in a resume first; this
+        // checks a frame that says so on its own isn't dropped as seen before.
         startAnew("sess-epoch-2")
         socket.push(publish("message.start"))
         socket.push(delta("new"))
