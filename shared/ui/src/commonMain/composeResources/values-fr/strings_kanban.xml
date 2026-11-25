@@ -68,4 +68,8 @@
     <string name="kanban_column_blocked_help">Le worker a demandé une saisie humaine</string>
     <string name="kanban_column_review_help">Implémentation terminée : en attente de révision</string>
     <string name="kanban_column_done_help">Terminé</string>
+    <plurals name="kanban_runs_earlier">
+        <item quantity="one">+%1$d plus tôt</item>
+        <item quantity="other">+%1$d plus tôt</item>
+    </plurals>
 </resources>

@@ -68,4 +68,8 @@
     <string name="kanban_column_blocked_help">O worker pediu entrada humana</string>
     <string name="kanban_column_review_help">Implementação completa: aguardando revisão</string>
     <string name="kanban_column_done_help">Concluído</string>
+    <plurals name="kanban_runs_earlier">
+        <item quantity="one">+%1$d antes</item>
+        <item quantity="other">+%1$d antes</item>
+    </plurals>
 </resources>
