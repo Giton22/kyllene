@@ -68,4 +68,8 @@
     <string name="kanban_column_blocked_help">Worker 请求人工输入</string>
     <string name="kanban_column_review_help">实现已完成 — 等待审核</string>
     <string name="kanban_column_done_help">已完成</string>
+    <plurals name="kanban_runs_earlier">
+        <item quantity="one">早 %1$d 次</item>
+        <item quantity="other">早 %1$d 次</item>
+    </plurals>
 </resources>

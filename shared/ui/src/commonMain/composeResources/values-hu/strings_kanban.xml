@@ -68,4 +68,8 @@
     <string name="kanban_column_blocked_help">A worker emberi bemenetet kért</string>
     <string name="kanban_column_review_help">Implementáció kész – felülvizsgálatra vár</string>
     <string name="kanban_column_done_help">Befejezve</string>
+    <plurals name="kanban_runs_earlier">
+        <item quantity="one">+%1$d korábban</item>
+        <item quantity="other">+%1$d korábban</item>
+    </plurals>
 </resources>
