@@ -244,6 +244,38 @@ sealed interface InputRequest {
             else -> null
         }
 
+        /**
+         * The [respondMethod] params for a [InputRequestDelivery.PendingControl] [request] answered with [result]
+         * (an [InputAnswers] object): the ids and the one answer key, nothing else. `clarify.respond` takes exactly
+         * `session_id`, `execution_generation`, `prompt_id` and `answer` (hermes-agent `ClarifyRespondParams`, closed
+         * and all required) and refuses anything else with 4001, so [InputAnswers.clarify]'s batch `answers` and
+         * [InputAnswers.clarifyCancel]'s `{}`, shaped for the classic `clarify` request, are mapped here: one batch
+         * answer goes as `answer`, a cancel as `answer: ""` (a skip, the only thing the method can say). A batch of
+         * two or more can't be carried and throws [IllegalArgumentException] without sending anything. An approval
+         * sends only `choice`. A null generation is left out, as before.
+         */
+        fun pendingControlParams(request: InputRequest, sessionId: String, result: JsonObject): JsonObject {
+            val delivery = request.delivery as? InputRequestDelivery.PendingControl
+            return buildJsonObject {
+                put("session_id", sessionId)
+                delivery?.executionGeneration?.let { put("execution_generation", it) }
+                put("prompt_id", request.id)
+                when (request) {
+                    is Clarify -> put("answer", clarifyAnswer(result))
+                    is Approval -> result["choice"]?.let { put("choice", it) }
+                    else -> Unit
+                }
+            }
+        }
+
+        private fun clarifyAnswer(result: JsonObject): JsonElement {
+            result["answer"]?.let { return it }
+            val answers = result["answers"] as? JsonObject ?: return JsonPrimitive("")
+            require(answers.size <= 1) { "This gateway takes one answer at a time, so these questions can't be answered here." }
+            val only = answers.values.firstOrNull() as? JsonPrimitive
+            return JsonPrimitive(only?.contentOrNull.orEmpty())
+        }
+
         /** The payload's own `choices` when present, else the gateway's rule (`_approval_request_payload`). */
         private fun approvalChoices(params: JsonObject): List<ApprovalChoice> {
             val offered = (params["choices"] as? JsonArray)
@@ -301,7 +333,10 @@ object InputAnswers {
         }
     }
 
-    /** `{}` (neither `answer` nor `answers`) cancels every question at once. */
+    /**
+     * `{}` (neither `answer` nor `answers`) cancels every question of a classic `clarify` request at once. A
+     * pending-controls prompt has no cancel: it goes as a skip (see [InputRequest.Companion.pendingControlParams]).
+     */
     val clarifyCancel: JsonObject = JsonObject(emptyMap())
 
     /** An empty [value] declines the prompt. */
