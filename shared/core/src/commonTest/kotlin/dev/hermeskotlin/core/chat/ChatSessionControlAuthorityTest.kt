@@ -108,7 +108,8 @@ class ChatSessionControlAuthorityTest {
         assertEquals("goal", dispatch.param("name"))
         assertEquals("pause", dispatch.param("arg"))
         assertEquals("paused", chat.state.first { it.control?.goal?.status == "paused" }.control?.goal?.status)
-        assertEquals(2, gw.sent("session.control.read").size)
+        // Once when the chat opened, then before and after the command: no update says what it changed.
+        assertEquals(3, gw.sent("session.control.read").size)
 
         // That link has no `session.control`, so the next tap goes straight to the command.
         assertNull(chat.runControl(ControlAction.LoopStop))
@@ -249,6 +250,37 @@ class ChatSessionControlAuthorityTest {
     }
 
     @Test
+    fun aRefusalIsShownWhenTheStateOnScreenWasStale() = runTest {
+        val (_, chat) = setup(backgroundScope, authority = true) { call ->
+            when (call.method) {
+                "session.control" -> call.unknownMethod()
+                "command.dispatch" -> """{"type":"exec","output":"No sub-goal 3 (there are 2)."}"""
+                else -> null
+            }
+        }
+        // Another client changed it; v0.22.1 sends no update, so this one still shows the old state.
+        paused = true
+
+        assertEquals("No sub-goal 3 (there are 2).", chat.runControl(ControlAction.SubgoalRemove, index = 3))
+        assertEquals("paused", chat.state.value.control?.goal?.status)
+    }
+
+    @Test
+    fun aSubgoalOfOnlyANextLineIsNotSent() = runTest {
+        val (gw, chat) = setup(backgroundScope, authority = true) { call ->
+            when (call.method) {
+                "session.control" -> call.unknownMethod()
+                "command.dispatch" -> """{"type":"exec","output":""}"""
+                else -> null
+            }
+        }
+
+        // Python strips U+0085 too, so this would go out as a bare `/subgoal`.
+        assertEquals("Write the sub-goal first.", chat.runControl(ControlAction.SubgoalAdd, text = "\u0085"))
+        assertTrue(gw.sent("command.dispatch").isEmpty())
+    }
+
+    @Test
     fun whenTheGatewayHasNoSuchCommandTheSheetSaysToUpdateHermes() = runTest {
         val (gw, chat) = setup(backgroundScope, authority = true) { call ->
             when (call.method) {
@@ -275,6 +307,6 @@ class ChatSessionControlAuthorityTest {
             }
         }
 
-        assertEquals("Couldn't pause the goal: the gateway refused it.", chat.runControl(ControlAction.GoalPause))
+        assertEquals("Couldn't pause the goal: the gateway didn't allow it.", chat.runControl(ControlAction.GoalPause))
     }
 }

@@ -1268,6 +1268,7 @@ class ChatSession(
      * publishes no `session.control.update`, so the state is read again. Throws with a user-readable
      * reason when the command fails as well. The command answers a refusal ("No goal set.", a sub-goal
      * number that's gone) as its plain output, so output with a state that didn't move is that reason.
+     * The state is read before the command too: with no updates, the one on screen may be stale.
      */
     private suspend fun controlByCommand(
         client: JsonRpcClient,
@@ -1276,8 +1277,11 @@ class ChatSession(
         text: String?,
         index: Int?,
     ): JsonObject {
-        if (action == ControlAction.SubgoalAdd && text.isNullOrBlank()) throw IllegalStateException(SUBGOAL_TEXT_MISSING)
+        if (action == ControlAction.SubgoalAdd && text.orEmpty().all { it.isPythonSpace() }) {
+            throw IllegalStateException(SUBGOAL_TEXT_MISSING)
+        }
         val (name, arg) = action.command(text, index) ?: throw IllegalStateException(SUBGOAL_READS_AS_VERB)
+        val readBefore = refreshControl()
         val revision = _state.value.control?.revision
         val dispatch = try {
             client.request(
@@ -1293,21 +1297,35 @@ class ChatSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
-            // Only a gateway without the command is helped by an update.
-            if (e.code == METHOD_NOT_FOUND || e.reason == "unsupported_command") {
-                throw IllegalStateException("Couldn't ${action.verb} on this gateway. Update Hermes to use goals.")
-            }
-            // The authority's refusals come as a bare code (`permission_denied`, `invalid_params`).
-            if (Regex("[a-z_]+").matches(e.message)) throw IllegalStateException("Couldn't ${action.verb}: the gateway refused it.")
-            throw e
+            throw IllegalStateException(commandRefusal(action, e))
+        } catch (_: RpcTimeoutException) {
+            // It may have gone through all the same, and no update will say so.
+            refreshControl()
+            throw IllegalStateException("Couldn't ${action.verb}: the gateway didn't answer in time.")
         }
         val output = dispatch.string("output")?.trim()
-        if (refreshControl() && dispatch.string("type") == "exec" && !output.isNullOrEmpty() &&
+        if (dispatch.string("type") == "exec" && !output.isNullOrEmpty() && refreshControl() && readBefore &&
             _state.value.control?.revision == revision
         ) {
             throw IllegalStateException(output)
         }
         return buildJsonObject { dispatch?.let { put("dispatch", it) } }
+    }
+
+    /** Why `command.dispatch` refused [action]: the session authority answers with a bare code (gateway/session_controls.py). */
+    private fun commandRefusal(action: ControlAction, e: RpcException): String {
+        val code = e.reason ?: e.message
+        val why = when {
+            // Only a gateway without the command is helped by an update.
+            e.code == METHOD_NOT_FOUND || code == "unsupported_command" -> return "Couldn't ${action.verb} on this gateway. Update Hermes to use goals."
+            code == "permission_denied" || code == "profile_mismatch" -> "the gateway didn't allow it."
+            code == "not_found" -> "the chat isn't open on the gateway any more."
+            code == "runtime_draining" -> "the gateway is restarting. Try again in a moment."
+            code == "session_busy" -> "the chat is busy. Try again in a moment."
+            code.isBlank() -> "the gateway refused it."
+            else -> "the gateway refused it ($code)."
+        }
+        return "Couldn't ${action.verb}: $why"
     }
 
     /**
