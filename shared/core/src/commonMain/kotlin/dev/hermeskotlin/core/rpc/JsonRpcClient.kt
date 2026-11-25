@@ -40,6 +40,11 @@ data class GatewayEvent(
      * payload rather than in it. Null on other gateways and on events outside a turn.
      */
     val executionGeneration: Long? = null,
+    /**
+     * The session authority's `admission_id` of the turn the event belongs to, beside the payload like
+     * [executionGeneration]: the id its `prompt.submit` gave the prompt that turn runs. Null on other gateways.
+     */
+    val admissionId: String? = null,
 )
 
 /**
@@ -294,6 +299,7 @@ class JsonRpcClient(
                 sessionId = params["session_id"]?.jsonPrimitive?.contentOrNull,
                 seq = params["seq"]?.jsonPrimitive?.longOrNull,
                 executionGeneration = (params["execution_generation"] as? JsonPrimitive)?.longOrNull,
+                admissionId = (params["admission_id"] as? JsonPrimitive)?.contentOrNull,
             ),
         )
     }

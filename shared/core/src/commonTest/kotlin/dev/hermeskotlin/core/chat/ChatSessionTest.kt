@@ -2449,6 +2449,10 @@ class ChatSessionTest {
         return chat to transport
     }
 
+    /** An event of the session authority's turn for [admission]: it stamps the turn's admission beside the payload. */
+    private fun authorityEvent(type: String, admission: String, payload: String = "{}") =
+        """{"jsonrpc":"2.0","method":"event","params":{"authority_epoch":"e1","execution_generation":2,"admission_id":"$admission","type":"$type","session_id":"stored-1","payload":$payload}}"""
+
     private fun FakeGateway.Call.branched(child: String = "local-2") =
         reply("""{"session_id":"stored-1","revision":5,"execution_generation":2,"operation":"branch","branched_session_id":"$child","copied_messages":2}""")
 
@@ -3140,6 +3144,109 @@ class ChatSessionTest {
         val prompt = done.messages.filterIsInstance<ChatMessage.User>().last()
         assertFalse(prompt.queued)
         assertEquals(prompt, done.regenerateTarget(done.messages.last().key))
+    }
+
+    @Test
+    fun aFollowUpWhoseOwnTurnStartsBeforeItsQueuedReplyIsReadIsNotLeftQueued() = runTest {
+        val (chat, transport) = authorityChat(backgroundScope) { it.rewound() }
+        fun ended(admission: String, text: String, user: Int, submission: String?) = authorityEvent(
+            "message.complete",
+            admission,
+            """{"text":"$text","status":"complete","persisted_turn":{"row_ids":[$user,${user + 1}],"complete":true,"user_row_id":$user,"submission_id":"$submission"}}""",
+        )
+        // Only the live copy shows the prompts: the fake transcript has neither.
+        historyFails = true
+        assertTrue(chat.send("one"))
+        val first = transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id")
+        transport.push(authorityEvent("message.start", "a1"))
+        chat.state.first { s -> s.messages.any { it is ChatMessage.Assistant && it.streaming } }
+        val canned = gateway.answer
+        gateway.answer = { call -> if (call.method == "prompt.submit") null else canned(call) }
+
+        // Sent while "one" runs. The turns are quick: "one" ends and the follow-up's own turn starts (stamped with
+        // its admission) before the reply, which says "queued", is read.
+        val sending = backgroundScope.async { chat.send("two", queue = true) }
+        val submit = transport.awaitSent { it.isCall("prompt.submit") && it.param("text") == "two" }
+        transport.push(ended("a1", "First", 3, first))
+        transport.push(authorityEvent("message.start", "a2"))
+        chat.state.first { s -> s.messages.any { it is ChatMessage.Assistant && it.text == "First" && !it.streaming } && s.running }
+        transport.push("""{"jsonrpc":"2.0","id":${submit["id"]},"result":{"admission_id":"a2","status":"queued"}}""")
+        assertTrue(sending.await())
+        transport.push(ended("a2", "Second", 5, submit.param("submission_id")))
+
+        val done = chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Assistant && it.text == "Second" } }
+        val prompt = done.messages.filterIsInstance<ChatMessage.User>().single { it.text == "two" }
+        assertFalse(prompt.queued, "stale Queued caption: ${done.messages}")
+    }
+
+    @Test
+    fun aFollowUpWhoseOwnTurnEndsBeforeItsQueuedReplyIsReadLeavesTheChatIdle() = runTest {
+        val (chat, transport) = authorityChat(backgroundScope) { it.rewound() }
+        fun ended(admission: String, text: String, user: Int, submission: String?) = authorityEvent(
+            "message.complete",
+            admission,
+            """{"text":"$text","status":"complete","persisted_turn":{"row_ids":[$user,${user + 1}],"complete":true,"user_row_id":$user,"submission_id":"$submission"}}""",
+        )
+        historyFails = true
+        assertTrue(chat.send("one"))
+        val first = transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id")
+        transport.push(authorityEvent("message.start", "a1"))
+        chat.state.first { s -> s.messages.any { it is ChatMessage.Assistant && it.streaming } }
+        val canned = gateway.answer
+        gateway.answer = { call -> if (call.method == "prompt.submit") null else canned(call) }
+
+        // Both turns end before the follow-up's "queued" reply is read.
+        val sending = backgroundScope.async { chat.send("two", queue = true) }
+        val submit = transport.awaitSent { it.isCall("prompt.submit") && it.param("text") == "two" }
+        transport.push(ended("a1", "First", 3, first))
+        transport.push(authorityEvent("message.start", "a2"))
+        transport.push(ended("a2", "Second", 5, submit.param("submission_id")))
+        chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Assistant && it.text == "Second" } }
+        transport.push("""{"jsonrpc":"2.0","id":${submit["id"]},"result":{"admission_id":"a2","status":"queued"}}""")
+        assertTrue(sending.await())
+
+        val done = chat.state.value
+        assertFalse(done.running, "a late reply made the ended turn look running")
+        assertFalse(done.messages.filterIsInstance<ChatMessage.User>().single { it.text == "two" }.queued)
+    }
+
+    @Test
+    fun aPromptQueuedBehindATurnThatEndedBeforeTheResumeIsReadIsNotLeftQueued() = runTest {
+        // A new bot's Bot Chat, opened while its intro runs (v0.23.4 session authority). The intro's
+        // message.complete goes out before the session.resume reply, which still says running: true.
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf("prompt.submit" to """{"admission_id":"a2","status":"queued"}"""),
+            ready = AUTHORITY_READY,
+        )
+        val canned = gateway.answer
+        gateway.answer = { call ->
+            if (call.method != "session.resume") canned(call) else {
+                """{"session_id":"stored-1","running":true,"inflight":{"assistant":"Hi, I'm"},"revision":4,"execution_generation":2}"""
+            }
+        }
+        val chat = ChatSession(url, "stored-1", "Bot", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "stored-1" && it.historyLoaded && it.running }
+
+        // The user's first prompt goes in behind the "running" intro (Queue, or a steer that fell back to it).
+        assertEquals(SendOutcome.Sent, chat.submit("first question", queue = true))
+        val submission = transport.sent.value.single { it.isCall("prompt.submit") }.param("submission_id")
+        transport.push(authorityEvent("message.start", "a2"))
+        transport.push(
+            authorityEvent(
+                "message.complete",
+                "a2",
+                """{"text":"Test reply","status":"complete","persisted_turn":{"row_ids":[3,4],"complete":true,"user_row_id":3,"submission_id":"$submission"}}""",
+            ),
+        )
+
+        val done = chat.state.first { !it.running }
+        val prompt = done.messages.filterIsInstance<ChatMessage.User>().single { it.text == "first question" }
+        assertFalse(prompt.queued, "stale Queued caption: ${done.messages}")
+        // Its reply is its own, below it, not the end of the intro the resume left open.
+        assertEquals("Test reply", (done.messages.last() as ChatMessage.Assistant).text)
+        assertEquals("Hi, I'm", (done.messages[done.messages.indexOf(prompt) - 1] as ChatMessage.Assistant).text)
     }
 
     @Test
