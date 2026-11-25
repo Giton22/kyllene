@@ -1,5 +1,11 @@
 package dev.hermeskotlin.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -40,8 +47,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
@@ -289,11 +298,31 @@ private fun ToolTimelineRow(
                 )
                 Text(title, Modifier.weight(1f), style = Theme[typography][label], color = Theme[colors][text],
                     maxLines = titleMaxLines, overflow = TextOverflow.Ellipsis)
-                if (onCollapse != null) {
-                    IconButton(
-                        Lucide.ChevronRight, stringResource(Res.string.chat_hide_details), onCollapse,
-                        modifier = Modifier.height(20.dp), iconSize = 14.dp,
-                    )
+                AnimatedVisibility(
+                    visible = onCollapse != null,
+                    enter = EnterTransition.None,
+                    exit = fadeOut(tween(durationMillis = 90, delayMillis = 130)),
+                ) {
+                    val rotation by transition.animateFloat(
+                        transitionSpec = { tween(durationMillis = 130) },
+                        label = "tool preview chevron",
+                    ) { if (it == EnterExitState.Visible) 90f else 0f }
+                    val collapseLabel = stringResource(Res.string.chat_hide_details)
+                    Box(
+                        Modifier.width(MinTouchTarget).height(20.dp).then(
+                            if (onCollapse != null) Modifier
+                                .handCursor()
+                                .clickable(role = Role.Button, onClick = onCollapse)
+                                .semantics { contentDescription = collapseLabel }
+                            else Modifier,
+                        ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        UnstyledIcon(
+                            Lucide.ChevronRight, contentDescription = null, tint = Theme[colors][textSecondary],
+                            modifier = Modifier.size(14.dp).graphicsLayer { rotationZ = rotation },
+                        )
+                    }
                 }
                 ToolDuration(tool)
                 if (tool.risk != null) {
