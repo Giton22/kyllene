@@ -128,7 +128,7 @@ class ChatSessionTest {
         assertEquals(
             "I’ve read this. If we already agreed on a next step and it’s still pending, carry it out. " +
                 "Otherwise, end the turn silently with a no-op.\n\n" +
-                "Assistant message #2 (excerpt): \"Hi! What next?\"",
+                "The reply ends: \"Hi! What next?\"",
             prompt.param("text"),
         )
     }
@@ -323,8 +323,11 @@ class ChatSessionTest {
 
         val call = transport.awaitSent { it.isCall("prompt.submit") }
         assertTrue(call.param("text").orEmpty().contains("Verify the claims"))
-        assertTrue(call.param("text").orEmpty().contains("message #2"))
         assertTrue(call.param("text").orEmpty().contains("Hi! What next?"))
+        // The bubble shows what was sent: no stored row id in it.
+        assertFalse(call.param("text").orEmpty().contains("#2"))
+        val bubble = chat.state.value.messages.filterIsInstance<ChatMessage.User>().last()
+        assertFalse(bubble.text.contains("#2"), bubble.text)
     }
 
     @Test

@@ -297,7 +297,7 @@ class ChatSession(
                 if (!stillOpen() || connectedClient() !== client || liveRuntimeId(client) != runtimeId) return
                 rows = rows.map { row ->
                     if (row.id == rowId) {
-                        val metadata = (row.displayMetadata as? JsonObject).orEmpty()
+                        val metadata = displayMetadataObject(row.displayMetadata).orEmpty()
                         row.copy(displayMetadata = JsonObject(metadata + ("reactions" to returned)))
                     } else row
                 }
@@ -308,7 +308,7 @@ class ChatSession(
                 }
             }
             if (cache != null) scope.launch { refreshSavedCopy() }
-            if (emoji == reaction.emoji) reaction.prompt(rowId, reply.text)?.let { prompt ->
+            if (emoji == reaction.emoji) reaction.prompt(reply.text)?.let { prompt ->
                 submitPrompt(
                     prompt, emptyList(), display = null, queue = _state.value.running, voiceLive = null,
                     resent = emptyList(), keepRejected = true,

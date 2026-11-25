@@ -32,7 +32,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -219,32 +218,6 @@ fun DropdownMenuPanelScope.MenuChoice(
     onClick: () -> Unit,
     count: Int? = null,
 ) {
-    MenuChoice(text, selected, onClick, count) { row ->
-        UnstyledIcon(icon, contentDescription = null, tint = Theme[colors][textSecondary], modifier = Modifier.size(row.icon))
-    }
-}
-
-/** An emoji reaction that can be applied or removed. The active reaction has the same tick as other choices. */
-@Composable
-fun DropdownMenuPanelScope.MenuEmojiChoice(text: String, emoji: String, selected: Boolean, onClick: () -> Unit) {
-    MenuChoice(text, selected, onClick, count = null) { row ->
-        Box(Modifier.size(row.icon), contentAlignment = Alignment.Center) {
-            val style = with(LocalDensity.current) {
-                Theme[typography][row.style].copy(fontSize = (row.icon - 4.dp).toSp(), lineHeight = row.icon.toSp())
-            }
-            Text(emoji, style = style, modifier = Modifier.clearAndSetSemantics {}, maxLines = 1)
-        }
-    }
-}
-
-@Composable
-private fun DropdownMenuPanelScope.MenuChoice(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    count: Int?,
-    leading: @Composable (MenuRowSize) -> Unit,
-) {
     val row = MenuRowSize.current()
     MenuItem(
         onClick = onClick,
@@ -256,7 +229,7 @@ private fun DropdownMenuPanelScope.MenuChoice(
             horizontalArrangement = Arrangement.spacedBy(row.gap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            leading(row)
+            UnstyledIcon(icon, contentDescription = null, tint = Theme[colors][textSecondary], modifier = Modifier.size(row.icon))
             Text(
                 text,
                 style = Theme[typography][row.style].copy(fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal),

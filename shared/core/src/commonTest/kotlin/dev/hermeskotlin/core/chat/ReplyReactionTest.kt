@@ -5,6 +5,7 @@ import dev.hermeskotlin.core.sessions.SessionMessage
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -22,6 +23,14 @@ class ReplyReactionTest {
         assertEquals(42L, reply.reactionRowId)
         assertEquals("👍", reply.userReaction)
         assertEquals("Done", reply.text)
+    }
+
+    @Test
+    fun aReactionInMetadataHeldAsAStringIsRead() {
+        // Older backends send display_metadata as a string holding the object.
+        val answer = HermesJson.decodeFromString<SessionMessage>("""{"id":42,"role":"assistant","content":"Done",
+            "display_metadata":"{\"reactions\":[{\"author\":\"user\",\"emoji\":\"🔍\"}]}"}""")
+        assertEquals("🔍", assertIs<ChatMessage.Assistant>(historyToMessages(listOf(answer)).single()).userReaction)
     }
 
     @Test
@@ -49,17 +58,19 @@ class ReplyReactionTest {
     @Test
     fun excerptDoesNotStartWithHalfAnEmoji() {
         val reply = "prefix 😀" + "a".repeat(599)
-        val prompt = checkNotNull(ReplyReaction.Explain.prompt(42, reply))
-        val excerpt = HermesJson.decodeFromString<String>(prompt.substringAfter("(excerpt): "))
+        val prompt = checkNotNull(ReplyReaction.Explain.prompt(reply))
+        val excerpt = HermesJson.decodeFromString<String>(prompt.substringAfter("The reply ends: "))
 
         assertEquals("a".repeat(599), excerpt)
     }
 
     @Test
-    fun reactionPromptsAddressTheReply() {
+    fun reactionPromptsQuoteTheReplyWithoutItsRowId() {
         for (reaction in ReplyReaction.entries) {
-            val prompt = checkNotNull(reaction.prompt(42, "Done"))
-            assertTrue(prompt.contains("message #42") && prompt.contains("\"Done\""))
+            // The user sees this as their prompt; a stored row's id means nothing to them or the agent.
+            val prompt = reaction.prompt("Done") ?: continue
+            assertTrue(prompt.endsWith("The reply ends: \"Done\""), prompt)
+            assertFalse(prompt.contains("#"), prompt)
         }
     }
 }
