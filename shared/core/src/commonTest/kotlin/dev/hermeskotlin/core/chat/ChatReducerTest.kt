@@ -118,6 +118,49 @@ class ChatReducerTest {
     private fun ChatState.apply(vararg events: GatewayEvent) = events.fold(this) { state, e -> state.reduce(e) }
 
     @Test
+    fun theSessionAuthorityReleasesThePromptItsTurnStartNames() {
+        val running = ChatState(
+            running = true,
+            messages = listOf(
+                ChatMessage.User("u1", "write it"),
+                ChatMessage.Assistant("a1", "Writing", streaming = true),
+                ChatMessage.User("q1", "then test", queued = true, admissionId = "ad1"),
+                ChatMessage.User("q2", "then ship", queued = true, admissionId = "ad2"),
+            ),
+        )
+        // Another client's turn: neither of ours goes.
+        val foreign = running.apply(
+            event("message.complete", """{"text":"Writing done","status":"complete"}"""),
+            GatewayEvent("message.start", HermesJson.parseToJsonElement("{}"), sessionId = "rt", seq = null, admissionId = "other"),
+        )
+        assertEquals(listOf(true, true), foreign.messages.filterIsInstance<ChatMessage.User>().drop(1).map { it.queued })
+        assertEquals(listOf("other"), foreign.startedAdmissions)
+        // Its start names the second: that one goes, though the first was queued earlier.
+        val named = running.apply(
+            event("message.complete", """{"text":"Writing done","status":"complete"}"""),
+            GatewayEvent("message.start", HermesJson.parseToJsonElement("{}"), sessionId = "rt", seq = null, admissionId = "ad2"),
+        )
+        assertEquals(listOf(true, false), named.messages.filterIsInstance<ChatMessage.User>().drop(1).map { it.queued })
+    }
+
+    @Test
+    fun aQueuedPromptWhoseTurnEndedWaitsForNothing() {
+        // Its start was missed or read before the "queued" reply; the turn's end names it by its submission.
+        val ended = ChatState(
+            running = true,
+            messages = listOf(
+                ChatMessage.User("q1", "then test", queued = true, submissionId = "s1"),
+                ChatMessage.Assistant("a1", "Tested", streaming = true),
+            ),
+        ).apply(
+            event("message.complete", """{"text":"Tested","status":"complete","persisted_turn":{"user_row_id":7,"submission_id":"s1"}}"""),
+        )
+        val prompt = ended.messages.first() as ChatMessage.User
+        assertFalse(prompt.queued)
+        assertEquals(7L, prompt.rowId)
+    }
+
+    @Test
     fun theNextTurnReleasesTheOldestQueuedPrompt() {
         val running = ChatState(
             running = true,

@@ -122,7 +122,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Search sessions by title, session id and message text from the sidebar search button (`GET /api/sessions/search`, debounced, with match snippet, one row per chat even when the gateway repeats one)
 
 ### 4. Chat
-- [x] Send a prompt (`prompt.submit`); prompts sent mid-turn are marked queued; unsent text returns to the composer
+- [x] Send a prompt (`prompt.submit`); prompts sent mid-turn are marked queued; unsent text returns to the composer. On the session authority the turn a `message.start` begins is named by its `admission_id`, so a queued prompt stops showing "Queued" when its own turn starts, even when that start is read before the `prompt.submit` reply or the turn before it ended unseen; a turn's end that names the prompt clears it too
 - [x] A prompt that lost its reply offers Check delivery (reads the transcript again), Resend (warns first that Hermes may get it twice) and Edit; nothing resends on its own. The chat's title line tells no connection, connecting again and signed out apart
 - [x] Streaming assistant text (`message.start`, `message.delta`, `message.complete`), including outcome (complete / stopped / error)
 - [x] Interim commentary (`message.interim`), folded into the reply; a loaded chat shows stored Codex commentary (`display_commentary`) in Reasoning, and with reasoning hidden, a reply of nothing but reasoning isn't listed
