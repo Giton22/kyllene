@@ -3,6 +3,10 @@ package dev.hermeskotlin.ui.chat
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.TranscriptEvent
 
+/** The public text in a reply, in the order it appears in the chat. */
+internal fun ChatMessage.Assistant.transcriptText(answer: String = text): String =
+    if (commentary.isEmpty()) answer else (commentary + answer).filter { it.isNotBlank() }.joinToString("\n\n")
+
 /** The conversation as Markdown: each prompt and reply under its speaker, attachments listed by name. */
 internal fun transcriptMarkdown(title: String, messages: List<ChatMessage>): String = buildString {
     appendLine("# $title")
@@ -15,11 +19,11 @@ internal fun transcriptMarkdown(title: String, messages: List<ChatMessage>): Str
                 if (message.text.isNotBlank()) appendLine(message.text.trim())
                 message.attachments.forEach { appendLine("- Attached: ${it.name}") }
             }
-            is ChatMessage.Assistant -> if (message.text.isNotBlank()) {
+            is ChatMessage.Assistant -> message.transcriptText().takeIf { it.isNotBlank() }?.let { text ->
                 appendLine()
                 appendLine("## Hermes")
                 appendLine()
-                appendLine(message.text.trim())
+                appendLine(text.trim())
             }
             is ChatMessage.Event -> (message.event as? TranscriptEvent.FromBot)?.let { from ->
                 appendLine()

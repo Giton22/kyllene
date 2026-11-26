@@ -90,6 +90,15 @@ class UnreadDividerTest {
     }
 
     @Test
+    fun theLineStartsAtSavedProgressBeforeTheNextAnswer() {
+        val progress = ChatMessage.Assistant("progress", timestamp = 200.0, commentary = listOf("Checking the logs."))
+        val messages = listOf(prompt("p1", 100.0), progress, reply("r2", 210.0))
+
+        assertEquals(UnreadLineStep.Above("progress"), unreadLineStep(messages, 110.0, olderMessages = false, pagesLoaded = 0))
+        assertEquals("r2", firstUnreadKey(messages, 200.0))
+    }
+
+    @Test
     fun theMachinerysOwnRowsAreNotWhereTheLineGoes() {
         val messages = listOf(prompt("p1", 100.0), failedTurn("f1"), reply("r2", 210.0))
 

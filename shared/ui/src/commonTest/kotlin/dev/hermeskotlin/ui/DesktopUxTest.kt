@@ -11,6 +11,7 @@ import dev.hermeskotlin.ui.chat.PromptRecall
 import dev.hermeskotlin.ui.chat.findMatches
 import dev.hermeskotlin.ui.chat.moveHighlight
 import dev.hermeskotlin.ui.chat.refChoices
+import dev.hermeskotlin.ui.chat.transcriptMarkdown
 import dev.hermeskotlin.ui.components.PaletteItem
 import dev.hermeskotlin.ui.components.paletteMatches
 import dev.hermeskotlin.ui.sessions.ShownChats
@@ -129,6 +130,26 @@ class DesktopUxTest {
         assertEquals(listOf(0, 1), findMatches(messages, " api "))
         assertEquals(emptyList(), findMatches(messages, ""))
         assertEquals(listOf(2), findMatches(messages, "model"))
+    }
+
+    @Test
+    fun findMatchesSavedProgressWithOrWithoutAnAnswer() {
+        val messages = listOf(
+            ChatMessage.Assistant("a1", text = "Done.", commentary = listOf("Checking logs.")),
+            ChatMessage.Assistant("a2", commentary = listOf("Checking more logs.")),
+        )
+        assertEquals(listOf(0, 1), findMatches(messages, "checking"))
+        assertEquals(listOf(0), findMatches(messages, "done"))
+    }
+
+    @Test
+    fun exportIncludesSavedProgressInTranscriptOrder() {
+        val messages = listOf(
+            ChatMessage.Assistant("a1", text = "Done.", commentary = listOf("Checking logs.", "Found it.")),
+            ChatMessage.Assistant("a2", commentary = listOf("Checking again.")),
+        )
+        assertEquals("# Chat\n\n## Hermes\n\nChecking logs.\n\nFound it.\n\nDone.\n\n## Hermes\n\nChecking again.\n",
+            transcriptMarkdown("Chat", messages))
     }
 
     @Test
