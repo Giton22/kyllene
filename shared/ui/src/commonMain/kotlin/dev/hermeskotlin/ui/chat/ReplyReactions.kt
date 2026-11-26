@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.BadgeAlert
@@ -76,7 +77,10 @@ internal fun ReplyReactionBadge(emoji: String, modifier: Modifier = Modifier) {
     val icon = reactionIcon(emoji)
     val spoken = ReplyReaction.entries.firstOrNull { it.emoji == emoji }?.label() ?: emoji
     Box(
-        modifier.padding(horizontal = ReplyReactionBadgePadding).semantics(mergeDescendants = true) { contentDescription = spoken },
+        modifier.padding(horizontal = ReplyReactionBadgePadding).semantics(mergeDescendants = true) {
+            contentDescription = spoken
+            selected = true
+        },
         contentAlignment = Alignment.Center,
     ) {
         if (icon != null) {

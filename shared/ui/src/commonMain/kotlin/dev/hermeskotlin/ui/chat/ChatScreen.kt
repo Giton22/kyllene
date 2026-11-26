@@ -3038,67 +3038,71 @@ internal fun AssistantReply(
             LaunchedEffect(hasMore) { if (!hasMore) moreOpen = false }
             val shown = !isDesktop || last || hovered || keysInside || (moreOpen && hasMore) || reading
             val iconSize = if (isDesktop) 32.dp else MinTouchTarget
-            if (shown) {
-                val moreLabel = stringResource(Res.string.chat_reply_more)
-                val usageText = usage?.let { replyUsage(it.input, it.output) }
-                val usageStyle = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily)
-                BoxWithConstraints(Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)) {
-                    val copyWidth = if (actionable) {
-                        val size = ButtonSize.Small
-                        maxOf(size.labelledIconWidth(copyLabel), size.labelledIconWidth(LocalDesignWords.current.copied)) + 2.dp
-                    } else 0.dp
-                    val moreWidth = if (hasMore) ButtonSize.Small.labelledIconWidth(moreLabel) + 2.dp else 0.dp
-                    val usageMeasurer = rememberTextMeasurer()
-                    val usageWidth = if (usageText != null) with(LocalDensity.current) {
-                        usageMeasurer.measure(usageText, style = usageStyle, maxLines = 1, softWrap = false).size.width.toDp()
-                    } else 0.dp
-                    // The chosen reaction's icon; one from another client's set with no icon to match shows as its emoji.
-                    val badgeWidth = when {
-                        reaction == null -> 0.dp
-                        reactionIcon(reaction) != null -> ReplyReactionBadgeIcon + ReplyReactionBadgePadding * 2 + 2.dp
-                        else -> with(LocalDensity.current) {
-                            usageMeasurer.measure(reaction, style = Theme[typography][body], maxLines = 1, softWrap = false).size.width.toDp() +
-                                ReplyReactionBadgePadding * 2 + 2.dp
-                        }
+            // A desktop shows the row on the newest reply and under the pointer; older replies read without it. It only
+            // fades, so nothing moves as the pointer passes and Tab still reaches it (one with the keyboard in it stays
+            // shown); faded out, it isn't read out either. The chosen reaction stays shown on every reply.
+            val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
+            val hidden = if (shown) Modifier else Modifier.clearAndSetSemantics {}
+            val moreLabel = stringResource(Res.string.chat_reply_more)
+            val usageText = usage?.let { replyUsage(it.input, it.output) }
+            val usageStyle = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily)
+            BoxWithConstraints(Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)) {
+                val copyWidth = if (actionable) {
+                    val size = ButtonSize.Small
+                    maxOf(size.labelledIconWidth(copyLabel), size.labelledIconWidth(LocalDesignWords.current.copied)) + 2.dp
+                } else 0.dp
+                val moreWidth = if (hasMore) ButtonSize.Small.labelledIconWidth(moreLabel) + 2.dp else 0.dp
+                val usageMeasurer = rememberTextMeasurer()
+                val usageWidth = if (usageText != null) with(LocalDensity.current) {
+                    usageMeasurer.measure(usageText, style = usageStyle, maxLines = 1, softWrap = false).size.width.toDp()
+                } else 0.dp
+                // The chosen reaction's icon; one from another client's set with no icon to match shows as its emoji.
+                val badgeWidth = when {
+                    reaction == null -> 0.dp
+                    reactionIcon(reaction) != null -> ReplyReactionBadgeIcon + ReplyReactionBadgePadding * 2 + 2.dp
+                    else -> with(LocalDensity.current) {
+                        usageMeasurer.measure(reaction, style = Theme[typography][body], maxLines = 1, softWrap = false).size.width.toDp() +
+                            ReplyReactionBadgePadding * 2 + 2.dp
                     }
-                    val playbackWidth = if (reading) (iconSize + 2.dp) * 2 else 0.dp
-                    val labelled = copyWidth + moreWidth + usageWidth + badgeWidth + playbackWidth <= maxWidth
-                    Row(
-                        Modifier.fillMaxWidth().onFocusChanged { keysInside = it.hasFocus }.focusGroup(),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        if (usage != null && usageText != null) {
-                            val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
-                            Text(
-                                usageText,
-                                style = usageStyle,
-                                color = Theme[colors][textMuted],
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f).semantics { contentDescription = spoken },
-                            )
-                        } else {
-                            Spacer(Modifier.weight(1f))
-                        }
-                        if (reading) {
-                            if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, Modifier.size(iconSize))
-                            else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, Modifier.size(iconSize))
-                            ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, Modifier.size(iconSize))
-                        }
-                        if (actionable) {
-                            if (labelled) CopyButton(text, visibleLabel = copyLabel)
-                            else CopyButton(text, modifier = Modifier.size(iconSize), label = copyLabel)
-                        }
-                        if (reaction != null) ReplyReactionBadge(reaction)
-                        if (hasMore) ReplyMoreMenu(
+                }
+                val playbackWidth = if (reading) (iconSize + 2.dp) * 2 else 0.dp
+                val labelled = copyWidth + moreWidth + usageWidth + badgeWidth + playbackWidth <= maxWidth
+                Row(
+                    Modifier.fillMaxWidth().onFocusChanged { keysInside = it.hasFocus }.focusGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (usage != null && usageText != null) {
+                        val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
+                        Text(
+                            usageText,
+                            style = usageStyle,
+                            color = Theme[colors][textMuted],
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).alpha(alpha)
+                                .then(if (shown) Modifier.semantics { contentDescription = spoken } else hidden),
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (reading) {
+                        if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, Modifier.size(iconSize))
+                        else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, Modifier.size(iconSize))
+                        ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, Modifier.size(iconSize))
+                    }
+                    if (actionable) Box(hidden.alpha(alpha)) {
+                        if (labelled) CopyButton(text, visibleLabel = copyLabel)
+                        else CopyButton(text, modifier = Modifier.size(iconSize), label = copyLabel)
+                    }
+                    if (reaction != null) ReplyReactionBadge(reaction)
+                    if (hasMore) Box(hidden.alpha(alpha)) {
+                        ReplyMoreMenu(
                             actions, moreLabel, labelled, moreOpen, { moreOpen = it },
                             onReact = react, selectedReaction = reaction,
                         )
                     }
                 }
-            } else {
-                Spacer(Modifier.height(iconSize).trimEndTop(end = 0.dp, top = 4.dp))
             }
         }
     }

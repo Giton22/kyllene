@@ -89,4 +89,33 @@ class ReplyReactionMenuTest {
         onNodeWithContentDescription("More").performClick()
         for (label in listOf("Got it", "Continue", "Verify", "Explain")) onNodeWithText(label).assertIsNotSelected()
     }
+
+    @Test
+    fun noReactionsAreOfferedWithoutAStoredRowOrWhileTheyCantBeSent() = runComposeUiTest {
+        val rowId = mutableStateOf<Long?>(null)
+        val canReact = mutableStateOf(true)
+        setContent {
+            HermesTheme(ColorScheme.Dark) {
+                AssistantReply(
+                    message = ChatMessage.Assistant(key = "reply", text = "Done.", reactionRowId = rowId.value, userReaction = "🔍"),
+                    onBranch = {},
+                    onRegenerate = null,
+                    last = true,
+                    onReact = if (canReact.value) ({}) else null,
+                )
+            }
+        }
+
+        // Not saved yet: no row to react on. The menu keeps the reply's other commands.
+        onNodeWithContentDescription("More").performClick()
+        onNodeWithText("Branch from here").assertIsDisplayed()
+        for (label in listOf("Got it", "Continue", "Verify", "Explain")) onNodeWithText(label).assertDoesNotExist()
+        onNodeWithText("Branch from here").performClick()
+
+        // Offline: none offered, but the chosen one still shows beside Copy, as chosen.
+        runOnIdle { rowId.value = 9; canReact.value = false }
+        onNodeWithContentDescription("Verify").assertIsDisplayed().assertIsSelected()
+        onNodeWithContentDescription("More").performClick()
+        for (label in listOf("Got it", "Continue", "Verify", "Explain")) onNodeWithText(label).assertDoesNotExist()
+    }
 }

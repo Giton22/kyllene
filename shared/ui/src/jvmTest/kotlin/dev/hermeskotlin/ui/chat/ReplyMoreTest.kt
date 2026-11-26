@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -9,6 +10,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.isFocused
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertHasClickAction
@@ -111,8 +121,44 @@ class ReplyMoreTest {
         onNodeWithContentDescription("More").assertDoesNotExist()
         onNodeWithText("Copy").assertDoesNotExist()
         onNodeWithText("More").assertDoesNotExist()
+        // Faded out, not gone: the row keeps its height, so the reply doesn't grow when the pointer passes.
+        val hiddenHeight = onRoot().fetchSemanticsNode().boundsInRoot.height
         runOnIdle { latest.value = true }
+        assertEquals(hiddenHeight, onRoot().fetchSemanticsNode().boundsInRoot.height)
         onNodeWithContentDescription("Copy").assertHasClickAction()
+        onNodeWithContentDescription("More").assertHasClickAction()
+    }
+
+    @Test
+    fun anOlderReplyKeepsItsChosenReactionShownAndItsActionsInReachOfTheKeyboard() = runComposeUiTest {
+        val focus = FocusRequester()
+        setContent {
+            HermesTheme(ColorScheme.Dark) {
+                CompositionLocalProvider(LocalDesktopLayout provides true) {
+                    Column {
+                        Box(Modifier.size(10.dp).focusRequester(focus).focusable())
+                        AssistantReply(
+                            message = ChatMessage.Assistant(key = "reply", text = "An earlier reply.", reactionRowId = 5, userReaction = "👍"),
+                            onBranch = {},
+                            onRegenerate = {},
+                            last = false,
+                            onReact = {},
+                        )
+                    }
+                }
+            }
+        }
+
+        onNodeWithContentDescription("Got it").assertIsDisplayed()
+        onNodeWithContentDescription("More").assertDoesNotExist()
+        // Tabbing on from the element above reaches the reply's row, which then shows.
+        runOnIdle { focus.requestFocus() }
+        repeat(6) {
+            if (onAllNodes(hasContentDescription("Copy") and isFocused()).fetchSemanticsNodes().isEmpty()) {
+                onRoot().performKeyInput { pressKey(Key.Tab) }
+            }
+        }
+        onNodeWithContentDescription("Copy").assertIsFocused()
         onNodeWithContentDescription("More").assertHasClickAction()
     }
 
