@@ -292,4 +292,8 @@
     <string name="managed_update_restart_title">Restart Kyllene?</string>
     <string name="managed_update_restart_warning">Finish calls and save your work. Restart closes all windows; unsaved changes and attachments may be lost.</string>
     <string name="managed_update_restart_now">Restart now</string>
+
+    <!-- Desktop push reception. -->
+    <string name="plugin_notifications_what_desktop">It watches your bots' chats and sends each new reply to this computer while Kyllene is running, end-to-end encrypted through ntfy.sh.</string>
+    <string name="settings_notifications_anywhere_desktop_detail">Hear from your bots even off your gateway's network, end-to-end encrypted through ntfy.sh. Installs the herald-push plugin on the gateway. Receives while Kyllene is running.</string>
 </resources>

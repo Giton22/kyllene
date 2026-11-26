@@ -26,6 +26,7 @@ internal data class LinuxNoticeOwner(
     val profile: String?,
     val current: () -> Boolean,
     val open: () -> Unit,
+    val usesReplyPreference: Boolean = true,
     val answer: (ApprovalChoice) -> Unit,
 )
 
@@ -34,15 +35,20 @@ internal class LinuxNotifications(
     private val delivery: NotificationDelivery,
     private val actionLabels: () -> Pair<String, String>,
     private val fallback: (DesktopNotice, LinuxNoticeOwner) -> Unit = { _, _ -> },
+    private val nowNanos: () -> Long = System::nanoTime,
     private val settings: () -> AppSettings,
 ) : AutoCloseable {
     private data class Entry(val notice: DesktopNotice, val owner: LinuxNoticeOwner, val actions: Map<String, ApprovalChoice?>)
+    private data class Reply(val gateway: String, val profile: String?, val session: String, val preview: String)
+    private data class RecentReply(val reply: Reply, val fromPush: Boolean, val at: Long)
     private val entries = linkedMapOf<String, Entry>()
+    private val recentReplies = mutableListOf<RecentReply>()
     private var closed = false
 
-    fun post(notice: DesktopNotice, owner: LinuxNoticeOwner) {
+    fun post(notice: DesktopNotice, owner: LinuxNoticeOwner, fromPush: Boolean = false) {
         reconcile()
-        if (closed || !owner.current() || !enabled(notice)) return
+        if (closed || !owner.current() || !enabled(notice, owner)) return
+        if (matchesOtherReplySource(notice, owner, fromPush)) return
         val id = idFor(owner, notice)
         val nonce = UUID.randomUUID().toString()
         val open = "open-$nonce"
@@ -63,7 +69,7 @@ internal class LinuxNotifications(
 
     fun action(id: String, action: String) {
         val entry = entries[id] ?: return
-        if (closed || !entry.owner.current() || !enabled(entry.notice)) {
+        if (closed || !entry.owner.current() || !enabled(entry.notice, entry.owner)) {
             withdraw(id)
             return
         }
@@ -75,7 +81,7 @@ internal class LinuxNotifications(
     }
 
     fun reconcile() {
-        entries.filterValues { !it.owner.current() || !enabled(it.notice) }.keys.toList().forEach(::withdraw)
+        entries.filterValues { !it.owner.current() || !enabled(it.notice, it.owner) }.keys.toList().forEach(::withdraw)
     }
 
     fun failed(id: String, defaultAction: String) {
@@ -86,19 +92,38 @@ internal class LinuxNotifications(
     private fun fallback(id: String) {
         val entry = entries[id] ?: return
         withdraw(id)
-        if (!closed && entry.owner.current() && enabled(entry.notice)) fallback(entry.notice, entry.owner)
+        if (!closed && entry.owner.current() && enabled(entry.notice, entry.owner)) fallback(entry.notice, entry.owner)
     }
 
     fun unavailable() = entries.keys.toList().forEach(::fallback)
 
+    // The push payload and live events do not share a reply ID. Pair only matching previews
+    // from opposite sources in a short window. Repeated replies from one source still notify.
+    private fun matchesOtherReplySource(notice: DesktopNotice, owner: LinuxNoticeOwner, fromPush: Boolean): Boolean {
+        val preview = notice.replyPreview ?: return false
+        val session = notice.sessionId ?: return false
+        val reply = Reply(owner.gateway, owner.profile?.takeUnless { it == "default" }, session, preview)
+        val now = nowNanos()
+        recentReplies.removeAll { now - it.at >= 15_000_000_000L }
+        val match = recentReplies.indexOfFirst { it.fromPush != fromPush && it.reply == reply }
+        if (match >= 0) {
+            recentReplies.removeAt(match)
+            return true
+        }
+        recentReplies += RecentReply(reply, fromPush, now)
+        if (recentReplies.size > 32) recentReplies.removeAt(0)
+        return false
+    }
+
     override fun close() {
         if (closed) return
         closed = true
+        recentReplies.clear()
         entries.keys.toList().forEach(::withdraw)
         delivery.close()
     }
 
-    private fun enabled(notice: DesktopNotice): Boolean = settings().let {
+    private fun enabled(notice: DesktopNotice, owner: LinuxNoticeOwner): Boolean = !owner.usesReplyPreference || settings().let {
         if (notice.request == null) it.notifyReplies else it.notifyRequests
     }
 

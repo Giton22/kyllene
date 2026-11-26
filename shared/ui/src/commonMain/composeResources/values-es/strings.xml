@@ -292,4 +292,8 @@
     <string name="managed_update_restart_title">¿Reiniciar Kyllene?</string>
     <string name="managed_update_restart_warning">Termina las llamadas y guarda tu trabajo. El reinicio cierra todas las ventanas; podrías perder cambios y archivos adjuntos sin guardar.</string>
     <string name="managed_update_restart_now">Reiniciar ahora</string>
+
+    <!-- Desktop push reception. -->
+    <string name="plugin_notifications_what_desktop">Vigila los chats de tus bots y envía cada respuesta nueva a este ordenador mientras Kyllene está en ejecución, cifrada de extremo a extremo a través de ntfy.sh.</string>
+    <string name="settings_notifications_anywhere_desktop_detail">Recibe noticias de tus bots incluso fuera de la red de tu Gateway, cifradas de extremo a extremo a través de ntfy.sh. Instala el plugin herald-push en el Gateway. Recibe mientras Kyllene está en ejecución.</string>
 </resources>

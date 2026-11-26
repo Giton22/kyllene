@@ -292,4 +292,6 @@
     <string name="managed_update_restart_title">Újraindítod a Kyllene alkalmazást?</string>
     <string name="managed_update_restart_warning">Fejezd be a hívásokat és mentsd a munkád. Az újraindítás minden ablakot bezár; a nem mentett változások és mellékletek elveszhetnek.</string>
     <string name="managed_update_restart_now">Újraindítás most</string>
+    <string name="plugin_notifications_what_desktop">Figyeli a botjaid csevegéseit, és amíg a Kyllene fut, minden új választ elküld erre a számítógépre, végpontok közötti titkosítással az ntfy.sh-n keresztül.</string>
+    <string name="settings_notifications_anywhere_desktop_detail">Értesülj a botjaidról a Gateway hálózatán kívül is, végpontok közötti titkosítással az ntfy.sh-n keresztül. Telepíti a herald-push bővítményt a Gateway-re. Az üzenetek addig érkeznek meg, amíg a Kyllene fut.</string>
 </resources>

@@ -35,13 +35,21 @@ class PushSetup(
     private val gateways: GatewayRepository,
     private val settings: SettingsStore,
     private val scope: CoroutineScope,
+    val available: Boolean = true,
     private val deviceName: () -> String,
 ) {
-    private val _status = MutableStateFlow(PushStatus())
+    private val _status = MutableStateFlow(PushStatus(if (available) State.Unknown else State.Off))
     val status: StateFlow<PushStatus> = _status.asStateFlow()
+    private val _receiverDetail = MutableStateFlow<String?>(null)
+    val receiverDetail: StateFlow<String?> = _receiverDetail.asStateFlow()
+
+    /** Running desktop receiver guidance; callers supply only safe text, never raw transport errors. */
+    fun reportReceiver(detail: String?) { _receiverDetail.value = detail }
+
     private val lock = Mutex()
 
     fun start() {
+        if (!available) return
         scope.launch {
             combine(connection.state, settings.settings) { state, prefs -> (state is ConnectionState.Connected) to (prefs?.pushAnywhere == true) }
                 .distinctUntilChanged()
@@ -67,6 +75,7 @@ class PushSetup(
 
     /** Turns it on: installs the plugin when the gateway lacks it, then registers this phone. */
     suspend fun enable() {
+        if (!available) return
         settings.update { it.copy(pushAnywhere = true) }
         refresh(install = true)
     }
@@ -88,9 +97,11 @@ class PushSetup(
     }
 
     /** The user asked for the newer plugin the status offers: install it on the gateway, then register again. */
-    suspend fun updatePlugin() = refresh(install = true, update = true)
+    suspend fun updatePlugin() {
+        if (available) refresh(install = true, update = true)
+    }
 
-    suspend fun test(): Boolean = runCatching { api.test(keys.deviceId) }.getOrDefault(false)
+    suspend fun test(): Boolean = available && runCatching { api.test(keys.deviceId) }.getOrDefault(false)
 
     private suspend fun retireNow() {
         val url = keys.pinnedGatewayUrl() ?: return
@@ -116,7 +127,10 @@ class PushSetup(
         _status.value = PushStatus(State.Working)
         try {
             // An identity registered with another gateway is retired, never shared.
-            keys.pinnedGatewayUrl()?.takeIf { it != url }?.let(keys::retire)
+            keys.pinnedGatewayUrl()?.takeIf { it != url }?.let { previous ->
+                keys.retire(previous)
+                api.registrationChanged()
+            }
             val ready = plugin(install, update) ?: return@withLock
             val info = ready.info
             // Refused keys would leave a registration the phone can't retire: check them first.
@@ -132,6 +146,7 @@ class PushSetup(
                 return@withLock
             }
             // Learned over the authenticated socket: the keys every push must be signed with.
+            val previous = keys.pinned(url)
             try {
                 keys.pin(url, gateway)
             } catch (e: CancellationException) {
@@ -142,7 +157,7 @@ class PushSetup(
                 _status.value = PushStatus(State.Failed, "The gateway's plugin sent unusable keys.")
                 return@withLock
             }
-            api.registrationChanged()
+            if (previous != gateway) api.registrationChanged()
             _status.value = PushStatus(State.On, listOfNotNull(ready.detail,
                 if (reply.watching) null else "Restart the gateway's dashboard to start sending.",
             ).joinToString("\n").ifEmpty { null }, ready.update)
