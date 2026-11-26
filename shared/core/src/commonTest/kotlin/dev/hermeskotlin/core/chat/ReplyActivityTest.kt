@@ -77,6 +77,17 @@ class ReplyActivityTest {
     }
 
     @Test
+    fun aReplyReadBackOnAReconnectIsNewAgainstTheTurnsStart() {
+        // The turn began; the link dropped; the transcript read on the reconnect has its reply, finished, while the
+        // chat still says running. Against the state just before the end it looks old; against the start it's new.
+        val started = answered.reduce(event("message.start"))
+        val readBack = started.copy(messages = answered.messages + ChatMessage.Assistant("row-7", text = "Done while away", outcome = TurnOutcome.Complete))
+        val ended = readBack.copy(running = false)
+        assertNull(ended.newFinishedReply(readBack))
+        assertEquals("Done while away", ended.newFinishedReply(started)?.text)
+    }
+
+    @Test
     fun aTurnsOwnReplyIsNew() {
         val running = answered.reduce(event("message.start")).reduce(event("message.delta", """{"text":"Again"}"""))
         val done = running.reduce(event("message.complete", """{"text":"Again"}"""))
