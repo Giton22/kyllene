@@ -422,7 +422,7 @@ class SessionWatcherTest {
         activateRunning = false
         live.value = listOf(Row("a", "working"))
         val watcher = setup().watcher
-        assertEquals(WatchedTurnEnd("a", "Chat a", "", TurnOutcome.Complete, null), watcher.turnEnds.first())
+        assertEquals(WatchedTurnEnd("a", "Chat a", null, TurnOutcome.Complete, null), watcher.turnEnds.first())
     }
 
     // --- A gateway whose /api/ws runs on its session authority ---

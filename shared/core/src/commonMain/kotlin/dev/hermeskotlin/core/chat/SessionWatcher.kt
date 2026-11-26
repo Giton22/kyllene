@@ -47,8 +47,8 @@ data class WatchedChat(
     internal val arrivals: Map<String, Long> = emptyMap(),
 )
 
-/** A watched chat's turn ended: its reply's [text], or [error] when it failed. */
-data class WatchedTurnEnd(val storedId: String, val title: String, val text: String, val outcome: TurnOutcome, val error: String?)
+/** A watched chat's turn ended: its reply's [text] (null: not known), or [error] when it failed. */
+data class WatchedTurnEnd(val storedId: String, val title: String, val text: String?, val outcome: TurnOutcome, val error: String?)
 
 /**
  * Follows the chats running on the gateway that this phone doesn't have open, so their approvals,
@@ -269,7 +269,7 @@ class SessionWatcher(
         // The reply's text isn't at hand, so it's told without it.
         else if (row.status.running) {
             val title = _chats.value[storedId]?.title ?: row.title
-            _turnEnds.emit(WatchedTurnEnd(storedId, title, "", TurnOutcome.Complete, null))
+            _turnEnds.emit(WatchedTurnEnd(storedId, title, null, TurnOutcome.Complete, null))
         }
         return Attach.Done
     }

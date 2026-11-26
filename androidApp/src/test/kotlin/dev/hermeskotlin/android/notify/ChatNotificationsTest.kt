@@ -4,6 +4,8 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import dev.hermeskotlin.android.R
+import dev.hermeskotlin.core.chat.TurnOutcome
+import dev.hermeskotlin.core.chat.WatchedTurnEnd
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,6 +40,22 @@ class ChatNotificationsTest {
         notifications.postReply("chat", "Bot chat", "", failed = true)
 
         assertEquals(context.getString(R.string.notification_turn_failed_text), preview())
+    }
+
+    @Test
+    fun aWatchedTurnWhoseReplyWasntAtHandSaysItFinished() {
+        val end = WatchedTurnEnd("chat", "Bot chat", text = null, outcome = TurnOutcome.Complete, error = null)
+        notifications.postReply("chat", "Bot chat", end.replyText(notifications.finished), failed = false)
+
+        assertEquals(context.getString(R.string.notification_finished), preview())
+    }
+
+    @Test
+    fun aWatchedTurnThatEndedInSilenceStaysUntold() {
+        val end = WatchedTurnEnd("chat", "Bot chat", text = "", outcome = TurnOutcome.Complete, error = null)
+        notifications.postReply("chat", "Bot chat", end.replyText(notifications.finished), failed = false)
+
+        assertEquals(0, posted.activeNotifications.size)
     }
 
     private fun preview(): String? =

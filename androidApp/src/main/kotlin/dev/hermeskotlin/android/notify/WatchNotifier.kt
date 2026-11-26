@@ -3,6 +3,7 @@ package dev.hermeskotlin.android.notify
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.SessionWatcher
 import dev.hermeskotlin.core.chat.TurnOutcome
+import dev.hermeskotlin.core.chat.WatchedTurnEnd
 import dev.hermeskotlin.core.phone.ringsForAnswers
 import dev.hermeskotlin.core.sessions.ActiveSessions
 import dev.hermeskotlin.core.settings.AppSettings
@@ -112,9 +113,7 @@ class WatchNotifier(
                 if (bots.botWithChat(end.storedId) != null) return@collect
                 // A room member's turn: its reply is the room's line, which RoomNotifier tells.
                 if (rooms.isRoomTurn(end.title)) return@collect
-                val failed = end.outcome == TurnOutcome.Error
-                val text = if (failed) end.error ?: end.text else end.text
-                notifications.postReply(end.storedId, end.title.ifBlank { null }, text, failed)
+                notifications.postReply(end.storedId, end.title.ifBlank { null }, end.replyText(notifications.finished), end.failed)
             }
         }
     }
@@ -126,3 +125,11 @@ class WatchNotifier(
         const val FOLLOW_AFTER_MS = 15_000L
     }
 }
+
+private val WatchedTurnEnd.failed: Boolean get() = outcome == TurnOutcome.Error
+
+/**
+ * What a watched turn's notification says. A turn that ended before the attach has words that weren't at hand: it's
+ * told as [finished]. An empty reply that was at hand is a silence or tool steps, which postReply leaves untold.
+ */
+internal fun WatchedTurnEnd.replyText(finished: String): String = if (failed) error ?: text.orEmpty() else text ?: finished
