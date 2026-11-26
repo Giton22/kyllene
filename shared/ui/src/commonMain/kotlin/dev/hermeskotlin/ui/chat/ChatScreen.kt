@@ -1100,7 +1100,14 @@ internal fun ChatView(
             }
             Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { paneHeight = it.height; paneWidth = it.width }) {
                 Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
-                    if (wallpaper != null) ChatWallpaper(wallpaper, LocalAppSettings.current.wallpaperStrength, Modifier.fillMaxSize())
+                    if (wallpaper != null) {
+                        // Under the transcript in the blur around the jump button and the reconnect banner too.
+                        ChatWallpaper(
+                            wallpaper,
+                            LocalAppSettings.current.wallpaperStrength,
+                            Modifier.fillMaxSize().then(if (controlHaze != null) Modifier.hazeSource(controlHaze, zIndex = -1f) else Modifier),
+                        )
+                    }
                     if (state.historyLoaded && state.messages.isNotEmpty()) {
                         CompositionLocalProvider(
                             LocalMediaLoader provides actions::loadMedia,
@@ -1178,9 +1185,11 @@ internal fun ChatView(
                 }
                 var lastLinkStatus by remember { mutableStateOf("") }
                 if (linkStatus != null) lastLinkStatus = linkStatus
+                val opaqueComposer = LocalAppSettings.current.opaqueComposer && composerShown && !centred && toFoot >= 1f
                 val reconnectBanner: @Composable () -> Unit = {
                     androidx.compose.animation.AnimatedVisibility(visible = linkStatus != null, enter = fadeIn(), exit = fadeOut()) {
-                        OfflineBanner(place, lastLinkStatus, controlHaze, onRetryConnection)
+                        // On the opaque backing there's no transcript next to it to blur.
+                        OfflineBanner(place, lastLinkStatus, controlHaze.takeUnless { opaqueComposer }, onRetryConnection)
                     }
                 }
                 // Over the top of the conversation: other chats, the desktop link status and older pages.
@@ -1212,7 +1221,7 @@ internal fun ChatView(
                     state.savedCopyAt?.let { lastSavedAt = it }
                     val showSaved = state.savedCopyAt != null && state.messages.isNotEmpty() && (state.historyError != null || !connected)
                     AnimatedVisibility(visible = showSaved, enter = fadeIn(), exit = fadeOut()) {
-                        // Offline, the banner above offers the retry; connected, the transcript itself failed to load.
+                        // Offline, the reconnect banner offers the retry; connected, the transcript itself failed to load.
                         SavedCopyPill(lastSavedAt, onRetry = if (connected) actions::retry else null)
                     }
                     AnimatedVisibility(visible = state.loadingOlder, enter = fadeIn(), exit = fadeOut()) {
@@ -1228,7 +1237,7 @@ internal fun ChatView(
                 ) {
                     Dock(
                         hazeState = hazeState,
-                        opaqueComposer = LocalAppSettings.current.opaqueComposer && composerShown && !centred && toFoot >= 1f,
+                        opaqueComposer = opaqueComposer,
                         reconnectBanner = reconnectBanner.takeUnless { isDesktop },
                         reconnectingInBanner = !isDesktop && linkStatus != null,
                         actions = actions,
@@ -1343,9 +1352,9 @@ private fun DropOverlay() {
     }
 }
 
-/** Covers a plan or composer including its outer padding, which meets the other panel when they are adjacent. */
+/** Covers the panels and composer, padding and gaps included, with the page colour when [hazeState] is given. */
 @Composable
-private fun ComposerBackdrop(hazeState: HazeState?, content: @Composable () -> Unit) {
+private fun ComposerBackdrop(hazeState: HazeState?, content: @Composable ColumnScope.() -> Unit) {
     Box {
         if (hazeState != null) {
             Box(
@@ -1353,7 +1362,7 @@ private fun ComposerBackdrop(hazeState: HazeState?, content: @Composable () -> U
                     .background(Theme[colors][background].copy(alpha = 1f)),
             )
         }
-        content()
+        Column(Modifier.fillMaxWidth(), content = content)
     }
 }
 
@@ -1449,109 +1458,106 @@ private fun ColumnScope.Dock(
             }
         }
     }
-    reconnectBanner?.invoke()
-    // One place says what's happening: the current action, with the status text and plan folded beneath.
-    AnimatedVisibility(visible = state.running, enter = fadeIn(), exit = fadeOut()) {
-        ProgressPanel(
-            step = currentStep(state),
-            status = state.status,
-            tool = state.runningTool(),
-            todos = state.livePlan(),
-            turnKey = runningTurnKey(state),
-            onStop = actions::interrupt,
-            // Not once it's over: the card fades out with the turn already ended.
-            canStop = connected && state.running,
-        )
-    }
-    // The plan and composer frost their own backing. Transient panels still frost the transcript.
+    // The panels and composer frost their own backing. Lists over them still frost the transcript.
     val opaqueHaze = rememberHazeState().takeIf { opaqueComposer }
     val panelHaze = opaqueHaze ?: hazeState
-    if (!state.running) {
-        ComposerBackdrop(opaqueHaze) {
-            TodoPanel(state.todos, live = state.todosLive, hazeState = panelHaze)
+    // One solid backing from the reconnect banner down to the composer, so no transcript shows between the panels.
+    ComposerBackdrop(opaqueHaze) {
+        reconnectBanner?.invoke()
+        // One place says what's happening: the current action, with the status text and plan folded beneath.
+        AnimatedVisibility(visible = state.running, enter = fadeIn(), exit = fadeOut()) {
+            ProgressPanel(
+                step = currentStep(state),
+                status = state.status,
+                tool = state.runningTool(),
+                todos = state.livePlan(),
+                turnKey = runningTurnKey(state),
+                onStop = actions::interrupt,
+                // Not once it's over: the card fades out with the turn already ended.
+                canStop = connected && state.running,
+            )
         }
-    }
-    // The chat's automation sits here whether or not a turn runs: the goal works on its own between turns.
-    SessionControlStrip(state.control, hazeState, onOpen = onOpenControl)
+        if (!state.running) TodoPanel(state.todos, live = state.todosLive, hazeState = panelHaze)
+        // The chat's automation sits here whether or not a turn runs: the goal works on its own between turns.
+        SessionControlStrip(state.control, panelHaze, onOpen = onOpenControl)
 
-    if (state.inputRequests.isNotEmpty()) {
-        // The task's Stop is on the live task card above.
-        InputRequestPanel(state.inputRequests, connected, onAnswer = actions::answer, onStop = null)
-    } else if (voiceChat.phase != VoicePhase.Off) {
-        // Full screen, the voice screen has these; the panel would only animate unseen beneath it.
-        if (!voiceFull) {
-            VoicePanel(
-                hazeState = hazeState,
-                state = voiceChat,
-                onSkip = actions::skipSpeech,
-                onMute = actions::toggleVoiceMute,
-                onEnd = actions::stopVoiceChat,
-                onExpand = onExpandVoice,
-                onSendNow = actions::sendVoiceNow,
-            )
-        }
-    } else {
-        Column(Modifier.onSizeChanged { onReferenceListsHeight(it.height) }) {
-            AnimatedVisibility(visible = mentions.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
-                var shown by remember { mutableStateOf(mentions) }
-                if (mentions.isNotEmpty()) shown = mentions
-                MentionSuggestions(
-                    remember(shown) { shown.map { MentionChoice(it.label, it.handle, it) } },
-                    hazeState,
-                    onPick = { choice -> choice.bot?.let(onMention) },
-                    marked = if (isDesktop) marked.coerceAtLeast(0) else -1,
-                    onMark = onMark,
+        if (state.inputRequests.isNotEmpty()) {
+            // The task's Stop is on the live task card above.
+            InputRequestPanel(state.inputRequests, connected, onAnswer = actions::answer, onStop = null)
+        } else if (voiceChat.phase != VoicePhase.Off) {
+            // Full screen, the voice screen has these; the panel would only animate unseen beneath it.
+            if (!voiceFull) {
+                VoicePanel(
+                    hazeState = hazeState,
+                    state = voiceChat,
+                    onSkip = actions::skipSpeech,
+                    onMute = actions::toggleVoiceMute,
+                    onEnd = actions::stopVoiceChat,
+                    onExpand = onExpandVoice,
+                    onSendNow = actions::sendVoiceNow,
                 )
             }
-            // `@file:` and `@folder:` references: the kinds while `@` is typed, then the gateway's files and folders.
-            AnimatedVisibility(visible = refs.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
-                var shown by remember { mutableStateOf(refs) }
-                if (refs.isNotEmpty()) shown = refs
-                val fileLabel = stringResource(Res.string.chat_ref_file)
-                val folderLabel = stringResource(Res.string.chat_ref_folder)
-                MentionSuggestions(
-                    remember(shown, fileLabel, folderLabel) {
-                        shown.map { ref ->
-                            val label = when (ref.kind) {
-                                PathRefKind.File -> fileLabel
-                                PathRefKind.Folder -> folderLabel
-                                null -> ref.label
+        } else {
+            Column(Modifier.onSizeChanged { onReferenceListsHeight(it.height) }) {
+                AnimatedVisibility(visible = mentions.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
+                    var shown by remember { mutableStateOf(mentions) }
+                    if (mentions.isNotEmpty()) shown = mentions
+                    MentionSuggestions(
+                        remember(shown) { shown.map { MentionChoice(it.label, it.handle, it) } },
+                        panelHaze,
+                        onPick = { choice -> choice.bot?.let(onMention) },
+                        marked = if (isDesktop) marked.coerceAtLeast(0) else -1,
+                        onMark = onMark,
+                    )
+                }
+                // `@file:` and `@folder:` references: the kinds while `@` is typed, then the gateway's files and folders.
+                AnimatedVisibility(visible = refs.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
+                    var shown by remember { mutableStateOf(refs) }
+                    if (refs.isNotEmpty()) shown = refs
+                    val fileLabel = stringResource(Res.string.chat_ref_file)
+                    val folderLabel = stringResource(Res.string.chat_ref_folder)
+                    MentionSuggestions(
+                        remember(shown, fileLabel, folderLabel) {
+                            shown.map { ref ->
+                                val label = when (ref.kind) {
+                                    PathRefKind.File -> fileLabel
+                                    PathRefKind.Folder -> folderLabel
+                                    null -> ref.label
+                                }
+                                MentionChoice(label, ref.shown, null, ref.icon)
                             }
-                            MentionChoice(label, ref.shown, null, ref.icon)
-                        }
-                    },
-                    hazeState,
-                    onPick = { choice -> shown.firstOrNull { it.shown == choice.handle }?.let(onRef) },
-                    // While bots are listed too, the keys walk theirs: only one list shows a mark.
-                    marked = if (isDesktop && mentions.isEmpty()) marked.coerceAtLeast(0) else -1,
-                    onMark = onMark.takeIf { mentions.isEmpty() },
+                        },
+                        panelHaze,
+                        onPick = { choice -> shown.firstOrNull { it.shown == choice.handle }?.let(onRef) },
+                        // While bots are listed too, the keys walk theirs: only one list shows a mark.
+                        marked = if (isDesktop && mentions.isEmpty()) marked.coerceAtLeast(0) else -1,
+                        onMark = onMark.takeIf { mentions.isEmpty() },
+                    )
+                }
+            }
+            // Over an empty composer only: once the user types, their own words are the next message.
+            val replyShown = suggestedReply != null && connected && !state.running && !editing && actions.composer.text.isEmpty()
+            AnimatedVisibility(visible = replyShown, enter = fadeIn(), exit = fadeOut()) {
+                // Kept through the fade-out, so the chip doesn't empty before it leaves.
+                var shown by remember { mutableStateOf(suggestedReply) }
+                if (suggestedReply != null) shown = suggestedReply
+                shown?.let { reply ->
+                    SuggestedReplyChip(
+                        reply.text,
+                        panelHaze,
+                        onUse = { actions.useSuggestedReply(reply) },
+                        onDismiss = actions::dismissSuggestedReply,
+                    )
+                }
+            }
+            if (editing) {
+                Banner(
+                    stringResource(Res.string.chat_editing_banner),
+                    actionLabel = stringResource(Res.string.common_cancel),
+                    onAction = actions::cancelEdit,
+                    icon = Lucide.Pencil,
                 )
             }
-        }
-        // Over an empty composer only: once the user types, their own words are the next message.
-        val replyShown = suggestedReply != null && connected && !state.running && !editing && actions.composer.text.isEmpty()
-        AnimatedVisibility(visible = replyShown, enter = fadeIn(), exit = fadeOut()) {
-            // Kept through the fade-out, so the chip doesn't empty before it leaves.
-            var shown by remember { mutableStateOf(suggestedReply) }
-            if (suggestedReply != null) shown = suggestedReply
-            shown?.let { reply ->
-                SuggestedReplyChip(
-                    reply.text,
-                    hazeState,
-                    onUse = { actions.useSuggestedReply(reply) },
-                    onDismiss = actions::dismissSuggestedReply,
-                )
-            }
-        }
-        if (editing) {
-            Banner(
-                stringResource(Res.string.chat_editing_banner),
-                actionLabel = stringResource(Res.string.common_cancel),
-                onAction = actions::cancelEdit,
-                icon = Lucide.Pencil,
-            )
-        }
-        ComposerBackdrop(opaqueHaze) {
             Composer(
                 editing = editing,
                 hazeState = panelHaze,
