@@ -308,6 +308,25 @@ class HistoryToMessagesTest {
     }
 
     @Test
+    fun incomingBotMessagesRemainVisibleWhenHermesMarksThemInternal() {
+        val body = "Please review `draft.md`."
+        val rows = listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("wake"), displayKind = "internal_notification"),
+            SessionMessage(
+                id = 2,
+                role = "user",
+                content = JsonPrimitive("Message from 🤖 Scribe (@scribe): $body"),
+                displayKind = "internal_notification",
+                timestamp = 200.0,
+            ),
+        )
+
+        val message = assertIs<ChatMessage.Event>(historyToMessages(rows).single())
+        assertEquals(TranscriptEvent.FromBot("Scribe", "scribe", body), message.event)
+        assertEquals(200.0, message.timestamp)
+    }
+
+    @Test
     fun anotherBotsMessageKeepsItsTimeSoTheNewMessagesLineCanFindIt() {
         val rows = listOf(
             SessionMessage(id = 1, role = "user", content = JsonPrimitive("Message from 🤖 Scribe (@scribe): the draft is ready"), timestamp = 200.0),
