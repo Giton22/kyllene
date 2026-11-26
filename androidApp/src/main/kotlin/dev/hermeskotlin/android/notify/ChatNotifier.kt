@@ -113,7 +113,7 @@ class ChatNotifier(
                 if (storedId != null) {
                     if (state.running && previous?.running == false) notifications.cancelReply(storedId)
                     if (previous?.running == true && !state.running && !visible && prefs.notifyReplies) {
-                        val reply = state.newFinishedReply(turnStart)
+                        val reply = state.newFinishedReply(turnStart, previous)
                         if (reply != null && reply.outcome != TurnOutcome.Interrupted) {
                             val failed = reply.outcome == TurnOutcome.Error
                             val text = if (failed) reply.error ?: reply.text else reply.text

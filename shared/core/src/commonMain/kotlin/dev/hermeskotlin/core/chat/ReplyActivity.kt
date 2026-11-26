@@ -28,11 +28,19 @@ fun List<SessionMessage>.hasUnreadBotMessage(readUpTo: Double): Boolean = any { 
  * A silent completion can leave the previous, already finished reply at the end of the chat: Bot Chat's
  * `message.complete` carries no text for one, so the turn's empty bubble goes and the reply before it is last again.
  * That reply was there, finished, when the turn began. Measured from the start, not from the state just before the
- * end: a reconnect reads the stored transcript, this turn's reply finished in it, before it says the turn is over.
+ * end ([previous]): a reconnect reads the stored transcript, this turn's reply finished in it, before it says the turn
+ * is over.
+ *
+ * A history read during the turn (a reconnect, a turn that isn't ours) gives the old reply its stored row's key. A
+ * reply this turn didn't stream, under a key the start doesn't have, is the old one when its words are the same.
  */
-fun ChatState.newFinishedReply(atStart: ChatState?): ChatMessage.Assistant? {
+fun ChatState.newFinishedReply(atStart: ChatState?, previous: ChatState? = atStart): ChatMessage.Assistant? {
     val reply = messages.lastOrNull() as? ChatMessage.Assistant ?: return null
-    val old = atStart?.messages?.lastOrNull { it.key == reply.key } as? ChatMessage.Assistant ?: return reply
+    val before = atStart?.messages ?: return reply
+    val streamed = previous?.messages?.any { it.key == reply.key && it is ChatMessage.Assistant && it.streaming } == true
+    val old = before.lastOrNull { it.key == reply.key } as? ChatMessage.Assistant
+        ?: before.lastOrNull { it is ChatMessage.Assistant && !it.streaming }.takeUnless { streamed } as? ChatMessage.Assistant
+        ?: return reply
     return reply.takeUnless {
         !old.streaming && old.text == it.text && old.outcome == it.outcome && old.error == it.error
     }

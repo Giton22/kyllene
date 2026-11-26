@@ -82,7 +82,7 @@ internal fun noticesFor(
         }
     }
     if (previous?.running == true && !state.running && !focused && prefs.notifyReplies) {
-        val reply = state.newFinishedReply(turnStart)
+        val reply = state.newFinishedReply(turnStart, previous)
         if (reply != null && reply.outcome != TurnOutcome.Interrupted) {
             val failed = reply.outcome == TurnOutcome.Error
             val text = (if (failed) reply.error ?: reply.text else reply.text).trim()

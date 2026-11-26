@@ -84,16 +84,27 @@ class ReplyActivityTest {
         val readBack = started.copy(messages = answered.messages + ChatMessage.Assistant("row-7", text = "Done while away", outcome = TurnOutcome.Complete))
         val ended = readBack.copy(running = false)
         assertNull(ended.newFinishedReply(readBack))
-        assertEquals("Done while away", ended.newFinishedReply(started)?.text)
+        assertEquals("Done while away", ended.newFinishedReply(started, readBack)?.text)
+    }
+
+    @Test
+    fun aSilenceAfterAHistoryReadDoesNotBringBackThePreviousReplyUnderItsRowKey() {
+        // A heartbeat turn starts; its start reads the history, which keys the old live reply by its stored row.
+        val started = answered.reduce(event("message.start"))
+        val old = answered.messages.last() as ChatMessage.Assistant
+        val reread = started.copy(messages = listOf(old.copy(key = "row-12")) + started.messages.drop(1))
+        val done = reread.reduce(event("message.complete", """{"text":""}"""))
+        assertEquals("row-12", done.messages.last().key)
+        assertNull(done.newFinishedReply(started, reread))
     }
 
     @Test
     fun aTurnsOwnReplyIsNew() {
         val running = answered.reduce(event("message.start")).reduce(event("message.delta", """{"text":"Again"}"""))
         val done = running.reduce(event("message.complete", """{"text":"Again"}"""))
-        assertEquals("Again", done.newFinishedReply(running)?.text)
+        assertEquals("Again", done.newFinishedReply(answered, running)?.text)
         // The same words as the reply before are still a new reply.
         val same = answered.reduce(event("message.start"))
-        assertEquals("Already answered", same.reduce(event("message.complete", """{"text":"Already answered"}""")).newFinishedReply(same)?.text)
+        assertEquals("Already answered", same.reduce(event("message.complete", """{"text":"Already answered"}""")).newFinishedReply(answered, same)?.text)
     }
 }
