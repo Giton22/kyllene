@@ -68,6 +68,27 @@ class ChatReducerTest {
     }
 
     @Test
+    fun aStoredStoppedReplyReadsAsStopped() {
+        fun rows(json: String) = HermesJson.decodeFromString<List<SessionMessage>>("[$json]")
+        val user = """{"id":1,"role":"user","content":"next"}"""
+        // The streamed part on its own, a later step of a reply with tools, and a stop during a tool (a hidden row).
+        val alone = historyToMessages(rows("""$user,{"id":2,"role":"assistant","content":"Working","display_metadata":{"interrupted":true}}"""))
+        assertEquals(TurnOutcome.Interrupted, assertIs<ChatMessage.Assistant>(alone.last()).outcome)
+        assertEquals(2L, assertIs<ChatMessage.Assistant>(alone.last()).reactionRowId)
+        val tool = """{"id":2,"role":"assistant","content":"Checking.","tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},""" +
+            """{"id":3,"role":"tool","tool_call_id":"c1","content":"ok"}"""
+        val merged = historyToMessages(rows("""$user,$tool,{"id":4,"role":"assistant","content":"Then","display_metadata":{"interrupted":true}}"""))
+        assertEquals(TurnOutcome.Interrupted, assertIs<ChatMessage.Assistant>(merged.last()).outcome)
+        val hidden = historyToMessages(
+            rows("""$user,$tool,{"id":4,"role":"assistant","content":"","display_kind":"hidden","display_metadata":{"interrupted":true}}"""),
+        )
+        assertEquals(TurnOutcome.Interrupted, assertIs<ChatMessage.Assistant>(hidden.last()).outcome)
+        // A reply that wasn't stopped has no outcome.
+        val done = historyToMessages(rows("""$user,{"id":2,"role":"assistant","content":"Done."}"""))
+        assertEquals(null, assertIs<ChatMessage.Assistant>(done.last()).outcome)
+    }
+
+    @Test
     fun historyRetainsACommentaryOnlyAssistantRow() {
         val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"",
             "reasoning":"Old progress.","display_reasoning":"","display_commentary":["Public progress."]}""")

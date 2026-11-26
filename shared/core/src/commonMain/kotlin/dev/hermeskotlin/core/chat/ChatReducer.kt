@@ -368,7 +368,15 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
     val messagedSinceUser = mutableSetOf<String>()
     var replyingTo: String? = null
     rows.forEachIndexed { index, row ->
-        if (row.isHidden) return@forEachIndexed
+        if (row.isHidden) {
+            // A stop during a tool closes the turn with a hidden row that holds the stopped mark
+            // (v0.23.4 agent/message_sanitization.py `close_interrupted_tool_sequence`): the reply it closes was stopped.
+            val last = messages.lastOrNull()
+            if (row.role == "assistant" && row.stopped && last is ChatMessage.Assistant) {
+                messages[messages.lastIndex] = last.copy(outcome = TurnOutcome.Interrupted)
+            }
+            return@forEachIndexed
+        }
         val key = row.id?.let { "row-$it" } ?: "h$index"
         if ((row.role == "user" || row.role == "assistant") && row.displayKind != "failed_turn") {
             TranscriptRows.compaction(row.text)?.let { checkpoint ->
