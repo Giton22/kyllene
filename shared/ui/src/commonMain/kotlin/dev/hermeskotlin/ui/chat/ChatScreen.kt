@@ -4147,7 +4147,6 @@ private fun Composer(
 ) {
     // Attachments or comments alone are sendable: the gateway gets Desktop's image prompt or the file references.
     val hasText = actions.composer.text.isNotBlank() || attachments.isNotEmpty() || comments.isNotEmpty()
-    val canSend = connected && !actions.readingPastedImages
     val runningSend by actions.runningSend.collectAsStateWithLifecycle()
     val shape = RoundedCornerShape(Theme[radii][radiusXLarge])
     val page = Theme[colors][background]
@@ -4260,18 +4259,18 @@ private fun Composer(
                         if (state.running && hasText && !editing) {
                             if (command) {
                                 // A command runs at once; there's nothing to choose.
-                                Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = canSend) }
+                                Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = connected) }
                             } else {
                                 RunningSendSegments(
                                     mode = runningMode,
                                     attachments = attachments.isNotEmpty(),
-                                    enabled = canSend,
+                                    enabled = connected,
                                     onSend = actions::send,
                                 )
                             }
                         } else {
                             // While a task runs this only waits: nothing typed yet, or an edit, which goes once it ends.
-                            Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = canSend && hasText && !state.running) }
+                            Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = connected && hasText && !state.running) }
                         }
                     }
                 }
@@ -4345,7 +4344,7 @@ private fun onComposerKey(
         ComposerKey.Send, ComposerKey.Queue -> {
             val sendable = text.isNotBlank() || attachments.isNotEmpty() || comments.isNotEmpty()
             // An edit goes once the reply finishes, as the disabled Send says.
-            if (!sendable || !connected || actions.readingPastedImages || (state.running && editing)) return true
+            if (!sendable || !connected || (state.running && editing)) return true
             val command = attachments.isEmpty() && SlashCommand.parse(text.trim()) != null
             actions.send(if (key == ComposerKey.Queue && state.running && !command) RunningSend.Queue else null)
             recall.reset()

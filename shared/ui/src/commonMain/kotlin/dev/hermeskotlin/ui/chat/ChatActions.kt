@@ -24,9 +24,6 @@ interface ChatActions {
     /** What's being typed. */
     val composer: TextFieldState
 
-    /** The current draft is still reading an image pasted into it. */
-    val readingPastedImages: Boolean get() = false
-
     /**
      * Sends the composer. Mid-turn it goes the way [mode] says (steered in, queued, or sent after a stop),
      * or as [runningSend] says when no mode was picked for this message.

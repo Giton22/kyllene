@@ -74,7 +74,6 @@ import dev.hermeskotlin.core.slash.SlashCommand
 import dev.hermeskotlin.core.slash.SlashKind
 import dev.hermeskotlin.core.slash.SlashRoute
 import dev.hermeskotlin.core.slash.SlashSuggestion
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
@@ -448,8 +447,6 @@ class ChatViewModel(
     val attachments: StateFlow<List<OutgoingAttachment>> = _attachments.asStateFlow()
 
     private var imagePasteScope: CoroutineScope? = null
-    private val pendingImagePastes = mutableIntStateOf(0)
-    override val readingPastedImages: Boolean get() = pendingImagePastes.intValue > 0
 
     /** Files picked in chats that aren't open, by [trayKey]; they live as long as the app does. */
     private val trays = mutableMapOf<String, List<OutgoingAttachment>>()
@@ -644,10 +641,7 @@ class ChatViewModel(
 
     /** Opens [target]'s chat in the host, with the transcript's file callbacks bound to that target. */
     private fun bind(target: ChatTarget) {
-        val previousReads = imagePasteScope
-        imagePasteScope = null
-        pendingImagePastes.intValue = 0
-        previousReads?.cancel()
+        discardImagePastes()
         val chat = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
         session.value = chat
         widgetSession.value = chat?.let { it to target }
@@ -976,9 +970,8 @@ class ChatViewModel(
         val scope = imagePasteScope ?: CoroutineScope(
             viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job]),
         ).also { imagePasteScope = it }
-        pendingImagePastes.intValue++
         scope.launch {
-            // A provider can block in native I/O. Time out the wait so Send can recover even if the read can't stop yet.
+            // Time out the wait even if the provider is still blocked in native I/O.
             val reading = scope.async { read() }
             try {
                 val result = withTimeoutOrNull(IMAGE_PASTE_TIMEOUT_MS) { reading.await() }
@@ -992,9 +985,14 @@ class ChatViewModel(
                 if (picked.isNotEmpty()) addAttachments(picked)
             } finally {
                 reading.cancel()
-                if (imagePasteScope === scope) pendingImagePastes.intValue--
             }
         }
+    }
+
+    private fun discardImagePastes() {
+        val previousReads = imagePasteScope
+        imagePasteScope = null
+        previousReads?.cancel()
     }
 
     override fun removeAttachment(id: String) = _attachments.update { tray -> tray.filterNot { it.id == id } }
@@ -1288,17 +1286,17 @@ class ChatViewModel(
      * turn is stopped. A steer can't carry files, so with attachments it queues instead.
      */
     override fun send(mode: RunningSend?) {
-        if (readingPastedImages) return
         val chat = session.value ?: return
         val text = withoutEmptyListItem(composer.text)
         val attachments = _attachments.value
         val comments = _comments.value
         if (text.isBlank() && attachments.isEmpty() && comments.isEmpty()) return
         _editing.value?.let { key -> return sendEdit(chat, key, text, comments) }
-        val command = SlashCommand.parse(text.trim())
+        val command = SlashCommand.parse(text.trim()).takeIf { attachments.isEmpty() }
+        if (command?.name == "") return
+        discardImagePastes()
         // Commands run at once either way; they never become a turn to queue. Waiting comments stay for the next prompt.
-        if (command != null && attachments.isEmpty()) {
-            if (command.name.isEmpty()) return
+        if (command != null) {
             composer.clearText()
             runCommand(chat, command)
             return

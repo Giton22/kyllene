@@ -12,7 +12,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -121,22 +120,18 @@ class ComposerImagePasteTest {
     }
 
     @Test
-    fun sendWaitsForTheImageInTheCurrentDraft() {
+    fun sendDiscardsAnUnfinishedImagePaste() {
         val input = showChat()
         input.commitText("Look at this", 1)
-        val send = composeRule.onNodeWithContentDescription("Send")
         readSlowImage(input) {
-            send.assertIsNotEnabled()
-            // Even an already-dispatched Send action must leave the draft in place.
-            composeRule.runOnIdle { viewModel.send() }
-            assertEquals("Look at this", viewModel.composer.text.toString())
+            composeRule.onNodeWithContentDescription("Send").assertIsEnabled().performClick()
+            composeRule.waitUntil(5_000) { "prompt.submit" in socket.methods }
         }
 
-        composeRule.onNodeWithContentDescription("Remove copied.jpg").assertExists()
-        send.assertIsEnabled().performClick()
-        composeRule.waitUntil(5_000) { "prompt.submit" in socket.methods }
-        assertTrue(socket.methods.indexOf("image.attach_bytes") in 0 until socket.methods.indexOf("prompt.submit"))
+        assertTrue("image.attach_bytes" !in socket.methods)
         assertEquals("", viewModel.composer.text.toString())
+        composeRule.onNodeWithContentDescription("Remove copied.jpg").assertDoesNotExist()
+        assertNull(viewModel.attachmentError.value)
     }
 
     @Test
@@ -148,6 +143,10 @@ class ComposerImagePasteTest {
         }
 
         composeRule.onNodeWithText("Model").assertExists()
+        composeRule.waitUntil(5_000) {
+            composeRule.runOnIdle { viewModel.attachments.value.isNotEmpty() || viewModel.attachmentError.value != null }
+        }
+        assertNull(viewModel.attachmentError.value)
         assertEquals("copied.jpg", viewModel.attachments.value.single().name)
     }
 
@@ -212,11 +211,17 @@ class ComposerImagePasteTest {
         }.toByteArray()
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
+        val closed = CountDownLatch(1)
         val resolver = RuntimeEnvironment.getApplication().contentResolver
         Shadows.shadowOf(resolver).registerInputStreamSupplier(uri) {
             started.countDown()
             check(release.await(10, TimeUnit.SECONDS)) { "Test did not release the image read" }
-            ByteArrayInputStream(png)
+            object : ByteArrayInputStream(png) {
+                override fun close() {
+                    super.close()
+                    closed.countDown()
+                }
+            }
         }
         val content = InputContentInfo(uri, ClipDescription("Copied image", arrayOf("image/png")), null)
         try {
@@ -226,10 +231,8 @@ class ComposerImagePasteTest {
         } finally {
             release.countDown()
         }
-        composeRule.waitUntil(5_000) {
-            composeRule.runOnIdle { viewModel.attachments.value.isNotEmpty() || viewModel.attachmentError.value != null }
-        }
-        assertNull(viewModel.attachmentError.value)
+        composeRule.waitUntil(5_000) { closed.count == 0L }
+        composeRule.waitForIdle()
     }
 
     private class FixtureSocket : RpcTransport {

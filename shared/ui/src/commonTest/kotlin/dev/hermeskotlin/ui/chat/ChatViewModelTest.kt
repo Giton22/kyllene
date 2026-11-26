@@ -231,7 +231,28 @@ class ChatViewModelTest {
     private fun attachment(id: String) = OutgoingAttachment(id, "$id.txt", "text/plain", byteArrayOf(1))
 
     @Test
-    fun aTimedOutImagePasteReleasesTheDraftAndIgnoresALateImage() = runTest(dispatcher) {
+    fun sendingDropsAReadThatFinishesInTheNextDraft() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        val pending = CompletableDeferred<OutgoingAttachment>()
+        vm.composer.setTextAndPlaceCursorAtEnd("Look at this")
+        vm.pasteImages(target) { listOf(withContext(NonCancellable) { pending.await() }) to null }
+        try {
+            vm.send()
+            vm.composer.setTextAndPlaceCursorAtEnd("Next draft")
+            vm.pasteImages(target) { listOf(attachment("new")) to null }
+        } finally {
+            pending.complete(attachment("old"))
+        }
+
+        runCurrent()
+        assertEquals(listOf("new"), vm.attachments.value.map { it.id })
+        assertNull(vm.attachmentError.value)
+    }
+
+    @Test
+    fun aTimedOutImagePasteShowsAnErrorAndIgnoresALateImage() = runTest(dispatcher) {
         val (vm, _) = viewModel()
         val target = ChatTarget(gateway, "s1", "Chat")
         vm.open(target)
@@ -239,12 +260,10 @@ class ChatViewModelTest {
         vm.pasteImages(target) { withContext(NonCancellable) { result.await() } to null }
         try {
             advanceTimeBy(29_999)
-            assertTrue(vm.readingPastedImages)
             assertNull(vm.attachmentError.value)
 
             advanceTimeBy(1)
             runCurrent()
-            assertEquals(false, vm.readingPastedImages)
             assertEquals(ComposerNotice.ImagePasteTimedOut, vm.attachmentError.value)
         } finally {
             result.complete(listOf(OutgoingAttachment("image", "copied.jpg", "image/jpeg", byteArrayOf(1))))
