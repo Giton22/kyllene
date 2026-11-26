@@ -2,6 +2,7 @@ package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.sessions.SessionMessage
+import dev.hermeskotlin.core.sessions.distinctCommentary
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -30,7 +31,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
         "message.delta" -> appendText(payload.string("text"))
         "message.interim" ->
             // Text next to tool calls; when already streamed it is in the text already. The event doesn't say whether
-            // it's Codex commentary (which a loaded chat shows in Reasoning) or a step's own text, so it stays text.
+            // it's Codex commentary or a step's own text, so it stays text.
             if (payload.boolean("already_streamed") == true) this else appendText(payload.string("text")?.let { "$it\n\n" })
         "reasoning.delta", "reasoning.available" -> payload.string("text")?.let { chunk ->
             withOpenReply { it.copy(reasoning = it.reasoning + chunk) }
@@ -244,7 +245,7 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
             .long("final_assistant_row_id")?.takeIf { it > 0 } ?: base.reactionRowId,
     )
     // A turn that ended with nothing to show (e.g. interrupted at once) leaves no bubble, unless it failed or warns.
-    val empty = reply.text.isBlank() && reply.reasoning.isBlank() && reply.tools.isEmpty() && reply.error == null && warning == null
+    val empty = reply.text.isBlank() && reply.reasoning.isBlank() && reply.commentary.isEmpty() && reply.tools.isEmpty() && reply.error == null && warning == null
     val updated = messages.toMutableList().apply {
         when {
             index == size -> if (!empty) add(reply)
@@ -452,6 +453,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     )
                 }
                 val reasoning = row.reasoningText
+                val commentary = row.commentary
                 val previous = (messages.lastOrNull() as? ChatMessage.Assistant)?.takeUnless { before ->
                     val at = row.timestamp
                     val ended = before.timestamp
@@ -471,18 +473,20 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         reasoning = listOf(previous.reasoning, reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
                         reactionRowId = if (keepTarget) previous.reactionRowId else reactionRow,
                         userReaction = if (keepTarget) previous.userReaction else row.userReaction,
+                        commentary = (previous.commentary + commentary).distinctCommentary(),
                         tools = previous.tools + tools,
                         outcome = if (row.stopped) TurnOutcome.Interrupted else previous.outcome,
                         // The reply is dated by its last step, when it finished.
                         timestamp = row.timestamp ?: previous.timestamp,
                     )
-                } else if (text.isNotEmpty() || (reasoning.isNotEmpty() && !silent) || tools.isNotEmpty()) {
+                } else if (text.isNotEmpty() || (reasoning.isNotEmpty() && !silent) || commentary.isNotEmpty() || tools.isNotEmpty()) {
                     messages += ChatMessage.Assistant(
                         key,
                         text = text,
                         reasoning = reasoning,
                         reactionRowId = reactionRow,
                         userReaction = row.userReaction.takeIf { reactionRow != null },
+                        commentary = commentary,
                         tools = tools,
                         repliedTo = replyingTo,
                         timestamp = row.timestamp,
