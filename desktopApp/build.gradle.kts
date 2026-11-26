@@ -35,6 +35,7 @@ kotlin {
             implementation(libs.dbus.core)
         }
         jvmTest.dependencies {
+            implementation(libs.kotlinx.coroutines.test)
             implementation(libs.kotlin.test)
             implementation(compose.desktop.uiTestJUnit4)
             implementation(compose.desktop.currentOs)

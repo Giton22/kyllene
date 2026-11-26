@@ -422,6 +422,7 @@ fun SessionsSidebar(
     var inboxOpenKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(inboxLink) {
         val link = inboxLink ?: return@LaunchedEffect
+        if (!link.current()) { onInboxLinkTaken(link); return@LaunchedEffect }
         inboxOpen = true
         inboxOpenKey = link.key
         onInboxLinkTaken(link)
