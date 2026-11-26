@@ -66,7 +66,8 @@ object TranscriptRows {
      */
     fun isNoise(row: String, displayKind: String?, displayMetadata: JsonElement? = null): Boolean =
         (displayKind == "internal_notification" && routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
-            row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
+            row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row) ||
+            row.substringBefore('\n').trimEnd('\r') in COMPACTION_REMINDER_HEADERS
 
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
     fun compaction(text: String): TranscriptEvent.Compaction? {
@@ -233,6 +234,12 @@ object TranscriptRows {
     private const val PREFIX_END = "may reflect work described here — avoid repeating it:"
     private const val LEGACY_SUMMARY_PREFIX = "[CONTEXT SUMMARY]:"
     private const val SUMMARY_END = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
+    // Older Hermes versions can store model-facing reminders as user rows without a display kind.
+    private val COMPACTION_REMINDER_HEADERS = setOf(
+        "[STILL IN PROGRESS — this is the active request, restated after the " +
+            "compaction boundary because it was not finished yet. Continue it; do not start over.]",
+        "[Your active task list was preserved across context compression]",
+    )
     private val HEARTBEAT = Regex("""^\[Background process \S+ heartbeat #\d+ """)
     private val PROCESS = Regex("""^\[IMPORTANT: (?:Background process|\d+ background processes) [\s\S]*]$""")
     private val BATCH_SPLIT = Regex("""\n\n(?=\[IMPORTANT: )""")

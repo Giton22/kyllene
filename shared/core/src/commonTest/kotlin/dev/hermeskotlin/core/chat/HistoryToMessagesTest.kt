@@ -100,6 +100,28 @@ class HistoryToMessagesTest {
     }
 
     @Test
+    fun exactCompactionRemindersStayOutOfHistoryAndTheOriginalBotMessageRemains() {
+        val restatement = "[STILL IN PROGRESS — this is the active request, restated after the " +
+            "compaction boundary because it was not finished yet. Continue it; do not start over.]"
+        val taskList = "[Your active task list was preserved across context compression]"
+        val original = "Message from 🤖 Rook (@rook): Please check the backup."
+        val question = "$taskList appears in my chat. What is it?"
+        val mention = "Please explain this header:\n$restatement"
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive(original)),
+            SessionMessage(id = 2, role = "user", content = JsonPrimitive("$COMPACTION_PREFIX Notes\n$SUMMARY_END\n$restatement\n$original"),
+                displayContent = JsonPrimitive("$restatement\n$original")),
+            SessionMessage(id = 3, role = "user", content = JsonPrimitive("$taskList\r\n- Check the backup")),
+            SessionMessage(id = 4, role = "user", content = JsonPrimitive(question)),
+            SessionMessage(id = 5, role = "user", content = JsonPrimitive(mention)),
+        ))
+
+        assertEquals(listOf("row-1", "row-4", "row-5"), messages.map { it.key })
+        assertEquals(TranscriptEvent.FromBot("Rook", "rook", "Please check the backup."), assertIs<ChatMessage.Event>(messages[0]).event)
+        assertEquals(listOf(question, mention), messages.filterIsInstance<ChatMessage.User>().map { it.text })
+    }
+
+    @Test
     fun regroupingHistoryKeepsContentAndChronologyAsOlderRowsArrive() {
         val text = "| Name | Result |\r\n|---|---|\r\n| scan | ${"word".repeat(200)} |\r\n\r\n```text\r\nready\r\n```"
         val older = SessionMessage(id = 1, role = "user", content = JsonPrimitive("[Cron delivery: Earlier]\n"))
