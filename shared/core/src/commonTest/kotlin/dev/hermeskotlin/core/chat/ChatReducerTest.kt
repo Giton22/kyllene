@@ -69,6 +69,17 @@ class ChatReducerTest {
     }
 
     @Test
+    fun adjacentSavedStepsDoNotRepeatTheSameCommentary() {
+        val rows = HermesJson.decodeFromString<List<SessionMessage>>("""[
+            {"role":"assistant","display_commentary":["Checking.\r\nMore detail."]},
+            {"role":"assistant","content":"Done.","display_commentary":["Checking.\nMore detail.","Finishing."]}
+        ]""")
+        val reply = assertIs<ChatMessage.Assistant>(historyToMessages(rows).single())
+
+        assertEquals(listOf("Checking.\r\nMore detail.", "Finishing."), reply.commentary)
+    }
+
+    @Test
     fun aStoredStoppedReplyReadsAsStopped() {
         fun rows(json: String) = HermesJson.decodeFromString<List<SessionMessage>>("[$json]")
         val user = """{"id":1,"role":"user","content":"next"}"""
@@ -123,6 +134,17 @@ class ChatReducerTest {
         val reply = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single())
         assertEquals("Summary", reply.reasoning)
         assertEquals(listOf("Progress.\nStill working.", "working."), reply.commentary)
+    }
+
+    @Test
+    fun legacyReasoningOmitsBothShortAndOverlappingMultilineCommentary() {
+        val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"Done.",
+            "reasoning":"Checking.\r\n\r\nChecking.\r\nMore detail.\r\n\r\nSummary.",
+            "display_commentary":["Checking.","Checking.\nMore detail."]}""")
+        val reply = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single())
+
+        assertEquals("Summary.", reply.reasoning)
+        assertEquals(listOf("Checking.", "Checking.\nMore detail."), reply.commentary)
     }
 
     @Test

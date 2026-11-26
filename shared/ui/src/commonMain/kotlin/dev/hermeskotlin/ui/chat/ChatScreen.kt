@@ -2474,13 +2474,14 @@ internal fun List<ChatMessage>.replyMark(): Pair<Int, Int> {
 }
 
 /**
- * The text a reader would scroll down for: a prompt, a reply's answer, a command's output, or a turn having failed
+ * The text a reader would scroll down for: a prompt, a reply's text and commentary, a command's output, or a turn having failed
  * or ended with a warning. A reply's blank space isn't counted: the stream and the stored rows space its steps
  * differently. A failure counts the same whatever it says, as the stored row may word it differently.
  */
 private fun ChatMessage.replyLength(): Int = when (this) {
     is ChatMessage.User -> text.length
     is ChatMessage.Assistant -> text.count { !it.isWhitespace() } +
+        commentary.sumOf { update -> update.count { !it.isWhitespace() } } +
         (if (error != null || outcome == TurnOutcome.Error) 1 else 0) + (if (warning != null) 1 else 0)
     is ChatMessage.Command -> output.length
     is ChatMessage.Event -> if (event is TranscriptEvent.FailedTurn) 1 else 0

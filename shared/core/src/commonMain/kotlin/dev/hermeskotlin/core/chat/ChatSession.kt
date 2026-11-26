@@ -12,6 +12,7 @@ import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.rpc.RpcTimeoutException
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
+import dev.hermeskotlin.core.sessions.distinctCommentary
 import dev.hermeskotlin.core.sessions.putStartInstruction
 import dev.hermeskotlin.core.slash.SlashCommand
 import dev.hermeskotlin.core.slash.SlashResult
@@ -3504,10 +3505,10 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
     if (live.key != turnReplyKey && live.key != inflightReplyKey(inflightText)) return this
     // Steps are saved apart and joined with blank lines; the stream runs them together. Spacing aside, the same.
     if (!live.text.startsWithIgnoringSpaces(saved.text)) return this
+    val commentary = (saved.commentary + live.commentary).distinctCommentary()
+    val shown = if (commentary.isEmpty()) "" else live.text.commentaryParagraphs()
     val folded = live.copy(
-        commentary = (saved.commentary + live.commentary).distinct().filterNot { update ->
-            live.text.split("\n\n").any { it.trim() == update }
-        },
+        commentary = commentary.filterNot { it.commentaryParagraphs() in shown },
         // Folded before, the live reply leads with the saved reasoning and has streamed on from there.
         reasoning = if (live.reasoning.startsWithIgnoringSpaces(saved.reasoning)) live.reasoning
             else listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
@@ -3533,6 +3534,10 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
         removeAt(savedAt)
     }
 }
+
+/** Keep paragraph boundaries when comparing a saved update to text already shown by the stream. */
+private fun String.commentaryParagraphs(): String =
+    replace("\r\n", "\n").split("\n\n").joinToString("\n\n", prefix = "\n\n", postfix = "\n\n") { it.trim() }
 
 /**
  * The streaming reply that is the running turn's: it carries on from the gateway's copy ([inflightText]), and has

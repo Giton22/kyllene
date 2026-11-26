@@ -326,6 +326,24 @@ class ChatSessionResumeTest {
     }
 
     @Test
+    fun foldingSavedStepsKeepsOnlyCommentaryMissingFromLiveText() {
+        val rows = listOf(
+            """{"id":2,"role":"assistant","content":"Starting.","timestamp":101,
+                "display_commentary":["Checking.\r\n\r\nMore detail.","Looking.\r\nStill looking.","More detail","Only in history."]}""",
+        ).map { lenient.decodeFromString<SessionMessage>(it) }
+        val saved = historyToMessages(rows, turnStartedAt = 100.0)
+        val live = ChatMessage.Assistant(
+            "live-0", text = "Starting.\n\nChecking.\n\nMore detail.\n\nLooking.\nStill looking.\n\nDone.",
+            streaming = true,
+        )
+
+        val merged = (saved + live).withSavedStepsInLiveReply(100.0, live.text, turnReplyKey = live.key)
+        val reply = assertIs<ChatMessage.Assistant>(merged.single())
+        assertEquals(live.text, reply.text)
+        assertEquals(listOf("More detail", "Only in history."), reply.commentary)
+    }
+
+    @Test
     fun aFoldAgainKeepsTheLiveCopyOfARunningTool() {
         // Folded once; the saved row came again while its tool still ran, with no result row yet.
         val rows = savedFirstStep().dropLast(1).map { lenient.decodeFromString<SessionMessage>(it) }

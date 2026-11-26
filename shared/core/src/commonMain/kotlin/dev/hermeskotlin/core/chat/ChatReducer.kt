@@ -2,6 +2,7 @@ package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.sessions.SessionMessage
+import dev.hermeskotlin.core.sessions.distinctCommentary
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -472,7 +473,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         reasoning = listOf(previous.reasoning, reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
                         reactionRowId = if (keepTarget) previous.reactionRowId else reactionRow,
                         userReaction = if (keepTarget) previous.userReaction else row.userReaction,
-                        commentary = previous.commentary + commentary,
+                        commentary = (previous.commentary + commentary).distinctCommentary(),
                         tools = previous.tools + tools,
                         outcome = if (row.stopped) TurnOutcome.Interrupted else previous.outcome,
                         // The reply is dated by its last step, when it finished.

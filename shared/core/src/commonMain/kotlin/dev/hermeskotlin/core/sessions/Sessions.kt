@@ -167,18 +167,19 @@ data class SessionMessage(
     /** Public progress supplied by the gateway, in transcript order. */
     val commentary: List<String>
         get() = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
-            .distinctBy { it.replace("\r\n", "\n") }
+            .distinctCommentary()
 
     /** Prefer the gateway's display projection, including an explicitly empty one. */
     val reasoningText: String
         get() {
             displayReasoning?.let { return it }
             val legacy = reasoning.orEmpty()
-            if (commentary.isEmpty()) return legacy
-            // Older gateways can include the same public progress in their legacy reasoning field.
+            val updates = commentary
+            if (updates.isEmpty()) return legacy
+            // Longer blocks go first so removing a shared line can't leave the rest of an update in Reasoning.
             var lines = legacy.replace("\r\n", "\n")
-            commentary.forEach { update ->
-                val wholeLines = Regex("^" + Regex.escape(update.replace("\r\n", "\n")) + "$", RegexOption.MULTILINE)
+            updates.map { it.replace("\r\n", "\n") }.sortedByDescending { it.length }.forEach { update ->
+                val wholeLines = Regex("^" + Regex.escape(update) + "$", RegexOption.MULTILINE)
                 lines = wholeLines.replace(lines, "")
             }
             return lines.trim()
@@ -216,6 +217,10 @@ data class SessionMessagesPage(
 )
 
 private val IMAGE_PART_TYPES = setOf("image_url", "image", "input_image")
+
+/** Keep the first display copy when only the line endings differ. */
+internal fun List<String>.distinctCommentary(): List<String> =
+    if (size < 2) this else distinctBy { it.replace("\r\n", "\n") }
 
 private fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
