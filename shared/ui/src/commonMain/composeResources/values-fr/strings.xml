@@ -28,6 +28,9 @@
     <string name="common_download">Télécharger</string>
     <string name="common_open_release">Ouvrir la version</string>
     <string name="settings_section_appearance">Apparence</string>
+    <string name="settings_section_accessibility">Accessibilité</string>
+    <string name="settings_opaque_composer">Zone de saisie opaque</string>
+    <string name="settings_opaque_composer_detail">Ajoute un fond opaque derrière la zone de saisie du chat pour faciliter la lecture.</string>
     <string name="settings_section_chat">Conversation</string>
     <string name="settings_section_voice">Voix</string>
     <string name="settings_section_notifications">Notifications</string>

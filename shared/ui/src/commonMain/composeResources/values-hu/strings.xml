@@ -28,6 +28,9 @@
     <string name="common_download">Letöltés</string>
     <string name="common_open_release">Kiadás megnyitása</string>
     <string name="settings_section_appearance">Megjelenés</string>
+    <string name="settings_section_accessibility">Akadálymentesség</string>
+    <string name="settings_opaque_composer">Átlátszatlan üzenetíró mező</string>
+    <string name="settings_opaque_composer_detail">Egyszínű hátteret ad a csevegés üzenetíró mezőjének a könnyebb olvashatóságért.</string>
     <string name="settings_section_chat">Csevegés</string>
     <string name="settings_section_voice">Hang</string>
     <string name="settings_section_notifications">Értesítések</string>

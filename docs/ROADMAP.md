@@ -116,6 +116,8 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Chat options (⋮ beside new chat) for the open chat: rename, pin, export as Markdown, copy session ID, archive, delete
 - [x] Floating see-through composer over the conversation; putting the on-screen keyboard away lets go of its focus, except while a hardware keyboard is attached, as some on-screen keyboards hide on its first key (#472)
 - [x] Ctrl+Enter on a hardware keyboard sends from the phone's chat composer, with the word still being typed; Enter still starts a line (#482)
+- [x] Settings → Accessibility → Opaque composer gives the chat composer a solid background when enabled (off by default), from the Disconnected banner and plan down to the composer, with no transcript showing between them
+- [x] On the phone, the jump button, New reply and the Disconnected banner blur the transcript and wallpaper just around them; the Disconnected banner sits just above the composer, and the top bar's status steps aside while it shows
 - [x] Reading back stays put while a reply streams below; the jump arrow then reads "New reply" once reply text arrives (not while it only thinks or runs tools)
 - [x] Live list updates (`sessions.changed`, `session.title` → refetch; also refetch after reconnect)
 - [x] Live per-session status in the list, turns started on other clients included: `session.active_list` is asked on connect, after turn and list events, and every 10 s while the list shows; a chat waiting on a request this phone never saw reads "Waiting for you"
