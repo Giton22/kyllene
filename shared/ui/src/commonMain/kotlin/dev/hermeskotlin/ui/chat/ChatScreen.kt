@@ -2946,7 +2946,10 @@ internal fun AssistantReply(
     var contextMenuOpen by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
-    val canMenu = isDesktop && !message.streaming && text.isNotBlank()
+    val actionable = !message.streaming && text.isNotBlank()
+    val canMenu = isDesktop && actionable
+    // A reply of only code or files has nothing to say, in either menu.
+    val speakable = remember(text, actionable) { actionable && readAloudText(text).isNotEmpty() }
     // Said by the menu and the icons alike; read here, as the menu is built outside composition.
     val copyLabel = stringResource(Res.string.chat_copy)
     val regenerateLabel = stringResource(Res.string.chat_regenerate)
@@ -2964,7 +2967,7 @@ internal fun AssistantReply(
                 if (reading) RowMenuItem(if (readingPaused) resumeReadingLabel else pauseReadingLabel, if (readingPaused) Lucide.Play else Lucide.Pause, run = if (readingPaused) onResumeReading else onPauseReading)
                 else null,
                 if (reading) RowMenuItem(stopReadingLabel, Lucide.Square, run = onStopReading)
-                else onReadAloud?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
+                else onReadAloud?.takeIf { speakable }?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
             )
         }
     }
@@ -3021,9 +3024,6 @@ internal fun AssistantReply(
             }
         }
         val usage = message.usage?.takeIf { settings.showUsage && !message.streaming }
-        val actionable = !message.streaming && text.isNotBlank()
-        // A reply of only code or files has nothing to say.
-        val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
         val actions = if (actionable) listOfNotNull(
             onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
             onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
