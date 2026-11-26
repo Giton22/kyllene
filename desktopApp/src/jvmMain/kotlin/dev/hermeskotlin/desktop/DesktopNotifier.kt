@@ -28,6 +28,7 @@ data class DesktopNotice(
     val chatTitle: String?,
     val request: InputRequest? = null,
     val origin: DesktopNoticeOrigin? = null,
+    val replyPreview: String? = null,
 )
 
 /** The actual source lifetime, including for a chat window's separate host. */
@@ -89,6 +90,7 @@ internal fun noticesFor(
                 body = text.lineSequence().firstOrNull { it.isNotBlank() }?.take(BODY_LIMIT) ?: words.replyIn,
                 sessionId = state.storedSessionId,
                 chatTitle = chat,
+                replyPreview = if (failed) null else desktopReplyPreview(text),
             )
         }
     }

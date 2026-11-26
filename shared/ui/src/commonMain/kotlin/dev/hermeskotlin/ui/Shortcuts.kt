@@ -34,6 +34,8 @@ sealed interface Shortcut {
     data object Settings : Shortcut
     /** An external action reveals the currently owned chat rather than a page opened over it. */
     data class RevealChat(val source: ChatSession, val current: () -> Boolean) : Shortcut
+    /** An owned notification waits for dialogs and sign-in before opening its destination. */
+    data class RevealNotice(val source: ChatSession?, val current: () -> Boolean, val open: () -> Unit) : Shortcut
     data object ToggleSidebar : Shortcut
     data object SearchChats : Shortcut
     data object NextChat : Shortcut

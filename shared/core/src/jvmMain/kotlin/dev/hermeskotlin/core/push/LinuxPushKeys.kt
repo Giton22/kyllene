@@ -14,7 +14,7 @@ import kotlinx.serialization.json.Json
 fun linuxPushKeys(store: KeyValueStore): PushKeys? = if (store is LinuxKeyValueStore) LinuxPushKeys(store) else null
 
 /** One identity and its pending revocations, committed together through the unlocked secure store. */
-internal class LinuxPushKeys(private val store: KeyValueStore) : PushKeys {
+internal class LinuxPushKeys(private val store: KeyValueStore) : PushKeys, PushInbox {
     @Serializable
     private data class Device(val id: String, val encPrivate: String, val sigPrivate: String,
         val encPublic: String, val sigPublic: String, val pushTopic: String, val replyTopic: String)
@@ -75,6 +75,93 @@ internal class LinuxPushKeys(private val store: KeyValueStore) : PushKeys {
     // every lookup; the text is still read through the store each time, so a change made elsewhere is checked again.
     private var checkedText: String? = null
     private var checkedState: State? = null
+
+    @Serializable
+    private data class Replay(val version: Int, val deviceId: String, val gatewayUrl: String,
+        val topic: String, val gateway: PushGateway, val seen: Map<String, Long>, val since: Long?)
+
+    override fun subscription(gatewayUrl: String): PushSubscription? = locked {
+        val state = read()
+        val device = state.device ?: return@locked null
+        val gateway = state.gateway?.takeIf { state.gatewayUrl == gatewayUrl } ?: return@locked null
+        val subscription = PushSubscription(gatewayUrl, device.id, NtfyClient.DEFAULT_SERVER, device.pushTopic, gateway, null)
+        subscription.copy(sinceSeconds = replay(subscription).since)
+    }
+
+    override fun current(subscription: PushSubscription): Boolean = locked { matches(subscription, read()) }
+
+    override fun receive(subscription: PushSubscription, event: NtfyEvent): PushMessage? = locked {
+        val message = open(subscription, event) ?: return@locked null
+        commit(subscription, event, message)
+    }
+
+    override suspend fun receivePersisting(
+        subscription: PushSubscription, event: NtfyEvent, persist: suspend (PushMessage) -> Unit,
+    ): PushMessage? {
+        val message = locked {
+            open(subscription, event)?.takeIf { acceptedReplay(subscription, event, it) != null }
+        } ?: return null
+        persist(message)
+        return locked { commit(subscription, event, message) }
+    }
+
+    private fun open(subscription: PushSubscription, event: NtfyEvent): PushMessage? {
+        val state = read()
+        if (!matches(subscription, state) || event.event != "message" || event.topic != subscription.topic) return null
+        val body = event.message?.takeIf { it.length <= NtfyClient.MAX_BODY } ?: return null
+        val message = runCatching {
+            val envelope = PushCrypto.decodeEnvelope(body)
+            val encoded = PushCrypto.unb64(checkNotNull(state.device).encPrivate)
+            val key = try { PushCrypto.decodePrivate(encoded) } finally { encoded.fill(0) }
+            val plain = PushCrypto.open(envelope, subscription.topic, PushDirection.GatewayToPhone, key,
+                PushCrypto.decodePublic(subscription.gateway.sigPub))
+            try { HermesJson.decodeFromString(PushMessage.serializer(), plain.decodeToString()) }
+            finally { plain.fill(0) }
+        }.getOrNull() ?: return null
+        return message.takeIf { it.ts >= 0 }
+    }
+
+    private fun commit(subscription: PushSubscription, event: NtfyEvent, message: PushMessage): PushMessage? {
+        if (!matches(subscription, read())) return null
+        val next = acceptedReplay(subscription, event, message) ?: return null
+        runBlocking(Dispatchers.IO) { store.put(REPLAY_KEY, stateJson.encodeToString(Replay.serializer(), next)) }
+        return message
+    }
+
+    private fun acceptedReplay(subscription: PushSubscription, event: NtfyEvent, message: PushMessage): Replay? {
+        val cached = replay(subscription)
+        val now = System.currentTimeMillis() / 1000
+        val guard = PushGuard(PushMessage.MAX_AGE_G2P_SECONDS) { now }
+        guard.remember(cached.seen)
+        if (!guard.accept(message)) return null
+        // Neither a broker's forged timestamp nor a gateway clock ahead may skip later valid messages.
+        val cursor = minOf(event.time.takeIf { it > 0 } ?: message.ts, message.ts, now)
+        return cached.copy(seen = guard.snapshot(), since = maxOf(cached.since ?: 0, cursor))
+    }
+
+    private fun matches(subscription: PushSubscription, state: State): Boolean =
+        state.gatewayUrl == subscription.gatewayUrl && state.gateway == subscription.gateway &&
+            state.device?.id == subscription.deviceId && state.device?.pushTopic == subscription.topic &&
+            subscription.server == NtfyClient.DEFAULT_SERVER
+
+    private fun replay(subscription: PushSubscription): Replay {
+        val text = runBlocking(Dispatchers.IO) { store.get(REPLAY_KEY) }
+        val cached = text?.let {
+            try {
+                stateJson.decodeFromString(Replay.serializer(), it).also { record ->
+                    check(record.version == 1 && record.gatewayUrl.isNotBlank() && accepts(record.gateway))
+                    check(UUID.fromString(record.deviceId).toString() == record.deviceId && TOPIC.matches(record.topic))
+                    check(record.seen.size <= 2000 && record.seen.all { (id, ts) -> id.isNotBlank() && ts >= 0 })
+                    check(record.since == null || record.since >= 0)
+                }
+            } catch (_: Exception) {
+                throw PushInboxException()
+            }
+        }
+        return cached?.takeIf { it.deviceId == subscription.deviceId && it.gatewayUrl == subscription.gatewayUrl &&
+            it.topic == subscription.topic && it.gateway == subscription.gateway }
+            ?: Replay(1, subscription.deviceId, subscription.gatewayUrl, subscription.topic, subscription.gateway, emptyMap(), null)
+    }
 
     // PushKeys is synchronous. Startup unlocks the store first; disk commits run on IO before callers publish success.
     private fun read(): State {
@@ -145,6 +232,7 @@ internal class LinuxPushKeys(private val store: KeyValueStore) : PushKeys {
 
     private companion object {
         const val KEY = "linux.push.identity.v1"
+        const val REPLAY_KEY = "linux.push.replay.v1"
         // Missing fields must not become an intentionally retired identity.
         val stateJson = Json(HermesJson) { explicitNulls = true }
         val TOPIC = Regex("hp-[0-9a-f]{32}")
