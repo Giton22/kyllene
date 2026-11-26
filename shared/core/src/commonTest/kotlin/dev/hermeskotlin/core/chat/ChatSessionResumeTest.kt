@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -437,6 +438,9 @@ class ChatSessionResumeTest {
         val ask = transports.last().sent.value.first { it.isCall("session.events.since") }
         assertEquals("rt1", ask.param("session_id"))
         assertEquals("3", ask.param("last_seen"))
+        // The seqs count in gateway.ready's epoch here; gateways up to v0.22.2 refuse either key (4000).
+        assertFalse("replay_epoch" in ask["params"]!!.jsonObject)
+        assertFalse("last_sequence" in ask["params"]!!.jsonObject)
         assertEquals(readsBefore, reads.size, "the transcript was read again although the replay filled the gap")
 
         // The rest of the turn streams on, and a frame sent twice is shown once.
@@ -488,6 +492,23 @@ class ChatSessionResumeTest {
         // Live events go on from there, whatever their seq.
         transports.last().push(delta(701, "ld"))
         assertEquals("Hello world", chat.state.first { it.reply()?.text?.endsWith("ld") == true }.reply()?.text)
+    }
+
+    @Test
+    fun aGatewayBeforeTheSessionAuthorityIsAskedOnlyWhatItTakes() = runTest {
+        // Up to v0.22.2 the request contract forbids extra params: a replay_epoch or last_sequence gets a 4000.
+        answer = { _, method, params ->
+            when {
+                method != "session.events.since" -> "{}"
+                "replay_epoch" in params || "last_sequence" in params -> "error:4000"
+                else -> since(replayed(4, "lo"), latest = 4)
+            }
+        }
+        val (chat, _) = droppedMidTurn(backgroundScope)
+        val readsBefore = reads.size
+
+        assertEquals("Hello", chat.state.first { it.reply()?.text == "Hello" }.reply()?.text)
+        assertEquals(readsBefore, reads.size)
     }
 
     @Test

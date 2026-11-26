@@ -45,7 +45,8 @@ val notifyModule = module {
     single { RequestAnswers(get(), get(), get(), get(), get()) }
     single { VoiceCallKeeper(androidContext()) } bind VoiceKeepAlive::class
     single { ReadAloudKeeper(androidContext()) } bind ReadAloudKeepAlive::class
-    single { ChatNotifier(androidContext(), get(), get(), get(), get(), get(), get(), get<WatchRelay>().busy) }
+    single { ChatServiceKeeper(androidContext()) }
+    single { ChatNotifier(get(), get(), get(), get(), get(), get(), get(), get<WatchRelay>().busy) }
     single { WatchNotifier(get(), get(), get(), get(), get(), get(), get(), get()) }
     single { BotNotifier(androidContext(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { RoomNotifier(get(), get(), get(), get(), get(), get()) }

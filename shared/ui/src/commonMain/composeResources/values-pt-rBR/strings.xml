@@ -28,6 +28,9 @@
     <string name="common_download">Baixar</string>
     <string name="common_open_release">Abrir versão</string>
     <string name="settings_section_appearance">Aparência</string>
+    <string name="settings_section_accessibility">Acessibilidade</string>
+    <string name="settings_opaque_composer">Campo de mensagem opaco</string>
+    <string name="settings_opaque_composer_detail">Adiciona um fundo sólido atrás do campo de mensagem do chat para facilitar a leitura.</string>
     <string name="settings_section_chat">Conversa</string>
     <string name="settings_section_voice">Voz</string>
     <string name="settings_section_notifications">Notificações</string>

@@ -28,6 +28,9 @@
     <string name="common_download">Download</string>
     <string name="common_open_release">Open release</string>
     <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_section_accessibility">Accessibility</string>
+    <string name="settings_opaque_composer">Opaque composer</string>
+    <string name="settings_opaque_composer_detail">Add a solid background behind the chat composer to make it easier to read.</string>
     <string name="settings_section_chat">Chat</string>
     <string name="settings_section_voice">Voice</string>
     <string name="settings_section_notifications">Notifications</string>

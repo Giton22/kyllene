@@ -148,15 +148,7 @@ class SessionWatcher(
             val delivery = found?.second?.delivery
             val method = found?.second?.let(InputRequest::respondMethod)
             if (delivery is InputRequestDelivery.PendingControl && method != null) {
-                client.request(
-                    method,
-                    buildJsonObject {
-                        put("session_id", found.first.runtimeId)
-                        delivery.executionGeneration?.let { put("execution_generation", it) }
-                        put("prompt_id", found.second.id)
-                        result.forEach { (k, v) -> put(k, v) }
-                    },
-                )
+                client.request(method, InputRequest.pendingControlParams(found.second, found.first.runtimeId, result))
             } else {
                 client.respond(requestId, result)
             }
@@ -233,8 +225,12 @@ class SessionWatcher(
             all + (storedId to (chat ?: WatchedChat(storedId, row.runtimeId, row.title)))
         }
         val result = try {
+            // The session authority has no `session.activate`. Its attach is `session.resume`, which subscribes this
+            // socket to the chat's events too, as Hermes Desktop's warm re-attach does
+            // (apps/desktop/src/api/canonical-protocol.ts). Its reply's replay fields stay here: an open chat reads
+            // its own resume.
             client.request(
-                "session.activate",
+                if (client.sessionAuthority) "session.resume" else "session.activate",
                 buildJsonObject {
                     put("session_id", row.runtimeId)
                     put("omit_messages", true)

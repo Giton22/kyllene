@@ -28,6 +28,9 @@
     <string name="common_download">Herunterladen</string>
     <string name="common_open_release">Release öffnen</string>
     <string name="settings_section_appearance">Darstellung</string>
+    <string name="settings_section_accessibility">Barrierefreiheit</string>
+    <string name="settings_opaque_composer">Undurchsichtiges Eingabefeld</string>
+    <string name="settings_opaque_composer_detail">Zeigt einen deckenden Hintergrund hinter dem Eingabefeld im Chat, damit es leichter zu lesen ist.</string>
     <string name="settings_section_chat">Chat</string>
     <string name="settings_section_voice">Stimme</string>
     <string name="settings_section_notifications">Benachrichtigungen</string>

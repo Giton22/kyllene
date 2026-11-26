@@ -62,7 +62,10 @@ class AndroidLiveCall(context: Context) : LiveCall {
             .setSamplesReadyCallback { samples -> micLevel = level(samples.data) }
             .createAudioDeviceModule()
         this.adm = adm
-        val factory = PeerConnectionFactory.builder().setAudioDeviceModule(adm).createPeerConnectionFactory()
+        val factory = PeerConnectionFactory.builder()
+            .setAudioDeviceModule(adm)
+            .setOptions(liveCallOptions())
+            .createPeerConnectionFactory()
         this.factory = factory
 
         val gathered = CompletableDeferred<Unit>()
@@ -233,6 +236,19 @@ class AndroidLiveCall(context: Context) : LiveCall {
             return min(1.0, sqrt(sum / count) / 256.0 / 42.0).toFloat()
         }
     }
+}
+
+/**
+ * The offer goes out once, with the candidates gathered by then. Android's NetworkMonitor reports the networks a
+ * moment after it starts, and gathering can finish before that: the offer then has zero ICE candidates and the call
+ * never connects. That happens now and then on any network, and nearly always while a VpnService (Tailscale,
+ * OpenVPN, WireGuard, …) is up. Without the monitor WebRTC reads the interfaces itself, before it gathers. Passing
+ * options at all drops WebRTC's default of ignoring loopback, which would put 127.0.0.1 and ::1 in the offer, so
+ * that is set again here.
+ */
+internal fun liveCallOptions() = PeerConnectionFactory.Options().apply {
+    networkIgnoreMask = PeerConnectionFactory.Options.ADAPTER_TYPE_LOOPBACK
+    disableNetworkMonitor = true
 }
 
 /** Creates an SDP and waits for it. */

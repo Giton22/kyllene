@@ -25,6 +25,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.buildJsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -48,24 +49,36 @@ class SessionWatcherTest {
 
     private class Setup(val connection: GatewayConnection, val host: ChatHost, val tracker: AttentionTracker, val watcher: SessionWatcher)
 
-    private suspend fun TestScope.setup(maxWatched: Int = 10): Setup {
+    /**
+     * A gateway on its session [authority] has no `session.activate` (-32601, as gateway/session_controls.py answers
+     * it); its attach is a `session.resume` without the messages, whose reply also carries the replay fields.
+     */
+    private suspend fun TestScope.setup(maxWatched: Int = 10, authority: Boolean = false): Setup {
         val scope = backgroundScope
         gateway = FakeGateway(scope).apply {
-            ready = { FakeGateway.QUIET_READY }
+            ready = { if (authority) AUTHORITY_READY else FakeGateway.QUIET_READY }
             http = { json("""{"messages":[]}""") }
             answer = { call ->
                 val sid = call.param("session_id").orEmpty()
-                when (call.method) {
-                    "session.active_list" -> live.value.joinToString(",", """{"sessions":[""", "]}") {
+                val attach = if (authority) "session.resume" else "session.activate"
+                when {
+                    call.method == "session.active_list" -> live.value.joinToString(",", """{"sessions":[""", "]}") {
                         """{"id":"${it.runtime}","session_key":"${it.key}","status":"${it.status}","title":"${it.title}"}"""
                     }
-                    "session.activate" -> {
-                        val result = """{"session_id":"$sid","running":$activateRunning,"open_requests":$openRequests}"""
+                    authority && call.method == "session.activate" -> call.error(
+                        -32601, "unknown method: session.activate — not available on this Hermes backend", reason = "unknown_method",
+                    )
+                    // The watcher attaches a listed runtime id; an open chat resumes its stored id.
+                    call.method == attach && (!authority || sid.startsWith("rt-")) -> {
+                        val result = """{"session_id":"$sid","running":$activateRunning,"open_requests":$openRequests""" +
+                            if (authority) ""","subscription_id":"sub-$sid","replay_epoch":"watcher-epoch","last_sequence":99,"inflight":{"assistant":"Half a reply from elsewhere"}}""" else "}"
                         if (activateDelayMs == 0L) result
                         else null.also { scope.launch { delay(activateDelayMs); call.socket.push(call.reply(result)) } }
                     }
-                    "session.resume" -> """{"session_id":"rt-$sid","running":false}"""
-                    else -> "{}"
+                    else -> when (call.method) {
+                        "session.resume" -> """{"session_id":"rt-$sid","running":false}"""
+                        else -> "{}"
+                    }
                 }
             }
         }
@@ -174,6 +187,54 @@ class SessionWatcherTest {
         val response = sockets.last().awaitSent { it["id"]?.jsonPrimitive?.contentOrNull == "srq-1" && "result" in it }
         assertEquals("once", (response["result"] as JsonObject)["choice"]?.jsonPrimitive?.contentOrNull)
         assertNull(watcher.find("srq-1"))
+    }
+
+    /**
+     * A pending-controls clarify waiting in watched chat `a`, answered from a notification with [result]. Returns
+     * whether it went out. `clarify.respond` takes exactly these four keys (hermes-agent `ClarifyRespondParams`).
+     */
+    private suspend fun TestScope.answerPendingClarify(questions: String, result: (InputRequest.Clarify) -> JsonObject): Boolean {
+        live.value = listOf(Row("a", "working"))
+        val watcher = setup().watcher
+        watcher.chats.first { "a" in it }
+        sockets.last().push(event("clarify.request", "rt-a", """{"prompt_id":"prm-1","execution_generation":4,"questions":[$questions]}"""))
+        watcher.chats.first { it["a"]?.requests?.isNotEmpty() == true }
+        val clarify = watcher.find("prm-1")?.second as InputRequest.Clarify
+        val sent = watcher.answer("prm-1", result(clarify))
+        assertEquals(!sent, watcher.find("prm-1") != null)
+        return sent
+    }
+
+    private fun clarifyRespond(): JsonObject = sentMethods("clarify.respond").single()["params"]!!.jsonObject
+
+    private fun assertClarifyRespond(answer: String) {
+        val params = clarifyRespond()
+        assertEquals(setOf("session_id", "execution_generation", "prompt_id", "answer"), params.keys)
+        assertEquals("rt-a", params["session_id"]?.jsonPrimitive?.contentOrNull)
+        assertEquals("4", params["execution_generation"]?.jsonPrimitive?.contentOrNull)
+        assertEquals("prm-1", params["prompt_id"]?.jsonPrimitive?.contentOrNull)
+        assertEquals(answer, params["answer"]?.jsonPrimitive?.contentOrNull)
+    }
+
+    private val q1 = """{"qid":"q1","question":"Name?"}"""
+    private val q2 = """{"qid":"q2","question":"Colour?","choices":["Red","Blue"]}"""
+
+    @Test
+    fun aPendingClarifyBatchOfOneGoesAsItsAnswer() = runTest {
+        assertTrue(answerPendingClarify(q1) { InputAnswers.clarify(it, listOf(listOf("Ada"))) })
+        assertClarifyRespond("Ada")
+    }
+
+    @Test
+    fun aPendingClarifyCancelGoesAsAnEmptyAnswer() = runTest {
+        assertTrue(answerPendingClarify("$q1,$q2") { InputAnswers.clarifyCancel })
+        assertClarifyRespond("")
+    }
+
+    @Test
+    fun aPendingClarifyBatchOfTwoIsNotSent() = runTest {
+        assertFalse(answerPendingClarify("$q1,$q2") { InputAnswers.clarify(it, listOf(listOf("Ada"), listOf("Red"))) })
+        assertTrue(sentMethods("clarify.respond").isEmpty())
     }
 
     @Test
@@ -362,5 +423,63 @@ class SessionWatcherTest {
         live.value = listOf(Row("a", "working"))
         val watcher = setup().watcher
         assertEquals(WatchedTurnEnd("a", "Chat a", "", TurnOutcome.Complete, null), watcher.turnEnds.first())
+    }
+
+    // --- A gateway whose /api/ws runs on its session authority ---
+
+    @Test
+    fun onTheSessionAuthorityAChatRunningElsewhereIsAttachedWithSessionResume() = runTest {
+        live.value = listOf(Row("a", "working"), Row("b", "idle"))
+        val watcher = setup(authority = true).watcher
+        assertEquals(setOf("a"), watcher.chats.first { it.isNotEmpty() }.keys)
+        val resume = sentMethods("session.resume").single()["params"]!!.jsonObject
+        assertEquals("rt-a", resume["session_id"]?.jsonPrimitive?.contentOrNull)
+        assertEquals("true", resume["omit_messages"]?.jsonPrimitive?.contentOrNull)
+        assertTrue(sentMethods("session.activate").isEmpty())
+    }
+
+    @Test
+    fun onTheSessionAuthorityTheWatcherKeepsWatchingAndTakesTheOpenRequests() = runTest {
+        openRequests = """[{"id":"srq-old","method":"approval","params":{"session_id":"rt-a","command":"ls","choices":["once","deny"]}}]"""
+        live.value = listOf(Row("a", "waiting"), Row("b", "working"))
+        val setup = setup(authority = true)
+        val watcher = setup.watcher
+        assertEquals(listOf("srq-old"), watcher.chats.first { it["a"]?.requests?.isNotEmpty() == true }.getValue("a").requests.map { it.id })
+        // Not parked as a gateway that can't be watched on: the next chat is attached too, and its turn is heard.
+        watcher.chats.first { "b" in it }
+        assertEquals(listOf("rt-a", "rt-b"), sentMethods("session.resume").map { it["params"]!!.jsonObject["session_id"]!!.jsonPrimitive.content })
+        val end = async { watcher.turnEnds.first() }
+        runCurrent()
+        sockets.last().push(event("message.complete", "rt-b", """{"text":"All done.","status":"complete"}"""))
+        assertEquals(WatchedTurnEnd("b", "Chat b", "All done.", TurnOutcome.Complete, null), end.await())
+    }
+
+    @Test
+    fun onTheSessionAuthorityTheWatchersResumeLeavesTheOpenChatAlone() = runTest {
+        val setup = setup(authority = true)
+        val open = setup.host.open(FakeGateway.URL, "open", null)
+        open.state.first { it.runtimeSessionId == "rt-open" && it.historyLoaded }
+        val before = open.state.value
+        // Its reply carries another chat's replay epoch, sequence and half-streamed reply.
+        live.value = listOf(Row("a", "working"))
+        setup.watcher.chats.first { "a" in it }
+        runCurrent()
+        assertEquals(before.messages, open.state.value.messages)
+        assertEquals(before.running, open.state.value.running)
+        assertTrue(open.state.value.messages.none { it.toString().contains("Half a reply") })
+    }
+
+    @Test
+    fun onAnOlderGatewayTheWatcherStillAttachesWithSessionActivate() = runTest {
+        live.value = listOf(Row("a", "working"))
+        val watcher = setup(authority = false).watcher
+        watcher.chats.first { "a" in it }
+        assertEquals(1, sentMethods("session.activate").size)
+        assertTrue(sentMethods("session.resume").isEmpty())
+    }
+
+    private companion object {
+        const val AUTHORITY_READY =
+            """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}"""
     }
 }

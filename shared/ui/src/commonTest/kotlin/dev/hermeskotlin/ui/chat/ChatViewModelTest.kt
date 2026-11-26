@@ -299,6 +299,19 @@ class ChatViewModelTest {
         assertEquals("\"/srv/site\"", create["params"]?.jsonObject?.get("cwd")?.toString())
     }
 
+    @Test
+    fun anEmptyListItemLeftAtTheEndIsntSent() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        vm.open(ChatTarget(gateway, null, null, nonce = 1))
+        // What Enter after the last item leaves behind.
+        vm.composer.setTextAndPlaceCursorAtEnd("1. eggs\n2. bread\n3. ")
+        vm.send(null)
+        // The fake gateway can't start the chat, so what was sent comes back to the composer as it went out.
+        assertEquals("1. eggs\n2. bread", vm.composer.text.toString())
+    }
+
     private val scribe = BotIdentity("scribe", "Scribe")
 
     @Test
