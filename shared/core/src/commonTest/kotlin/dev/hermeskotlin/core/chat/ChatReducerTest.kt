@@ -42,14 +42,15 @@ class ChatReducerTest {
     }
 
     @Test
-    fun historyCombinesProjectedReasoningAndCommentaryAfterCacheRoundTrip() {
+    fun historySeparatesProjectedReasoningAndCommentaryAfterCacheRoundTrip() {
         val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"Done.",
             "reasoning":"Summary\n\nUnredacted old commentary.","display_reasoning":"Summary",
             "display_commentary":["Public progress.","Public progress."," "]}""")
         val cached = HermesJson.decodeFromString<SessionMessage>(HermesJson.encodeToString(row))
         val reply = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(cached)).single())
         assertEquals("Done.", reply.text)
-        assertEquals("Summary\n\nPublic progress.", reply.reasoning)
+        assertEquals("Summary", reply.reasoning)
+        assertEquals(listOf("Public progress."), reply.commentary)
     }
 
     @Test
@@ -64,7 +65,7 @@ class ChatReducerTest {
     fun commentaryRepeatedWithOtherLineEndsOrEdgeSpacesShowsOnce() {
         val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"Done.","display_reasoning":"",
             "display_commentary":["Progress.\r\nDone with it.","Progress.\nDone with it. "]}""")
-        assertEquals("Progress.\r\nDone with it.", assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single()).reasoning)
+        assertEquals(listOf("Progress.\r\nDone with it."), assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single()).commentary)
     }
 
     @Test
@@ -100,7 +101,8 @@ class ChatReducerTest {
             "reasoning":"Old progress.","display_reasoning":"","display_commentary":["Public progress."]}""")
         val reply = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single())
         assertEquals("", reply.text)
-        assertEquals("Public progress.", reply.reasoning)
+        assertEquals("", reply.reasoning)
+        assertEquals(listOf("Public progress."), reply.commentary)
         val legacy = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","reasoning":"Summary"}""")
         assertEquals("Summary", assertIs<ChatMessage.Assistant>(historyToMessages(listOf(legacy)).single()).reasoning)
     }
@@ -119,7 +121,8 @@ class ChatReducerTest {
             "reasoning":"Summary\r\n\r\nProgress.\r\nStill working.",
             "display_commentary":["Progress.\nStill working.","working."]}""")
         val reply = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single())
-        assertEquals("Summary\r\n\r\nProgress.\r\nStill working.\n\nworking.", reply.reasoning)
+        assertEquals("Summary", reply.reasoning)
+        assertEquals(listOf("Progress.\nStill working.", "working."), reply.commentary)
     }
 
     @Test

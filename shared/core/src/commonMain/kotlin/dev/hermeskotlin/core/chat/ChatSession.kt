@@ -3505,6 +3505,9 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
     // Steps are saved apart and joined with blank lines; the stream runs them together. Spacing aside, the same.
     if (!live.text.startsWithIgnoringSpaces(saved.text)) return this
     val folded = live.copy(
+        commentary = (saved.commentary + live.commentary).distinct().filterNot { update ->
+            live.text.split("\n\n").any { it.trim() == update }
+        },
         // Folded before, the live reply leads with the saved reasoning and has streamed on from there.
         reasoning = if (live.reasoning.startsWithIgnoringSpaces(saved.reasoning)) live.reasoning
             else listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
@@ -3604,7 +3607,7 @@ internal fun ChatState.sealReplyBefore(key: String): ChatState {
     val open = messages.indexOfLast { it is ChatMessage.Assistant && it.streaming }
     if (prompt < 0 || open !in 0 until prompt) return this
     val reply = messages[open] as ChatMessage.Assistant
-    if (reply.text.isBlank() && reply.reasoning.isBlank() && reply.tools.isEmpty()) {
+    if (reply.text.isBlank() && reply.reasoning.isBlank() && reply.commentary.isEmpty() && reply.tools.isEmpty()) {
         return copy(messages = messages.toMutableList().apply { removeAt(open) })
     }
     return copy(

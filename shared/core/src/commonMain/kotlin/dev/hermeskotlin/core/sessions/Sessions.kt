@@ -164,17 +164,24 @@ data class SessionMessage(
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
 
-    /** Prefer the gateway's display projection; older gateways only send [reasoning]. */
+    /** Public progress supplied by the gateway, in transcript order. */
+    val commentary: List<String>
+        get() = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+            .distinctBy { it.replace("\r\n", "\n") }
+
+    /** Prefer the gateway's display projection, including an explicitly empty one. */
     val reasoningText: String
         get() {
-            val base = displayReasoning ?: reasoning.orEmpty()
-            // Some gateways still flatten public commentary into legacy reasoning. Match whole lines,
-            // including multiline commentary, without changing the stored text's line endings.
-            val lines = "\n${base.replace("\r\n", "\n")}\n"
-            val commentary = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.replace("\r\n", "\n") }.filterNot {
-                lines.contains("\n${it.replace("\r\n", "\n")}\n")
+            displayReasoning?.let { return it }
+            val legacy = reasoning.orEmpty()
+            if (commentary.isEmpty()) return legacy
+            // Older gateways can include the same public progress in their legacy reasoning field.
+            var lines = legacy.replace("\r\n", "\n")
+            commentary.forEach { update ->
+                val wholeLines = Regex("^" + Regex.escape(update.replace("\r\n", "\n")) + "$", RegexOption.MULTILINE)
+                lines = wholeLines.replace(lines, "")
             }
-            return (listOf(base) + commentary).filter { it.isNotBlank() }.joinToString("\n\n")
+            return lines.trim()
         }
 
     /** Image parts of a multimodal row (`image_url` / `image` / `input_image`). */
