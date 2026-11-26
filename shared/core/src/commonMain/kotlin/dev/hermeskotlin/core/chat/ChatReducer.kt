@@ -393,10 +393,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     messages += ChatMessage.Notice(key, report.line, stored = true)
                     return@forEachIndexed
                 }
-                val storedText = row.text.trim()
-                // Hermes can tag a bot's message to this chat as an internal notification.
-                val noiseKind = row.displayKind.takeUnless { it == "internal_notification" && AgentMessage.parse(storedText) != null }
-                if (TranscriptRows.isNoise(storedText, noiseKind, row.displayMetadata)) return@forEachIndexed
+                if (TranscriptRows.isNoise(row.text.trim(), row.displayKind, row.displayMetadata)) return@forEachIndexed
                 TranscriptRows.classify(row.text, row.displayKind, deliveries, row.displayMetadata)?.let { events ->
                     events.forEachIndexed { i, event ->
                         messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event, timestamp = row.timestamp)
