@@ -22,12 +22,15 @@ fun List<SessionMessage>.hasUnreadBotMessage(readUpTo: Double): Boolean = any { 
             AgentMessage.parse(row.text, requireEnvelope = row.displayKind == "internal_notification") != null)
 }
 
-/** A silent completion can leave the previous, already finished reply at the end of the chat. */
+/**
+ * A silent completion can leave the previous, already finished reply at the end of the chat: Bot Chat's
+ * `message.complete` carries no text for one, so the turn's empty bubble goes and the reply before it is last again.
+ * That reply was already there, finished, while the turn ran, wherever the turn's own bubble sat.
+ */
 fun ChatState.newFinishedReply(previous: ChatState?): ChatMessage.Assistant? {
     val reply = messages.lastOrNull() as? ChatMessage.Assistant ?: return null
-    val old = previous?.messages?.lastOrNull() as? ChatMessage.Assistant ?: return reply
+    val old = previous?.messages?.lastOrNull { it.key == reply.key } as? ChatMessage.Assistant ?: return reply
     return reply.takeUnless {
-        !old.streaming && old.key == it.key && old.text == it.text &&
-            old.outcome == it.outcome && old.error == it.error
+        !old.streaming && old.text == it.text && old.outcome == it.outcome && old.error == it.error
     }
 }

@@ -1,12 +1,16 @@
 package dev.hermeskotlin.core.chat
 
+import dev.hermeskotlin.core.network.HermesJson
+import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.sessions.SessionMessage
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ReplyActivityTest {
@@ -56,5 +60,29 @@ class ReplyActivityTest {
         assertTrue(listOf(reply, tool).hasUnreadBotMessage(100.0))
         assertTrue(listOf(incoming, tool).hasUnreadBotMessage(120.0))
         assertFalse(listOf(reply, incoming, tool).hasUnreadBotMessage(125.0))
+    }
+
+    private fun event(type: String, payload: String = "{}") =
+        GatewayEvent(type, HermesJson.parseToJsonElement(payload), sessionId = "rt", seq = null)
+
+    private val answered = ChatState().reduce(event("message.start")).reduce(event("message.complete", """{"text":"Already answered"}"""))
+
+    @Test
+    fun aBotChatSilenceDoesNotBringBackThePreviousReply() {
+        // Bot Chat's message.complete is empty for a silence, so the turn's bubble goes and the old reply is last again.
+        val running = answered.reduce(event("message.start"))
+        val done = running.reduce(event("message.complete", """{"text":""}"""))
+        assertEquals("Already answered", (done.messages.last() as ChatMessage.Assistant).text)
+        assertNull(done.newFinishedReply(running))
+    }
+
+    @Test
+    fun aTurnsOwnReplyIsNew() {
+        val running = answered.reduce(event("message.start")).reduce(event("message.delta", """{"text":"Again"}"""))
+        val done = running.reduce(event("message.complete", """{"text":"Again"}"""))
+        assertEquals("Again", done.newFinishedReply(running)?.text)
+        // The same words as the reply before are still a new reply.
+        val same = answered.reduce(event("message.start"))
+        assertEquals("Already answered", same.reduce(event("message.complete", """{"text":"Already answered"}""")).newFinishedReply(same)?.text)
     }
 }
