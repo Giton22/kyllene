@@ -38,7 +38,7 @@ val robolectricDeps = tasks.register("robolectricDepsProperties") {
     }
 }
 
-tasks.withType<Test>().matching { it.name == "testAndroidHostTest" }.configureEach {
+tasks.withType<Test>().matching { it.name == "testAndroidHostTest" || it.name.endsWith("UnitTest") }.configureEach {
     dependsOn(robolectricDeps)
     // The jars' contents are the input, not where they sit, so the test results stay shareable through the build cache.
     inputs.files(robolectricAndroidAll).withPropertyName("robolectricAndroidAll")

@@ -30,6 +30,7 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -38,6 +39,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
@@ -52,8 +54,10 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * A bot just made here, whose Bot Chat another client (Desktop, a second phone) opens in the moment between our
@@ -68,7 +72,7 @@ class BotsViewModelTakenTest {
     private val gateway = SavedGateway("https://hermes.example.ts.net")
     private val json = headersOf(HttpHeaders.ContentType, "application/json")
 
-    @BeforeTest fun setUp() = Dispatchers.setMain(dispatcher)
+    @BeforeTest fun setUp() = Dispatchers.setMain(StandardTestDispatcher(dispatcher.scheduler))
     @AfterTest fun tearDown() = Dispatchers.resetMain()
 
     /**
@@ -84,6 +88,7 @@ class BotsViewModelTakenTest {
         private val listed: Boolean = true,
         /** Whether our `session.create` fails outright instead (and no other client takes the chat). */
         private val createFails: Boolean = false,
+        var fixedRoster: String? = null,
     ) : RpcTransport {
         private val inbound = Channel<String>(Channel.UNLIMITED).apply {
             val payload = if (authority) """{"session_authority":true}""" else "{}"
@@ -115,7 +120,7 @@ class BotsViewModelTakenTest {
 
         private fun answer(method: String, params: JsonObject): Any = when (method) {
             "profiles.create" -> { made = true; "{}" }
-            "profiles.list" -> roster()
+            "profiles.list" -> fixedRoster ?: roster()
             "profiles.configure" -> """{"applied":{"ui_meta":true}}"""
             "setup.runtime_check" -> """{"ok":true}"""
             "session.create" -> if (createFails) Refused(5000, "Session store is busy") else {
@@ -146,12 +151,21 @@ class BotsViewModelTakenTest {
         fun sent(method: String): List<JsonObject> = requests.filter { it.first == method }.map { it.second }
     }
 
-    private suspend fun viewModel(socket: RaceGateway): BotsViewModel {
+    private suspend fun viewModel(
+        socket: RaceGateway,
+        history: suspend (String?, Int) -> Pair<HttpStatusCode, String> = { _, _ -> error("Unexpected history request") },
+    ): BotsViewModel {
         val config = MockEngineConfig()
         config.dispatcher = dispatcher
         config.addHandler { request ->
-            if (request.url.encodedPath.endsWith("api/cron/jobs")) respond("""{"jobs":[]}""", HttpStatusCode.OK, json)
-            else respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
+            val (status, body) = when {
+                request.url.encodedPath.endsWith("/messages") -> history(
+                    request.url.parameters["profile"], request.url.parameters["offset"]?.toInt() ?: 0,
+                )
+                request.url.encodedPath.endsWith("api/cron/jobs") -> HttpStatusCode.OK to """{"jobs":[]}"""
+                else -> HttpStatusCode.OK to """{"ticket":"T","ttl_seconds":30}"""
+            }
+            respond(body, status, json)
         }
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
         val client = createHttpClient(MockEngine(config), cookies)
@@ -247,6 +261,145 @@ class BotsViewModelTakenTest {
         assertNull(opened)
         assertTrue(vm.state.value.notice != null, "no notice")
         assertEquals(1, done)
+    }
+
+    @Test
+    fun rosterLoadsAndWatchesBeforeUnreadHistoryReturns() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster())
+        val reply = CompletableDeferred<String>()
+        val historyStarted = CompletableDeferred<Unit>()
+        var reads = 0
+        val vm = viewModel(socket) { _, _ ->
+            reads++
+            historyStarted.complete(Unit)
+            HttpStatusCode.OK to reply.await()
+        }
+
+        try {
+            vm.bind(gateway.gatewayUrl)
+            runCurrent()
+
+            vm.refresh()
+            historyStarted.await()
+            assertFalse(vm.state.value.loading, "The roster must load while history is suspended")
+            assertEquals(listOf("work"), vm.state.value.all.map { it.name })
+            assertTrue(socket.sent("session.list").isNotEmpty())
+            assertTrue(vm.state.value.unread.isEmpty())
+
+            reply.complete("""{"session_id":"chat","messages":[{"role":"assistant","content":"Done.","timestamp":1100}]}""")
+            vm.state.first { "work" in it.unread }
+
+            vm.refresh()
+            runCurrent()
+            assertEquals(1, reads, "An unchanged unread chat does not need its history again")
+        } finally {
+            reply.complete("""{"session_id":"chat","messages":[]}""")
+        }
+    }
+
+    private fun historyRoster(activity: Int = 1100, nextActivity: Int? = null): String {
+        val next = nextActivity?.let {
+            """,{"name":"after","canonical_session":{"id":"chat-after","last_active":$it,"message_count":1}}"""
+        }.orEmpty()
+        return """{"profiles":[{"name":"work","canonical_session":{"id":"chat","last_active":$activity,"message_count":800}}$next],"bot_mode_protocol":true}"""
+    }
+
+    private fun historyPage(vararg rows: String) =
+        HttpStatusCode.OK to """{"session_id":"chat","messages":[${rows.joinToString(",")}]}"""
+
+    private fun toolRows(offset: Int = 0, timestamp: Int? = 1100, withIds: Boolean = true) =
+        Array(100) { index ->
+            val id = if (withIds) """"id":${offset + index + 1},""" else ""
+            """{$id"role":"tool","timestamp":$timestamp}"""
+        }
+
+    private val readableReply = """{"role":"assistant","content":"Done.","timestamp":1050}"""
+
+    @Test
+    fun aReplyOnPageTwoMakesTheBotUnread() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster())
+        val offsets = mutableListOf<Int>()
+        val vm = viewModel(socket) { _, offset ->
+            offsets += offset
+            if (offset == 0) historyPage(*toolRows()) else historyPage(readableReply)
+        }
+        vm.bind(gateway.gatewayUrl)
+        vm.state.first { "work" in it.unread }
+        assertEquals(listOf(0, 100), offsets)
+    }
+
+    @Test
+    fun aFailedFetchKeepsTheBadgeAndTheNextRefreshCanClearIt() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        var response = historyPage(readableReply)
+        var nextResponse = historyPage(readableReply)
+        var reads = 0
+        val vm = viewModel(socket) { profile, _ ->
+            if (profile == "after") nextResponse else {
+                reads++
+                response
+            }
+        }
+        vm.bind(gateway.gatewayUrl)
+        vm.state.first { it.unread == setOf("work", "after") }
+
+        socket.fixedRoster = historyRoster(activity = 1200, nextActivity = 1150)
+        response = HttpStatusCode.ServiceUnavailable to "{}"
+        nextResponse = historyPage()
+        vm.refresh()
+        val afterFailure = vm.state.first { "after" !in it.unread }
+        assertEquals(2, reads)
+        assertEquals(setOf("work"), afterFailure.unread)
+
+        response = historyPage("""{"role":"tool","timestamp":1200}""")
+        vm.refresh()
+        vm.state.first { it.unread.isEmpty() }
+        assertEquals(3, reads)
+    }
+
+    @Test
+    fun anUntimedToolRowDoesNotExtendAReadPage() = runTest(dispatcher, timeout = 10.seconds) {
+        val offsets = scannedOffsets { offset ->
+            if (offset == 0) {
+                val rows = toolRows(timestamp = 900)
+                rows[99] = """{"id":100,"role":"tool"}"""
+                historyPage(*rows)
+            } else historyPage()
+        }
+        assertEquals(listOf(0), offsets)
+    }
+
+    @Test
+    fun aRepeatedPageWithoutRowIdsStopsTheScan() = runTest(dispatcher, timeout = 10.seconds) {
+        val offsets = scannedOffsets { offset ->
+            if (offset < 200) historyPage(*toolRows(withIds = false)) else historyPage()
+        }
+        assertEquals(listOf(0, 100), offsets)
+    }
+
+    @Test
+    fun pagesWithoutTimestampsCannotKeepTheScanGoingForever() = runTest(dispatcher, timeout = 10.seconds) {
+        val offsets = scannedOffsets { offset ->
+            if (offset < 700) historyPage(*toolRows(offset, timestamp = null)) else historyPage()
+        }
+        assertEquals(listOf(0, 100, 200, 300, 400), offsets)
+    }
+
+    private suspend fun scannedOffsets(
+        page: (Int) -> Pair<HttpStatusCode, String>,
+    ): List<Int> {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        val offsets = mutableListOf<Int>()
+        val vm = viewModel(socket) { profile, offset ->
+            if (profile == "after") historyPage(readableReply) else {
+                offsets += offset
+                page(offset)
+            }
+        }
+        vm.bind(gateway.gatewayUrl)
+        // The second bot's badge confirms the worker has finished the first bot's scan.
+        assertEquals(setOf("after"), vm.state.first { "after" in it.unread }.unread)
+        return offsets
     }
 
     @Test
