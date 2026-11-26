@@ -141,7 +141,10 @@ fun main(args: Array<String>) {
     // A second launch brings the running Herald forward, with its link, instead of opening another.
     val flatpak = inFlatpak
     val restartWait = if (flatpak && args.contentEquals(arrayOf("--restart"))) 30_000L else 0L
-    val instance = SingleInstance.claim(appDataDir, launchLink, restartWait) ?: exitProcess(if (restartWait > 0) 1 else 0)
+    val flatpakRuntime = flatpak
+    val startupCapable = flatpakRuntime && java.awt.SystemTray.isSupported()
+    val quietLaunch = backgroundInvocation(args, flatpakRuntime)
+    val instance = SingleInstance.claim(appDataDir, launchLink, restartWait, foreground = !quietLaunch) ?: exitProcess(if (restartWait > 0) 1 else 0)
     // Linux's light or dark preference, which Compose reads only once there: this follows it as it changes. Asked
     // for now, so the answer comes in while the storage and the settings are read.
     val colorScheme = if (System.getProperty("os.name") == "Linux") LinuxColorScheme({ SystemColorScheme.dark = it }) else null
@@ -162,6 +165,11 @@ fun main(args: Array<String>) {
     colorScheme?.awaitFirst(1_000)
     val links = koin.get<ChatLinks>()
     koin.get<PushSetup>().start()
+    val portal = BackgroundPortal()
+    val startup = if (quietLaunch && startupCapable) runBlocking {
+        if (portal.available()) BackgroundStartup.load(koin.get(), portal::request) else null
+    } else null
+    val startHidden = startup != null && backgroundLaunch(args, startup.state.value.choice, startupCapable)
     val saved = WindowMemory.read(koin.get())
     // The same mark as docs/logo.svg, for the title bar, the taskbar and the tray.
     val icon = Thread.currentThread().contextClassLoader.getResourceAsStream("herald.svg")!!.use { loadSvgPainter(it, Density(1f)) }
@@ -174,7 +182,14 @@ fun main(args: Array<String>) {
         val shortcuts = remember { ShortcutBus() }
         val back = remember { DesktopBack() }
         val settings = settingsStore.settings.collectAsState().value ?: AppSettings()
-        var windowShown by remember { mutableStateOf(true) }
+        var windowShown by remember { mutableStateOf(!startHidden) }
+        var startupControl by remember { mutableStateOf(startup) }
+        val startupState = startupControl?.state?.collectAsState()?.value
+        LaunchedEffect(Unit) {
+            if (startupCapable && !quietLaunch && portal.available()) {
+                startupControl = BackgroundStartup.load(koin.get(), portal::request)
+            }
+        }
         var frame by remember { mutableStateOf<Frame?>(null) }
         val focused = remember { MutableStateFlow(false) }
         var quickOpen by remember { mutableStateOf(false) }
@@ -443,6 +458,13 @@ fun main(args: Array<String>) {
                 }
                 Item(stringResource(Res.string.tray_quick_entry), onClick = { quickOpen = true; quickRaise++ })
                 Separator()
+                val control = startupControl
+                if (control != null && startupState != null) {
+                    CheckboxItem(stringResource(Res.string.startup_at_login), checked = startupState.choice != StartupChoice.Off,
+                        enabled = !startupState.busy, onCheckedChange = { on -> scope.launch { control.set(on) } })
+                    startupState.message?.let { Item(stringResource(it.text), enabled = false, onClick = {}) }
+                    Separator()
+                }
                 Item(stringResource(Res.string.tray_quit), onClick = ::exitApplication)
             },
         )
