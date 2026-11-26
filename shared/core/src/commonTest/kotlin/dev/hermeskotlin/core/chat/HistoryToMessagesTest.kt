@@ -308,6 +308,53 @@ class HistoryToMessagesTest {
     }
 
     @Test
+    fun incomingBotMessagesRemainVisibleWhenHermesMarksThemInternal() {
+        val body = "Please review `draft.md`."
+        val rows = listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("wake"), displayKind = "internal_notification"),
+            SessionMessage(
+                id = 2,
+                role = "user",
+                content = JsonPrimitive("Message from 🤖 Scribe (@scribe): $body"),
+                displayKind = "internal_notification",
+                timestamp = 200.0,
+            ),
+            SessionMessage(
+                id = 3,
+                role = "user",
+                content = JsonPrimitive("[Message from agent 'scribe'] Done."),
+                displayKind = "internal_notification",
+                timestamp = 210.0,
+            ),
+            SessionMessage(id = 4, role = "user", content = JsonPrimitive("Message from the scheduler: wake"), displayKind = "internal_notification"),
+            SessionMessage(id = 5, role = "user", content = JsonPrimitive("Message from 🤖 Scribe: wake"), displayKind = "internal_notification"),
+            SessionMessage(id = 6, role = "user", content = JsonPrimitive("Message from Scribe (@scribe): wake"), displayKind = "internal_notification"),
+        )
+
+        val messages = historyToMessages(rows).map { assertIs<ChatMessage.Event>(it) }
+        assertEquals(
+            listOf(TranscriptEvent.FromBot("Scribe", "scribe", body), TranscriptEvent.FromBot("scribe", null, "Done.")),
+            messages.map { it.event },
+        )
+        assertEquals(listOf(200.0, 210.0), messages.map { it.timestamp })
+    }
+
+    @Test
+    fun scheduledResultWithPlainSenderTextRemainsARoutine() {
+        val body = "Message from the scheduler: backup complete"
+        val row = SessionMessage(
+            id = 1,
+            role = "user",
+            content = JsonPrimitive(body),
+            displayKind = "internal_notification",
+            displayMetadata = Json.parseToJsonElement("""{"completion_note":[["cron","local","job"]]}"""),
+        )
+
+        val message = assertIs<ChatMessage.Event>(historyToMessages(listOf(row)).single())
+        assertEquals(body, assertIs<TranscriptEvent.Routine>(message.event).body)
+    }
+
+    @Test
     fun anotherBotsMessageKeepsItsTimeSoTheNewMessagesLineCanFindIt() {
         val rows = listOf(
             SessionMessage(id = 1, role = "user", content = JsonPrimitive("Message from 🤖 Scribe (@scribe): the draft is ready"), timestamp = 200.0),
