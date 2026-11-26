@@ -838,7 +838,7 @@ class StreamedSpeechTest {
 
         // One echo so far, not two: the microphone listens over the rest of the reply.
         assertEquals(3, recorder.listening.value)
-        // The echo's written down first, so the cut-in gets its own words.
+        // The echo's sent to be written down first, so the cut-in gets the next transcript.
         setup.transcribed.first { it >= 2 }
         recorder.cut.complete(Unit)
         setup.socket.submits.first { it.size == 2 }
@@ -864,7 +864,7 @@ class StreamedSpeechTest {
         recorder.listening.first { it >= 2 }
         advanceTimeBy(1_000)
         assertEquals(2, recorder.listening.value)
-        // Both echoes are written down first, so the next request gets its own words.
+        // Both echoes are sent to be written down first, so the next request gets the next transcript.
         setup.transcribed.first { it >= 3 }
         stream.gateway.close()
         setup.socket.event("message.complete", """{"text":"It was a long day.","status":"complete"}""")
@@ -899,7 +899,7 @@ class StreamedSpeechTest {
         recorder.listening.first { it >= 2 }
         advanceTimeBy(1_000)
         assertEquals(2, recorder.listening.value)
-        // Both echoes are written down first, so the answer gets its own words.
+        // Both echoes are sent to be written down first, so the answer gets the next transcript.
         setup.transcribed.first { it >= 3 }
 
         setup.socket.push("""{"jsonrpc":"2.0","id":"srq-2","method":"clarify","params":{"session_id":"rt9","question":"Which folder?","choices":["src","build"]}}""")
@@ -935,7 +935,7 @@ class StreamedSpeechTest {
         recorder.listening.first { it >= 2 }
         advanceTimeBy(1_000)
         assertEquals(2, recorder.listening.value)
-        // Both echoes are written down first, so the answer gets its own words.
+        // Both echoes are sent to be written down first, so the answer gets the next transcript.
         setup.transcribed.first { it >= 3 }
         setup.voice.stopChat()
         setup.voice.chat.first { it.phase == VoicePhase.Off }
