@@ -613,7 +613,14 @@ class ChatNotifications(
     fun postReply(storedSessionId: String, title: String?, text: String, failed: Boolean) {
         if (!failed && text.replyTextOrNull() == null) return
         val preview = text.toPlainText().take(MAX_PREVIEW)
-            .ifBlank { if (failed) str(R.string.notification_turn_failed_text) else return }
+            // A reply that is only a picture is still a reply; other markup that renders as nothing isn't.
+            .ifBlank {
+                when {
+                    failed -> str(R.string.notification_turn_failed_text)
+                    MARKDOWN_IMAGE.containsMatchIn(text) -> finished
+                    else -> return
+                }
+            }
         val input = RemoteInput.Builder(NotificationActionReceiver.KEY_TEXT).setLabel(str(R.string.notification_message_hermes)).build()
         val notification = base(CHANNEL_REPLIES, storedSessionId, title)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -976,6 +983,9 @@ private val ApprovalChoice.label: Int
         ApprovalChoice.Always -> R.string.notification_allow_always
         ApprovalChoice.Deny -> R.string.notification_deny
     }
+
+/** A Markdown picture, `![caption](url)`. */
+private val MARKDOWN_IMAGE = Regex("!\\[[^]]*]\\([^)]+\\)")
 
 /** Markdown reads badly in the shade; keep the words, drop the markup. */
 internal fun String.toPlainText(): String = this

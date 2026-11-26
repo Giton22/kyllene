@@ -36,6 +36,13 @@ class ChatNotificationsTest {
     }
 
     @Test
+    fun aReplyThatIsOnlyAPictureSaysItFinished() {
+        notifications.postReply("chat", "Bot chat", "![](https://gateway.test/image.png)", failed = false)
+
+        assertEquals(context.getString(R.string.notification_finished), preview())
+    }
+
+    @Test
     fun aFailureWithoutDetailsStillPosts() {
         notifications.postReply("chat", "Bot chat", "", failed = true)
 
