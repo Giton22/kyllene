@@ -161,8 +161,18 @@ kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotl
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 junit4 = { module = "junit:junit", version.ref = "junit4" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+# The Android framework jars Robolectric runs the tests on, one per SDK level a test's @Config asks for (30, 33, 35).
+# Gradle fetches them (gradle/robolectric.gradle.kts), so Robolectric doesn't at test time. Their versions are in
+# Robolectric's DefaultSdkProvider and can change when Robolectric is bumped; a missing one fails the test with
+# "no artifacts for org.robolectric:android-all-instrumented:…".
+robolectric-android-all-30 = { module = "org.robolectric:android-all-instrumented", version = "11-robolectric-6757853-i7" }
+robolectric-android-all-33 = { module = "org.robolectric:android-all-instrumented", version = "13-robolectric-9030017-i7" }
+robolectric-android-all-35 = { module = "org.robolectric:android-all-instrumented", version = "15-robolectric-13954326-i7" }
 # Host-rendered Compose tests: the same androidx Compose version the multiplatform build resolves.
 compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4", version.ref = "compose-multiplatform" }
+
+[bundles]
+robolectric-android-all = ["robolectric-android-all-30", "robolectric-android-all-33", "robolectric-android-all-35"]
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

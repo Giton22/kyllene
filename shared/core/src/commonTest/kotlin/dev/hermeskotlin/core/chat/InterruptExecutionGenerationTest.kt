@@ -4,6 +4,7 @@ import dev.hermeskotlin.core.rpc.FakeGateway
 import dev.hermeskotlin.core.rpc.event
 import dev.hermeskotlin.core.rpc.isCall
 import dev.hermeskotlin.core.rpc.json
+import dev.hermeskotlin.core.rpc.param
 import dev.hermeskotlin.core.sessions.SessionsApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -32,7 +33,7 @@ class InterruptExecutionGenerationTest {
                         if (gen == null) "error:4001:invalid_params" else """{"status":"interrupted"}"""
                     }
                     "prompt.submit" -> """{"status":"streaming","execution_generation":8}"""
-                    "process.stop" -> """{"killed":0}"""
+                    "process.stop" -> if (call.param("session_id") == "rt1") """{"killed":0}""" else "error:4001:invalid_params"
                     else -> "{}"
                 }
             }
@@ -64,5 +65,7 @@ class InterruptExecutionGenerationTest {
         assertEquals(2, interrupts.size)
         assertEquals(9L, interrupts.last()["params"]?.jsonObject?.get("execution_generation")?.jsonPrimitive?.longOrNull)
         assertNull(chat.state.value.error)
+        val stopCard = chat.state.value.messages.filterIsInstance<ChatMessage.Command>().last()
+        assertEquals("Stopped the reply.\nNo background processes were running.", stopCard.output)
     }
 }

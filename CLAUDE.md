@@ -34,8 +34,9 @@ and issues already in `androidApp/lint-baseline.xml`.
 
 - Rows, pills and the composer still fit at 360 dp wide, and colours and layout work in both themes. See "Try it
   on a device" in CONTRIBUTING.md.
-- Actions on a chat message are inline icons under the reply, or a long-press dropdown on the user's prompt. No
-  bottom sheets and no ⋯ menu buttons.
+- Actions on a chat message: under a bot reply, Copy plus one More (⋯) dropdown that holds the reactions and the
+  reply's commands (`ReplyMoreMenu`); on the user's prompt, a long-press dropdown. No bottom sheets and no other ⋯
+  menu buttons.
 
 ### Tests
 

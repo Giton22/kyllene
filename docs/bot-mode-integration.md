@@ -41,6 +41,9 @@ on top of profiles:
    - If the title is taken, the error is code **4022** `Title 'Bot Chat' is already in use by session <id>`
      (`hermes_state_titles.py:119`). Then `session.close` our runtime, `session.delete` our row (the gateway
      never prunes a non-`tui` row), and adopt the existing chat. *(Done.)*
+   - On a session-authority gateway (`gateway.ready` `session_authority`) there is no `session.title`. The titled
+     `session.create` itself titles the row, and it answers with the existing Bot Chat when the profile has one
+     (gateway/session_controls.py `create`), so nothing follows it. *(Done.)*
 3. **Never touch the chat's identity.** No rename, no `/title`, no unhide (`session.set_hidden false` disables the
    rename guard), and no archive unless the user means to retire the chat (archiving frees the title).
    - In a Bot Chat, `/new` and `/reset` compress instead.
@@ -143,16 +146,17 @@ Classify a row **before** picking a bubble, in this order:
 | compaction handoff | user or assistant row starting `[CONTEXT COMPACTION — REFERENCE ONLY]`, unless a real prompt follows the summary end marker | reference text inside System messages |
 | routine output | user row starting `[Cronjob "<name>" output — scheduled job, not the user…]\n\n` | routine name and content inside System messages |
 | cron mirror | `[Cron delivery: <name>]\n…` | same treatment |
+| scheduled-job result | `display_kind:"internal_notification"` with `display_metadata.completion_note` whose entries all name producer `cron` (a cron `deliver: origin` result for a local chat, hermes-agent 0.22.6+); where the route leaves the metadata out, only the whole `Cronjob Response: <name>\n(job_id: …)` wrapper with its footer | the job's message, open, outside System messages; red when `notification_category` is `diagnostic` |
 | silence | a settled assistant reply that is exactly `[SILENT]`, `SILENT`, `NO_REPLY`, `NO REPLY`, `[静默]`, `静默`, `[沉默]` or `沉默`, after normalising (port `is_intentional_silence_response`, `gateway/response_filters.py:40-75`) | nothing; while streaming, hold back a prefix of a marker |
 | sender's `message_agent` call | tool call `message_agent{target,message}`; the ack is `{status:"queued", delivery_id, process_id, reply_delivery}` or `{error, reason}` | "Messaging @x…", then "Messaged @x"; "Couldn't message @x: …" on an error; hide the ack JSON |
 | other kinds | `model_switch`, `auto_continue`, `steer`, … | a centred one-line label |
 
-Adjacent routine outputs, compaction handoffs, successful process completions and session labels share a
+Adjacent routine outputs (not scheduled-job results), compaction handoffs, successful process completions and session labels share a
 collapsed **System messages · N** disclosure with a gear icon, styled like Reasoning. Expanding it shows
 those entries in order. Replies, other bots' messages, delivery outcomes and failures remain outside the
 group. Gateway-hidden rows remain hidden; `display_content` takes precedence over raw stored content.
-User rows typed `internal_notification` are also shown when they match either known cron envelope above.
-This is best-effort format recognition; other internal notifications remain hidden.
+User rows typed `internal_notification` are also shown when their `completion_note` names only `cron`, or
+when they match a known cron envelope above. Wakes, watch notes and heartbeats share the kind and remain hidden.
 
 **Delivery outcome** (parse the process `Output:`):
 - plain text, `{"reply",…,"status":"settled"}` or `Reply from X:` → "💬 Reply from @x", collapsed. Strip

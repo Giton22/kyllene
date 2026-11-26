@@ -30,6 +30,7 @@ import dev.hermeskotlin.ui.inbox.Words
 import dev.hermeskotlin.ui.inbox.words
 import dev.hermeskotlin.ui.inbox.wordsThen
 import dev.hermeskotlin.ui.resources.*
+import dev.hermeskotlin.ui.chat.withoutEmptyListItem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -128,6 +129,9 @@ class RoomsViewModel(
 
     /** The open room's composer. */
     override val composer = TextFieldState()
+
+    /** The composer's text as a send posts it: trimmed, without an empty list item Enter left at the end. */
+    private fun composerText() = withoutEmptyListItem(composer.text).trim()
 
     private val gateway = MutableStateFlow<GatewayUrl?>(null)
 
@@ -266,7 +270,7 @@ class RoomsViewModel(
             val pending = unansweredSend?.takeIf { it.roomId == roomId } ?: unansweredFiles[roomId]
             val kept = pending?.takeIf {
                 it.files.isNotEmpty() && it.files == open.attachments &&
-                    (it.submitted || open.sending || composer.text.toString().trim() == it.text)
+                    (it.submitted || open.sending || composerText() == it.text)
             }
             if (kept != null) {
                 kept.markUnknown()
@@ -386,7 +390,7 @@ class RoomsViewModel(
     override fun send() {
         val open = _opened.value ?: return
         if (open.sending) return
-        val text = composer.text.toString().trim()
+        val text = composerText()
         if (text.isEmpty() && open.attachments.isEmpty()) return
         if (open.attachments.isNotEmpty() && !open.attachmentsSupported) return
         val roomId = open.room.roomId
@@ -434,7 +438,7 @@ class RoomsViewModel(
                 if (unansweredFiles[roomId] === attempt) unansweredFiles.remove(roomId)
                 // The room may have been left and opened again meanwhile: that opening shows the message too.
                 if (gateway.value != url || _opened.value?.room?.roomId != roomId) return@launch
-                if (composer.text.toString().trim() == attempt.text) composer.clearText()
+                if (composerText() == attempt.text) composer.clearText()
                 openEvents = mergeRoomEvents(openEvents, listOf(event))
                 _opened.update {
                     val left = it?.attachments.orEmpty().filterNot { file -> file in attempt.files }
@@ -719,7 +723,7 @@ class RoomsViewModel(
                     if (pending.files.isNotEmpty()) {
                         fileSendJob?.cancel()
                         fileSendJob = null
-                        if (composer.text.toString().trim() == pending.text) composer.clearText()
+                        if (composerText() == pending.text) composer.clearText()
                         _opened.update { it?.copy(attachments = it.attachments.filterNot { file -> file in pending.files }, attachmentRetry = false, notice = null) }
                     }
                 }
