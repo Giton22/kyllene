@@ -187,6 +187,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 
 ### Attachments & media
 - [x] Image attachments from the photo picker or camera (`image.attach_bytes`), upright and scaled to 2048 px; a failed send detaches them (`image.detach`)
+- [x] Paste an image into the Android chat composer from the clipboard or keyboard, ready to send as an attachment
 - [x] File and PDF attachments (`file.attach` as `@file:` refs, preserving the complete original PDF)
 - [x] Attachments up to 12 MB each, what one WebSocket message carries base64 (#340): a larger file is turned down when picked, pasted or shared, a message over the socket's 16 MiB isn't sent, and only one large message is out at a time, where they used to drop the connection
 - [x] Attachments up to 100 MB: a file past 12 MB streams up over `POST /api/files/upload-stream` and is attached by its path (`file.attach`), with how far it has gone under the bubble; the upload is removed once attached, or after a week when the chat uses it in place. A gateway without the route says to update Hermes

@@ -1,17 +1,22 @@
 package dev.hermeskotlin.ui.chat
 
+import android.content.ClipDescription
 import android.content.ComponentName
+import android.graphics.Bitmap
+import android.net.Uri
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputContentInfo
 import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -22,8 +27,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import com.composeunstyled.theme.ColorScheme
+import dev.hermeskotlin.core.chat.OutgoingAttachment
 import dev.hermeskotlin.designsystem.HermesTheme
 import dev.hermeskotlin.designsystem.components.TextField
+import kotlinx.coroutines.launch
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -40,6 +47,8 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowInputMethodManager
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -137,6 +146,43 @@ class ComposerEnterImeTest {
     private fun InputConnection.sendHardwareCtrlNumPadEnter(repeatCount: Int = 0) {
         sendHardwareKey(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_NUMPAD_ENTER, repeatCount, KeyEvent.META_CTRL_ON)
         sendHardwareKey(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_NUMPAD_ENTER, 0, KeyEvent.META_CTRL_ON)
+    }
+
+    @Test
+    fun keyboardImageIsAttachedWithoutChangingDraftText() {
+        val uri = Uri.parse("content://clipboard.test/copied.png")
+        val png = ByteArrayOutputStream().apply {
+            Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888).compress(Bitmap.CompressFormat.PNG, 100, this)
+        }.toByteArray()
+        val resolver = RuntimeEnvironment.getApplication().contentResolver
+        Shadows.shadowOf(resolver).registerInputStreamSupplier(uri) { ByteArrayInputStream(png) }
+
+        val attachments = mutableListOf<OutgoingAttachment>()
+        var error: String? = null
+        val (state, ic) = setupComposer(field = { text, modifier ->
+            val picker = rememberAttachmentPicker(onPicked = {}, onError = {})
+            val scope = rememberCoroutineScope()
+            val imagePaste = picker.imagePasteModifier { read ->
+                scope.launch {
+                    val (picked, failure) = read()
+                    attachments.addAll(picked)
+                    error = failure
+                }
+            }
+            ComposerTextInput(text, modifier.then(imagePaste), placeholder = {})
+        })
+        ic.commitText("draft text", 1)
+        val image = InputContentInfo(uri, ClipDescription("Copied image", arrayOf("image/png")), null)
+        assertTrue(ic.commitContent(image, 0, null))
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.runOnIdle { attachments.isNotEmpty() || error != null }
+        }
+        assertNull(error)
+        val attachment = attachments.single()
+        assertEquals("copied.jpg", attachment.name)
+        assertEquals("image/jpeg", attachment.mimeType)
+        assertNotNull(attachment.thumbnail)
+        assertEquals("draft text", state.text.toString())
     }
 
     @Test
