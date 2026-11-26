@@ -307,8 +307,21 @@ jobs:
             --repository "file://$GITHUB_WORKSPACE" \
             --ref flatpak-release --commit "$GITHUB_SHA" --release "${GITHUB_REF_NAME#v}"
 
+      # Maven Central answers a burst of requests from a shared runner address with HTTP 429. Downloads restored
+      # from an earlier run aren't fetched again; download-sources.py first drops any that don't match their
+      # checksum, since flatpak-builder checks one only when it downloads it. Restore only: a cache saved on a tag can
+      # be read back only by that tag, so saving one would just take room from master's.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .flatpak-builder/downloads
+          key: flatpak-downloads-${{ hashFiles('packaging/flatpak/app.kyllene.Kyllene.Devel.json', 'packaging/flatpak/gradle-sources.json') }}
+          restore-keys: flatpak-downloads-
+
+      - name: Download sources
+        run: python3 packaging/flatpak/download-sources.py build/flatpak packaging/flatpak/release.json
+
       - name: Build offline
-        run: flatpak-builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/release.json
+        run: flatpak-builder --user --disable-download --repo=build/flatpak-repo build/flatpak packaging/flatpak/release.json
 
       - name: Sign and bundle
         env:

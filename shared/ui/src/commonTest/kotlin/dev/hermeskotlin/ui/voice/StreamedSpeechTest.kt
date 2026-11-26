@@ -34,7 +34,9 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
@@ -300,7 +302,19 @@ class StreamedSpeechTest {
         }
     }
 
-    private class Setup(val socket: Socket, val voice: VoiceController, val player: Player, val spoken: MutableList<String>, val session: ChatSession)
+    /**
+     * [transcribed]: recordings sent to be written down so far. An echo's is sent in the background, so a test whose
+     * next recording must get the next transcript waits for the echoes' first: otherwise one can arrive after it and take
+     * its transcript.
+     */
+    private class Setup(
+        val socket: Socket,
+        val voice: VoiceController,
+        val player: Player,
+        val spoken: MutableList<String>,
+        val session: ChatSession,
+        val transcribed: StateFlow<Int>,
+    )
 
     /** A chained voice chat on a chat whose gateway voices replies through [stream], or can't when it's null. */
     private suspend fun TestScope.chat(stream: Stream?, player: Player = Player()): Setup =
@@ -327,14 +341,17 @@ class StreamedSpeechTest {
         streams: () -> SpeechStream?,
     ): Setup {
         val spoken = mutableListOf<String>()
-        var transcribed = 0
+        // Counted atomically: an echo's recording is written down in the background, so two can arrive at once on
+        // the engine's threads, and a plain counter can give both the same transcript and the next one the wrong one.
+        val transcribed = MutableStateFlow(0)
         val client = createHttpClient(
             MockEngine { request ->
                 when (request.url.encodedPath) {
                     "/api/auth/ws-ticket" -> respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
                     "/api/audio/transcribe" -> {
-                        transcribing(transcribed + 1)
-                        val transcript = transcripts[minOf(transcribed++, transcripts.lastIndex)]
+                        val n = transcribed.getAndUpdate { it + 1 }
+                        transcribing(n + 1)
+                        val transcript = transcripts[minOf(n, transcripts.lastIndex)]
                         respond("""{"ok":true,"transcript":"$transcript"}""", HttpStatusCode.OK, json)
                     }
                     "/api/config" -> {
@@ -361,7 +378,7 @@ class StreamedSpeechTest {
         val voice = VoiceController(AudioApi(client), recorder, player, backgroundScope, backgroundScope, speechStreams = { _, _ -> streams() })
         voice.startChat(session, gateway, "rin")
         if (awaitSubmit) socket.submits.first { it.isNotEmpty() }
-        return Setup(socket, voice, player, spoken, session)
+        return Setup(socket, voice, player, spoken, session, transcribed)
     }
 
     @Test
@@ -821,6 +838,8 @@ class StreamedSpeechTest {
 
         // One echo so far, not two: the microphone listens over the rest of the reply.
         assertEquals(3, recorder.listening.value)
+        // The echo's sent to be written down first, so the cut-in gets the next transcript.
+        setup.transcribed.first { it >= 2 }
         recorder.cut.complete(Unit)
         setup.socket.submits.first { it.size == 2 }
         setup.voice.stopChat()
@@ -845,6 +864,8 @@ class StreamedSpeechTest {
         recorder.listening.first { it >= 2 }
         advanceTimeBy(1_000)
         assertEquals(2, recorder.listening.value)
+        // Both echoes are sent to be written down first, so the next request gets the next transcript.
+        setup.transcribed.first { it >= 3 }
         stream.gateway.close()
         setup.socket.event("message.complete", """{"text":"It was a long day.","status":"complete"}""")
         setup.socket.submits.first { it.size == 2 }
@@ -878,6 +899,8 @@ class StreamedSpeechTest {
         recorder.listening.first { it >= 2 }
         advanceTimeBy(1_000)
         assertEquals(2, recorder.listening.value)
+        // Both echoes are sent to be written down first, so the answer gets the next transcript.
+        setup.transcribed.first { it >= 3 }
 
         setup.socket.push("""{"jsonrpc":"2.0","id":"srq-2","method":"clarify","params":{"session_id":"rt9","question":"Which folder?","choices":["src","build"]}}""")
         setup.session.state.first { it.inputRequests.isNotEmpty() }
@@ -912,6 +935,8 @@ class StreamedSpeechTest {
         recorder.listening.first { it >= 2 }
         advanceTimeBy(1_000)
         assertEquals(2, recorder.listening.value)
+        // Both echoes are sent to be written down first, so the answer gets the next transcript.
+        setup.transcribed.first { it >= 3 }
         setup.voice.stopChat()
         setup.voice.chat.first { it.phase == VoicePhase.Off }
 

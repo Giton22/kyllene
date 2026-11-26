@@ -341,12 +341,23 @@ private fun Routes() {
     val shortcuts = LocalShortcuts.current
     val boundChat = remember { mutableStateOf<ChatViewModel?>(null) }
     var pendingReveal by remember { mutableStateOf<Shortcut.RevealChat?>(null) }
+    var pendingNotice by remember { mutableStateOf<Shortcut.RevealNotice?>(null) }
     fun revealChat() {
         gatewaysOpen = false
         app.cancelPendingCall()
     }
     ShortcutHandler { shortcut ->
-        if (shortcut is Shortcut.RevealChat) {
+        if (shortcut is Shortcut.RevealNotice) {
+            if (route is Route.Chat) return@ShortcutHandler false
+            if (!shortcut.current()) return@ShortcutHandler true
+            val source = shortcut.source
+            val target = source?.let { boundChat.value?.targetFor(it) }
+            if (source != null && target != null && app.returnToChat(source, target)) revealChat()
+            pendingReveal = null
+            pendingNotice = shortcut
+            true
+        } else if (shortcut is Shortcut.RevealChat) {
+            pendingNotice = null
             val target = boundChat.value?.targetFor(shortcut.source)
             if (shortcut.current() && target != null && (route as? Route.SignIn)?.adding == true) {
                 pendingReveal = shortcut
@@ -405,6 +416,15 @@ private fun Routes() {
             pendingReveal = null
         } else if (route is Route.Chat) {
             pendingReveal = null
+            shortcuts.fire(pending)
+        }
+    }
+
+    LaunchedEffect(route, pendingNotice) {
+        val pending = pendingNotice ?: return@LaunchedEffect
+        if (!pending.current()) pendingNotice = null
+        else if (route is Route.Chat) {
+            pendingNotice = null
             shortcuts.fire(pending)
         }
     }
@@ -593,11 +613,12 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     var shownInboxLink by remember { mutableStateOf<InboxLink?>(null) }
     LaunchedEffect(inboxLink) {
         val link = inboxLink ?: return@LaunchedEffect
+        if (!link.current()) { inboxLinks.consume(link); return@LaunchedEffect }
         app.cancelPendingCall()
         try {
             sidebar.open()
         } finally {
-            shownInboxLink = link
+            if (link.current()) shownInboxLink = link else inboxLinks.consume(link)
         }
     }
     // A room asked for from outside the screens (a tapped notification) opens over the chat.
@@ -720,6 +741,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     val bus = LocalShortcuts.current
     val openModals = LocalOpenModals.current
     var pendingReveal by remember { mutableStateOf<Shortcut.RevealChat?>(null) }
+    var pendingNotice by remember { mutableStateOf<Shortcut.RevealNotice?>(null) }
     LaunchedEffect(pendingReveal, openModals.any, editing, pluginUrl) {
         val pending = pendingReveal ?: return@LaunchedEffect
         if (!pending.current()) {
@@ -729,6 +751,20 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
             settingsOpen = false
             menuOpen = false
             closeDrawerToChat()
+        }
+    }
+    LaunchedEffect(pendingNotice, openModals.any, editing, pluginUrl) {
+        val pending = pendingNotice ?: return@LaunchedEffect
+        if (!pending.current()) pendingNotice = null
+        else if (!openModals.any && editing == null && pluginUrl == null) {
+            pendingNotice = null
+            settingsOpen = false
+            menuOpen = false
+            closeDrawerToChat()
+            if (pending.current()) {
+                onRevealChat()
+                pending.open()
+            }
         }
     }
     ShortcutHandler { shortcut ->
@@ -748,7 +784,12 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                 closeDrawerToChat()
             }
             Shortcut.Settings -> true.also { settingsOpen = true }
+            is Shortcut.RevealNotice -> true.also {
+                pendingReveal = null
+                if (shortcut.current()) pendingNotice = shortcut
+            }
             is Shortcut.RevealChat -> true.also {
+                pendingNotice = null
                 if (shortcut.current()) {
                     onRevealChat()
                     pendingReveal = shortcut

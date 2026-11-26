@@ -76,7 +76,11 @@ class SidebarAttentionTest {
         val running = sections.filteredForAttention(AttentionFilter.Running, statuses)
         assertEquals(listOf("b", "c", "a"), running.threads.map { it.session.id })
         val waiting = sections.filteredForAttention(AttentionFilter.NeedsAttention, statuses)
-        assertEquals(listOf("c", "a"), waiting.threads.map { it.session.id })
+        assertEquals(listOf("a"), waiting.threads.map { it.session.id })
+        val afterReply = sections.filteredForAttention(
+            AttentionFilter.NeedsAttention, statuses + ("c" to RowStatus(unread = true)),
+        )
+        assertEquals(listOf("c", "a"), afterReply.threads.map { it.session.id })
     }
 
     @Test

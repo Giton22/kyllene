@@ -1,11 +1,14 @@
 package dev.hermeskotlin.core.sessions
 
+import dev.hermeskotlin.core.chat.displayMetadataObject
+import dev.hermeskotlin.core.chat.userReactionEmoji
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /**
@@ -139,6 +142,11 @@ data class SessionMessage(
     val timestamp: Double? = null,
     val reasoning: String? = null,
     @SerialName("display_kind") val displayKind: String? = null,
+    /**
+     * What the gateway knows about a machine-written row, e.g. `completion_note` naming its producer. An object,
+     * or a string holding one on older backends; missing where a route leaves it out (the API server's).
+     */
+    @SerialName("display_metadata") val displayMetadata: JsonElement? = null,
     /** The session the row is stored under: an ancestor's id for rows from before a compression. */
     @SerialName("session_id") val sessionId: String? = null,
     /** False for rows a compression archived; the live agent no longer holds them. */
@@ -148,6 +156,11 @@ data class SessionMessage(
     @SerialName("display_reasoning") val displayReasoning: String? = null,
     @SerialName("display_commentary") val displayCommentary: List<String>? = null,
 ) {
+    val userReaction: String? get() = userReactionEmoji(displayMetadataObject(displayMetadata)?.get("reactions"))
+
+    /** The part of a reply a stopped turn had streamed, which hermes-agent marks (v0.23.4 agent/turn_api_call.py). */
+    val stopped: Boolean get() = (displayMetadataObject(displayMetadata)?.get("interrupted") as? JsonPrimitive)?.booleanOrNull == true
+
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
 

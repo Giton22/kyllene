@@ -49,6 +49,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -105,6 +106,10 @@ class ChatSession(
 
     /** Held by a [submit] from its uploads until its prompt is settled; see there. */
     private val sendMutex = Mutex()
+    private val reactionMutex = Mutex()
+
+    /** The stored rows of replies whose reaction is being saved now. */
+    private val reacting = MutableStateFlow(emptySet<Long>())
 
     /**
      * The socket [ChatState.runtimeSessionId] was attached on. Runtime ids belong to the
@@ -121,6 +126,9 @@ class ChatSession(
      */
     @kotlin.concurrent.Volatile
     private var executionGeneration: Long? = null
+
+    /** The session authority's `confirm` token for the last guarded pick: model, provider, token. */
+    private var modelConfirm: Triple<String, String, String>? = null
 
     /**
      * The session authority's `revision` for the attached session (from `session.resume`, `session.create`,
@@ -162,7 +170,9 @@ class ChatSession(
 
     /**
      * Where the event stream stands, to pick it up after a drop: the seq of the last event applied, the runtime
-     * session it counts in and the gateway run (`replay_epoch`) numbering it. Null seq: nothing to resume from.
+     * session it counts in and the `replay_epoch` numbering it. Null seq: nothing to resume from. The epoch is the
+     * gateway run's (`gateway.ready`) on the legacy gateway, and the session's own on the session authority, from
+     * `session.resume` / `session.create` and each event (see [EventReplay]).
      */
     private var lastSeq: Long? = null
     private var seqRuntime: String? = null
@@ -170,6 +180,20 @@ class ChatSession(
 
     /** Live events held back while the gap before them is filled; null when nothing is being caught up. */
     private var held: MutableList<GatewayEvent>? = null
+
+    /** A `session.replay_gap` waits for its `session.resume`; gaps that come before that starts need no second one. */
+    private var gapResumePending = false
+
+    /**
+     * The runtime taken up again after a `session.replay_gap`, and the frames of its new subscription, held until the
+     * resume is in: while it attaches the state names no runtime, so they'd be dropped (a `message.complete` with
+     * them). Null when none is being taken up.
+     */
+    private var gapRuntime: String? = null
+    private var gapHeld: MutableList<GatewayEvent>? = null
+
+    /** Counts `session.replay_gap`s: a catch-up begun before one has nothing left to apply. */
+    private var streamGeneration = 0
 
     /** Orders applying events, holding them and filling gaps, which run on different threads. Never held across I/O. */
     private val streamMutex = Mutex()
@@ -194,6 +218,7 @@ class ChatSession(
         jobs = listOf(
             scope.launch { if (rowExists) loadHistory() else _state.update { it.copy(historyLoaded = true) } },
             scope.launch { followConnection() },
+            scope.launch { followReactionSupport() },
             scope.launch { followEvents() },
             scope.launch { followServerRequests() },
         ) + _state.value.messages.mapNotNull { card ->
@@ -238,6 +263,93 @@ class ChatSession(
         voiceLive: VoiceLiveTurn? = null,
     ): SendOutcome = submitPrompt(text, attachments, display, queue, voiceLive, resent = emptyList())
 
+    /**
+     * Sets or clears the user's reaction on the stored reply [replyKey], by its row: the newest row can change
+     * meanwhile. Reactions go one at a time; another tap on the same reply (by its row: a reload can rename a live
+     * reply meanwhile) while its reaction is still being saved is ignored, as the same emoji again would take it
+     * off after its follow-up has gone.
+     */
+    suspend fun react(replyKey: String, reaction: ReplyReaction, stillOpen: () -> Boolean) {
+        val reply = _state.value.messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey }
+            ?.takeUnless { it.streaming } ?: return
+        val rowId = reply.reactionRowId ?: return
+        var claimed = false
+        reacting.update { rows -> (rowId !in rows).also { claimed = it }.let { if (it) rows + rowId else rows } }
+        if (!claimed) return
+        try {
+            reactionMutex.withLock { reactToStoredReply(reply, rowId, reaction, stillOpen) }
+        } finally {
+            reacting.update { it - rowId }
+        }
+    }
+
+    private suspend fun reactToStoredReply(
+        reply: ChatMessage.Assistant,
+        rowId: Long,
+        reaction: ReplyReaction,
+        stillOpen: () -> Boolean,
+    ) {
+        try {
+            if (!stillOpen()) return
+            val client = connectedClient() ?: throw RpcException(0, "Connect to the gateway to react.")
+            if (!client.replyReactionsSupported.value) return
+            val runtimeId = ensureAttached(client)
+            // By its row: a reload meanwhile renames a live reply's key but not its row.
+            val shown = _state.value.messages.firstOrNull {
+                it is ChatMessage.Assistant && !it.streaming && it.reactionRowId == rowId
+            } as? ChatMessage.Assistant
+            if (!stillOpen() || connectedClient() !== client || shown == null) return
+            // The same emoji again clears it on the gateway, so what happens follows the gateway's state, not the
+            // screen's. One set where the screen showed none, as on another client not yet reloaded here, is set again.
+            val setting = shown.userReaction != reaction.emoji
+            suspend fun send() = client.request("message.react", buildJsonObject {
+                put("session_id", runtimeId)
+                put("row_id", rowId)
+                put("emoji", reaction.emoji)
+            }) as? JsonObject
+            val result = try {
+                send().let { first ->
+                    val cleared = userReactionEmoji(first?.get("reactions")) != reaction.emoji
+                    if (setting && cleared && first?.get("reactions") is JsonArray) send() else first
+                }
+            } catch (e: RpcException) {
+                if (e.code != METHOD_NOT_FOUND) throw e
+                client.markReplyReactionsUnsupported()
+                if (stillOpen()) _state.update { it.copy(error = "This gateway doesn't support reactions. Update Hermes to use them.") }
+                return
+            }
+            val returned = result?.get("reactions") as? JsonArray
+                ?: throw RpcException(0, "The gateway did not confirm the reaction.")
+            val emoji = userReactionEmoji(returned)
+            historyMutex.withLock {
+                // Saved on the gateway by its stored row, which a re-attach or reconnect meanwhile doesn't change.
+                if (!stillOpen()) return
+                rows = rows.map { row ->
+                    if (row.id == rowId) {
+                        val metadata = displayMetadataObject(row.displayMetadata).orEmpty()
+                        row.copy(displayMetadata = JsonObject(metadata + ("reactions" to returned)))
+                    } else row
+                }
+                _state.update { state ->
+                    state.copy(messages = state.messages.map {
+                        if (it is ChatMessage.Assistant && it.reactionRowId == rowId) it.copy(userReaction = emoji) else it
+                    })
+                }
+            }
+            if (cache != null) scope.launch { refreshSavedCopy() }
+            if (emoji == reaction.emoji) reaction.prompt(reply.text)?.let { prompt ->
+                submitPrompt(
+                    prompt, emptyList(), display = null, queue = _state.value.running, voiceLive = null,
+                    resent = emptyList(), keepRejected = true,
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (stillOpen()) _state.update { it.copy(error = e.message ?: "Could not save the reaction.") }
+        }
+    }
+
     /** [submit], with [resent]: the `@file:` references, and their cards, of a prompt sent again ([resend]). */
     private suspend fun submitPrompt(
         text: String,
@@ -247,6 +359,7 @@ class ChatSession(
         voiceLive: VoiceLiveTurn?,
         resent: List<Pair<String, ShownAttachment>>,
         resentImages: List<Pair<StagedImage, ShownAttachment>> = emptyList(),
+        keepRejected: Boolean = false,
     ): SendOutcome {
         val trimmed = text.trim()
         if (trimmed.isEmpty() && attachments.isEmpty() && resent.isEmpty() && resentImages.isEmpty()) return SendOutcome.NotSent
@@ -254,6 +367,9 @@ class ChatSession(
         val visible = trimmed.ifEmpty {
             if (attachments.any { it.kind == AttachmentKind.Image } || resentImages.isNotEmpty()) IMAGE_ONLY_PROMPT else ""
         }
+        val copiesBefore = if (keepRejected) _state.value.messages.count {
+            it is ChatMessage.User && !it.pending && it.check == null && it.text.contains(visible)
+        } else 0
         val key = "local-${_state.value.keySeq}"
         _state.update {
             it.copy(
@@ -306,11 +422,18 @@ class ChatSession(
             uploadRuntimeId = runtimeId
             attachments.forEach { a -> upload(client, runtimeId, a, queuedImages, stagedImages, key)?.let { files += it to a.toShown() } }
             val refs = files.map { (ref, _) -> ref }
+            // The session authority answers before the prompt's row is written; its turn's end names the row by this id.
+            // On the bubble before it goes: a short turn can end before this reads the reply.
+            val submissionId = if (client.sessionAuthority) newRequestId() else null
+            if (submissionId != null) {
+                _state.update { it.copy(messages = it.messages.updateUser(key) { u -> u.copy(submissionId = submissionId) }) }
+            }
             submitted = true
             val result = client.request(
                 "prompt.submit",
                 buildJsonObject {
                     put("session_id", runtimeId)
+                    submissionId?.let { put("submission_id", it) }
                     // Like Desktop: the file references first, then what was typed.
                     put("text", (refs + visible).filter { it.isNotEmpty() }.joinToString("\n\n"))
                     if (client.sessionAuthority && stagedImages.isNotEmpty()) {
@@ -338,11 +461,18 @@ class ChatSession(
             // The row written for it, so it can be regenerated or edited before the transcript is read again.
             val rowId = result.long("user_row_id")
             val sentText = visible.takeIf { attachments.isEmpty() && resent.isEmpty() && display == null && it.isNotEmpty() }
+            // The session authority's id for it, which its turn's events carry.
+            val admissionId = result.string("admission_id")?.takeIf { client.sessionAuthority }
             _state.update { state ->
+                // The session authority answers every prompt "queued", one that starts a turn too. Marked so, a prompt
+                // whose turn began before this read the reply would wait for a start that has already come.
+                val started = admissionId != null && admissionId in state.startedAdmissions
+                val held = status == "queued" && !(client.sessionAuthority && startsTurn) && !started
                 val sent = state.copy(
-                    running = true,
+                    // A turn whose start was read first has said whether it still runs, its end too.
+                    running = state.running || !started,
                     messages = state.messages.updateUser(key) {
-                        it.copy(pending = false, queued = status == "queued", rowId = rowId, sentText = sentText)
+                        it.copy(pending = false, queued = held, rowId = rowId ?: it.rowId, sentText = sentText, admissionId = admissionId)
                     },
                 )
                 // What streamed before the correction stays above it; the rest of the turn continues below.
@@ -356,21 +486,27 @@ class ChatSession(
             // An error reply is the gateway turning it down; anything else after it went out is no verdict.
             if (submitted && e !is RpcException) {
                 val arrived = if (startsTurn) findInTranscript(visible, key, promptsBefore) else null
-                return settleUnanswered(key, arrived, UnsettledPrompt(text, display, startsTurn, files.toList(), stagedImages.toList())) {
+                val prompt = UnsettledPrompt(text, display, startsTurn, files.toList(), stagedImages.toList(), keepRejected, copiesBefore)
+                return settleUnanswered(key, arrived, prompt) {
                     detach(uploadClient, uploadRuntimeId, queuedImages)
                 }
             }
             detach(uploadClient, uploadRuntimeId, queuedImages)
             val refused = SessionRefusal.of(e)
-            _state.update { state ->
-                state.copy(
-                    error = if (refused != null) null else e.message ?: "Couldn't send the message.",
-                    refused = refused,
-                    // The caller gets the text back to resend; a dead bubble would only duplicate it.
-                    messages = state.messages.filterNot { it.key == key },
-                )
+            if (keepRejected) {
+                unsettled[key] = UnsettledPrompt(text, display, startsTurn, keepRejected = true, copiesBefore = copiesBefore)
+                retainRejectedPrompt(key, e.message ?: "Couldn't send the message.", refused)
+            } else {
+                _state.update { state ->
+                    state.copy(
+                        error = if (refused != null) null else e.message ?: "Couldn't send the message.",
+                        refused = refused,
+                        // The caller gets the text back to resend; a dead bubble would only duplicate it.
+                        messages = state.messages.filterNot { it.key == key },
+                    )
+                }
+                SendOutcome.NotSent
             }
-            SendOutcome.NotSent
         } finally {
             sendMutex.unlock()
         }
@@ -385,6 +521,7 @@ class ChatSession(
         key: String,
         arrived: Boolean?,
         prompt: UnsettledPrompt,
+        unknownError: String = LOST_WHILE_SENDING,
         takeBack: suspend () -> Unit,
     ): SendOutcome {
         when (arrived) {
@@ -395,6 +532,10 @@ class ChatSession(
             }
             false -> {
                 takeBack()
+                if (prompt.keepRejected) {
+                    unsettled[key] = prompt
+                    return retainRejectedPrompt(key, "Hermes didn't get your message.")
+                }
                 _state.update { state ->
                     state.copy(
                         error = "Hermes didn't get your message. It's back in the composer.",
@@ -406,7 +547,7 @@ class ChatSession(
                 unsettled[key] = prompt
                 _state.update { state ->
                     state.copy(
-                        error = "Lost the connection while sending. Check that it isn't running before you send it again.",
+                        error = unknownError,
                         messages = state.messages.updateUser(key) { it.copy(pending = false, check = SendCheck.Unknown) },
                     )
                 }
@@ -417,6 +558,19 @@ class ChatSession(
             false -> SendOutcome.NotSent
             null -> SendOutcome.Unsettled
         }
+    }
+
+    /** A generated prompt has no composer draft to restore. Keep its bubble available to resend. */
+    private fun retainRejectedPrompt(key: String, error: String, refused: SessionRefusal? = null): SendOutcome {
+        _state.update { state ->
+            state.copy(
+                // A refusal says why with its own guidance, as for any prompt; the bubble stays to resend from.
+                error = if (refused != null) null else error,
+                refused = refused,
+                messages = state.messages.updateUser(key) { it.copy(pending = false, check = SendCheck.NotReceived) },
+            )
+        }
+        return SendOutcome.Unsettled
     }
 
     /**
@@ -437,8 +591,10 @@ class ChatSession(
             messages.take(index).count { m -> m is ChatMessage.User && !m.pending && m.check == null }
         }
         val arrived = findInTranscript(bubble.text, key, before)
+        // A steer the agent read is kept in no user row, so a miss can't say it's safe to send again, mid-turn or after.
+        val steerUnseen = arrived == false && unsettled[key]?.steer == true
         // A correction or a queued prompt is written only once the turn takes it in, so mid-turn a miss proves nothing.
-        val mayBeWaiting = arrived == false && unsettled[key]?.startsTurn == false && _state.value.running
+        val mayBeWaiting = arrived == false && !steerUnseen && unsettled[key]?.startsTurn == false && _state.value.running
         when {
             arrived == true -> {
                 rowExists = true
@@ -446,12 +602,14 @@ class ChatSession(
                 _state.update { it.copy(error = null, messages = it.messages.updateUser(key) { u -> u.copy(check = null) }) }
                 loadHistory()
             }
-            arrived == false && !mayBeWaiting ->
+            arrived == false && !mayBeWaiting && !steerUnseen ->
                 _state.update { it.copy(error = null, messages = it.messages.updateUser(key) { u -> u.copy(check = SendCheck.NotReceived) }) }
             else -> _state.update { state ->
                 state.copy(
                     error = if (mayBeWaiting) {
                         "Hermes may still be holding it for the running turn. Check again once the turn ends."
+                    } else if (steerUnseen) {
+                        "A steer isn't saved in the conversation, so it can't be checked. See whether the reply followed it."
                     } else {
                         "Couldn't read the conversation to check. Try again once connected."
                     },
@@ -487,10 +645,11 @@ class ChatSession(
             prompt?.text ?: shown,
             emptyList(),
             prompt?.display,
-            queue = false,
+            queue = prompt?.keepRejected == true && _state.value.running,
             voiceLive = null,
             resent = prompt?.files.orEmpty(),
             resentImages = prompt?.images.orEmpty(),
+            keepRejected = prompt?.keepRejected == true,
         )
         return shown.takeIf { outcome == SendOutcome.NotSent }
     }
@@ -498,11 +657,13 @@ class ChatSession(
     /**
      * Rewinds the chat to prompt [key] and sends [text] in its place: a regenerate sends the prompt's own text
      * again, an edit a new one. The prompt and everything after it go, here and on the gateway, in one
-     * `prompt.submit` that cuts the stored transcript before the prompt's row, as Desktop's rewind does. Only
+     * `prompt.submit` that cuts the stored transcript before the prompt's row, as Desktop's rewind does. The session
+     * authority takes the cut and the prompt apart instead ([mutateRewind], then a plain `prompt.submit`). Only
      * between turns, and only for a prompt with a stored row ([ChatMessage.User.rowId]).
      *
-     * Refused (busy, or the gateway can't find the row any more): nothing changed, and [SendOutcome.NotSent].
-     * When the link drops before the answer, the stored transcript says whether it went.
+     * Refused (busy, the chat changed elsewhere, or the gateway can't find the row any more): nothing changed, and
+     * [SendOutcome.NotSent]. When the link drops before the answer, the stored transcript says whether it went. On
+     * the session authority the prompt can fail after the cut is made: it stays, marked, as [SendOutcome.Unsettled].
      */
     suspend fun rewind(key: String, text: String): SendOutcome {
         val trimmed = text.trim()
@@ -531,20 +692,38 @@ class ChatSession(
         }
         ownTurnsPending++
         var submitted = false
+        // The session authority cut the chat in a request of its own, before the prompt's.
+        var cut = false
         return try {
             val runtimeId = ensureAttached(client)
             submitted = true
-            val result = client.request(
-                "prompt.submit",
-                buildJsonObject {
-                    put("session_id", runtimeId)
-                    put("text", trimmed)
-                    put("truncate_before_row_id", rowId)
-                    put("confirm_truncate", true)
-                    // Cutting at the first prompt can empty the transcript (all but a hidden starting instruction), which the gateway wants said outright.
-                    put("confirm_empty_truncate", true)
-                },
-            ) as? JsonObject
+            val result = if (client.sessionAuthority) {
+                mutateRewind(client, runtimeId, rowId)
+                cut = true
+                // Its row comes with its turn's end, named by this id (as for a prompt sent from the composer).
+                val submissionId = newRequestId()
+                _state.update { it.copy(messages = it.messages.updateUser(newKey) { u -> u.copy(submissionId = submissionId) }) }
+                (client.request(
+                    "prompt.submit",
+                    buildJsonObject {
+                        put("session_id", runtimeId)
+                        put("submission_id", submissionId)
+                        put("text", trimmed)
+                    },
+                ) as? JsonObject)?.also { reply -> reply.long("execution_generation")?.let { executionGeneration = it } }
+            } else {
+                client.request(
+                    "prompt.submit",
+                    buildJsonObject {
+                        put("session_id", runtimeId)
+                        put("text", trimmed)
+                        put("truncate_before_row_id", rowId)
+                        put("confirm_truncate", true)
+                        // Cutting at the first prompt can empty the transcript (all but a hidden starting instruction), which the gateway wants said outright.
+                        put("confirm_empty_truncate", true)
+                    },
+                ) as? JsonObject
+            }
             if (result.string("status") !in TURN_STARTING_STATUSES) ownTurnsPending = (ownTurnsPending - 1).coerceAtLeast(0)
             // The stored rows decide once the turn is over, so what shows matches the gateway's transcript.
             rewound = true
@@ -552,7 +731,8 @@ class ChatSession(
                 state.copy(
                     running = true,
                     messages = state.messages.updateUser(newKey) {
-                        it.copy(pending = false, rowId = result.long("user_row_id"), sentText = trimmed)
+                        // The session authority's reply has no row; a short turn may have given it one already.
+                        it.copy(pending = false, rowId = result.long("user_row_id") ?: it.rowId, sentText = trimmed)
                     },
                 )
             }
@@ -561,11 +741,13 @@ class ChatSession(
             throw e
         } catch (e: Exception) {
             ownTurnsPending = (ownTurnsPending - 1).coerceAtLeast(0)
+            if (cut) return keepPromptAfterCut(newKey, trimmed, e)
             if (submitted && e !is RpcException) {
                 // No answer: the cut may have happened. The transcript shows which, and its last prompt says whether this went.
                 _state.update { state -> state.copy(messages = state.messages.filterNot { it.key == newKey }) }
                 loadHistory()
-                val arrived = _state.value.historyRead &&
+                // The session authority's prompt never went: its cut got no answer.
+                val arrived = !client.sessionAuthority && _state.value.historyRead &&
                     (_state.value.messages.lastOrNull { it is ChatMessage.User } as? ChatMessage.User)?.text == trimmed
                 if (arrived) {
                     rewound = true
@@ -574,7 +756,14 @@ class ChatSession(
                 _state.update { it.copy(error = "Lost the connection while sending. The chat shows what Hermes has.") }
                 return SendOutcome.NotSent
             }
-            val stale = (e as? RpcException)?.code in STALE_REWIND_CODES
+            val rpc = e as? RpcException
+            // The session authority's refusals of the cut, which wrote nothing: they come by reason, under one code.
+            val fenced = client.sessionAuthority && rpc?.reason in FENCE_REFUSALS
+            val busy = rpc?.code == BUSY || (client.sessionAuthority && rpc?.reason == "session_busy")
+            val stale = rpc?.code in STALE_REWIND_CODES ||
+                (client.sessionAuthority && rpc?.reason == "invalid_params" && rpc?.data.string("field") == "target_message_id")
+            // A session authority without `session.mutate` has no other way to cut: its `prompt.submit` refuses the keys.
+            val noCut = client.sessionAuthority && rpc?.code == METHOD_NOT_FOUND
             val refused = SessionRefusal.of(e)
             _state.update { state ->
                 state.copy(
@@ -582,17 +771,78 @@ class ChatSession(
                     refused = refused,
                     error = when {
                         refused != null -> null
-                        (e as? RpcException)?.code == BUSY -> BUSY_MESSAGE
+                        busy -> BUSY_MESSAGE
                         stale -> "This message can't be changed any more."
+                        fenced -> CHANGED_ELSEWHERE
+                        noCut -> "This gateway can't cut a chat back. Update Hermes to edit or regenerate here."
                         else -> e.message ?: "Couldn't send the message."
                     },
                 )
             }
             // The gateway's transcript isn't what this chat shows; show it as it is.
-            if (stale) loadHistory()
+            if (stale || fenced || (busy && client.sessionAuthority)) loadHistory()
             SendOutcome.NotSent
         }
     }
+
+    /**
+     * A rewind's cut on the session authority, whose `prompt.submit` takes no truncation keys: a `rewind` through
+     * `session.mutate` at the prompt's row [rowId], fenced by the session's revision and execution generation as
+     * Hermes Desktop sends it. The prompt goes after, in a plain `prompt.submit`. A refusal wrote nothing; one for
+     * stale fences carries the current ones, kept for the next try rather than sent again here, since the chat it
+     * would cut is no longer the one shown.
+     */
+    private suspend fun mutateRewind(client: JsonRpcClient, runtimeId: String, rowId: Long) {
+        val receipt = try {
+            client.request(
+                "session.mutate",
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("request_id", newRequestId())
+                    // Unknown only if the gateway sent neither; its refusal then says what they are.
+                    put("expected_revision", revision ?: 0)
+                    put("expected_generation", executionGeneration ?: 0)
+                    put("operation", "rewind")
+                    putJsonObject("payload") { put("target_message_id", rowId) }
+                },
+            ) as? JsonObject
+        } catch (e: RpcException) {
+            if (e.reason in FENCE_REFUSALS) {
+                e.data.long("revision")?.let { revision = it }
+                e.data.long("execution_generation")?.let { executionGeneration = it }
+            }
+            throw e
+        }
+        receipt.long("revision")?.let { seen -> revision = maxOf(revision ?: seen, seen) }
+        receipt.long("execution_generation")?.let { executionGeneration = it }
+    }
+
+    /**
+     * The session authority cut the chat, but the prompt [key] that was to follow didn't go ([e]). The chat shows the
+     * cut, and the prompt stays under it to send again: turned down, Hermes hasn't got it; with no answer, it may have.
+     */
+    private suspend fun keepPromptAfterCut(key: String, text: String, e: Exception): SendOutcome {
+        loadHistory()
+        val refused = SessionRefusal.of(e)
+        unsettled[key] = UnsettledPrompt(text, display = null, startsTurn = true)
+        _state.update { state ->
+            state.copy(
+                refused = refused,
+                error = when {
+                    refused != null -> null
+                    e is RpcException -> "The chat was cut back, but your message didn't go. Send it again."
+                    else -> "Lost the connection while sending. Check that it isn't running before you send it again."
+                },
+                messages = state.messages.updateUser(key) {
+                    it.copy(pending = false, check = if (e is RpcException) SendCheck.NotReceived else SendCheck.Unknown)
+                },
+            )
+        }
+        return SendOutcome.Unsettled
+    }
+
+    @OptIn(ExperimentalUuidApi::class)
+    private fun newRequestId(): String = Uuid.random().toString()
 
     /**
      * Whether the transcript has a prompt more than the [before] shown ahead of the send, the latest being
@@ -800,6 +1050,9 @@ class ChatSession(
             finishCommand(key, shown.message ?: "/${command.name} failed.", failed = true)
             return null
         }
+        // A command may have set or moved the goal, loop or heartbeat: `/goal`, `/hb`, or a quick alias the session
+        // authority resolves itself, so the name typed doesn't tell. v0.22.1's authority sends no update for it.
+        if (result !is SlashResult.Alias && controlUnpublished(anyChat = true)) scope.launch { refreshControl() }
         return when (result) {
             is SlashResult.Output -> {
                 val text = result.text.ifBlank { "Done." }
@@ -825,8 +1078,22 @@ class ChatSession(
         }
     }
 
-    /** `/compress`: summarizes older turns through `session.compress` (the slash worker times out on it). */
+    /**
+     * `/compress`: summarizes older turns through `session.compress` (the slash worker times out on it). The
+     * session authority has none: there it is a `session.mutate` `compress`.
+     */
     suspend fun compress(focus: String) = runOnGateway("/compress", COMPRESS_TIMEOUT_MS) { client, runtimeId ->
+        if (client.sessionAuthority) {
+            val result = mutateFenced(client, runtimeId, "compress", CHANGED_WHILE_COMPRESSING, COMPRESS_TIMEOUT_MS) {
+                if (focus.isNotBlank()) put("focus", focus.trim())
+            }
+            // gateway/session_mutation_compress.py: a compress that removed nothing says `noop`; the summary words
+            // the outcome as /compress does.
+            val summary = result?.get("summary") as? JsonObject
+            if (result.string("status") != "noop" && summary.boolean("noop") != true) scope.launch { loadHistory() }
+            return@runOnGateway listOfNotNull(summary.string("headline"), summary.string("token_line"), summary.string("note"))
+                .map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n").ifEmpty { "Compressed." }
+        }
         val result = client.request(
             "session.compress",
             buildJsonObject {
@@ -849,22 +1116,41 @@ class ChatSession(
         }
     }
 
-    /** `/status`: the session report from `session.status`. */
+    /**
+     * `/status`: the session report from `session.status`, or on the session authority, which has none, from
+     * `slash.exec status` (the same report, gateway/session_commands.py).
+     */
     suspend fun status() = runOnGateway("/status") { client, runtimeId ->
-        val result = client.request("session.status", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+        val result = if (client.sessionAuthority) {
+            client.request(
+                "slash.exec",
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("command", "status")
+                },
+                timeoutMs = COMMAND_TIMEOUT_MS,
+            ) as? JsonObject
+        } else {
+            client.request("session.status", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+        }
         result.string("output") ?: "No status."
     }
 
     /**
-     * The provider account's limits and credits as the gateway words them (`session.usage`
-     * `account_lines` / `credits_lines`, e.g. a quota window); empty when there are none or offline.
+     * The provider account's limits and credits as the gateway words them (`session.usage` `account_lines` /
+     * `credits_lines`, or on the session authority `session.account_usage` `lines` / `nous_lines`, e.g. a quota
+     * window); empty when there are none, offline, or on a gateway without the call (an authority before
+     * hermes-agent v0.23.2).
      */
     suspend fun accountLimits(): List<String> {
         val client = connectedClient() ?: return emptyList()
         val runtimeId = liveRuntimeId(client) ?: return emptyList()
         return try {
-            val result = client.request("session.usage", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
-            listOf("account_lines", "credits_lines").flatMap { key ->
+            val authority = client.sessionAuthority
+            val method = if (authority) "session.account_usage" else "session.usage"
+            val result = client.request(method, buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
+            val keys = if (authority) listOf("lines", "nous_lines") else listOf("account_lines", "credits_lines")
+            keys.flatMap { key ->
                 (result?.get(key) as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty) }
             }
         } catch (e: CancellationException) {
@@ -995,29 +1281,66 @@ class ChatSession(
     private var controlUnsupportedOn: JsonRpcClient? = null
 
     /**
+     * The session-authority link whose `session.control` came back "no such method" (Hermes v0.22.1 serves only
+     * `.read` there): a button runs as its typed command instead, as v0.22.3's own `session.control` does. A new
+     * link may be to an updated gateway, so it asks once more.
+     */
+    private var controlByCommandOn: JsonRpcClient? = null
+
+    /**
+     * The link a `session.control.update` came in on. A session authority of Hermes v0.22.1 sends none, not after a
+     * typed `/goal` nor after the goal's judge; v0.22.3 and later do (gateway/session_commands.py, run_goals.py).
+     * Those send one only when something changes, so a new link to them is read after each turn until one comes.
+     */
+    private var controlPublishedOn: JsonRpcClient? = null
+
+    /** Writes to the state that aren't reads (`session.control.update`, a [runControl] answer); a read out meanwhile yields. */
+    private var controlWrites = 0
+
+    /** The last `session.control.read` sent, and the last whose answer was taken: an earlier read's answer is older. */
+    private var controlReadsSent = 0
+    private var controlReadTaken = 0
+
+    /**
+     * Whether the attached link is a session authority that hasn't shown it sends `session.control.update`, while the
+     * chat has a goal, loop or heartbeat: its state is read again when a turn ends or the judge speaks. With
+     * [anyChat] it holds for a chat with none yet, as another client may just have set one.
+     */
+    private fun controlUnpublished(anyChat: Boolean = false): Boolean {
+        val client = attachedClient ?: return false
+        return client.sessionAuthority && client !== controlPublishedOn && (anyChat || _state.value.control != null)
+    }
+
+    /**
      * Reads the session's goal, loop and heartbeat once (`session.control.read`), since `session.resume`
      * doesn't carry them; later changes arrive as `session.control.update` events. Best effort: a gateway
      * that doesn't know the method hides the feature, and any other failure leaves the state as it is.
+     * Returns whether the gateway answered; an answer older than an update or read that came in meanwhile yields to it.
      */
-    suspend fun refreshControl() {
-        val client = connectedClient() ?: return
-        if (client === controlUnsupportedOn) return
-        val runtimeId = liveRuntimeId(client) ?: return
-        // An update that lands while the read is out is newer than the read's answer, so the answer yields to it.
-        val before = _state.value.control
+    suspend fun refreshControl(): Boolean {
+        val client = connectedClient() ?: return false
+        if (client === controlUnsupportedOn) return false
+        val runtimeId = liveRuntimeId(client) ?: return false
+        // An update that lands while the read is out is newer than the read's answer, so the answer yields to it, as it
+        // does to a later read's answer: reads after a turn's end and after the judge's status can overlap.
+        val writes = controlWrites
+        val read = ++controlReadsSent
         val result = try {
             client.request("session.control.read", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
             if (e.code == METHOD_NOT_FOUND) controlUnsupportedOn = client
-            return
+            return false
         } catch (_: Exception) {
-            return
+            return false
         }
-        if (result != null && "control" in result) {
-            _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        if (result == null || "control" !in result) return false
+        if (controlWrites == writes && read > controlReadTaken) {
+            controlReadTaken = read
+            _state.update { it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
         }
+        return true
     }
 
     /**
@@ -1091,25 +1414,39 @@ class ChatSession(
         } catch (e: Exception) {
             return e.message ?: "Couldn't open the session."
         }
-        // As with the read: an update from another client that lands first is newer than this answer.
-        val before = _state.value.control
+        // As with the read: an update from another client that lands first is newer than this answer. A read's answer
+        // that lands first isn't: it may have been sent before this action.
+        val writes = controlWrites
         val result = try {
-            client.request(
-                "session.control",
-                buildJsonObject {
-                    put("session_id", runtimeId)
-                    put("action", action.wire)
-                    if (text != null) put("args", buildJsonObject { put("text", text) })
-                    else if (index != null) put("args", buildJsonObject { put("index", index) })
-                },
-            ) as? JsonObject
+            if (client === controlByCommandOn) {
+                controlByCommand(client, runtimeId, action, text, index)
+            } else {
+                try {
+                    client.request(
+                        "session.control",
+                        buildJsonObject {
+                            put("session_id", runtimeId)
+                            put("action", action.wire)
+                            if (text != null) put("args", buildJsonObject { put("text", text) })
+                            else if (index != null) put("args", buildJsonObject { put("index", index) })
+                        },
+                    ) as? JsonObject
+                } catch (e: RpcException) {
+                    if (e.code != METHOD_NOT_FOUND || !client.sessionAuthority) throw e
+                    controlByCommandOn = client
+                    controlByCommand(client, runtimeId, action, text, index)
+                }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             return e.message ?: "Couldn't ${action.verb}."
         }
-        if (result != null && "control" in result) {
-            _state.update { if (it.control !== before) it else it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
+        if (result != null && "control" in result && controlWrites == writes) {
+            controlWrites++
+            // Reads still out were sent before this answer, so theirs are no newer.
+            controlReadTaken = controlReadsSent
+            _state.update { it.withControl(SessionControl.parse(result["control"] as? JsonObject)) }
         }
         val dispatch = result?.get("dispatch") as? JsonObject
         if (dispatch.string("type") == "send") {
@@ -1125,20 +1462,152 @@ class ChatSession(
         return null
     }
 
-    /** `/stop`: stops the reply, then the background processes the agent left running (`process.stop`). */
-    suspend fun stopEverything() = runOnGateway("/stop") { client, runtimeId ->
-        val lines = mutableListOf<String>()
-        if (_state.value.running) {
-            interruptOnGateway(client, runtimeId)
-            lines += "Stopped the reply."
+    /**
+     * [action] as its typed command (`command.dispatch`), for the session-authority gateway of
+     * [controlByCommandOn]. Its answer is the `dispatch` that `session.control` would carry; that gateway
+     * publishes no `session.control.update`, so the state is read again. Throws with a user-readable
+     * reason when the command fails as well. The command answers a refusal ("No goal set.", a sub-goal
+     * number that's gone) as its plain output, so output with a state that didn't move is that reason.
+     * The state is read before the command too: with no updates, the one on screen may be stale.
+     */
+    private suspend fun controlByCommand(
+        client: JsonRpcClient,
+        runtimeId: String,
+        action: ControlAction,
+        text: String?,
+        index: Int?,
+    ): JsonObject {
+        if (action == ControlAction.SubgoalAdd && text.orEmpty().all { it.isPythonSpace() }) {
+            throw IllegalStateException(SUBGOAL_TEXT_MISSING)
         }
-        val killed = (client.request("process.stop", JsonObject(emptyMap())) as? JsonObject).int("killed") ?: 0
-        lines += when (killed) {
-            0 -> "No background processes were running."
-            1 -> "Stopped 1 background process."
-            else -> "Stopped $killed background processes."
+        val (name, arg) = action.command(text, index) ?: throw IllegalStateException(SUBGOAL_READS_AS_VERB)
+        val readBefore = refreshControl()
+        val revision = _state.value.control?.revision
+        val dispatch = try {
+            client.request(
+                "command.dispatch",
+                // Only what Hermes v0.22.1 takes here (gateway/session_commands.py `_parse`): strings, no more.
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("name", name)
+                    put("arg", arg)
+                },
+                timeoutMs = COMMAND_TIMEOUT_MS,
+            ) as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RpcException) {
+            throw IllegalStateException(commandRefusal(action, e))
+        } catch (_: RpcTimeoutException) {
+            // It may have gone through all the same, and no update will say so.
+            refreshControl()
+            throw IllegalStateException("Couldn't ${action.verb}: the gateway didn't answer in time.")
         }
-        lines.joinToString("\n")
+        val output = dispatch.string("output")?.trim()
+        if (dispatch.string("type") == "exec" && !output.isNullOrEmpty() && refreshControl() && readBefore &&
+            _state.value.control?.revision == revision
+        ) {
+            throw IllegalStateException(output)
+        }
+        return buildJsonObject { dispatch?.let { put("dispatch", it) } }
+    }
+
+    /** Why `command.dispatch` refused [action]: the session authority answers with a bare code (gateway/session_controls.py). */
+    private fun commandRefusal(action: ControlAction, e: RpcException): String {
+        val code = e.reason ?: e.message
+        val why = when {
+            // Only a gateway without the command is helped by an update.
+            e.code == METHOD_NOT_FOUND || code == "unsupported_command" -> return "Couldn't ${action.verb} on this gateway. Update Hermes to use goals."
+            code == "permission_denied" || code == "profile_mismatch" -> "the gateway didn't allow it."
+            code == "not_found" -> "the chat isn't open on the gateway any more."
+            code == "runtime_draining" -> "the gateway is restarting. Try again in a moment."
+            code == "session_busy" -> "the chat is busy. Try again in a moment."
+            code.isBlank() -> "the gateway refused it."
+            else -> "the gateway refused it ($code)."
+        }
+        return "Couldn't ${action.verb}: $why"
+    }
+
+    /**
+     * `/stop`: stops the reply, then the background processes this chat's agent left running. Other chats' processes
+     * are left alone. When the reply was stopped but the processes couldn't be, the card says both.
+     */
+    suspend fun stopEverything() {
+        val started = TimeSource.Monotonic.markNow()
+        runOnGateway("/stop") { client, runtimeId ->
+            val lines = mutableListOf<String>()
+            var sessionId = runtimeId
+            if (_state.value.running) {
+                sessionId = interruptOnGateway(client, runtimeId)
+                lines += "Stopped the reply."
+            }
+            val stop = ProcessStop()
+            try {
+                // Within /stop's own time limit, so a slow kill can't take "Stopped the reply." with it.
+                withTimeoutOrNull(COMMAND_TIMEOUT_MS.milliseconds - started.elapsedNow()) {
+                    stopProcesses(client, sessionId, stop)
+                } ?: run { stop.failure = stop.failure ?: RpcTimeoutException("process.kill") }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                stop.failure = e
+            }
+            val failure = stop.failure
+            if (failure != null && stop.stopped == 0 && lines.isEmpty()) throw failure
+            if (failure == null || stop.stopped > 0) {
+                lines += when (stop.stopped) {
+                    0 -> "No background processes were running."
+                    1 -> "Stopped 1 background process."
+                    else -> "Stopped ${stop.stopped} background processes."
+                }
+            }
+            if (failure != null) {
+                val which = if (stop.stopped > 0) "every background process" else "the background processes"
+                lines += "Couldn't stop $which: ${failure.message ?: "the gateway didn't say why."}"
+            }
+            lines.joinToString("\n")
+        }
+    }
+
+    /** How far `/stop` got with this chat's background processes: how many it stopped, and the first thing that failed. */
+    private class ProcessStop {
+        var stopped = 0
+        var failure: Exception? = null
+    }
+
+    /**
+     * Stops the background processes of chat [sessionId], counting them in [stop]. On the session authority that is
+     * `process.stop` (gateway/session_ancillary.py stop_processes). The legacy sidecar's `process.stop` is the
+     * registry-wide `kill_all`, every chat's processes, so there it's this chat's `process.list` and a `process.kill`
+     * for each running one. One kill failing doesn't keep the others from being tried.
+     */
+    private suspend fun stopProcesses(client: JsonRpcClient, sessionId: String, stop: ProcessStop) {
+        if (client.sessionAuthority) {
+            val result = client.request("process.stop", buildJsonObject { put("session_id", sessionId) }) as? JsonObject
+            stop.stopped = result.int("killed") ?: 0
+            return
+        }
+        val listed = client.request("process.list", buildJsonObject { put("session_id", sessionId) }) as? JsonObject
+        BackgroundProcess.parseList(listed).filter { it.running }.forEach { process ->
+            try {
+                val result = client.request(
+                    "process.kill",
+                    buildJsonObject {
+                        put("session_id", sessionId)
+                        put("process_id", process.id)
+                    },
+                ) as? JsonObject
+                when (result.string("status")) {
+                    "killed" -> stop.stopped++
+                    // tools/process_registry.py kill_process: a failed kill is a result, not a JSON-RPC error.
+                    "error" -> stop.failure = stop.failure ?: Exception(result.string("error"))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                stop.failure = stop.failure ?: e
+            }
+        }
     }
 
     /**
@@ -1311,8 +1780,24 @@ class ChatSession(
         if (on) "YOLO on: this chat runs tools without asking for approval." else "YOLO off: risky tools ask for approval again."
     }
 
-    /** `/title <name>`: renames the chat through `session.title` (REST can't address a live session's row yet). */
+    /**
+     * `/title <name>`: renames the chat through `session.title` (REST can't address a live session's row yet). The
+     * session authority has none: there it is a `session.mutate` `rename`.
+     */
     suspend fun retitle(title: String) = runOnGateway("/title") { client, runtimeId ->
+        if (client.sessionAuthority) {
+            val result = try {
+                mutateFenced(client, runtimeId, "rename", CHANGED_WHILE_RENAMING) { put("title", title.trim()) }
+            } catch (e: RpcException) {
+                // hermes-agent (v0.23.4) answers a title another chat has with a bare internal error: the store's
+                // "already in use" isn't mapped to a refusal (persistence/sqlite/conversation/_store/titles.py).
+                if (e.code != INTERNAL_ERROR) throw e
+                throw RpcException(e.code, RENAME_FAILED, e.reason, e.data)
+            }
+            val final = (if (result?.containsKey("title") == true) result.string("title") else title).orEmpty().trim()
+            _state.update { it.copy(title = final.ifEmpty { null }) }
+            return@runOnGateway if (final.isEmpty()) "Title cleared." else "Title set: $final"
+        }
         val result = client.request(
             "session.title",
             buildJsonObject {
@@ -1408,7 +1893,9 @@ class ChatSession(
         runOnGateway("/branch") { client, runtimeId ->
             val result = if (client.sessionAuthority) {
                 val row = if (keep == null) null else through() ?: throw RpcException(0, BRANCH_ROW_UNKNOWN)
-                mutateBranch(client, runtimeId, row)
+                mutateFenced(client, runtimeId, "branch", CHANGED_WHILE_BRANCHING) {
+                    row?.let { put("through_message_id", it) }
+                }
             } else {
                 val params = buildJsonObject {
                     put("session_id", runtimeId)
@@ -1433,12 +1920,20 @@ class ChatSession(
     }
 
     /**
-     * A `branch` through `session.mutate` on the session authority (gateway/session_mutations.py), as Hermes Desktop
-     * sends it: fenced by the session's revision and execution generation. A refusal for stale ones carries the
-     * current ones, so it goes once more with those; a second refusal is the error.
+     * A `session.mutate` [operation] (`branch`, `model`, `rename`, `compress`) on the session authority
+     * (gateway/session_mutations.py), as Hermes Desktop sends it: fenced by the session's revision and execution
+     * generation. A refusal for stale ones carries the current ones, so it goes once more with those; a second refusal
+     * is the error, as [changed].
      */
     @OptIn(ExperimentalUuidApi::class)
-    private suspend fun mutateBranch(client: JsonRpcClient, runtimeId: String, through: Long?): JsonObject? {
+    private suspend fun mutateFenced(
+        client: JsonRpcClient,
+        runtimeId: String,
+        operation: String,
+        changed: String,
+        timeoutMs: Long = 30_000,
+        payload: JsonObjectBuilder.() -> Unit,
+    ): JsonObject? {
         suspend fun send(expectedRevision: Long, expectedGeneration: Long) = client.request(
             "session.mutate",
             buildJsonObject {
@@ -1447,9 +1942,10 @@ class ChatSession(
                 put("request_id", Uuid.random().toString())
                 put("expected_revision", expectedRevision)
                 put("expected_generation", expectedGeneration)
-                put("operation", "branch")
-                putJsonObject("payload") { through?.let { put("through_message_id", it) } }
+                put("operation", operation)
+                putJsonObject("payload", payload)
             },
+            timeoutMs = timeoutMs,
         ) as? JsonObject
         return try {
             // Unknown only if the gateway sent neither; its refusal then says what they are.
@@ -1457,14 +1953,16 @@ class ChatSession(
         } catch (e: RpcException) {
             val fresh = e.data.long("revision")
             val generation = e.data.long("execution_generation")
-            if (e.reason !in FENCE_REFUSALS || fresh == null || generation == null) throw e
+            if (e.reason !in FENCE_REFUSALS) throw e
+            // hermes-agent v0.22.1 refuses without the current ones, so there is nothing to retry with.
+            if (fresh == null || generation == null) throw RpcException(e.code, changed, e.reason, e.data)
             revision = fresh
             executionGeneration = generation
             try {
                 send(fresh, generation)
             } catch (again: RpcException) {
                 if (again.reason !in FENCE_REFUSALS) throw again
-                throw RpcException(again.code, CHANGED_WHILE_BRANCHING, again.reason, again.data)
+                throw RpcException(again.code, changed, again.reason, again.data)
             }
         }
     }
@@ -1612,6 +2110,9 @@ class ChatSession(
      * as the next prompt instead; a gateway that can't steer (no such method, or an agent without it) gets a
      * plain prompt, which its busy mode folds in as before.
      *
+     * On the session authority, a refusal that came before any agent saw the text (the turn it was meant for
+     * ended) sends it as the next prompt too. A `rejected` the agent may already have read isn't sent again.
+     *
      * A steer the turn ended before reading isn't lost: the gateway queues the leftover as the next prompt,
      * and that turn shows up like one started elsewhere, its prompt pulled from the transcript.
      */
@@ -1626,22 +2127,37 @@ class ChatSession(
         _state.update {
             it.copy(messages = it.messages + ChatMessage.User(key, trimmed, pending = true), keySeq = it.keySeq + 1, error = null)
         }
-        val status = try {
-            (client.request("session.steer", buildJsonObject {
-                put("session_id", runtimeId)
-                put("text", trimmed)
-            }) as? JsonObject).string("status")
+        val reply = try {
+            steerOnGateway(client, runtimeId, trimmed)
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
             removeMessage(key)
             if (e.code in STEER_UNSUPPORTED) return submit(trimmed)
+            // Refused before any agent saw it: the turn it was meant for is gone, or can't take a steer. It runs next.
+            if (client.sessionAuthority && e.reason in UNDELIVERED_STEER_REFUSALS) return submit(trimmed, queue = true)
             _state.update { it.copy(error = e.message.ifBlank { "Couldn't steer the reply." }) }
+            return SendOutcome.NotSent
+        } catch (e: SteerNotSent) {
+            // The running turn couldn't be read, so nothing went out: the text goes back.
+            removeMessage(key)
+            _state.update { it.copy(error = "Couldn't reach the running reply, so the steer wasn't sent.") }
             return SendOutcome.NotSent
         } catch (e: Exception) {
             // Out without a reply: the agent may have read it, so it isn't handed back to go twice. Like a
             // lost correction, the bubble stays marked; a steer leaves nothing in the transcript to settle it.
-            return settleUnanswered(key, arrived = null, UnsettledPrompt(trimmed, display = null, startsTurn = false)) {}
+            return settleUnanswered(key, arrived = null, UnsettledPrompt(trimmed, display = null, startsTurn = false, steer = true)) {}
+        }
+        val status = reply.string("status")
+        if (status == STEER_REJECTED && client.sessionAuthority && reply.boolean("delivered") != false) {
+            // The session authority's plain `rejected` can follow delivery (a steer whose acknowledgement timed
+            // out), so it isn't sent again; only `delivered: false` says no agent saw it.
+            return settleUnanswered(
+                key,
+                arrived = null,
+                UnsettledPrompt(trimmed, display = null, startsTurn = false, steer = true),
+                unknownError = STEER_MAYBE_DELIVERED,
+            ) {}
         }
         if (status != STEER_ACCEPTED) {
             // Turned down: the turn ended meanwhile, or the agent can't take it now. It runs next instead.
@@ -1654,6 +2170,53 @@ class ChatSession(
         }
         return SendOutcome.Sent
     }
+
+    /**
+     * Sends `session.steer` for [text]. The session authority takes the running turn's `execution_generation`
+     * with it, and refuses the steer without one (gateway/session_busy_controls.py `correct`); other gateways
+     * take only the id and the text, and refuse any other key. A generation that isn't known yet is read with
+     * `session.resume` first; null when that shows no turn running, so nothing went to one. One the authority
+     * calls stale isn't tried again with a newer one, as Desktop doesn't: the turn running by then may be
+     * another prompt's, so the caller sends the text as the next prompt.
+     *
+     * @throws SteerNotSent when the running turn couldn't be read.
+     */
+    private suspend fun steerOnGateway(client: JsonRpcClient, runtimeId: String, text: String): JsonObject? {
+        suspend fun send(id: String, generation: Long?) = client.request(
+            "session.steer",
+            buildJsonObject {
+                put("session_id", id)
+                put("text", text)
+                generation?.let { put("execution_generation", it) }
+            },
+        ) as? JsonObject
+        if (!client.sessionAuthority) return send(runtimeId, null)
+        executionGeneration?.let { return send(runtimeId, it) }
+        val fresh = try {
+            attach(client, reconnected = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Not left "Attaching": the chat shows the failure with its retry, as a failed send's attach does.
+            _state.update {
+                if (it.attachment !is Attachment.Attaching) it
+                else it.copy(
+                    attachment = Attachment.Failed(e.message ?: "Couldn't open the session."),
+                    // As runCatchingAttach: a chat the gateway turned down has no turn left to follow.
+                    running = it.running && e !is RpcException,
+                )
+            }
+            throw SteerNotSent(e)
+        }
+        val generation = executionGeneration?.takeIf { _state.value.running } ?: return null
+        return send(fresh, generation)
+    }
+
+    /** A resume after a gap that a reconnect overtook: the chat is attached on the new socket, so it isn't sent. */
+    private class StaleGapResume : Exception()
+
+    /** A steer that never went out: the running turn's generation couldn't be read ([cause]). */
+    private class SteerNotSent(cause: Throwable) : Exception(cause.message, cause)
 
     /**
      * Stops the running reply (`session.interrupt`), waits for the turn to settle, then sends [text] as a
@@ -1712,9 +2275,10 @@ class ChatSession(
 
     /**
      * Sends `session.interrupt` with `execution_generation` when known (required by canonical session authority).
-     * If a session-authority socket lacks the generation, re-attaches first to fetch it.
+     * If a session-authority socket lacks the generation, re-attaches first to fetch it. Returns the chat id the
+     * interrupt went to, which the re-attach can change.
      */
-    private suspend fun interruptOnGateway(client: JsonRpcClient, runtimeId: String) {
+    private suspend fun interruptOnGateway(client: JsonRpcClient, runtimeId: String): String {
         val targetId = if (executionGeneration == null && client.sessionAuthority && rowExists) {
             attach(client, reconnected = true)
         } else {
@@ -1728,6 +2292,7 @@ class ChatSession(
                 gen?.let { put("execution_generation", it) }
             },
         )
+        return targetId
     }
 
     /** Stops one running subagent (`subagent.interrupt`); its `subagent.complete` follows. */
@@ -1805,12 +2370,26 @@ class ChatSession(
         }
         _state.update { it.copy(model = model, provider = provider) }
         return try {
-            val result = // --session: a pick on the phone must not quietly rewrite the profile default (config.yaml).
-            configSet("model", JsonPrimitive("$model --provider $provider --session")) {
+            val client = connectedClient() ?: throw RpcException(0, "Not connected to the gateway.")
+            // --session: a pick on the phone must not quietly rewrite the profile default (config.yaml).
+            suspend fun overConfigSet() = configSet("model", JsonPrimitive("$model --provider $provider --session")) {
                 if (confirm) put("confirm_expensive_model", true)
             }
-            if (result.boolean("confirm_required") == true) {
+            val result = if (client.sessionAuthority) {
+                try {
+                    mutateModel(client, model, provider, confirm)
+                } catch (e: RpcException) {
+                    // Every session authority so far (hermes-agent v0.22.1 on) has it; one that doesn't gets the old call.
+                    if (e.code != METHOD_NOT_FOUND) throw e
+                    overConfigSet()
+                }
+            } else {
+                overConfigSet()
+            }
+            // The session authority marks a guarded pick with both; key on either.
+            if (result.boolean("confirm_required") == true || result.string("status") == "confirmation_required") {
                 _state.update { it.copy(model = previous.model, provider = previous.provider) }
+                modelConfirm = result.string("confirm")?.let { Triple(model, provider, it) }
                 ModelSwitch.NeedsConfirmation(result.string("confirm_message") ?: "This model costs more than usual. Switch anyway?")
             } else {
                 ModelSwitch.Done
@@ -1845,6 +2424,29 @@ class ChatSession(
             throw e
         } catch (e: Exception) {
             _state.update { it.copy(reasoningEffort = previous.reasoningEffort, fast = previous.fast, error = e.message ?: "Couldn't change the setting.") }
+        }
+    }
+
+    /**
+     * The session authority refuses `config.set model` (`use_session_mutation_model`, gateway/session_busy_controls.py):
+     * there a pick is `session.mutate` `model`, as Hermes Desktop sends it. A guarded (expensive) target answers
+     * `confirmation_required` with a `confirm` token, and only that token applies it; [confirm] sends the one the
+     * gateway gave for this pick. A pick during a turn is deferred to the next one, which is still a switch.
+     */
+    private suspend fun mutateModel(client: JsonRpcClient, model: String, provider: String, confirm: Boolean): JsonObject? {
+        val runtimeId = ensureAttached(client)
+        val token = modelConfirm?.takeIf { confirm && it.first == model && it.second == provider }?.third
+        modelConfirm = null
+        return try {
+            mutateFenced(client, runtimeId, "model", CHANGED_WHILE_SWITCHING) {
+                put("model", model)
+                put("provider", provider)
+                token?.let { put("confirm", it) }
+            }
+        } catch (e: RpcException) {
+            // v0.22.1 refuses a pick during a turn; later versions defer it to the next turn.
+            if (e.reason != "session_busy") throw e
+            throw RpcException(e.code, SWITCH_WHEN_DONE, e.reason, e.data)
         }
     }
 
@@ -1912,16 +2514,10 @@ class ChatSession(
             val delivery = request.delivery
             val method = InputRequest.respondMethod(request)
             if (delivery is InputRequestDelivery.PendingControl && method != null) {
+                // Refused before attaching, so nothing at all goes out.
+                InputRequest.pendingControlRefusal(request, result)?.let { throw IllegalArgumentException(it) }
                 val runtimeId = liveRuntimeId(client) ?: ensureAttached(client)
-                client.request(
-                    method,
-                    buildJsonObject {
-                        put("session_id", runtimeId)
-                        delivery.executionGeneration?.let { put("execution_generation", it) }
-                        put("prompt_id", request.id)
-                        result.forEach { (k, v) -> put(k, v) }
-                    },
-                )
+                client.request(method, InputRequest.pendingControlParams(request, runtimeId, result))
             } else {
                 client.respond(request.id, result)
             }
@@ -1956,12 +2552,79 @@ class ChatSession(
         }
     }
 
+    private suspend fun followReactionSupport() {
+        connection.state.collectLatest { state ->
+            val client = (state as? ConnectionState.Connected)?.client ?: return@collectLatest
+            client.replyReactionsSupported.collect { supported ->
+                _state.update { it.copy(replyReactionsSupported = supported) }
+            }
+        }
+    }
+
     private suspend fun followEvents() {
         connection.events.collect { event ->
-            val runtimeId = _state.value.runtimeSessionId ?: return@collect
+            val runtimeId = _state.value.runtimeSessionId ?: run {
+                // Taken up again after a gap: the new subscription's frames, a gap among them too, wait for the resume.
+                val kept = event.sessionId != null && streamMutex.withLock {
+                    gapHeld?.takeIf { event.sessionId == gapRuntime }?.add(event) == true
+                }
+                // Or the resume got in since: the frame goes on as any other.
+                if (kept) null else _state.value.runtimeSessionId
+            } ?: return@collect
             if (event.sessionId != runtimeId) return@collect
+            if (event.type == REPLAY_GAP && resumeAfterGap(runtimeId)) return@collect
             streamMutex.withLock { deliver(event) }
         }
+    }
+
+    /**
+     * The session authority ended this socket's subscription to the chat: this viewer fell too far behind, so its
+     * backlog was dropped (hermes-agent `tui_gateway/transport.py` FanoutTransport.write) and one `session.replay_gap`
+     * sent instead (`gateway/session_events.py` SessionEvents.publish). The socket stays up, so no reconnect comes,
+     * and nothing of the session arrives until a `session.resume` attaches it again, as Desktop and the TUI do. The
+     * hole is longer than `session.events.since` keeps, so the chat reloads the transcript, as after a drop with no
+     * replay. The legacy sidecar sends no such frame (it closes the socket instead), so off the authority it's ignored.
+     */
+    private suspend fun resumeAfterGap(runtimeId: String): Boolean {
+        val client = connectedClient()?.takeIf { it.sessionAuthority } ?: return false
+        val start = streamMutex.withLock {
+            // Only this socket's subscription ended; a runtime not attached on it has nothing to take up again.
+            if (liveRuntimeId(client) != runtimeId) return true
+            !gapResumePending.also { gapResumePending = true }
+        }
+        if (start) scope.launch { reattachAfterGap(client, runtimeId) }
+        return true
+    }
+
+    /**
+     * The `session.resume` after a gap. The frames since the last one applied are gone, so it picks up from nothing
+     * (`afterGap`), and held ones from before the gap are in the transcript it reloads. The new subscription's frames
+     * wait for it in [gapHeld], then go through in order; a gap among them takes another resume.
+     */
+    private suspend fun reattachAfterGap(client: JsonRpcClient, runtimeId: String) {
+        val waiting = mutableListOf<GatewayEvent>()
+        streamMutex.withLock {
+            gapResumePending = false
+            streamGeneration++
+            held = null
+            gapRuntime = runtimeId
+            gapHeld = waiting
+        }
+        val attached = runCatchingAttach(client, reconnected = true, afterGap = true)
+        val again = streamMutex.withLock {
+            // A later gap took over the holding; its resume lets them through.
+            if (gapHeld !== waiting) return
+            gapHeld = null
+            gapRuntime = null
+            if (!attached) return
+            if (waiting.none { it.type == REPLAY_GAP }) {
+                waiting.forEach(::deliver)
+                return
+            }
+            // The new subscription ended too: take up the runtime the resume named, which may not be the one before.
+            liveRuntimeId(client)
+        }
+        again?.let { resumeAfterGap(it) }
     }
 
     /**
@@ -1980,7 +2643,9 @@ class ChatSession(
             val start = streamMutex.withLock {
                 // Only the runtime attached on this socket, and not while another catch-up runs. Live events are held
                 // from here, so none lands both live and again in the replay.
-                (liveRuntimeId(client) == runtimeId && held == null).also { if (it) held = mutableListOf() }
+                // Nor while a gap's resume takes the chat up again: it reloads the transcript itself.
+                (liveRuntimeId(client) == runtimeId && held == null && gapHeld == null && !gapResumePending)
+                    .also { if (it) held = mutableListOf() }
             }
             if (start) catchUp(client, runtimeId, foreground = true)
         }
@@ -1991,11 +2656,25 @@ class ChatSession(
      * waits, with those after it, while [catchUp] fills the gap. Called under [streamMutex].
      */
     private fun deliver(event: GatewayEvent) {
+        gapHeld?.let {
+            it += event
+            return
+        }
         held?.let {
             it += event
             return
         }
         val seq = event.seq
+        // The session authority started counting the session anew: seqs from before don't follow. It does that only
+        // after the last viewer left (SessionEvents.release), which the next session.resume reports, so this only
+        // guards against a frame that says so first. Only there: the legacy gateway's seqs count in gateway.ready's
+        // epoch, whatever a frame says.
+        event.replayEpoch?.takeIf { attachedClient?.sessionAuthority == true }?.let { epoch ->
+            if (epoch != seqEpoch) {
+                seqEpoch = epoch
+                lastSeq = null
+            }
+        }
         val last = lastSeq
         if (seq != null && last != null) {
             if (seq <= last) return
@@ -2016,16 +2695,20 @@ class ChatSession(
      * reloads the transcript and takes the running reply as the gateway has it, as it did before replay existed.
      */
     private suspend fun catchUp(client: JsonRpcClient, runtimeId: String, foreground: Boolean = false) {
-        val from = streamMutex.withLock { lastSeq }
+        val (from, epoch, generation) = streamMutex.withLock { Triple(lastSeq, seqEpoch, streamGeneration) }
         val missed = if (from == null) null else try {
             val reply = client.request(
                 "session.events.since",
                 buildJsonObject {
                     put("session_id", runtimeId)
                     put("last_seen", from)
+                    // The session authority answers only in the session's epoch, and a gateway before it (up to
+                    // v0.22.2) refuses the param: only a session's own epoch is sent. Never `last_sequence`, which
+                    // those refuse too.
+                    if (client.sessionAuthority && epoch != null) put("replay_epoch", epoch)
                 },
             ) as? JsonObject
-            EventReplay.parse(reply, runtimeId, from, seqEpoch)
+            EventReplay.parse(reply, runtimeId, from, epoch)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -2037,6 +2720,8 @@ class ChatSession(
         // Read while live events stay held; the stream lock is only taken to apply.
         if (missed == null && !keep && rowExists && _state.value.runtimeSessionId == runtimeId) loadHistory()
         streamMutex.withLock {
+            // A gap came meanwhile: what was missed is in the transcript its resume reloads, and what's held is its own.
+            if (generation != streamGeneration) return
             // The link went, or another runtime took over: the next attach starts its own catch-up.
             if (_state.value.runtimeSessionId != runtimeId) {
                 held = null
@@ -2069,7 +2754,11 @@ class ChatSession(
 
     private fun apply(event: GatewayEvent) {
         event.seq?.let { lastSeq = it }
-        (event.payload as? JsonObject).long("execution_generation")?.let { executionGeneration = it }
+        // The session authority stamps a turn's events with its generation beside the payload; a few payloads carry it
+        // too. Only ever forward, as Desktop keeps it: a replayed or late event of an older turn must not rewind it.
+        (event.executionGeneration ?: (event.payload as? JsonObject).long("execution_generation"))?.let { seen ->
+            executionGeneration = maxOf(executionGeneration ?: seen, seen)
+        }
         if (event.type == "session.info" || event.type == "session.updated") {
             val payload = event.payload as? JsonObject
             // A receipt names its session; only ever forward, as a replayed older one must not rewind it.
@@ -2078,6 +2767,8 @@ class ChatSession(
         }
         val now = nowSeconds()
         val noticesBefore = _state.value.notices
+        // Only an update that carries the state moves it (ChatReducer), so only that one outdates a read that's out.
+        if (event.type == "session.control.update" && (event.payload as? JsonObject)?.get("control") is JsonObject) controlWrites++
         // Cleared before the turn's end lands, so no rows laid out meanwhile still take it as running.
         if (event.type == "message.complete") {
             turnStartedAt = null
@@ -2097,18 +2788,30 @@ class ChatSession(
             "tool.output_risk" -> flaggedOutput(event.payload as? JsonObject)?.let { (id, risk) ->
                 risks?.let { scope.launch { it.remember(id, risk) } }
             }
+            "session.control.update" -> controlPublishedOn = attachedClient
+            // The goal's judge runs after the turn ends and can finish after the read on `message.complete`, so its
+            // verdict is read again on the status it sends (v0.22.1 gateway/run_goals.py `_send_goal_status_notice`).
+            "status.update" -> if ((event.payload as? JsonObject).string("kind") == "goal" && controlUnpublished(anyChat = true)) {
+                scope.launch { refreshControl() }
+            }
             "message.start" -> if (ownTurnsPending > 0) {
                 ownTurnsPending--
             } else {
                 foreignTurn = true
                 scope.launch { loadHistory() }
+                // The kickoff of a goal another client just typed: v0.22.1 stored it before the turn, unpublished.
+                if (controlUnpublished(anyChat = true)) scope.launch { refreshControl() }
             }
             // Swap the live copy for the stored rows, which now hold the other client's prompt for sure.
             "message.complete" -> {
                 // Nothing can still wait on a person once the turn is over; this also clears a
                 // clarify answered on another client, which gets no request.cancel.
                 _state.update { it.copy(inputRequests = emptyList()) }
-                if (foreignTurn || rewound) {
+                // A gateway that sends no `session.control.update` (v0.22.1's authority): the goal's turn moved it on
+                // unseen, so it's read again. A turn from another client may be the kickoff of a goal it just typed
+                // into a chat that had none, so that one is read whatever the strip shows.
+                if (controlUnpublished(anyChat = foreignTurn)) scope.launch { refreshControl() }
+                if (foreignTurn || rewound || stoppedUnnamed(event.payload as? JsonObject)) {
                     foreignTurn = false
                     rewound = false
                     scope.launch { loadHistory() }
@@ -2200,14 +2903,16 @@ class ChatSession(
         }
     }
 
-    /** The copy last written to the device, by row count and newest row id, so an unchanged transcript isn't written again. */
-    private var savedCopyKey: Pair<Int, Long?>? = null
+    /** The last saved copy's row count, newest row ID and user reactions. */
+    private var savedCopyKey: Triple<Int, Long?, List<Pair<Long?, String>>>? = null
     private var saveJob: Job? = null
+    private val savedCopyRefreshMutex = Mutex()
 
     /** Writes [saved] as the device's copy of chat [id], off the history lock; a newer copy replaces one still being written. */
     private fun saveCopy(id: String, saved: List<SessionMessage>, savedSessionId: String?) {
         val cache = cache ?: return
-        val key = saved.size to saved.lastOrNull()?.id
+        val reactions = saved.mapNotNull { row -> row.userReaction?.let { row.id to it } }
+        val key = Triple(saved.size, saved.lastOrNull()?.id, reactions)
         if (key == savedCopyKey) return
         savedCopyKey = key
         saveJob?.cancel()
@@ -2219,15 +2924,20 @@ class ChatSession(
      * loaded rows don't have. Nothing shown changes.
      */
     private suspend fun refreshSavedCopy() {
-        val id = _state.value.storedSessionId ?: return
-        val page = (sessions.messages(gateway, id, limit = HISTORY_PAGE, profile = profile) as? ApiResult.Success)?.value ?: return
-        historyMutex.withLock {
-            if (!_state.value.historyRead || _state.value.storedSessionId != id) return
-            val full = page.messages.size >= HISTORY_PAGE
-            val newest = if (full) page.messages.fromFirstTurn() else page.messages
-            val joined = (if (full) rows.withNewestFull(page.messages) else null) ?: newest
-            _state.update { it.copy(storedActivityAt = joined.latestStoredActivity()) }
-            saveCopy(id, joined, page.sessionId)
+        savedCopyRefreshMutex.withLock {
+            val id = _state.value.storedSessionId ?: return
+            if (!_state.value.historyRead) return
+            // A newer saved copy (from a history load) can land while the refresh reads the gateway.
+            val previousSave = historyMutex.withLock { saveJob }
+            val page = (sessions.messages(gateway, id, limit = HISTORY_PAGE, profile = profile) as? ApiResult.Success)?.value ?: return
+            historyMutex.withLock {
+                if (!_state.value.historyRead || _state.value.storedSessionId != id || saveJob !== previousSave) return
+                val full = page.messages.size >= HISTORY_PAGE
+                val newest = if (full) page.messages.fromFirstTurn() else page.messages
+                val joined = (if (full) rows.withNewestFull(page.messages) else null) ?: newest
+                _state.update { it.copy(storedActivityAt = joined.latestStoredActivity()) }
+                saveCopy(id, joined, page.sessionId)
+            }
         }
     }
 
@@ -2316,10 +3026,17 @@ class ChatSession(
         // The running turn's saved steps apart from the reply before them, to fold into its live reply below.
         val stored = historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged)
         // A prompt sent without a reply that the transcript now has arrived after all.
-        val storedPrompts = stored.mapNotNullTo(HashSet()) { (it as? ChatMessage.User)?.text }
+        val storedPrompts = stored.mapNotNull { (it as? ChatMessage.User)?.text }
         // Only the gateway's transcript says a prompt arrived; the saved copy is from before it.
         val unsettled = if (savedCopyAt != null) live else {
-            live.filterNot { it is ChatMessage.User && it.check != null && storedPrompts.any { p -> p.contains(it.text) } }
+            live.filterNot { message ->
+                if (message !is ChatMessage.User || message.check == null) return@filterNot false
+                val prompt = unsettled[message.key]
+                // A reaction's follow-up can repeat an earlier one word for word: it arrived once the transcript
+                // holds one more copy than when it went.
+                if (prompt?.keepRejected == true) storedPrompts.count { it.contains(message.text) } > prompt.copiesBefore
+                else storedPrompts.any { it.contains(message.text) }
+            }
         }
         // Steps of the running turn are saved as it goes, and the live copy repeats them: show them once.
         val messages = (stored + unsettled).withSavedStepsFolded()
@@ -2334,12 +3051,19 @@ class ChatSession(
         )
     }
 
-    private suspend fun runCatchingAttach(client: JsonRpcClient, reconnected: Boolean = false, reuse: Boolean = false): Boolean = try {
-        val runtimeId = attach(client, reconnected, reuse)
+    private suspend fun runCatchingAttach(
+        client: JsonRpcClient,
+        reconnected: Boolean = false,
+        reuse: Boolean = false,
+        afterGap: Boolean = false,
+    ): Boolean = try {
+        val runtimeId = attach(client, reconnected, reuse, afterGap)
         scope.launch { refreshSubagents(client, runtimeId) }
         true
     } catch (e: CancellationException) {
         throw e
+    } catch (e: StaleGapResume) {
+        false
     } catch (e: Exception) {
         _state.update {
             it.copy(
@@ -2381,9 +3105,17 @@ class ChatSession(
      * ([reconnected]) the same runtime picks up from the last event applied (see [catchUp]); a new one, or one
      * with nothing to pick up from, reloads the transcript instead. With [reuse], a runtime already attached on
      * [client] by the time the lock is free (a send and the reconnect racing) is kept rather than resumed again.
+     * [afterGap] takes up a subscription the session authority ended: nothing to pick up from, and nothing to do
+     * when a reconnect attached the chat on a new socket first.
      */
-    private suspend fun attach(client: JsonRpcClient, reconnected: Boolean = false, reuse: Boolean = false): String = attachMutex.withLock {
+    private suspend fun attach(
+        client: JsonRpcClient,
+        reconnected: Boolean = false,
+        reuse: Boolean = false,
+        afterGap: Boolean = false,
+    ): String = attachMutex.withLock {
         if (reuse) liveRuntimeId(client)?.let { return@withLock it }
+        if (afterGap && (attachedClient !== client || connectedClient() !== client)) throw StaleGapResume()
         val stored = _state.value.storedSessionId ?: error("No stored session to resume")
         _state.update { it.copy(attachment = Attachment.Attaching) }
         val result = client.request(
@@ -2407,18 +3139,20 @@ class ChatSession(
         // Questions asked while no socket of ours was attached; the gateway keeps them open for us.
         val open = InputRequest.parseResume(result)
         val streamed = inflight.string("assistant").orEmpty()
-        val epoch = readyEpoch(client)
+        val epoch = replayEpoch(client, result)
         val (resumable, catchingUp) = streamMutex.withLock {
             inflightText = streamed
-            // Seqs count per runtime session and per gateway run, so only the same of both can be picked up.
-            val resumable = reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
+            // Seqs count per runtime session and per epoch, so only the same of both can be picked up.
+            val resumable = !afterGap && reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
             if (!resumable) {
-                lastSeq = null
+                lastSeq = startSeq(client, result, epoch)
                 // The turn may have changed while away: the gateway's copy names its reply again below.
                 turnReplyKey = null
             }
             seqRuntime = runtimeId
             seqEpoch = epoch
+            // The resume may name another runtime (the session's newest after a compression): its frames are held.
+            if (afterGap && gapHeld != null) gapRuntime = runtimeId
             // Held from before the state names the runtime, so no live event slips in ahead of the missed ones.
             val catchingUp = resumable && held == null
             if (catchingUp) held = mutableListOf()
@@ -2477,9 +3211,24 @@ class ChatSession(
     private fun List<ChatMessage>.withSavedStepsFolded(): List<ChatMessage> =
         withSavedStepsInLiveReply(turnStartedAt, inflightText, turnReplyKey)
 
-    /** The gateway run's `replay_epoch` from [client]'s `gateway.ready`, when it is the connected one. */
-    private fun readyEpoch(client: JsonRpcClient): String? =
-        (connection.state.value as? ConnectionState.Connected)?.takeIf { it.client === client }?.ready.string("replay_epoch")
+    /**
+     * The `replay_epoch` the seqs of a session opened on [client] count in: the session's own from the session
+     * authority's `session.resume` / `session.create` [result], else the gateway run's from `gateway.ready`, when
+     * [client] is the connected one.
+     */
+    private fun replayEpoch(client: JsonRpcClient, result: JsonObject): String? =
+        if (client.sessionAuthority) {
+            result.string("replay_epoch")
+        } else {
+            (connection.state.value as? ConnectionState.Connected)?.takeIf { it.client === client }?.ready.string("replay_epoch")
+        }
+
+    /**
+     * Where a freshly opened session's stream starts: the session authority's `last_sequence` from [result], so a
+     * gap in the first events is filled too. Null elsewhere: the first event applied sets it.
+     */
+    private fun startSeq(client: JsonRpcClient, result: JsonObject, epoch: String?): Long? =
+        result.long("last_sequence").takeIf { client.sessionAuthority && epoch != null }
 
     /**
      * `session.create` for a brand-new chat; its stored row appears with the first prompt, or at once when it starts
@@ -2517,9 +3266,9 @@ class ChatSession(
         // The session authority stores every new chat's row on create, so a send after a lost link resumes it.
         if (client.sessionAuthority || !instruction.isNullOrBlank()) rowExists = true
         streamMutex.withLock {
-            lastSeq = null
+            seqEpoch = replayEpoch(client, result)
+            lastSeq = startSeq(client, result, seqEpoch)
             seqRuntime = runtimeId
-            seqEpoch = readyEpoch(client)
         }
         // The gateway takes a folder that's gone without an error and runs the chat in its own folder instead.
         val ranIn = (result["info"] as? JsonObject).string("cwd")
@@ -2544,6 +3293,9 @@ class ChatSession(
     private fun connectedClient(): JsonRpcClient? = (connection.state.value as? ConnectionState.Connected)?.client
 
     private companion object {
+        /** The session authority's notice that it ended this socket's subscription to a session. */
+        const val REPLAY_GAP = "session.replay_gap"
+
         /** A message key made from a stored row (`historyToMessages`): `row-<id>`, or `row-<id>-<n>` for one of its events. */
         val ROW_KEY = Regex("row-(\\d+)(?:-\\d+)?")
 
@@ -2565,6 +3317,20 @@ class ChatSession(
 
         /** `session.steer`'s status for a steer the running turn took in. */
         const val STEER_ACCEPTED = "queued"
+
+        /** `session.steer`'s status for a steer the agent didn't take, or (on the session authority) may have. */
+        const val STEER_REJECTED = "rejected"
+
+        /**
+         * Session-authority refusals of a steer that came before any agent saw it (session_busy_controls.py
+         * `correct`, Desktop's `UNDELIVERED_CORRECTION_REASONS`): safe to send as the next prompt.
+         */
+        val UNDELIVERED_STEER_REFUSALS = setOf("stale_generation", "execution_not_ready", "unsupported_control")
+
+        const val LOST_WHILE_SENDING = "Lost the connection while sending. Check that it isn't running before you send it again."
+
+        const val STEER_MAYBE_DELIVERED =
+            "Hermes may have read your steer, so it wasn't sent again. Check the reply before you send it again."
 
         /** `session.steer` errors for a gateway that can't steer: no such method, or an agent without `steer()`. */
         val STEER_UNSUPPORTED = setOf(METHOD_NOT_FOUND, 4010)
@@ -2591,7 +3357,20 @@ class ChatSession(
          */
         val STALE_REWIND_CODES = setOf(4018, 4030, 4004)
 
+        const val CHANGED_ELSEWHERE = "The chat changed somewhere else meanwhile. It's up to date now; try again."
+
         const val NOT_CONNECTED = "Not connected to the gateway."
+
+        /**
+         * A sub-goal Hermes v0.22.1's `/subgoal` would take for its own `remove` or `clear`
+         * (gateway/slash_commands_goals.py), so it isn't sent as that command.
+         */
+        const val SUBGOAL_READS_AS_VERB =
+            "This gateway would read a sub-goal starting with \"remove\" or \"clear\" as a command. " +
+                "Reword it, or update Hermes."
+
+        /** A sub-goal with no text, which `/subgoal` would answer with the goal's status instead of adding it. */
+        const val SUBGOAL_TEXT_MISSING = "Write the sub-goal first."
 
         /** Looks at the transcript for a prompt sent without a reply: about 7 s in all. */
         const val DELIVERY_LOOKS = 4
@@ -2608,6 +3387,19 @@ class ChatSession(
         const val BRANCH_ROW_UNKNOWN = "Couldn't find this message in the saved chat. Open the chat again, then branch from it."
 
         const val CHANGED_WHILE_BRANCHING = "The chat changed on the gateway while branching. Try again."
+
+        const val CHANGED_WHILE_SWITCHING = "The chat changed on the gateway while switching the model. Try again."
+
+        const val SWITCH_WHEN_DONE = "The model can't change while a reply is running. Switch it when this one is done."
+
+        const val CHANGED_WHILE_RENAMING = "The chat changed on the gateway while renaming. Try again."
+
+        const val CHANGED_WHILE_COMPRESSING = "The chat changed on the gateway while compressing. Try again."
+
+        /** JSON-RPC "internal error". */
+        const val INTERNAL_ERROR = -32603
+
+        const val RENAME_FAILED = "The gateway couldn't rename the chat. Another chat may have this title already."
 
         /** A REST read of a session the gateway no longer has. */
         const val HTTP_NOT_FOUND = 404
@@ -2767,6 +3559,23 @@ private fun String.startsWithIgnoringSpaces(prefix: String): Boolean {
         i++
         j++
     }
+}
+
+/**
+ * A stopped turn's `message.complete` whose reply is stored but not named, so the transcript is read for its row.
+ * The receipt names the reply's row only for a turn that completed (v0.23.4 agent/persisted_turn_receipt.py), but a
+ * stopped one is stored too. Only when the receipt lists a stored row besides the prompt's: without one, nothing says
+ * the reply was stored (a save that failed, a stop before any text), and a read could drop the live copy. Row 0 names
+ * nothing, as the reducer reads it.
+ */
+internal fun stoppedUnnamed(payload: JsonObject?): Boolean {
+    val receipt = payload?.get("persisted_turn") as? JsonObject ?: return false
+    val prompts = setOfNotNull(receipt.long("user_row_id")) +
+        (receipt["user_row_ids"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.longOrNull }
+    val stored = (receipt["row_ids"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.longOrNull }
+    return payload.string("status") == "interrupted" &&
+        stored.any { it !in prompts } &&
+        receipt.long("final_assistant_row_id")?.takeIf { it > 0 } == null
 }
 
 /**

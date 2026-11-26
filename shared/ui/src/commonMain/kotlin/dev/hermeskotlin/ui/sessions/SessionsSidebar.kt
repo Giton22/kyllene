@@ -442,6 +442,7 @@ fun SessionsSidebar(
     var inboxOpenKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(inboxLink) {
         val link = inboxLink ?: return@LaunchedEffect
+        if (!link.current()) { onInboxLinkTaken(link); return@LaunchedEffect }
         inboxOpen = true
         inboxOpenKey = link.key
         onInboxLinkTaken(link)
@@ -2748,7 +2749,7 @@ internal fun rowTone(status: RowStatus?, draft: Boolean): RowTone = when {
     status?.waiting == Waiting.Approval || status?.waiting == Waiting.Unknown -> RowTone.Approval
     status?.waiting != null -> RowTone.Question
     status?.running == true -> RowTone.Running
-    status?.unread == true -> RowTone.Reply
+    status?.newReply == true -> RowTone.Reply
     draft -> RowTone.Draft
     else -> RowTone.Idle
 }
@@ -2757,7 +2758,7 @@ internal fun rowTone(status: RowStatus?, draft: Boolean): RowTone = when {
 internal fun rowStatusWords(status: RowStatus?, draft: Boolean): List<StringResource> = listOfNotNull(
     status?.waiting?.let(::waitingWord),
     Res.string.sessions_status_running.takeIf { status?.running == true },
-    Res.string.sessions_status_new_reply.takeIf { status?.unread == true },
+    Res.string.sessions_status_new_reply.takeIf { status?.newReply == true },
     Res.string.sessions_status_draft.takeIf { draft },
 )
 

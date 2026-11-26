@@ -107,8 +107,14 @@ internal fun TranscriptEventRow(event: TranscriptEvent) {
             body = event.output.takeIf { it.isNotBlank() }?.let { { Monospace(it) } },
         )
         is TranscriptEvent.Routine -> FoldedLine(
-            icon = Lucide.AlarmClock,
-            title = stringResource(Res.string.chat_event_routine, event.name),
+            icon = if (event.failed) Lucide.CircleAlert else Lucide.AlarmClock,
+            title = when (val name = event.name) {
+                null -> stringResource(if (event.failed) Res.string.chat_event_routine_problem_unnamed else Res.string.chat_event_routine_unnamed)
+                else -> stringResource(if (event.failed) Res.string.chat_event_routine_problem else Res.string.chat_event_routine, name)
+            },
+            tint = if (event.failed) Theme[colors][danger] else Theme[colors][textTertiary],
+            // A job's message to this chat is the reason it ran: shown open, its words a tap from folding away.
+            initiallyOpen = event.result,
             body = event.body.takeIf { it.isNotBlank() }?.let { { MarkdownText(it) } },
         )
         is TranscriptEvent.FailedTurn -> FoldedLine(
@@ -357,8 +363,14 @@ private fun messageText(input: String): String? = runCatching {
 
 /** One line with an icon; tapping opens [body] beneath it when there is one. */
 @Composable
-private fun FoldedLine(icon: ImageVector, title: String, tint: Color = Theme[colors][textTertiary], body: (@Composable () -> Unit)?) {
-    var open by remember { mutableStateOf(false) }
+private fun FoldedLine(
+    icon: ImageVector,
+    title: String,
+    tint: Color = Theme[colors][textTertiary],
+    initiallyOpen: Boolean = false,
+    body: (@Composable () -> Unit)?,
+) {
+    var open by remember { mutableStateOf(initiallyOpen) }
     val detailsAction = stringResource(if (open) Res.string.chat_hide_details else Res.string.chat_show_details)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(

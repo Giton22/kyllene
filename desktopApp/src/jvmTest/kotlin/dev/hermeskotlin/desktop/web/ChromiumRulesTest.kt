@@ -37,6 +37,15 @@ class ChromiumRulesTest {
     }
 
     @Test
+    fun aGatewayOnThisComputerStaysReachable() {
+        // Chromium lets the last matching rule win: the gateways come after the rule that sends loopback to the proxy.
+        val rules = proxyBypassList(setOf("127.0.0.1:9119", "hermes.example.com:443")).split(";")
+        assertEquals("<-loopback>", rules.first())
+        assertEquals(setOf("127.0.0.1:9119", "hermes.example.com:443"), rules.drop(1).toSet())
+        assertEquals("<-loopback>", proxyBypassList(emptySet()))
+    }
+
+    @Test
     fun editingKeysStayWithThePage() {
         assertFalse(reachesApp(key(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK)))
         assertFalse(reachesApp(key(KeyEvent.VK_V, InputEvent.CTRL_DOWN_MASK)))
