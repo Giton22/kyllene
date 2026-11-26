@@ -77,12 +77,20 @@ object TranscriptRows {
         return row.substringAfter('\n', "").trim().takeIf { it.isNotEmpty() }
     }
 
+    internal fun carriesRestatedRequest(text: String): Boolean {
+        val trimmed = text.trimStart()
+        return compactionPrefix(trimmed) != null && restatedRequest(trimmed.substringAfter(SUMMARY_END, "").trimStart()) != null
+    }
+
+    private fun compactionPrefix(text: String): String? =
+        listOf(SUMMARY_INTRO, LEGACY_SUMMARY_PREFIX).firstOrNull(text::startsWith)
+
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
     fun compaction(text: String): TranscriptEvent.Compaction? {
         // The whole introduction every shipped prefix shares, as the gateway matches it (hermes_state_common.py),
         // so a prompt that merely starts with the bracketed label stays a prompt.
         val trimmed = text.trim()
-        val prefix = listOf(SUMMARY_INTRO, LEGACY_SUMMARY_PREFIX).firstOrNull(trimmed::startsWith) ?: return null
+        val prefix = compactionPrefix(trimmed) ?: return null
         // A legacy carrier can hold a real ask after the summary. Without a display projection,
         // leave that whole row visible rather than hide the ask and its prompt actions.
         if (trimmed.substringAfter(SUMMARY_END, "").isNotBlank()) return null

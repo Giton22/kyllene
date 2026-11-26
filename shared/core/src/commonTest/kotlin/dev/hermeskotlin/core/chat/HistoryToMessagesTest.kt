@@ -122,6 +122,26 @@ class HistoryToMessagesTest {
     }
 
     @Test
+    fun restatedRuntimeRowsKeepTheirOriginalTreatment() {
+        val bodies = listOf(
+            "[System: wake]",
+            "[Background process proc_1 heartbeat #1 progress]",
+            "[ASYNC DELEGATION COMPLETE — batch_1]\nStatus: completed\n--- RESULT ---\nDone.",
+        )
+        val rows = bodies.mapIndexed { index, body ->
+            SessionMessage(id = index.toLong(), role = "user", content = JsonPrimitive(body))
+        }
+        val replays = rows.map { row ->
+            row.copy(content = JsonPrimitive("[STILL IN PROGRESS — this is the active request, restated after the " +
+                "compaction boundary because it was not finished yet. Continue it; do not start over.]\n${row.text}"))
+        }
+
+        val expected = historyToMessages(rows)
+        assertIs<ChatMessage.Notice>(expected.single())
+        assertEquals(expected, historyToMessages(replays))
+    }
+
+    @Test
     fun compactionRestatementKeepsTheRequestUntilItsOriginalIsInHistory() {
         val original = SessionMessage(id = 1, role = "user", content = JsonPrimitive("Check the backup."), messageUid = "original")
         val restated = JsonPrimitive("[STILL IN PROGRESS — this is the active request, restated after the " +
@@ -143,7 +163,10 @@ class HistoryToMessagesTest {
             assertEquals(null, onlyCopy.rowId)
             assertEquals(listOf("row-0", onlyCopy.key), historyToMessages(listOf(earlierSameText, replay)).map { it.key })
             assertEquals(listOf("row-1"), historyToMessages(listOf(original, replay)).map { it.key })
+            assertEquals(listOf("row-1"), historyToMessages(listOf(original.copy(messageUid = null), replay)).map { it.key })
         }
+        val carrierWithoutSourceUid = replays.last().copy(absorbedMessageUids = JsonPrimitive("[]"))
+        assertEquals(listOf("row-1"), historyToMessages(listOf(original, carrierWithoutSourceUid)).map { it.key })
     }
 
     @Test

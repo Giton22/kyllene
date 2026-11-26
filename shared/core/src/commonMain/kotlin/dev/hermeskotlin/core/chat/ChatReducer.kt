@@ -369,9 +369,14 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
     var replyingTo: String? = null
     val shownRequestTextsByUid = mutableMapOf<String, MutableSet<String>>()
     val shownRequestTexts = mutableSetOf<String>()
+    val shownLegacyRequestTexts = mutableSetOf<String>()
     fun rememberRequest(row: SessionMessage, text: String) {
-        row.requestUids.forEach { uid -> shownRequestTextsByUid.getOrPut(uid) { mutableSetOf() }.add(text) }
-        if (row.imageCount == 0) shownRequestTexts += text
+        val uids = row.requestUids
+        uids.forEach { uid -> shownRequestTextsByUid.getOrPut(uid) { mutableSetOf() }.add(text) }
+        if (row.imageCount == 0) {
+            shownRequestTexts += text
+            if (uids.isEmpty()) shownLegacyRequestTexts += text
+        }
     }
     rows.forEachIndexed { index, row ->
         if (row.isHidden) {
@@ -393,22 +398,30 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
         }
         when (row.role) {
             "user" -> {
+                val displayText = row.text.trim()
+                val noise = TranscriptRows.isNoise(displayText, row.displayKind, row.displayMetadata)
+                val restated = if (noise) TranscriptRows.restatedRequest(displayText) else null
+                val shownText = restated ?: displayText
+                if (restated != null) {
+                    val uids = row.requestUids
+                    if (uids.any { restated in shownRequestTextsByUid[it].orEmpty() }) return@forEachIndexed
+                    if (row.imageCount == 0 && restated in shownRequestTexts) {
+                        if (uids.isEmpty() || restated in shownLegacyRequestTexts) return@forEachIndexed
+                        // The summary's own UID cannot identify the original when its absorbed UID is absent.
+                        val carrierWithoutSource = uids.singleOrNull() == row.messageUid &&
+                            row.displayContent != null && TranscriptRows.carriesRestatedRequest(row.storedText)
+                        if (carrierWithoutSource) return@forEachIndexed
+                    }
+                }
                 // Background subagents reporting back: written for the agent, so a line here, and their results go to their card.
-                parseDelegationReport(row.text.trim())?.let { report ->
+                parseDelegationReport(shownText)?.let { report ->
                     messages.settle(report)
                     messages += ChatMessage.Notice(key, report.line, stored = true)
+                    rememberRequest(row, shownText)
                     return@forEachIndexed
                 }
-                val displayText = row.text.trim()
-                val restated = if (TranscriptRows.isNoise(displayText, row.displayKind, row.displayMetadata)) {
-                    val request = TranscriptRows.restatedRequest(displayText) ?: return@forEachIndexed
-                    val uids = row.requestUids
-                    if (uids.any { request in shownRequestTextsByUid[it].orEmpty() } ||
-                        (uids.isEmpty() && row.imageCount == 0 && request in shownRequestTexts)
-                    ) return@forEachIndexed
-                    request
-                } else null
-                val shownText = restated ?: displayText
+                val shownNoise = if (restated == null) noise else TranscriptRows.isNoise(shownText, row.displayKind, row.displayMetadata)
+                if (shownNoise) return@forEachIndexed
                 TranscriptRows.classify(shownText, row.displayKind, deliveries, row.displayMetadata)?.let { events ->
                     events.forEachIndexed { i, event ->
                         if (event is TranscriptEvent.FromBot) rememberRequest(row, shownText)

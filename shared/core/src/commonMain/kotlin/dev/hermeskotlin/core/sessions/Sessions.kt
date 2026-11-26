@@ -177,6 +177,7 @@ data class SessionMessage(
 
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
+    internal val storedText: String get() = content.plainText()
 
     /** Prefer the gateway's display projection; older gateways only send [reasoning]. */
     val reasoningText: String
