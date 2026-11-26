@@ -194,7 +194,7 @@ object TranscriptRows {
      * a result in (cron/scheduler_delivery.py `_deliver_result`) tells one apart.
      */
     private fun scheduledResult(row: String, displayMetadata: JsonElement?): TranscriptEvent.Routine? {
-        val metadata = displayMetadata.asObject()
+        val metadata = displayMetadataObject(displayMetadata)
         val producers = metadata?.get("completion_note")?.let(::completionProducers)
         val wrapped = CRON_WRAPPED.matchEntire(row)
         if (producers == null) {
@@ -224,12 +224,6 @@ object TranscriptRows {
             }
             (identity?.firstOrNull() as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
         }
-    }
-
-    private fun JsonElement?.asObject(): JsonObject? = when (this) {
-        is JsonObject -> this
-        is JsonPrimitive -> contentOrNull?.let { runCatching { HermesJson.parseToJsonElement(it) as? JsonObject }.getOrNull() }
-        else -> null
     }
 
     private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull

@@ -19,7 +19,10 @@ enum class ReplyReaction(val emoji: String, private val instruction: String? = n
      */
     fun prompt(reply: String): String? = instruction?.let {
         val tail = reply.trim().takeLast(600)
-        val quote = if (tail.firstOrNull()?.isLowSurrogate() == true) tail.drop(1) else tail
+        val quote = (if (tail.firstOrNull()?.isLowSurrogate() == true) tail.drop(1) else tail)
+            // The gateway expands `@file:`, `@diff` and the like anywhere in a prompt: a word joiner after each `@`
+            // keeps a quoted one from pulling in files the user never asked for.
+            .replace("@", "@\u2060")
         "$it\n\nThe reply ends: ${JsonPrimitive(quote)}"
     }
 }

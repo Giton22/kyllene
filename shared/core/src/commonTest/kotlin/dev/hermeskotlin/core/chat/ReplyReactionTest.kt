@@ -76,6 +76,14 @@ class ReplyReactionTest {
     }
 
     @Test
+    fun aQuotedReferenceIsNotExpandedByTheGateway() {
+        // The gateway reads `@diff` or `@file:` anywhere in a prompt and pulls the diff or the file in.
+        val prompt = checkNotNull(ReplyReaction.Verify.prompt("Run @diff, then attach @file:notes.md or mail me@example.com"))
+        assertFalse(Regex("""(?<![\w/])@(diff|staged|file:|folder:|git:|url:|[a-zA-Z])""").containsMatchIn(prompt), prompt)
+        assertTrue(prompt.contains("@\u2060diff"))
+    }
+
+    @Test
     fun reactionPromptsQuoteTheReplyWithoutItsRowId() {
         for (reaction in ReplyReaction.entries) {
             // The user sees this as their prompt; a stored row's id means nothing to them or the agent.
