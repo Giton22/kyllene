@@ -63,7 +63,6 @@
     <string name="notification_deny">Ablehnen</string>
 
     <string name="notification_turn_failed_text">Der Durchlauf ist fehlgeschlagen.</string>
-    <string name="notification_done">Fertig.</string>
     <string name="notification_finished">Abgeschlossen.</string>
     <string name="notification_message_hermes">Nachricht an Hermes</string>
     <string name="notification_turn_failed">Durchlauf fehlgeschlagen</string>
