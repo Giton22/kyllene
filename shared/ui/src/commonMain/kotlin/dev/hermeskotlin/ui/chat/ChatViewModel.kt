@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import dev.hermeskotlin.designsystem.components.stripBidiIsolates
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.hermeskotlin.core.chat.BackgroundProcess
@@ -1027,9 +1028,18 @@ class ChatViewModel(
     }
 
     override fun askAside(source: CommentSource, anchor: SelectionAnchor) {
-        // The selection comes off the rendered text, so it carries the bidi isolates; the composer must not.
-        val quote = stripBidiIsolates(anchor.text).replace(Regex("""\s+"""), " ").trim().let { if (it.length > ASIDE_QUOTE_MAX) it.take(ASIDE_QUOTE_MAX).trimEnd() + "…" else it }
-        composer.setTextAndPlaceCursorAtEnd("/btw About “$quote” in ${source.label}: ")
+        composer.setTextAndPlaceCursorAtEnd("/btw About “${quoteOneLine(anchor.text)}” in ${source.label}: ")
+    }
+
+    override fun replyTo(text: String) {
+        val quote = "> ${quoteOneLine(text)}\n\n"
+        composer.edit {
+            // What was already typed stays, and the caret waits under the quote, ready for the answer.
+            val typed = toString()
+            replace(0, length, quote + typed)
+            selection = TextRange(quote.length)
+        }
+        viewModelScope.launch { _requests.send(ChatRequest.FocusComposer) }
     }
 
     /** Shows [message], already in words (a picker's or a share's own), over the composer. */
@@ -1562,9 +1572,6 @@ class ChatViewModel(
         /** What Explain asks of the agent about the selection. */
         const val EXPLAIN_NOTE = "Explain this in more detail."
 
-        /** How much of the selection a `/btw` question quotes. */
-        const val ASIDE_QUOTE_MAX = 160
-
         /** How long the Call Hermes shortcut waits for the gateway (a cold start connects in a few seconds). */
         const val VOICE_CONNECT_WAIT_MS = 30_000L
 
@@ -1572,6 +1579,16 @@ class ChatViewModel(
         const val READ_POSITION_WAIT_MS = 5_000L
     }
 }
+
+/** How much of a quoted reply or selection the composer takes: about two lines of it. */
+internal const val QUOTE_MAX = 160
+
+/**
+ * [text] on one line, cut to [QUOTE_MAX]: for the composer, where the bidi isolates the renderer puts
+ * around a reply have no place.
+ */
+internal fun quoteOneLine(text: String): String =
+    stripBidiIsolates(text).replace(Regex("""\s+"""), " ").trim().let { if (it.length > QUOTE_MAX) it.take(QUOTE_MAX).trimEnd() + "…" else it }
 
 /** The start of gateway [file] for its viewer, read through [profile]; the reason in plain words when it can't be had. */
 internal suspend fun MediaApi.fileLoad(gateway: GatewayUrl, file: GatewayFile, profile: String?): FileLoad =

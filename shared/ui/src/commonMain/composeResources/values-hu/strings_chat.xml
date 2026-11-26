@@ -481,6 +481,7 @@
     <string name="chat_editing_banner">Üzenet szerkesztése. A küldés lecseréli azt és mindent, ami utána jött.</string>
 
     <string name="chat_copy">Másolás</string>
+    <string name="chat_reply">Válasz</string>
     <string name="chat_edit">Szerkesztés</string>
     <string name="chat_edit_last_prompt">Utolsó prompt szerkesztése</string>
     <string name="chat_branch">Elágazás</string>

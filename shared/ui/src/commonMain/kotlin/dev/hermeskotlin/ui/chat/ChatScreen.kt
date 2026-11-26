@@ -237,6 +237,7 @@ import dev.hermeskotlin.designsystem.surface2
 import com.composables.icons.lucide.CloudOff
 import com.composables.icons.lucide.Lightbulb
 import com.composables.icons.lucide.ListEnd
+import com.composables.icons.lucide.MessageSquareReply
 import com.composables.icons.lucide.Info
 import dev.hermeskotlin.core.chat.MESSAGE_AGENT_TOOL
 import dev.hermeskotlin.core.chat.toolInProgress
@@ -2295,6 +2296,7 @@ private fun Messages(
                                     onReact = if (connected && chat.replyReactionsSupported) {
                                         { reaction -> actions.reactToReply(message.key, reaction) }
                                     } else null,
+                                    onReply = actions::replyTo,
                                     onPauseReading = actions::pauseReading,
                                     onResumeReading = actions::resumeReading,
                                 )
@@ -3038,6 +3040,8 @@ internal fun AssistantReply(
     onStopReading: () -> Unit = {},
     /** Sets or clears the user's reaction on this stored reply; null when it can't be now. */
     onReact: ((ReplyReaction) -> Unit)? = null,
+    /** Quotes this reply in the composer, to answer it; null when it can't be now. */
+    onReply: ((String) -> Unit)? = null,
     onPauseReading: () -> Unit = {},
     onResumeReading: () -> Unit = {},
 ) {
@@ -3070,9 +3074,11 @@ internal fun AssistantReply(
     val pauseReadingLabel = stringResource(Res.string.chat_pause_reading)
     val resumeReadingLabel = stringResource(Res.string.chat_resume_reading)
     val readAloudLabel = stringResource(Res.string.chat_read_aloud)
+    val replyLabel = stringResource(Res.string.chat_reply)
     if (canMenu) {
         RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
             listOfNotNull(
+                onReply?.let { reply -> RowMenuItem(replyLabel, Lucide.MessageSquareReply) { reply(text) } },
                 RowMenuItem(copyLabel, Lucide.Copy) { scope.launch { clipboard.setClipEntry(plainTextClipEntry(text)) } },
                 onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
                 onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
@@ -3137,6 +3143,7 @@ internal fun AssistantReply(
         }
         val usage = message.usage?.takeIf { settings.showUsage && !message.streaming }
         val actions = if (actionable) listOfNotNull(
+            onReply?.let { reply -> RowMenuItem(replyLabel, Lucide.MessageSquareReply) { reply(text) } },
             onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
             onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
             onReadAloud?.takeIf { !reading && speakable }?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },

@@ -356,6 +356,19 @@ class ChatViewModelTest {
         assertEquals("1. eggs\n2. bread", vm.composer.text.toString())
     }
 
+    @Test
+    fun aReplyQuotedInTheComposerIsAnsweredUnderIt() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        vm.composer.setTextAndPlaceCursorAtEnd("half typed")
+
+        vm.replyTo("Done.\n\nOpen the file.")
+
+        // The quote on one line above, then a blank line and what was already typed; the caret under the quote.
+        val text = vm.composer.text.toString()
+        assertEquals("> Done. Open the file.\n\nhalf typed", text)
+        assertTrue(vm.composer.selection.start == text.indexOf("half typed"), "caret at ${vm.composer.selection.start}")
+    }
+
     private val scribe = BotIdentity("scribe", "Scribe")
 
     @Test
