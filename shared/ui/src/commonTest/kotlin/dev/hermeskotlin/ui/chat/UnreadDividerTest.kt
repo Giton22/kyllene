@@ -47,6 +47,14 @@ class UnreadDividerTest {
     }
 
     @Test
+    fun anEmptyStreamingReplyGetsTheLineBeforeItsFirstWords() {
+        val reply = ChatMessage.Assistant("live", streaming = true, reasoning = "working")
+        assertEquals("live", firstUnreadKey(listOf(reply), readUpTo = 105.0))
+        assertEquals("live", unreadLineKey(listOf(reply.copy(text = "Ready.")), "live", readUpTo = 105.0))
+        assertNull(unreadLineKey(listOf(reply.copy(streaming = false, text = "[SILENT]")), "live", readUpTo = 105.0))
+    }
+
+    @Test
     fun olderPagesLoadWhileEverythingLoadedIsStillNew() {
         val allNew = listOf(prompt("p9", 900.0), reply("r9", 910.0))
 

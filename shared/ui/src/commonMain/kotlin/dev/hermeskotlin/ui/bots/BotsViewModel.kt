@@ -45,6 +45,7 @@ import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.sessions.SeenStore
+import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionSummary
 import dev.hermeskotlin.core.sessions.SessionsApi
 import kotlinx.coroutines.CancellationException
@@ -640,17 +641,20 @@ class BotsViewModel(
     private suspend fun hasUnreadBotHistory(url: GatewayUrl, profile: String, tip: String, looked: Double): Boolean? {
         val pageSize = 100
         var offset = 0
-        var lastPageStart: Long? = null
-        while (gateway.value == url) {
+        var previous: List<SessionMessage>? = null
+        repeat(UNREAD_HISTORY_PAGE_LIMIT) {
+            if (gateway.value != url) return null
             val result = sessions.messages(url, tip, limit = pageSize, profile = profile, offset = offset, inlineImages = false)
             val rows = (result as? ApiResult.Success)?.value?.messages ?: return null
             val firstId = rows.firstOrNull()?.id
-            if (firstId != null && firstId == lastPageStart) return null
-            lastPageStart = firstId
+            if ((firstId != null && firstId == previous?.firstOrNull()?.id) || rows == previous) return null
             if (rows.hasUnreadBotMessage(looked)) return true
-            if (rows.size < pageSize || rows.all { it.timestamp?.let { at -> at <= looked } == true }) return false
+            val newest = rows.asSequence().mapNotNull { it.timestamp }.maxOrNull()
+            if (rows.size < pageSize || (newest != null && newest <= looked)) return false
+            previous = rows
             offset += rows.size
         }
+        // Older pages may still contain a reply. Keep the last known badge when we run out of pages.
         return null
     }
 
@@ -684,6 +688,7 @@ class BotsViewModel(
         /** The roster's fallback read, for changes that send no event; chat activity arrives as events. */
         const val POLL_MS = 30_000L
         const val EVENT_DEBOUNCE_MS = 400L
+        const val UNREAD_HISTORY_PAGE_LIMIT = 5
         const val ROUTINES_EVERY_MS = 60_000L
 
         /** Brief gaps (a screen rotating) keep the inbox collected; collecting it asks the gateway for live statuses. */
