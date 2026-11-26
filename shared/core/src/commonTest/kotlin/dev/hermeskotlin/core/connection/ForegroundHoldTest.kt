@@ -57,6 +57,22 @@ class ForegroundHoldTest {
     }
 
     @Test
+    fun aNewServiceAskedForBeforeTheOldOneIsGoneIsNotStoppedBeforeItIsInTheForeground() {
+        val service = Service()
+
+        service.hold.hold()
+        service.hold.started()
+        service.hold.release()
+        // A new turn starts and ends before the stopped one's onDestroy.
+        service.hold.hold()
+        service.hold.release()
+
+        assertEquals(listOf("start", "stop", "start"), service.calls)
+        service.hold.stopped()
+        assertFalse(service.hold.started())
+    }
+
+    @Test
     fun aSecondHoldDoesNotAskAgain() {
         val service = Service()
 

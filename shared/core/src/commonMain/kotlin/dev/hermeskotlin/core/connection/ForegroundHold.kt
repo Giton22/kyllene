@@ -28,8 +28,12 @@ class ForegroundHold(
 
     fun release() {
         wanted = false
-        // One still starting stops itself once it's in the foreground (started).
-        if (foreground) stopService()
+        // One still starting stops itself once it's in the foreground (started). One stopped is gone: a new one
+        // asked for before its onDestroy isn't in the foreground until its own started.
+        if (foreground) {
+            foreground = false
+            stopService()
+        }
     }
 
     /** The service is in the foreground; false when it was released meanwhile, so it should stop itself. */
