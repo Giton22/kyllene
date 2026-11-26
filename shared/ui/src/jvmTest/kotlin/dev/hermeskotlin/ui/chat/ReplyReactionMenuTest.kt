@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -12,7 +13,9 @@ import androidx.compose.ui.test.v2.runComposeUiTest
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ReplyReaction
+import dev.hermeskotlin.core.chat.TurnOutcome
 import dev.hermeskotlin.designsystem.HermesTheme
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -55,6 +58,34 @@ class ReplyReactionMenuTest {
         onNodeWithText("Got it").performClick()
         runOnIdle { assertEquals(null, selected.value) }
         onNodeWithContentDescription("Got it").assertDoesNotExist()
+    }
+
+    @Test
+    fun aStoppedReplyWithAStoredRowOffersTheReactions() {
+        for (desktop in listOf(false, true)) runComposeUiTest {
+            var chosen: ReplyReaction? = null
+            setContent {
+                HermesTheme(ColorScheme.Light) {
+                    CompositionLocalProvider(LocalDesktopLayout provides desktop) {
+                        AssistantReply(
+                            message = ChatMessage.Assistant(
+                                key = "row-4", text = "Working on it", outcome = TurnOutcome.Interrupted, reactionRowId = 4,
+                            ),
+                            onBranch = {},
+                            onRegenerate = {},
+                            last = true,
+                            onReact = { chosen = it },
+                        )
+                    }
+                }
+            }
+
+            onNodeWithText("Stopped").assertIsDisplayed()
+            onNodeWithContentDescription("More").performClick()
+            for (label in listOf("Got it", "Continue", "Verify", "Explain")) onNodeWithText(label).assertIsDisplayed()
+            onNodeWithText("Continue").performClick()
+            runOnIdle { assertEquals(ReplyReaction.Continue, chosen, "desktop=$desktop") }
+        }
     }
 
     @Test
