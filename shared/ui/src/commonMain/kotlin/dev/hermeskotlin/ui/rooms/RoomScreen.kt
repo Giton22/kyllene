@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -73,6 +72,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -258,7 +258,10 @@ internal fun RoomView(
                 },
             )
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                Transcript(room, faces, onLoadEarlier = viewModel::loadEarlier, onOpenFile = onOpenFile)
+                // One transcript per room: another room's place and first jump don't carry over to this one.
+                key(room.room.roomId) {
+                    Transcript(room, faces, onLoadEarlier = viewModel::loadEarlier, onOpenFile = onOpenFile)
+                }
             }
             // A failed read in full, above whatever waits on the user; the loop keeps trying.
             room.error?.let { ListNotice(it.text()) }
@@ -296,15 +299,21 @@ internal fun RoomView(
  */
 @Composable
 private fun Transcript(room: OpenRoom, faces: BotFaces, onLoadEarlier: () -> Unit, onOpenFile: (String?, GatewayFile) -> Unit) {
-    val listState = rememberLazyListState()
     val lines = room.lines
+    // Opened at the end of the newest line, also when that's a reply taller than the screen. The room is on
+    // screen before its log is read, so the list is made again when the first lines come in, and its first
+    // frame is already at the end.
+    val listState = rememberSaveable(lines.isEmpty(), saver = LazyListState.Saver) {
+        LazyListState(lines.lastIndex.coerceAtLeast(0), if (lines.isEmpty()) 0 else LIST_END)
+    }
     // A newer line brings the end of the conversation into view; older ones read in above don't move the reader.
     val newest = lines.lastOrNull()?.seq
-    // Whether the first jump to the end is done: before it, the list starts at its top without the reader there.
+    // Whether the first jump to the end is done. That one is a snap, not a scroll down through the whole log;
+    // only lines that come in later scroll into view.
     var atEndOnce by remember { mutableStateOf(false) }
     LaunchedEffect(newest) {
         if (newest == null) return@LaunchedEffect
-        listState.animateScrollToItem(lines.size - 1)
+        if (atEndOnce) listState.animateScrollToItem(lines.size - 1) else listState.scrollToItem(lines.size - 1, LIST_END)
         atEndOnce = true
     }
     // The line the reader is on when older lines are asked for, and how far down it sits, to put them back there.
@@ -323,7 +332,7 @@ private fun Transcript(room: OpenRoom, faces: BotFaces, onLoadEarlier: () -> Uni
     }
     // At the top (or with nothing to show yet), read further back while there's more. Once older lines are
     // in, the reader is back on their line, off the top, so the next read waits for them to scroll up again.
-    val atTop by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
+    val atTop by remember(listState) { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
     LaunchedEffect(atTop, atEndOnce, lines.isEmpty(), room.canLoadEarlier, room.loadingEarlier, room.loading) {
         val wanted = lines.isEmpty() || (atTop && atEndOnce)
         if (wanted && room.canLoadEarlier && !room.loadingEarlier && !room.loading) onLoadEarlier()
@@ -752,6 +761,9 @@ private fun rememberRoomMentions(room: OpenRoom, viewModel: RoomActions, faces: 
 
 /** How big a member's face is beside its lines. */
 private val FACE = 30.dp
+
+/** A scroll offset past any line: the list stops it at the end of the last one. */
+private const val LIST_END = 1_000_000
 
 /** Opens the gateway file [link] points at as one of [profile]'s; a web link or anything else is left alone. */
 internal fun roomFileLink(link: String, profile: String?, open: (String?, GatewayFile) -> Unit) {
