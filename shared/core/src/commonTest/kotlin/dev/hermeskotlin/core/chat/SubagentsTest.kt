@@ -58,7 +58,8 @@ class SubagentsTest {
         assertEquals("Read the docs", (messages[0] as ChatMessage.User).text)
         val reply = messages[1] as ChatMessage.Assistant
         assertEquals("Done", reply.text)
-        assertEquals("I found the file.", reply.reasoning)
+        assertEquals(listOf("I found the file."), reply.commentary)
+        assertEquals("", reply.reasoning)
         assertEquals("terminal", reply.tools.single().name)
         assertEquals(2, messages.size)
     }
