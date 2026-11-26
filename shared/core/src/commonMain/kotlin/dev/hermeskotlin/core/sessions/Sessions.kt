@@ -1,13 +1,15 @@
 package dev.hermeskotlin.core.sessions
 
+import dev.hermeskotlin.core.chat.displayMetadataObject
+import dev.hermeskotlin.core.chat.userReactionEmoji
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * One stored session row as `GET /api/sessions` returns it (hermes_cli/web_routers/sessions.py,
@@ -140,6 +142,11 @@ data class SessionMessage(
     val timestamp: Double? = null,
     val reasoning: String? = null,
     @SerialName("display_kind") val displayKind: String? = null,
+    /**
+     * What the gateway knows about a machine-written row, e.g. `completion_note` naming its producer. An object,
+     * or a string holding one on older backends; missing where a route leaves it out (the API server's).
+     */
+    @SerialName("display_metadata") val displayMetadata: JsonElement? = null,
     /** The session the row is stored under: an ancestor's id for rows from before a compression. */
     @SerialName("session_id") val sessionId: String? = null,
     /** False for rows a compression archived; the live agent no longer holds them. */
@@ -149,6 +156,11 @@ data class SessionMessage(
     @SerialName("display_reasoning") val displayReasoning: String? = null,
     @SerialName("display_commentary") val displayCommentary: List<String>? = null,
 ) {
+    val userReaction: String? get() = userReactionEmoji(displayMetadataObject(displayMetadata)?.get("reactions"))
+
+    /** The part of a reply a stopped turn had streamed, which hermes-agent marks (v0.23.4 agent/turn_api_call.py). */
+    val stopped: Boolean get() = (displayMetadataObject(displayMetadata)?.get("interrupted") as? JsonPrimitive)?.booleanOrNull == true
+
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
 
@@ -200,14 +212,14 @@ private val IMAGE_PART_TYPES = setOf("image_url", "image", "input_image")
 
 private fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
-/** Strings pass through; OpenAI-style parts arrays join their `text` parts; anything else is dropped. */
+/** Strings pass through; parts arrays join primitive text values and skip unsupported structured values. */
 private fun JsonElement?.plainText(): String = when (this) {
     null -> ""
     is JsonPrimitive -> if (isString) content else ""
     is JsonArray -> mapNotNull { part ->
         when (part) {
             is JsonPrimitive -> part.contentOrNull
-            is JsonObject -> part["text"]?.jsonPrimitive?.contentOrNull
+            is JsonObject -> (part["text"] as? JsonPrimitive)?.contentOrNull
             else -> null
         }
     }.joinToString("\n")

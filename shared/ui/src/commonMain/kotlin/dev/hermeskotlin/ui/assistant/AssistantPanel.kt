@@ -1,6 +1,6 @@
 package dev.hermeskotlin.ui.assistant
 
-import dev.hermeskotlin.ui.imeVisible
+import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,7 +10,6 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -121,6 +120,8 @@ import dev.hermeskotlin.ui.chat.AppMark
 import dev.hermeskotlin.ui.chat.BarButton
 import dev.hermeskotlin.ui.chat.BarStatus
 import dev.hermeskotlin.ui.chat.ComposerButton
+import dev.hermeskotlin.ui.chat.ContinueLists
+import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.ui.chat.DictationButton
 import dev.hermeskotlin.ui.chat.DockShadow
 import dev.hermeskotlin.ui.chat.InputRequestPanel
@@ -505,11 +506,8 @@ private fun Composer(
     val hasText = actions.composer.text.isNotBlank()
     val shape = RoundedCornerShape(Theme[radii][radiusXLarge])
     var focused by remember { mutableStateOf(false) }
-    // As in the chat: Back hides the keyboard but leaves the field focused, which lights the edge and brings the
-    // keyboard back on the next relayout. Put away means done typing.
-    val keyboardUp = imeVisible
-    val focusManager = LocalFocusManager.current
-    LaunchedEffect(keyboardUp) { if (!keyboardUp && focused) focusManager.clearFocus() }
+    // As in the chat: a focused field also lights the edge.
+    ReleaseFocusWhenKeyboardPutAway(focused)
     val tray: (@Composable () -> Unit)? = when {
         circled != null -> { { CircledChip(circled, onCircleAgain = actions::startCircling, onRemove = actions::dropCircled) } }
         !chat.hasConversation && screen.missed -> { { ScreenUnavailable(onOpenScreenSettings) } }
@@ -537,7 +535,9 @@ private fun Composer(
             selectionColors = LocalTextSelectionColors.current,
             lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp),
+            // Lists go on as in the chat's composer.
+            inputTransformation = ContinueLists,
+            modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).commitComposingOnEnter(actions.composer, ContinueLists),
         ) {
             TextInput(
                 placeholder = {

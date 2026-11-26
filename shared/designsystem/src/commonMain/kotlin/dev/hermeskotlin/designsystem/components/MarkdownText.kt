@@ -3,6 +3,8 @@ package dev.hermeskotlin.designsystem.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -129,6 +131,13 @@ import com.mikepenz.markdown.model.ImageTransformer
 /** Code blocks wrap long lines instead of scrolling sideways (the "Wrap code lines" setting). */
 val LocalCodeWrap = compositionLocalOf { false }
 
+/**
+ * How much of the text color the background of an inline code span takes, so a selection shows through it. A dark
+ * ground needs more of it for the span to stand out as much as it does on a light one.
+ */
+private const val INLINE_CODE_WASH = 0.05f
+private const val INLINE_CODE_WASH_DARK = 0.08f
+
 /** The Markdown being drawn is still streaming in. */
 private val LocalStreaming = compositionLocalOf { false }
 
@@ -183,7 +192,11 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier, streaming: Boolean
     val markdownColors = DefaultMarkdownColors(
         text = bodyStyle.color,
         codeBackground = Theme[colors][well],
-        inlineCodeBackground = Theme[colors][surface2],
+        // Translucent: Compose paints a span's background over a text selection's highlight, so an opaque one
+        // hides the selection on the code. A faint wash of the text color reads as the same chip in either theme.
+        inlineCodeBackground = Theme[colors][textColor].copy(
+            alpha = if (Theme[colors][background].luminance() < 0.5f) INLINE_CODE_WASH_DARK else INLINE_CODE_WASH,
+        ),
         dividerColor = Theme[colors][stroke],
         tableBackground = Theme[colors][surface],
     )
@@ -603,9 +616,29 @@ private fun CopyPill(text: String) {
  * them can say whose text each one copies.
  */
 @Composable
-fun CopyButton(text: String, modifier: Modifier = Modifier, label: String? = null) {
+fun CopyButton(
+    text: String,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    visibleLabel: String? = null,
+) {
     val (copied, copy) = rememberCopy(text)
     val words = LocalDesignWords.current
+    if (visibleLabel != null) {
+        val size = ButtonSize.Small
+        val width = maxOf(size.labelledIconWidth(visibleLabel), size.labelledIconWidth(words.copied))
+        val touch = if (LocalDesktopLayout.current) Modifier else Modifier.heightIn(min = MinTouchTarget)
+        Button(
+            text = if (copied) words.copied else visibleLabel,
+            onClick = copy,
+            modifier = modifier.widthIn(min = width).then(touch),
+            variant = ButtonVariant.Ghost,
+            size = size,
+            leadingIcon = if (copied) Lucide.Check else Lucide.Copy,
+            accessibleLabel = if (copied) words.copied else label ?: visibleLabel,
+        )
+        return
+    }
     IconButton(
         icon = if (copied) Lucide.Check else Lucide.Copy,
         contentDescription = if (copied) words.copied else label ?: words.copy,

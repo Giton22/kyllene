@@ -53,7 +53,8 @@ internal fun ChatMenu(
     messages: List<ChatMessage>,
     onDismiss: () -> Unit,
     onRenamed: (String?) -> Unit,
-    onDeleted: () -> Unit,
+    /** The chat is deleted; [next] is the one listed in its place, to open (null when none is left). */
+    onDeleted: (next: SessionSummary?) -> Unit,
     onUsage: () -> Unit,
     onProcesses: () -> Unit,
     onCheckpoints: () -> Unit,
@@ -70,6 +71,8 @@ internal fun ChatMenu(
     onOpenChat: (String, String) -> Unit = { _, _ -> },
     /** The desktop's options button, for the menu to hang from; null opens it at the pointer. */
     anchor: Rect? = null,
+    /** The chats as the sidebar lists them, for the one to open in a deleted chat's place. */
+    shownChats: ShownChats? = null,
     viewModel: SessionsViewModel = koinViewModel(),
 ) {
     val state = viewModel.state.collectAsStateWithLifecycle().value
@@ -128,8 +131,10 @@ internal fun ChatMenu(
         deleteTarget,
         onDismiss = { deleteTarget = null },
         onDelete = {
+            // Before the delete, which takes the row out of the list at once.
+            val next = shownChats?.after(it)
             viewModel.delete(it)
-            onDeleted()
+            onDeleted(next)
         },
     )
 }

@@ -6,6 +6,7 @@ import dev.hermeskotlin.android.pebble.PebbleRinger
 import dev.hermeskotlin.android.pebble.RoutingOutbox
 import dev.hermeskotlin.core.wear.WatchOutbox
 import dev.hermeskotlin.core.wear.WatchRelay
+import dev.hermeskotlin.ui.voice.CatalogueWatchCallWords
 import dev.hermeskotlin.ui.voice.WatchCalls
 import dev.hermeskotlin.ui.calls.PhoneCallModel
 import org.koin.android.ext.koin.androidContext
@@ -21,7 +22,7 @@ val wearModule = module {
     single<WatchOutbox> { RoutingOutbox(PhoneOutbox(androidContext()), get()) }
     single { PebbleRequests(get(), get(), get(), get(), get()) }
     single { PebbleRinger(androidContext(), get(), get(), get(), get()) }
-    single { WatchRelay(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { WatchRelay(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), CatalogueWatchCallWords) }
     single { WatchCalls(get(), get(), get(), get(), get()) }
     single { WearRequests(get(), get()) }
     single(createdAtStart = true) { WatchProfileNotifier(androidContext(), get(), get(), get()).also { it.start() } }

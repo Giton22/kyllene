@@ -44,8 +44,9 @@ hermes dashboard --host 0.0.0.0 --port 9119 --no-open   # + username/password pr
 ### Auth flows
 1. **Discovery** — `GET /api/status`, `GET /api/auth/providers` (public).
 2. **Password login** — `POST /auth/password-login` `{provider, username, password}` → sets cookies
-   `hermes_session_at` (~15 min) + `hermes_session_rt` (24 h rotating, reuse-detected). Cookie names may be
-   prefixed `__Host-` / `__Secure-`. Expired AT + live RT is rotated transparently on the next authed request.
+   `hermes_session_at` (~15 min) + `hermes_session_rt` (24 h rotating, reuse-detected). Over https the names are
+   prefixed: `__Host-`, or `__Secure-` (with `Path=<prefix>`) behind a proxy that sends `X-Forwarded-Prefix`.
+   Since hermes-agent 0.23.2 the gateway reads only that one name over https; plain http reads every form. Expired AT + live RT is rotated transparently on the next authed request.
    429 = rate limited, 401 = bad creds.
 3. **Native OAuth (RFC 8252 + PKCE S256)** — `GET /auth/native/authorize?provider&code_challenge&code_challenge_method=S256&redirect_uri&state`
    in the system browser (Custom Tab); `redirect_uri` **must be a loopback IP literal**

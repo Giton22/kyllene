@@ -21,6 +21,8 @@ import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class JsonRpcClientTest {
@@ -229,6 +231,83 @@ class JsonRpcClientTest {
         // And the dead client turns new calls away at once, the same way.
         val next = runCatching { client.request("command.dispatch", timeoutMs = 600_000) }.exceptionOrNull()
         assertEquals(error, next)
+        pump.cancel()
+    }
+
+    @Test
+    fun anIdleHeartbeatPingsOncePerMinuteAndComingBackPingsAtOnce() = runTest {
+        val transport = FakeTransport()
+        val client = JsonRpcClient(transport, clock = { testScheduler.currentTime })
+        val pump = launch { runCatching { client.run() } }
+        fun pings() = transport.sent.value.count { it["method"]?.jsonPrimitive?.str() == "gateway.ping" }
+        fun pong() = transport.push("""{"jsonrpc":"2.0","id":"ping${pings()}","result":{}}""")
+        transport.push(FakeTransport.READY)
+        client.ready.await()
+
+        client.setIdle(true)
+        // Ten minutes out of sight, the gateway answering every ping: ten pings, not forty, and the link holds.
+        repeat(10) {
+            testScheduler.advanceTimeBy(60_000)
+            testScheduler.runCurrent()
+            pong()
+        }
+        assertEquals(10, pings())
+
+        // Back in sight: a ping goes out now, not up to a minute later, then every 15 s again.
+        client.setIdle(false)
+        testScheduler.runCurrent()
+        assertEquals(11, pings())
+        pong()
+        testScheduler.advanceTimeBy(15_000)
+        testScheduler.runCurrent()
+        assertEquals(12, pings())
+        pump.cancel()
+    }
+
+    @Test
+    fun anIdleHeartbeatStillFindsADeadLink() = runTest {
+        val transport = FakeTransport(dead = true)
+        val client = JsonRpcClient(transport, clock = { testScheduler.currentTime })
+        val pump = async { runCatching { client.run() }.exceptionOrNull() }
+        transport.push(FakeTransport.READY)
+        client.ready.await()
+        client.setIdle(true)
+
+        // Two silent minutes are inside the idle deadline (150 s): the link is kept, where awake it would be dropped.
+        testScheduler.advanceTimeBy(120_001)
+        testScheduler.runCurrent()
+        assertFalse(pump.isCompleted, "the idle heartbeat gave up before its deadline")
+        // Silent past it, checked on the next minute's ping.
+        testScheduler.advanceTimeBy(60_000)
+        testScheduler.runCurrent()
+        assertTrue(pump.isCompleted, "the idle heartbeat never gave up")
+        assertIs<HeartbeatTimeoutException>(pump.await())
+    }
+
+    @Test
+    fun comingBackAfterAQuietIdleSpellIsNoTimeout() = runTest {
+        val transport = FakeTransport()
+        val client = JsonRpcClient(transport, clock = { testScheduler.currentTime })
+        val pump = async { runCatching { client.run() }.exceptionOrNull() }
+        fun pings() = transport.sent.value.count { it["method"]?.jsonPrimitive?.str() == "gateway.ping" }
+        transport.push(FakeTransport.READY)
+        client.ready.await()
+        client.setIdle(true)
+
+        // Two minutes out of sight with nothing coming in, then back: longer than the 45 s deadline, but idle silence.
+        testScheduler.advanceTimeBy(120_001)
+        testScheduler.runCurrent()
+        client.setIdle(false)
+        testScheduler.runCurrent()
+        assertFalse(pump.isCompleted, "dropped for the silence while idle")
+        // A ping goes out at once to test the link, and its pong keeps it.
+        assertEquals(3, pings())
+        testScheduler.advanceTimeBy(20_000)
+        transport.push("""{"jsonrpc":"2.0","id":"ping3","result":{}}""")
+        // 60 s after coming back but 40 s after the pong: only the pong keeps the link inside the 45 s deadline.
+        testScheduler.advanceTimeBy(40_000)
+        testScheduler.runCurrent()
+        assertFalse(pump.isCompleted, "dropped after the pong")
         pump.cancel()
     }
 

@@ -230,6 +230,28 @@ enum class ControlAction(val wire: String) {
     SubgoalClear("subgoal.clear"),
 }
 
+/**
+ * The typed command (name, argument) the button stands for, as the gateway's `/goal`, `/loop`, `/heartbeat` and
+ * `/subgoal` take it; v0.22.3's `session.control` maps them the same way (gateway/session_control_actions.py).
+ * Null for a sub-goal `/subgoal` would read as its own `remove` or `clear`.
+ */
+internal fun ControlAction.command(text: String?, index: Int?): Pair<String, String>? = when (this) {
+    ControlAction.SubgoalAdd -> text?.trim { it.isPythonSpace() }
+        ?.takeIf { it.isNotEmpty() && it.takeWhile { c -> !c.isPythonSpace() }.lowercase() !in SUBGOAL_VERBS }
+        ?.let { "subgoal" to it }
+    ControlAction.SubgoalRemove -> index?.let { "subgoal" to "remove $it" }
+    ControlAction.SubgoalClear -> "subgoal" to "clear"
+    else -> wire.substringBefore('.') to wire.substringAfter('.')
+}
+
+private val SUBGOAL_VERBS = setOf("remove", "clear")
+
+/**
+ * What the gateway's Python `str.strip()` and `str.split()` take for a space: any Unicode one (a keyboard's
+ * no-break space too), and U+0085, which Kotlin's [isWhitespace] doesn't count.
+ */
+internal fun Char.isPythonSpace(): Boolean = isWhitespace() || this == '\u0085'
+
 /** What to say the action does when the gateway's own message can't be had. */
 internal val ControlAction.verb: String
     get() = when (this) {

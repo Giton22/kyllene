@@ -196,7 +196,7 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
         val page = remember(client) { OffscreenBrowser(client, "about:blank", transparent = false) }
 
         suspend fun lend(fresh: Boolean): WebSession {
-            val session = unlessFailed { cookies.sessionFor(url) } ?: WebSession(emptyList(), emptyMap(), null)
+            val session = unlessFailed { cookies.sessionFor(url, gateway) } ?: WebSession(emptyList(), emptyMap(), null)
             currentCoroutineContext().ensureActive()
             headers = session.headers
             CefCookieManager.getGlobalManager().put(url, session.cookies, fresh)
