@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Canvas
@@ -95,14 +97,30 @@ class OpaqueDockBackingTest {
         // shows as it does further out.
         val rim = shot[(jump.left - 15 * DENSITY).toInt(), y]
         val wall = shot[(jump.left - 60 * DENSITY).toInt(), y]
-        assertTrue(rim.near(wall), "rim $rim should be close to the wallpaper $wall, not the page $page")
+        assertTrue(!wall.near(page), "the wallpaper $wall should show beside the button")
+        assertTrue(rim.near(wall),"rim $rim should be close to the wallpaper $wall, not the page $page")
     }
 
-    private fun conversation(opaque: Boolean, offline: Boolean, editing: Boolean, page: (Color) -> Unit) {
+    @Test
+    fun theDockKeepsItsHeightWhenTheBackingComesOrGoesUnderTheBanner() {
+        val opaque = mutableStateOf(false)
+        conversation(opaque = opaque, offline = true, editing = false) {}
+        val off = bounds("Retry now")
+        val offPlan = bounds("Last plan 1/1")
+        compose.runOnIdle { opaque.value = true }
+        compose.waitForIdle()
+        assertEquals(off, bounds("Retry now"))
+        assertEquals(offPlan, bounds("Last plan 1/1"))
+    }
+
+    private fun conversation(opaque: Boolean, offline: Boolean, editing: Boolean, page: (Color) -> Unit) =
+        conversation(mutableStateOf(opaque), offline, editing, page)
+
+    private fun conversation(opaque: State<Boolean>, offline: Boolean, editing: Boolean, page: (Color) -> Unit) {
         compose.setContent {
             HermesTheme(ColorScheme.Dark) {
                 page(Theme[colors][background])
-                CompositionLocalProvider(LocalAppSettings provides AppSettings(opaqueComposer = opaque, showPet = false)) {
+                CompositionLocalProvider(LocalAppSettings provides AppSettings(opaqueComposer = opaque.value, showPet = false)) {
                     Box(Modifier.fillMaxSize().testTag("conversation")) {
                         ChatView(
                             title = "Conversation",

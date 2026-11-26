@@ -1188,8 +1188,12 @@ internal fun ChatView(
                 val opaqueComposer = LocalAppSettings.current.opaqueComposer && composerShown && !centred && toFoot >= 1f
                 val reconnectBanner: @Composable () -> Unit = {
                     androidx.compose.animation.AnimatedVisibility(visible = linkStatus != null, enter = fadeIn(), exit = fadeOut()) {
-                        // On the opaque backing there's no transcript next to it to blur.
-                        OfflineBanner(place, lastLinkStatus, controlHaze.takeUnless { opaqueComposer }, onRetryConnection)
+                        // On the opaque backing there's no transcript next to it to blur. It keeps the blur's room above
+                        // and below, so the dock doesn't jump when the backing comes or goes.
+                        val onBacking = opaqueComposer && controlHaze != null
+                        Box(Modifier.padding(vertical = if (onBacking) TranscriptControlRim else 0.dp)) {
+                            OfflineBanner(place, lastLinkStatus, controlHaze.takeUnless { onBacking }, onRetryConnection)
+                        }
                     }
                 }
                 // Over the top of the conversation: other chats, the desktop link status and older pages.
@@ -1458,7 +1462,7 @@ private fun ColumnScope.Dock(
             }
         }
     }
-    // The panels and composer frost their own backing. Lists over them still frost the transcript.
+    // The panels, `@` lists and composer frost their own backing. The `/` list above it still frosts the transcript.
     val opaqueHaze = rememberHazeState().takeIf { opaqueComposer }
     val panelHaze = opaqueHaze ?: hazeState
     // One solid backing from the reconnect banner down to the composer, so no transcript shows between the panels.
