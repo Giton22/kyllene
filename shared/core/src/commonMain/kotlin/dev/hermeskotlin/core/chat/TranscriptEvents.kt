@@ -72,6 +72,11 @@ object TranscriptRows {
             (row.substringBefore('\n').trimEnd('\r') in COMPACTION_REMINDER_HEADERS &&
                 (displayKind != "internal_notification" || scheduledResult(row, displayMetadata) == null))
 
+    fun restatedRequest(row: String): String? {
+        if (row.substringBefore('\n').trimEnd('\r') != INFLIGHT_REQUEST_HEADER) return null
+        return row.substringAfter('\n', "").trim().takeIf { it.isNotEmpty() }
+    }
+
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
     fun compaction(text: String): TranscriptEvent.Compaction? {
         // The whole introduction every shipped prefix shares, as the gateway matches it (hermes_state_common.py),
@@ -238,10 +243,11 @@ object TranscriptRows {
     private const val PREFIX_END = "may reflect work described here — avoid repeating it:"
     private const val LEGACY_SUMMARY_PREFIX = "[CONTEXT SUMMARY]:"
     private const val SUMMARY_END = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
-    // Older Hermes versions can store model-facing reminders as user rows without a display kind.
-    private val COMPACTION_REMINDER_HEADERS = setOf(
+    private const val INFLIGHT_REQUEST_HEADER =
         "[STILL IN PROGRESS — this is the active request, restated after the " +
-            "compaction boundary because it was not finished yet. Continue it; do not start over.]",
+            "compaction boundary because it was not finished yet. Continue it; do not start over.]"
+    private val COMPACTION_REMINDER_HEADERS = setOf(
+        INFLIGHT_REQUEST_HEADER,
         "[Your active task list was preserved across context compression]",
     )
     private val HEARTBEAT = Regex("""^\[Background process \S+ heartbeat #\d+ """)

@@ -122,6 +122,31 @@ class HistoryToMessagesTest {
     }
 
     @Test
+    fun compactionRestatementKeepsTheRequestUntilItsOriginalIsInHistory() {
+        val original = SessionMessage(id = 1, role = "user", content = JsonPrimitive("Check the backup."), messageUid = "original")
+        val restated = JsonPrimitive("[STILL IN PROGRESS — this is the active request, restated after the " +
+            "compaction boundary because it was not finished yet. Continue it; do not start over.]\r\nCheck the backup.")
+        val replays = listOf(
+            original.copy(id = 2, content = restated),
+            original.copy(
+                id = 3,
+                content = JsonPrimitive("$COMPACTION_PREFIX Notes\n$SUMMARY_END\n${restated.content}"),
+                displayContent = restated,
+                messageUid = "carrier",
+                absorbedMessageUids = JsonPrimitive("""["original"]"""),
+            ),
+        )
+        val earlierSameText = original.copy(id = 0, messageUid = "earlier")
+        for (replay in replays) {
+            val onlyCopy = assertIs<ChatMessage.User>(historyToMessages(listOf(replay)).single())
+            assertEquals(original.text, onlyCopy.text)
+            assertEquals(null, onlyCopy.rowId)
+            assertEquals(listOf("row-0", onlyCopy.key), historyToMessages(listOf(earlierSameText, replay)).map { it.key })
+            assertEquals(listOf("row-1"), historyToMessages(listOf(original, replay)).map { it.key })
+        }
+    }
+
+    @Test
     fun regroupingHistoryKeepsContentAndChronologyAsOlderRowsArrive() {
         val text = "| Name | Result |\r\n|---|---|\r\n| scan | ${"word".repeat(200)} |\r\n\r\n```text\r\nready\r\n```"
         val older = SessionMessage(id = 1, role = "user", content = JsonPrimitive("[Cron delivery: Earlier]\n"))

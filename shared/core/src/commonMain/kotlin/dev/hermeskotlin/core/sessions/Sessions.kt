@@ -2,6 +2,7 @@ package dev.hermeskotlin.core.sessions
 
 import dev.hermeskotlin.core.chat.displayMetadataObject
 import dev.hermeskotlin.core.chat.userReactionEmoji
+import dev.hermeskotlin.core.network.HermesJson
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -155,7 +156,20 @@ data class SessionMessage(
     @Serializable(with = LenientBooleanSerializer::class) val compacted: Boolean = false,
     @SerialName("display_reasoning") val displayReasoning: String? = null,
     @SerialName("display_commentary") val displayCommentary: List<String>? = null,
+    @SerialName("message_uid") val messageUid: String? = null,
+    @SerialName("absorbed_message_uids") val absorbedMessageUids: JsonElement? = null,
 ) {
+    /** A merged compaction carrier has its own UID and names the request it absorbed separately. */
+    internal val requestUids: List<String>
+        get() {
+            val absorbed = when (val value = absorbedMessageUids) {
+                is JsonPrimitive -> value.contentOrNull?.let { runCatching { HermesJson.parseToJsonElement(it) }.getOrNull() }
+                else -> value
+            }
+            val sources = (absorbed as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.stringOrNull() }
+            return sources.ifEmpty { listOfNotNull(messageUid) }
+        }
+
     val userReaction: String? get() = userReactionEmoji(displayMetadataObject(displayMetadata)?.get("reactions"))
 
     /** The part of a reply a stopped turn had streamed, which hermes-agent marks (v0.23.4 agent/turn_api_call.py). */

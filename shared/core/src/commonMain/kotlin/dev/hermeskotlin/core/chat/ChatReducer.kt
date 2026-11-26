@@ -367,6 +367,12 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
     // Who this bot has messaged since the person last spoke: their answers aren't replies to fold away.
     val messagedSinceUser = mutableSetOf<String>()
     var replyingTo: String? = null
+    val shownRequestTextsByUid = mutableMapOf<String, MutableSet<String>>()
+    val shownRequestTexts = mutableSetOf<String>()
+    fun rememberRequest(row: SessionMessage, text: String) {
+        row.requestUids.forEach { uid -> shownRequestTextsByUid.getOrPut(uid) { mutableSetOf() }.add(text) }
+        if (row.imageCount == 0) shownRequestTexts += text
+    }
     rows.forEachIndexed { index, row ->
         if (row.isHidden) {
             // A stop during a tool closes the turn with a hidden row that holds the stopped mark
@@ -393,9 +399,19 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     messages += ChatMessage.Notice(key, report.line, stored = true)
                     return@forEachIndexed
                 }
-                if (TranscriptRows.isNoise(row.text.trim(), row.displayKind, row.displayMetadata)) return@forEachIndexed
-                TranscriptRows.classify(row.text, row.displayKind, deliveries, row.displayMetadata)?.let { events ->
+                val displayText = row.text.trim()
+                val restated = if (TranscriptRows.isNoise(displayText, row.displayKind, row.displayMetadata)) {
+                    val request = TranscriptRows.restatedRequest(displayText) ?: return@forEachIndexed
+                    val uids = row.requestUids
+                    if (uids.any { request in shownRequestTextsByUid[it].orEmpty() } ||
+                        (uids.isEmpty() && row.imageCount == 0 && request in shownRequestTexts)
+                    ) return@forEachIndexed
+                    request
+                } else null
+                val shownText = restated ?: displayText
+                TranscriptRows.classify(shownText, row.displayKind, deliveries, row.displayMetadata)?.let { events ->
                     events.forEachIndexed { i, event ->
+                        if (event is TranscriptEvent.FromBot) rememberRequest(row, shownText)
                         messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event, timestamp = row.timestamp)
                         replyingTo = (event as? TranscriptEvent.FromBot)?.takeUnless { from ->
                             from.handle?.lowercase() in messagedSinceUser || from.sender.lowercase() in messagedSinceUser
@@ -405,13 +421,14 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                 }
                 messagedSinceUser.clear()
                 replyingTo = null
-                val raw = unwrapCorrection(row.text.trim())
+                val raw = unwrapCorrection(shownText)
                 val (refs, text) = skillInvocationText(raw)?.let { emptyList<ShownAttachment>() to it } ?: splitAttachmentRefs(raw, key)
                 val attachments = List(row.imageCount) { ShownAttachment("$key-i$it", "Image", AttachmentKind.Image) } + refs
-                // Only rows the live agent still holds can be cut at: not those a compression archived or left
-                // in the session before it.
-                val cuttable = row.active && !row.compacted && (liveSessionId == null || row.sessionId == null || row.sessionId == liveSessionId)
+                // A recovered restatement is display-only. Rewind targets must be original rows the live agent still holds.
+                val cuttable = restated == null && row.active && !row.compacted &&
+                    (liveSessionId == null || row.sessionId == null || row.sessionId == liveSessionId)
                 if (text.isNotEmpty() || attachments.isNotEmpty()) {
+                    rememberRequest(row, shownText)
                     messages += ChatMessage.User(
                         key,
                         text,
