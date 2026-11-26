@@ -66,6 +66,7 @@ import dev.hermeskotlin.core.chat.SubagentRow
 import dev.hermeskotlin.core.chat.SubagentStatus
 import dev.hermeskotlin.core.chat.SubagentTranscriptRead
 import dev.hermeskotlin.core.chat.ToolActivity
+import dev.hermeskotlin.core.chat.linkFileUris
 import dev.hermeskotlin.core.chat.subagentTranscriptMessages
 import dev.hermeskotlin.core.chat.subagentRows
 import dev.hermeskotlin.core.chat.pollSubagentTranscript
@@ -420,6 +421,9 @@ private fun SubagentDetail(
                 is ChatMessage.Assistant -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (showReasoning && message.reasoning.isNotBlank()) {
                         Reasoning(message.reasoning, streaming = false)
+                    }
+                    message.commentary.forEach { update ->
+                        MarkdownText(remember(update) { linkFileUris(update) })
                     }
                     if (message.tools.isNotEmpty()) SubagentTranscriptTools(message.tools, message.key)
                     if (message.text.isNotBlank()) SelectionContainer { MarkdownText(message.text) }

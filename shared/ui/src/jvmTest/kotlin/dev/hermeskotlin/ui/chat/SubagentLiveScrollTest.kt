@@ -3,6 +3,7 @@ package dev.hermeskotlin.ui.chat
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
@@ -16,7 +17,9 @@ import dev.hermeskotlin.core.chat.SubagentRow
 import dev.hermeskotlin.core.chat.SubagentStatus
 import dev.hermeskotlin.core.chat.SubagentTranscriptPage
 import dev.hermeskotlin.core.sessions.SessionMessage
+import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.designsystem.HermesTheme
+import dev.hermeskotlin.ui.LocalAppSettings
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.concurrent.atomic.AtomicInteger
@@ -59,5 +62,26 @@ class SubagentLiveScrollTest {
         onNodeWithText("Fixture line 22").assertDoesNotExist()
         list.performScrollToIndex(21)
         onNodeWithText("Fixture line 22").assertIsDisplayed()
+    }
+
+    @Test fun savedCommentaryAppearsWithReasoningHidden() = runComposeUiTest {
+        val task = SubagentRow(key = "task", goal = "Fixture", status = SubagentStatus.Done, transcriptId = "child")
+        val row = SessionMessage(id = 1, role = "assistant", content = JsonPrimitive("Done."),
+            reasoning = "Check the working directory.", displayCommentary = listOf("I found the file."))
+        val page = SubagentTranscriptPage(listOf(row), null, false, true, false, true)
+        setContent {
+            HermesTheme(ColorScheme.Dark) {
+                CompositionLocalProvider(LocalAppSettings provides AppSettings(showReasoning = false)) {
+                    SubagentInspector(
+                        selected = InspectorRow("task", task), runtimeId = "parent", load = { _, _ -> page },
+                        onStop = {}, onDismiss = {}, desktop = false, modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+
+        onNodeWithText("I found the file.").assertIsDisplayed()
+        onNodeWithText("Done.").assertIsDisplayed()
+        onNodeWithText("Reasoning").assertDoesNotExist()
     }
 }
