@@ -63,6 +63,35 @@ class ReplySelectionCursorTest {
         }
     }
 
+    @Test
+    fun aCodeBlocksScrollbarKeepsTheArrow() {
+        val code = "val line = \"" + "a".repeat(200) + "\""
+        val platform = CursorPlatform()
+        val recomposer = FrameRecomposer(Dispatchers.Unconfined)
+        val scene = CanvasLayersComposeScene(recomposer, size = IntSize(420, 240), platformContext = platform)
+        try {
+            scene.setContent {
+                HermesTheme(ColorScheme.Light) {
+                    CompositionLocalProvider(LocalDesktopLayout provides true) {
+                        AssistantReply(ChatMessage.Assistant("reply", text = "```kotlin\n$code\n```"), null, null, last = true)
+                    }
+                }
+            }
+            recomposer.performFrame(0)
+            scene.measureAndLayout()
+
+            val lines = platform.textBounds(code)
+            scene.sendPointerEvent(PointerEventType.Move, Offset(lines.left + 10, lines.center.y))
+            assertEquals(PointerIcon.Text, platform.cursor, "Hovering over the code")
+            // The scrollbar sits in the block's bottom padding, under the long line.
+            scene.sendPointerEvent(PointerEventType.Move, Offset(lines.left + 10, lines.bottom + 6))
+            assertEquals(PointerIcon.Default, platform.cursor, "Hovering over the code's scrollbar")
+        } finally {
+            scene.close()
+            recomposer.close()
+        }
+    }
+
     private class CursorPlatform : PlatformContext.Empty(), PlatformContext.SemanticsOwnerListener {
         var cursor = PointerIcon.Default
             private set
