@@ -3323,7 +3323,8 @@ internal fun List<ChatMessage>.withoutBlankReplies(showReasoning: Boolean): List
 
 /**
  * The first message newer than [readUpTo] (epoch seconds) that the person would call new: a reply, a prompt
- * from elsewhere, or another bot's row. Messages without a time (a reply still streaming) count as new.
+ * from elsewhere, or another bot's row. A reply counts once it has words to read (not a silence or only tool steps);
+ * one without a time (still streaming) counts as new.
  * Null when every message is older, or when nothing in [messages] is new.
  */
 internal fun firstUnreadKey(messages: List<ChatMessage>, readUpTo: Double): String? =
