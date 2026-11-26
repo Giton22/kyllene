@@ -371,6 +371,17 @@ class ChatSessionResumeTest {
     }
 
     @Test
+    fun savedCommentaryTheStreamAlreadyShowsIsntRepeated() {
+        // The stream had it as reply text (message.interim), spaced and line-ended its own way.
+        val saved = ChatMessage.Assistant("s1", commentary = listOf("Step one.\r\n\r\nStep two.", "Not streamed yet."), timestamp = 101.0)
+        val live = ChatMessage.Assistant("live-0", text = "Looking. Step one.\n\nStep two.\n\nStill going.", streaming = true)
+
+        val reply = (listOf(saved, live).withSavedStepsInLiveReply(100.0, "Looking.", turnReplyKey = "live-0").single()) as ChatMessage.Assistant
+
+        assertEquals(listOf("Not streamed yet."), reply.commentary)
+    }
+
+    @Test
     fun aFoldAgainKeepsTheLiveCopyOfARunningTool() {
         // Folded once; the saved row came again while its tool still ran, with no result row yet.
         val rows = savedFirstStep().dropLast(1).map { lenient.decodeFromString<SessionMessage>(it) }
