@@ -66,18 +66,23 @@ class ReplySelectionCursorTest {
     @Test
     fun aCodeBlocksScrollbarKeepsTheArrow() {
         val code = "val line = \"" + "a".repeat(200) + "\""
+        val short = "val fits = 1"
         val platform = CursorPlatform()
         val recomposer = FrameRecomposer(Dispatchers.Unconfined)
-        val scene = CanvasLayersComposeScene(recomposer, size = IntSize(420, 240), platformContext = platform)
+        val scene = CanvasLayersComposeScene(recomposer, size = IntSize(420, 360), platformContext = platform)
         try {
             scene.setContent {
                 HermesTheme(ColorScheme.Light) {
                     CompositionLocalProvider(LocalDesktopLayout provides true) {
-                        AssistantReply(ChatMessage.Assistant("reply", text = "```kotlin\n$code\n```"), null, null, last = true)
+                        val reply = "```kotlin\n$code\n```\n\n```kotlin\n$short\n```"
+                        AssistantReply(ChatMessage.Assistant("reply", text = reply), null, null, last = true)
                     }
                 }
             }
             recomposer.performFrame(0)
+            scene.measureAndLayout()
+            // A second frame, for the bars to learn from the first layout whether there's anything to scroll.
+            recomposer.performFrame(1)
             scene.measureAndLayout()
 
             val lines = platform.textBounds(code)
@@ -86,6 +91,10 @@ class ReplySelectionCursorTest {
             // The scrollbar sits in the block's bottom padding, under the long line.
             scene.sendPointerEvent(PointerEventType.Move, Offset(lines.left + 10, lines.bottom + 6))
             assertEquals(PointerIcon.Default, platform.cursor, "Hovering over the code's scrollbar")
+            // A block that fits draws no bar, so its padding keeps the reply's text cursor.
+            val fits = platform.textBounds(short)
+            scene.sendPointerEvent(PointerEventType.Move, Offset(fits.left + 10, fits.bottom + 6))
+            assertEquals(PointerIcon.Text, platform.cursor, "Hovering under code that fits")
         } finally {
             scene.close()
             recomposer.close()
