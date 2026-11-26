@@ -1990,7 +1990,9 @@ private fun Messages(
 ) {
     var confirm by remember { mutableStateOf<Pair<MessageChange, String>?>(null) }
     val lastPrompt = messages.lastOrNull { it is ChatMessage.User }?.key
-    val lastReply = messages.lastOrNull { it is ChatMessage.Assistant && it.text.isNotBlank() }?.key
+    val lastReply = messages.lastOrNull {
+        it is ChatMessage.Assistant && (it.text.isNotBlank() || it.commentary.isNotEmpty())
+    }?.key
     val faces = LocalBotFaces.current
     val partners = remember(messages, faces) { messages.map { exchangePartner(it, faces) } }
     // The rewind rules read only the messages.
@@ -3050,7 +3052,9 @@ internal fun AssistantReply(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val actionable = !message.streaming && text.isNotBlank()
-    val canMenu = isDesktop && actionable
+    val copyText = remember(message.commentary, text) { message.transcriptText(text) }
+    val copyable = !message.streaming && copyText.isNotBlank()
+    val canMenu = isDesktop && copyable
     // A reply of only code or files has nothing to say, in either menu.
     val speakable = remember(text, actionable) { actionable && readAloudText(text).isNotEmpty() }
     // Said by the menu and the icons alike; read here, as the menu is built outside composition.
@@ -3064,9 +3068,9 @@ internal fun AssistantReply(
     if (canMenu) {
         RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
             listOfNotNull(
-                RowMenuItem(copyLabel, Lucide.Copy) { scope.launch { clipboard.setClipEntry(plainTextClipEntry(text)) } },
-                onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
-                onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
+                RowMenuItem(copyLabel, Lucide.Copy) { scope.launch { clipboard.setClipEntry(plainTextClipEntry(copyText)) } },
+                onRegenerate?.takeIf { actionable }?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
+                onBranch?.takeIf { actionable }?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
                 if (reading) RowMenuItem(if (readingPaused) resumeReadingLabel else pauseReadingLabel, if (readingPaused) Lucide.Play else Lucide.Pause, run = if (readingPaused) onResumeReading else onPauseReading)
                 else null,
                 if (reading) RowMenuItem(stopReadingLabel, Lucide.Square, run = onStopReading)
@@ -3138,7 +3142,7 @@ internal fun AssistantReply(
         val react = onReact.takeIf { !message.streaming && message.reactionRowId != null }
         val reaction = message.userReaction.takeUnless { message.streaming }
         val hasMore = actions.isNotEmpty() || react != null
-        if (actionable || usage != null || react != null || reaction != null) {
+        if (copyable || usage != null || react != null || reaction != null) {
             var keysInside by remember { mutableStateOf(false) }
             var moreOpen by remember { mutableStateOf(false) }
             LaunchedEffect(hasMore) { if (!hasMore) moreOpen = false }
@@ -3154,7 +3158,7 @@ internal fun AssistantReply(
             val usageText = usage?.let { replyUsage(it.input, it.output) }
             val usageStyle = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily)
             BoxWithConstraints(Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)) {
-                val copyWidth = if (actionable) {
+                val copyWidth = if (copyable) {
                     val size = ButtonSize.Small
                     maxOf(size.labelledIconWidth(copyLabel), size.labelledIconWidth(LocalDesignWords.current.copied)) + 2.dp
                 } else 0.dp
@@ -3198,9 +3202,9 @@ internal fun AssistantReply(
                         else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, Modifier.size(iconSize))
                         ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, Modifier.size(iconSize))
                     }
-                    if (actionable) Box(hidden.alpha(alpha)) {
-                        if (labelled) CopyButton(text, visibleLabel = copyLabel)
-                        else CopyButton(text, modifier = Modifier.size(iconSize), label = copyLabel)
+                    if (copyable) Box(hidden.alpha(alpha)) {
+                        if (labelled) CopyButton(copyText, visibleLabel = copyLabel)
+                        else CopyButton(copyText, modifier = Modifier.size(iconSize), label = copyLabel)
                     }
                     if (reaction != null) ReplyReactionBadge(reaction)
                     if (hasMore) Box(hidden.alpha(alpha)) {

@@ -53,7 +53,7 @@ import org.jetbrains.compose.resources.stringResource
 /** The words of [message] that Find in chat looks through; none for what isn't said (tool rows, events). */
 internal fun findableText(message: ChatMessage): String = when (message) {
     is ChatMessage.User -> message.text
-    is ChatMessage.Assistant -> message.text
+    is ChatMessage.Assistant -> message.transcriptText()
     is ChatMessage.Command -> "${message.command}\n${message.output}"
     is ChatMessage.Notice -> message.text
     is ChatMessage.Event -> ""
