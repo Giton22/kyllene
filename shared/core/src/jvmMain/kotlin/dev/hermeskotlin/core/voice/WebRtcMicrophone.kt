@@ -2,16 +2,15 @@ package dev.hermeskotlin.core.voice
 
 import dev.onvoid.webrtc.media.MediaDevices
 import dev.onvoid.webrtc.media.audio.AudioDeviceModule
-import dev.onvoid.webrtc.media.audio.AudioLayer
 
-/** A fresh PulseAudio device module for each recording; no shared device or volume changes. */
+/** A fresh device module per recording, on the platform's own backend; no shared device or volume changes. */
 internal class WebRtcMicrophone : Microphone {
     private var module: AudioDeviceModule? = null
 
     override fun start(onFrame: (PcmFrame) -> Unit, onFailure: (Throwable) -> Unit) {
         check(module == null)
         try {
-            val native = AudioDeviceModule(AudioLayer.kLinuxPulseAudio)
+            val native = AudioDeviceModule(desktopAudioLayer())
             module = native
             val device = MediaDevices.getDefaultAudioCaptureDevice() ?: error("No default microphone")
             native.setRecordingDevice(device)

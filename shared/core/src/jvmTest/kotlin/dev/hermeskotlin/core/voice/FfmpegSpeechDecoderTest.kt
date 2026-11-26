@@ -30,7 +30,7 @@ class FfmpegSpeechDecoderTest {
     @Test fun pipeDecodePreservesInputAndUsesBoundedFramesWithoutInheritedEnvironment() = runBlocking {
         val pcm = ByteArray(1922) { (it % 127).toByte() }
         val process = FinishedProcess(pcm)
-        val decoder = FfmpegSpeechDecoder { builder ->
+        val decoder = FfmpegSpeechDecoder(ffmpeg = "/usr/bin/ffmpeg") { builder ->
             assertTrue(builder.environment().isEmpty())
             assertEquals("/usr/bin/ffmpeg", builder.command().first())
             assertEquals("pipe", builder.command()[builder.command().indexOf("-protocol_whitelist") + 1])

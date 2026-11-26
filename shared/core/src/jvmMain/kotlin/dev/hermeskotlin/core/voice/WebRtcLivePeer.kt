@@ -70,7 +70,7 @@ internal class WebRtcLivePeer(private val events: LivePeerEvents, private val re
     init {
         var failure: Throwable? = null
         try {
-            audio = AudioDeviceModule(if (realAudio) AudioLayer.kLinuxPulseAudio else AudioLayer.kDummyAudio)
+            audio = AudioDeviceModule(if (realAudio) desktopAudioLayer() else AudioLayer.kDummyAudio)
             if (realAudio) {
                 val capture = MediaDevices.getDefaultAudioCaptureDevice() ?: error("No microphone or speaker is available.")
                 val render = MediaDevices.getDefaultAudioRenderDevice() ?: error("No microphone or speaker is available.")

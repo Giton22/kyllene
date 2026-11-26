@@ -53,6 +53,14 @@ kotlin {
                 implementation(libs.dbus.unix)
                 implementation(libs.junixsocket.common)
                 runtimeOnly(libs.junixsocket.native)
+            } else if (System.getProperty("os.name").orEmpty().startsWith("Windows")) {
+                // Windows' Core Audio backend; no D-Bus or junixsocket there.
+                val classifier = when (System.getProperty("os.arch")) {
+                    "amd64", "x86_64" -> "windows-x86_64"
+                    "aarch64" -> "windows-aarch64"
+                    else -> null
+                }
+                classifier?.let { runtimeOnly("${libs.desktop.webrtc.get()}:$it") }
             }
         }
         commonMain.dependencies {

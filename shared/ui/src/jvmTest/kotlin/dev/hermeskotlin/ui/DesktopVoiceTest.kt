@@ -6,10 +6,17 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DesktopVoiceTest {
-    @Test fun onlySupportedLinuxHostsAdvertiseTheImplementedVoiceBackend() {
-        for (arch in listOf("amd64", "x86_64", "aarch64")) assertTrue(nativeDesktopAudio("Linux", arch))
-        for (os in listOf("Windows 11", "Mac OS X", "FreeBSD", "")) assertFalse(nativeDesktopAudio(os, "amd64"))
-        for (arch in listOf("x86", "armv7", "")) assertFalse(nativeDesktopAudio("Linux", arch))
+    @Test fun supportedLinuxAndWindowsHostsAdvertiseTheImplementedVoiceBackend() {
+        for (arch in listOf("amd64", "x86_64", "aarch64")) {
+            assertTrue(nativeDesktopAudio("Linux", arch))
+            assertTrue(nativeDesktopAudio("Windows 10", arch))
+            assertTrue(nativeDesktopAudio("Windows 11", arch))
+        }
+        for (os in listOf("Mac OS X", "FreeBSD", "")) assertFalse(nativeDesktopAudio(os, "amd64"))
+        for (arch in listOf("x86", "armv7", "")) {
+            assertFalse(nativeDesktopAudio("Linux", arch))
+            assertFalse(nativeDesktopAudio("Windows 10", arch))
+        }
     }
 
     @Test fun spokenRepliesAlsoNeedTheSpeechDecoder() {
