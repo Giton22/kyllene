@@ -49,11 +49,13 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runCurrent
@@ -227,6 +229,29 @@ class ChatViewModelTest {
     }
 
     private fun attachment(id: String) = OutgoingAttachment(id, "$id.txt", "text/plain", byteArrayOf(1))
+
+    @Test
+    fun aTimedOutImagePasteReleasesTheDraftAndIgnoresALateImage() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        val result = CompletableDeferred<List<OutgoingAttachment>>()
+        vm.pasteImages(target) { withContext(NonCancellable) { result.await() } to null }
+        try {
+            advanceTimeBy(29_999)
+            assertTrue(vm.readingPastedImages)
+            assertNull(vm.attachmentError.value)
+
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(false, vm.readingPastedImages)
+            assertEquals(ComposerNotice.ImagePasteTimedOut, vm.attachmentError.value)
+        } finally {
+            result.complete(listOf(OutgoingAttachment("image", "copied.jpg", "image/jpeg", byteArrayOf(1))))
+        }
+        runCurrent()
+        assertTrue(vm.attachments.value.isEmpty())
+    }
 
     @Test
     fun aDraftFromOutsideFillsTheNewChatWithoutSending() = runTest(dispatcher) {

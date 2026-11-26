@@ -594,12 +594,9 @@ fun ChatScreen(
     val modelPillBounds = remember { mutableStateOf<Rect?>(null) }
     val conversationKey = Triple(target.gateway.gatewayUrl, target.profile, target.storedSessionId)
     val editing = viewModel.editing.collectAsStateWithLifecycle().value
-    val imagePaste = key(target.copy(readUpTo = null)) {
-        // A slow clipboard read must finish in the draft that started it.
-        if (ownsTranscript && connected && keysEnabled && !dialogOpen && editing == null &&
-            attachments.size < OutgoingAttachment.MAX_COUNT
-        ) attachmentPicker.imagePasteModifier() else Modifier
-    }
+    val imagePaste = if (ownsTranscript && connected && keysEnabled && !dialogOpen && editing == null &&
+        attachments.size < OutgoingAttachment.MAX_COUNT
+    ) attachmentPicker.imagePasteModifier { read -> viewModel.pasteImages(target, read) } else Modifier
     Box(Modifier.fillMaxSize().onSizeChanged { paneWidth = with(density) { it.width.toDp() } }) {
     CompositionLocalProvider(LocalModelPillBounds provides modelPillBounds) {
     ChatView(
@@ -1631,6 +1628,7 @@ private fun ComposerNotice.text(): String = when (this) {
     is ComposerNotice.Said -> text
     ComposerNotice.PromptNotSent -> stringResource(Res.string.chat_notice_prompt_not_sent)
     ComposerNotice.CallNotStarted -> stringResource(Res.string.chat_notice_call_not_started)
+    ComposerNotice.ImagePasteTimedOut -> stringResource(Res.string.android_attach_photo_failed)
     is ComposerNotice.TooManyAttachments -> stringResource(Res.string.chat_notice_too_many_files, max)
     is ComposerNotice.FileTooLarge -> stringResource(Res.string.chat_notice_file_too_large, name, megabytes)
 }
@@ -4147,6 +4145,7 @@ private fun Composer(
 ) {
     // Attachments or comments alone are sendable: the gateway gets Desktop's image prompt or the file references.
     val hasText = actions.composer.text.isNotBlank() || attachments.isNotEmpty() || comments.isNotEmpty()
+    val canSend = connected && !actions.readingPastedImages
     val runningSend by actions.runningSend.collectAsStateWithLifecycle()
     val shape = RoundedCornerShape(Theme[radii][radiusXLarge])
     val page = Theme[colors][background]
@@ -4259,18 +4258,18 @@ private fun Composer(
                         if (state.running && hasText && !editing) {
                             if (command) {
                                 // A command runs at once; there's nothing to choose.
-                                Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = connected) }
+                                Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = canSend) }
                             } else {
                                 RunningSendSegments(
                                     mode = runningMode,
                                     attachments = attachments.isNotEmpty(),
-                                    enabled = connected,
+                                    enabled = canSend,
                                     onSend = actions::send,
                                 )
                             }
                         } else {
                             // While a task runs this only waits: nothing typed yet, or an edit, which goes once it ends.
-                            Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = connected && hasText && !state.running) }
+                            Snug { SendButton(SendIcon.Send, onClick = { actions.send() }, enabled = canSend && hasText && !state.running) }
                         }
                     }
                 }
@@ -4344,7 +4343,7 @@ private fun onComposerKey(
         ComposerKey.Send, ComposerKey.Queue -> {
             val sendable = text.isNotBlank() || attachments.isNotEmpty() || comments.isNotEmpty()
             // An edit goes once the reply finishes, as the disabled Send says.
-            if (!sendable || !connected || (state.running && editing)) return true
+            if (!sendable || !connected || actions.readingPastedImages || (state.running && editing)) return true
             val command = attachments.isEmpty() && SlashCommand.parse(text.trim()) != null
             actions.send(if (key == ComposerKey.Queue && state.running && !command) RunningSend.Queue else null)
             recall.reset()

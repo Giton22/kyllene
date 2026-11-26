@@ -22,9 +22,9 @@ interface AttachmentPicker {
      */
     fun pasteAttachments(): Boolean = false
 
-    /** Receives image pastes in an Android composer. Its scope belongs to the current draft. */
+    /** Receives Android image pastes and hands the current draft a reader for each accepted clip. */
     @Composable
-    fun imagePasteModifier(): Modifier = Modifier
+    fun imagePasteModifier(onPaste: (suspend () -> Pair<List<OutgoingAttachment>, String?>) -> Unit): Modifier = Modifier
 
     /** The clipboard's text, for a paste with nothing focused; null where there's none (or no desktop). */
     fun clipboardText(): String? = null

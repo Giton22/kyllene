@@ -74,10 +74,14 @@ import dev.hermeskotlin.core.slash.SlashCommand
 import dev.hermeskotlin.core.slash.SlashKind
 import dev.hermeskotlin.core.slash.SlashRoute
 import dev.hermeskotlin.core.slash.SlashSuggestion
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.debounce
@@ -443,6 +447,10 @@ class ChatViewModel(
     /** Files waiting in the composer for the next send. */
     val attachments: StateFlow<List<OutgoingAttachment>> = _attachments.asStateFlow()
 
+    private var imagePasteScope: CoroutineScope? = null
+    private val pendingImagePastes = mutableIntStateOf(0)
+    override val readingPastedImages: Boolean get() = pendingImagePastes.intValue > 0
+
     /** Files picked in chats that aren't open, by [trayKey]; they live as long as the app does. */
     private val trays = mutableMapOf<String, List<OutgoingAttachment>>()
 
@@ -636,6 +644,10 @@ class ChatViewModel(
 
     /** Opens [target]'s chat in the host, with the transcript's file callbacks bound to that target. */
     private fun bind(target: ChatTarget) {
+        val previousReads = imagePasteScope
+        imagePasteScope = null
+        pendingImagePastes.intValue = 0
+        previousReads?.cancel()
         val chat = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
         session.value = chat
         widgetSession.value = chat?.let { it to target }
@@ -956,6 +968,35 @@ class ChatViewModel(
         _attachments.update { it + fitting.take(room.coerceAtLeast(0)) }
     }
 
+    /** An accepted paste belongs to the draft even while a sheet covers its composer. */
+    internal fun pasteImages(owner: ChatTarget, read: suspend () -> Pair<List<OutgoingAttachment>, String?>) {
+        if (target?.sameChatAs(owner) != true || _editing.value != null) return
+        val chat = session.value ?: return
+        if (chat !== host.session.value || chat.ownerVersion != host.ownerVersion.value) return
+        val scope = imagePasteScope ?: CoroutineScope(
+            viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job]),
+        ).also { imagePasteScope = it }
+        pendingImagePastes.intValue++
+        scope.launch {
+            // A provider can block in native I/O. Time out the wait so Send can recover even if the read can't stop yet.
+            val reading = scope.async { read() }
+            try {
+                val result = withTimeoutOrNull(IMAGE_PASTE_TIMEOUT_MS) { reading.await() }
+                if (imagePasteScope !== scope || chat !== host.session.value || chat.ownerVersion != host.ownerVersion.value) return@launch
+                if (result == null) {
+                    showNotice(ComposerNotice.ImagePasteTimedOut)
+                    return@launch
+                }
+                val (picked, error) = result
+                error?.let(::showAttachmentError)
+                if (picked.isNotEmpty()) addAttachments(picked)
+            } finally {
+                reading.cancel()
+                if (imagePasteScope === scope) pendingImagePastes.intValue--
+            }
+        }
+    }
+
     override fun removeAttachment(id: String) = _attachments.update { tray -> tray.filterNot { it.id == id } }
 
     override fun addComment(source: CommentSource, anchor: SelectionAnchor): Long {
@@ -1247,6 +1288,7 @@ class ChatViewModel(
      * turn is stopped. A steer can't carry files, so with attachments it queues instead.
      */
     override fun send(mode: RunningSend?) {
+        if (readingPastedImages) return
         val chat = session.value ?: return
         val text = withoutEmptyListItem(composer.text)
         val attachments = _attachments.value
@@ -1517,6 +1559,8 @@ class ChatViewModel(
         /** Typing pauses this long before the draft is written to storage. */
         const val DRAFT_SAVE_DEBOUNCE_MS = 400L
 
+        const val IMAGE_PASTE_TIMEOUT_MS = 30_000L
+
         /** What Explain asks of the agent about the selection. */
         const val EXPLAIN_NOTE = "Explain this in more detail."
 
@@ -1555,6 +1599,9 @@ sealed interface ComposerNotice {
 
     /** The Call Hermes shortcut's call couldn't start. */
     data object CallNotStarted : ComposerNotice
+
+    /** An Android clipboard provider didn't finish in time. */
+    data object ImagePasteTimedOut : ComposerNotice
 
     /** More files were picked than a message carries. */
     data class TooManyAttachments(val max: Int) : ComposerNotice

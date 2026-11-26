@@ -110,9 +110,11 @@ actual fun rememberAttachmentPicker(
 
             @OptIn(ExperimentalFoundationApi::class)
             @Composable
-            override fun imagePasteModifier(): Modifier {
-                val pasteScope = rememberCoroutineScope()
-                val receiver = remember(pasteScope) {
+            override fun imagePasteModifier(
+                onPaste: (suspend () -> Pair<List<OutgoingAttachment>, String?>) -> Unit,
+            ): Modifier {
+                val paste by rememberUpdatedState(onPaste)
+                val receiver = remember {
                     // Keep the keyboard's URI grant, held in the transfer's extras, alive during the read.
                     val pendingContent = mutableSetOf<TransferableContent>()
                     ReceiveContentListener { content ->
@@ -128,12 +130,10 @@ actual fun rememberAttachmentPicker(
                                 uris.size >= OutgoingAttachment.MAX_COUNT
                             ) false else uris.add(uri)
                         }
-                        if (uris.isNotEmpty()) pasteScope.launch {
+                        if (uris.isNotEmpty()) paste {
                             pendingContent.add(content)
                             try {
-                                val (read, error) = readAttachments(context, uris, pastedImages = true)
-                                error?.let(failed)
-                                read.takeIf { it.isNotEmpty() }?.let(picked)
+                                readAttachments(context, uris, pastedImages = true)
                             } finally {
                                 pendingContent.remove(content)
                             }

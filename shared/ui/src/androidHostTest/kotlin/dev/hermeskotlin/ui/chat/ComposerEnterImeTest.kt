@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -29,6 +30,7 @@ import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.OutgoingAttachment
 import dev.hermeskotlin.designsystem.HermesTheme
 import dev.hermeskotlin.designsystem.components.TextField
+import kotlinx.coroutines.launch
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -158,8 +160,16 @@ class ComposerEnterImeTest {
         val attachments = mutableListOf<OutgoingAttachment>()
         var error: String? = null
         val (state, ic) = setupComposer(field = { text, modifier ->
-            val picker = rememberAttachmentPicker(onPicked = { attachments.addAll(it) }, onError = { error = it })
-            ComposerTextInput(text, modifier.then(picker.imagePasteModifier()), placeholder = {})
+            val picker = rememberAttachmentPicker(onPicked = {}, onError = {})
+            val scope = rememberCoroutineScope()
+            val imagePaste = picker.imagePasteModifier { read ->
+                scope.launch {
+                    val (picked, failure) = read()
+                    attachments.addAll(picked)
+                    error = failure
+                }
+            }
+            ComposerTextInput(text, modifier.then(imagePaste), placeholder = {})
         })
         ic.commitText("draft text", 1)
         val image = InputContentInfo(uri, ClipDescription("Copied image", arrayOf("image/png")), null)
