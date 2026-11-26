@@ -377,6 +377,21 @@ class HistoryToMessagesTest {
     }
 
     @Test
+    fun scheduledResultWithCompactionReminderHeaderRemainsARoutine() {
+        val body = "[Your active task list was preserved across context compression]\n- Check the backup"
+        val row = SessionMessage(
+            id = 1,
+            role = "user",
+            content = JsonPrimitive(body),
+            displayKind = "internal_notification",
+            displayMetadata = Json.parseToJsonElement("""{"completion_note":[["cron","local","job"]]}"""),
+        )
+
+        val message = assertIs<ChatMessage.Event>(historyToMessages(listOf(row)).single())
+        assertEquals(body, assertIs<TranscriptEvent.Routine>(message.event).body)
+    }
+
+    @Test
     fun anotherBotsMessageKeepsItsTimeSoTheNewMessagesLineCanFindIt() {
         val rows = listOf(
             SessionMessage(id = 1, role = "user", content = JsonPrimitive("Message from 🤖 Scribe (@scribe): the draft is ready"), timestamp = 200.0),

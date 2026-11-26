@@ -69,7 +69,8 @@ object TranscriptRows {
             AgentMessage.parse(row, requireEnvelope = true) == null &&
             routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
             row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row) ||
-            row.substringBefore('\n').trimEnd('\r') in COMPACTION_REMINDER_HEADERS
+            (row.substringBefore('\n').trimEnd('\r') in COMPACTION_REMINDER_HEADERS &&
+                (displayKind != "internal_notification" || scheduledResult(row, displayMetadata) == null))
 
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
     fun compaction(text: String): TranscriptEvent.Compaction? {
