@@ -208,6 +208,11 @@
     <string name="chat_process_pid">pid %1$d</string>
 
     <string name="chat_model_title">Modelo</string>
+    <string name="chat_quick_model_title">Escolher modelo</string>
+    <string name="chat_quick_model_effort">Nível de raciocínio</string>
+    <string name="chat_quick_model_favorites">Favoritos</string>
+    <string name="chat_quick_model_providers">Provedores</string>
+    <string name="chat_quick_model_unsupported">O nível de raciocínio deste modelo não pode ser ajustado.</string>
     <string name="chat_model_for_this_chat">Para esta conversa</string>
     <string name="chat_model_saving">Salvando…</string>
     <string name="chat_model_thinking">Raciocínio</string>

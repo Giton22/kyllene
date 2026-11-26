@@ -202,6 +202,11 @@
     <string name="chat_process_pid">pid %1$d</string>
 
     <string name="chat_model_title">模型</string>
+    <string name="chat_quick_model_title">选择模型</string>
+    <string name="chat_quick_model_effort">思考强度</string>
+    <string name="chat_quick_model_favorites">收藏</string>
+    <string name="chat_quick_model_providers">提供方</string>
+    <string name="chat_quick_model_unsupported">此模型不支持调整思考强度。</string>
     <string name="chat_model_for_this_chat">用于此对话</string>
     <string name="chat_model_saving">正在保存…</string>
     <string name="chat_model_thinking">思考</string>

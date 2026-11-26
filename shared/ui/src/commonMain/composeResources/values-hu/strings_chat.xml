@@ -208,6 +208,11 @@
     <string name="chat_process_pid">pid %1$d</string>
 
     <string name="chat_model_title">Modell</string>
+    <string name="chat_quick_model_title">Modell kiválasztása</string>
+    <string name="chat_quick_model_effort">Gondolkodási szint</string>
+    <string name="chat_quick_model_favorites">Kedvencek</string>
+    <string name="chat_quick_model_providers">Szolgáltatók</string>
+    <string name="chat_quick_model_unsupported">Ennél a modellnél nem állítható a gondolkodási szint.</string>
     <string name="chat_model_for_this_chat">Ehhez a csevegéshez</string>
     <string name="chat_model_saving">Mentés…</string>
     <string name="chat_model_thinking">Gondolkodás</string>
