@@ -2085,14 +2085,12 @@ private fun Messages(
     // How much reply the bottom holds; more of it arriving while the reader is away from the end is new to them.
     val tail = messages.replyMark()
     var replySeen by remember { mutableStateOf(ReplySeen(oldest, tail)) }
-    LaunchedEffect(awayFromBottom, oldest, tail) {
-        // The older part could supply this turn's missing prompt. Compare the part we already had,
-        // so an older page and a real reply arriving in the same update are distinguishable.
-        val comparable = if (oldest.isOlderThan(replySeen.oldest)) {
-            val start = messages.indexOfFirst { it.key == replySeen.oldest }
-            if (start >= 0) messages.subList(start, messages.size).replyMark() else null
-        } else null
-        replySeen = replySeen.next(awayFromBottom, oldest, tail, comparable)
+    var previousReplyMessages by remember { mutableStateOf(messages) }
+    LaunchedEffect(awayFromBottom, messages) {
+        val arrivedWithPage = oldest.isOlderThan(replySeen.oldest) &&
+            messages.replyArrivedWithPage(previousReplyMessages, replySeen.mark)
+        replySeen = replySeen.next(awayFromBottom, oldest, tail, arrivedWithPage)
+        previousReplyMessages = messages
     }
     val newBelow = awayFromBottom && replySeen.new
     // Where the messages that came since the chat was last read begin. It stays put for the rest of this visit,
@@ -2488,13 +2486,25 @@ private fun ChatMessage.replyLength(): Int = when (this) {
     is ChatMessage.Notice -> 0
 }
 
+private fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, mark: Pair<Int, Int>): Boolean {
+    val oldest = previous.firstOrNull()?.key ?: return false
+    val start = indexOfFirst { it.key == oldest }
+    // The page can bring the prompt for a partly loaded turn. Compare only the portion we already had.
+    if (start >= 0) return subList(start, size).replyMark() != mark
+
+    // If history folded the first assistant bubble into an older row, compare the transcript after that bubble.
+    val row = oldest.storedRowId() ?: return false
+    val boundary = indexOfLast { message -> message.key.storedRowId()?.let { it <= row } == true }
+    return boundary >= 0 && subList(boundary + 1, size).replyMark() != previous.subList(1, previous.size).replyMark()
+}
+
 /**
  * The [replyMark] and oldest loaded row as they last were, and whether reply text has come ([new]) since the reader
  * left the end. It stays new until they are back there, even if a later turn brings the mark back to what it was.
  */
 internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val new: Boolean = false) {
-    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>, comparable: Pair<Int, Int>? = null): ReplySeen {
-        val arrived = if (oldest.isOlderThan(this.oldest)) comparable != null && comparable != this.mark else mark != this.mark
+    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>, arrivedWithPage: Boolean = false): ReplySeen {
+        val arrived = if (oldest.isOlderThan(this.oldest)) arrivedWithPage else mark != this.mark
         return ReplySeen(oldest, mark, new = away && (new || arrived))
     }
 }

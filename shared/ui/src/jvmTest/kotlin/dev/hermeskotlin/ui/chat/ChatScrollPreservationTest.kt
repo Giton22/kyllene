@@ -54,6 +54,14 @@ class ChatScrollPreservationTest {
         }
     }
 
+    private val stored = messages.mapIndexed { index, message ->
+        when (message) {
+            is ChatMessage.User -> message.copy(key = "row-${index + 1}")
+            is ChatMessage.Assistant -> message.copy(key = "row-${index + 1}")
+            else -> error("Unexpected fixture row")
+        }
+    }
+
     private fun viewport(firstKey: String?, pinned: Boolean = false) = TranscriptViewport(
         conversationKey = "chat-1",
         firstKey = firstKey,
@@ -143,14 +151,27 @@ class ChatScrollPreservationTest {
     private fun ComposeUiTest.middleOfScreen(): Int? = (10..50).filter { isDisplayed(it) }.let { it.getOrNull(it.size / 2) }
 
     @Test
-    fun pagingAboveKeepsTheAnchorAndOnlyARealConcurrentReplyIsNew() = runComposeUiTest {
-        val stored = messages.mapIndexed { i, message ->
-            when (message) {
-                is ChatMessage.User -> message.copy(key = "row-${i + 1}")
-                is ChatMessage.Assistant -> message.copy(key = "row-${i + 1}")
-                else -> error("Unexpected fixture row")
-            }
+    fun aPinnedShortPageStaysAtTheEndOnTheFirstLayoutAfterAPrepend() = runComposeUiTest {
+        var state by mutableStateOf(ChatState(messages = stored.takeLast(3), historyLoaded = true, loadingOlder = true))
+        setContent { Chat(state, readUpTo = null, saved = { null }, onSave = {}) }
+        val latest = onNode(hasText("Message 60:", substring = true))
+        latest.assertIsDisplayed()
+        val top = latest.fetchSemanticsNode().boundsInRoot.top
+
+        mainClock.autoAdvance = false
+        // Paging joins the first partial assistant bubble to its earlier segment, changing its key.
+        val mergedPage = stored.take(56) + stored.takeLast(2)
+        runOnIdle { state = state.copy(messages = mergedPage, loadingOlder = false) }
+        mainClock.advanceTimeByFrame()
+        runWithoutImplicitWait {
+            onNode(hasText("Message 56:", substring = true)).assertIsDisplayed()
+            latest.assertIsDisplayed()
+            assertEquals(top, latest.fetchSemanticsNode().boundsInRoot.top, absoluteTolerance = 1f)
         }
+    }
+
+    @Test
+    fun pagingAboveKeepsTheAnchorAndOnlyARealConcurrentReplyIsNew() = runComposeUiTest {
         var state by mutableStateOf(ChatState(messages = stored.drop(20), historyLoaded = true, olderMessages = true))
         var reads = 0
         setContent { Chat(state, readUpTo = null, saved = { null }, onSave = {}, onReadLatest = { reads++ }) }
