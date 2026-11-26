@@ -49,6 +49,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -2794,7 +2795,7 @@ class ChatSession(
                 // unseen, so it's read again. A turn from another client may be the kickoff of a goal it just typed
                 // into a chat that had none, so that one is read whatever the strip shows.
                 if (controlUnpublished(anyChat = foreignTurn)) scope.launch { refreshControl() }
-                if (foreignTurn || rewound) {
+                if (foreignTurn || rewound || stoppedUnnamed(event.payload as? JsonObject)) {
                     foreignTurn = false
                     rewound = false
                     scope.launch { loadHistory() }
@@ -3525,6 +3526,23 @@ private fun String.startsWithIgnoringSpaces(prefix: String): Boolean {
         i++
         j++
     }
+}
+
+/**
+ * A stopped turn's `message.complete` whose reply is stored but not named, so the transcript is read for its row.
+ * The receipt names the reply's row only for a turn that completed (v0.23.4 agent/persisted_turn_receipt.py), but a
+ * stopped one is stored too. Only when the receipt lists a stored row besides the prompt's: without one, nothing says
+ * the reply was stored (a save that failed, a stop before any text), and a read could drop the live copy. Row 0 names
+ * nothing, as the reducer reads it.
+ */
+internal fun stoppedUnnamed(payload: JsonObject?): Boolean {
+    val receipt = payload?.get("persisted_turn") as? JsonObject ?: return false
+    val prompts = setOfNotNull(receipt.long("user_row_id")) +
+        (receipt["user_row_ids"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.longOrNull }
+    val stored = (receipt["row_ids"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.longOrNull }
+    return payload.string("status") == "interrupted" &&
+        stored.any { it !in prompts } &&
+        receipt.long("final_assistant_row_id")?.takeIf { it > 0 } == null
 }
 
 /**

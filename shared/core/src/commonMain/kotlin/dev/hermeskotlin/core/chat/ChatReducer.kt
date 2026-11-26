@@ -368,7 +368,15 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
     val messagedSinceUser = mutableSetOf<String>()
     var replyingTo: String? = null
     rows.forEachIndexed { index, row ->
-        if (row.isHidden) return@forEachIndexed
+        if (row.isHidden) {
+            // A stop during a tool closes the turn with a hidden row that holds the stopped mark
+            // (v0.23.4 agent/message_sanitization.py `close_interrupted_tool_sequence`): the reply it closes was stopped.
+            val last = messages.lastOrNull()
+            if (row.role == "assistant" && row.stopped && last is ChatMessage.Assistant) {
+                messages[messages.lastIndex] = last.copy(outcome = TurnOutcome.Interrupted)
+            }
+            return@forEachIndexed
+        }
         val key = row.id?.let { "row-$it" } ?: "h$index"
         if ((row.role == "user" || row.role == "assistant") && row.displayKind != "failed_turn") {
             TranscriptRows.compaction(row.text)?.let { checkpoint ->
@@ -464,6 +472,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         reactionRowId = if (keepTarget) previous.reactionRowId else reactionRow,
                         userReaction = if (keepTarget) previous.userReaction else row.userReaction,
                         tools = previous.tools + tools,
+                        outcome = if (row.stopped) TurnOutcome.Interrupted else previous.outcome,
                         // The reply is dated by its last step, when it finished.
                         timestamp = row.timestamp ?: previous.timestamp,
                     )
@@ -477,6 +486,8 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         tools = tools,
                         repliedTo = replyingTo,
                         timestamp = row.timestamp,
+                        // Still reads as stopped once the transcript replaces the live copy.
+                        outcome = TurnOutcome.Interrupted.takeIf { row.stopped },
                     )
                 }
             }
