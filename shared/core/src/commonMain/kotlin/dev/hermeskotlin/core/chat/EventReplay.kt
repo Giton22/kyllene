@@ -10,13 +10,19 @@ import kotlinx.serialization.json.longOrNull
  * Reads a `session.events.since` reply (tui_gateway/event_replay.py). The gateway stamps every event of a runtime
  * session with a `seq` counting up from 1 and keeps the last ~512 in a ring, so a client that lost the socket asks
  * for everything after the last seq it applied and carries on, instead of reloading the chat.
+ *
+ * The legacy gateway counts the seqs in its process's epoch (`gateway.ready`'s `replay_epoch`). The session authority
+ * counts them per session (gateway/session_events.py): its epoch comes with `session.resume` / `session.create` and on
+ * every event, the request must name it as `replay_epoch`, and the reply's `epoch` is that session's.
  */
 internal object EventReplay {
     /**
      * The events after [from] for [runtimeId], oldest first, when the reply proves none is missing; null when the
      * gap can't be trusted and the chat must be reloaded instead:
-     * - `truncated`: the ring dropped events past [from] (too long away, or a frame too big to keep);
-     * - another `epoch` than [epoch], the run the seqs were counted in: the gateway restarted and counts anew;
+     * - `truncated` or `snapshot_required`: the ring dropped events past [from] (too long away, or a frame too big to
+     *   keep), or the session authority didn't get the epoch it counts in;
+     * - another `epoch` than [epoch], the run or session epoch the seqs were counted in: the gateway restarted, or
+     *   the session started counting anew;
      * - `latest_seq` below [from], the same restart seen without an epoch;
      * - a hole in the seqs, or an event that isn't for [runtimeId].
      *
@@ -27,7 +33,7 @@ internal object EventReplay {
         reply ?: return null
         val latest = (reply["latest_seq"] as? JsonPrimitive)?.longOrNull ?: return null
         val events = reply["events"] as? JsonArray ?: return null
-        if (reply.boolean("truncated") != false) return null
+        if (reply.boolean("truncated") != false || reply.boolean("snapshot_required") == true) return null
         if (epoch != null && reply.string("epoch").let { it != null && it != epoch }) return null
         if (latest < from) return null
         var cursor = from
@@ -46,6 +52,7 @@ internal object EventReplay {
                 sessionId = runtimeId,
                 seq = seq,
                 executionGeneration = (event["execution_generation"] as? JsonPrimitive)?.longOrNull,
+                replayEpoch = event.string("replay_epoch"),
             )
         }
         return missed

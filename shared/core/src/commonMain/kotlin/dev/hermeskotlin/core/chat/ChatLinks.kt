@@ -15,6 +15,8 @@ data class ChatLink(
     val title: String?,
     val draft: ComposeDraft? = null,
     val bot: String? = null,
+    /** Optional notification ownership, checked again after deferred UI/storage work. */
+    val current: () -> Boolean = { true },
 )
 
 /**
@@ -63,6 +65,11 @@ class ChatLinks {
     /** Opens [bot]'s permanent chat, known to be [storedSessionId] when given. */
     fun openBot(bot: String, label: String?, storedSessionId: String? = null) {
         _pending.value = ChatLink(storedSessionId, label, bot = bot)
+    }
+
+    /** A push names its session explicitly: it never performs a deferred lookup for another owner. */
+    fun openOwnedBot(bot: String, label: String?, storedSessionId: String, current: () -> Boolean) {
+        _pending.value = ChatLink(storedSessionId, label, bot = bot, current = current)
     }
 
     /** Opens a new chat that starts with [draft]. */

@@ -15,11 +15,14 @@ import io.ktor.http.content.OutgoingContent
 import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SessionsApiTest {
@@ -300,6 +303,25 @@ class SessionsApiTest {
         assertEquals("look", messages[1].text)
         assertEquals(listOf("terminal"), messages[2].calledTools)
         assertTrue(messages[4].isHidden)
+    }
+
+    @Test
+    fun messagesKeepDisplayMetadataWhereTheRouteSendsIt() = runTest {
+        // The Webapp's route sends an object (older backends a JSON string); the API server's leaves it out.
+        val api = api {
+            respond(
+                """{"session_id":"s1","messages":[
+                   {"id":1,"role":"user","content":"a","display_kind":"internal_notification","display_metadata":{"completion_note":["[\"cron\",\"r\",\"1\"]"]}},
+                   {"id":2,"role":"user","content":"b","display_kind":"internal_notification","display_metadata":"{\"completion_note\":[]}"},
+                   {"id":3,"role":"user","content":"c","display_kind":"internal_notification"}]}""",
+                HttpStatusCode.OK, json,
+            )
+        }
+
+        val messages = assertIs<ApiResult.Success<SessionMessagesPage>>(api.messages(url, "s1")).value.messages
+        assertIs<JsonObject>(messages[0].displayMetadata)
+        assertEquals(JsonPrimitive("""{"completion_note":[]}"""), messages[1].displayMetadata)
+        assertNull(messages[2].displayMetadata)
     }
 
     @Test

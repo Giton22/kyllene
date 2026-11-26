@@ -112,9 +112,19 @@ jobs:
             packaging/flatpak/app.kyllene.Kyllene.Devel.json \
             --repository "file://$GITHUB_WORKSPACE" \
             --ref flatpak-ci-tested --commit "$GITHUB_SHA"
+      # Maven Central answers a burst of requests from a shared runner address with HTTP 429. Downloads restored
+      # from an earlier run aren't fetched again; download-sources.py first drops any that don't match their
+      # checksum, since flatpak-builder checks one only when it downloads it.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .flatpak-builder/downloads
+          key: flatpak-downloads-${{ hashFiles('packaging/flatpak/app.kyllene.Kyllene.Devel.json', 'packaging/flatpak/gradle-sources.json') }}
+          restore-keys: flatpak-downloads-
+      - name: Download sources
+        run: python3 packaging/flatpak/download-sources.py build/flatpak packaging/flatpak/ci.json
       # Separate steps, so the run's timings show whether the builder's cache pruning or the bundle takes the time.
       - name: Build offline
-        run: flatpak-builder --user --repo=build/flatpak-repo build/flatpak packaging/flatpak/ci.json
+        run: flatpak-builder --user --disable-download --repo=build/flatpak-repo build/flatpak packaging/flatpak/ci.json
       - name: Bundle
         run: flatpak build-bundle build/flatpak-repo build/kyllene.flatpak app.kyllene.Kyllene.Devel devel
       # The app reads its settings key from the Secret portal at startup, so the smoke runs in a session as a

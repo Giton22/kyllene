@@ -87,6 +87,8 @@ class GatewayConnection(
         job = scope.launch { loop(gateway) }
     }
 
+    fun isConnectedTo(gatewayUrl: String): Boolean = url?.value == gatewayUrl && state.value is ConnectionState.Connected
+
     fun stop() {
         job?.cancel()
         job = null

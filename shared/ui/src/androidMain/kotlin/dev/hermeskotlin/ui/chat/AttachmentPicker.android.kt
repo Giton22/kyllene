@@ -11,6 +11,13 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.content.MediaType
+import androidx.compose.foundation.content.ReceiveContentListener
+import androidx.compose.foundation.content.TransferableContent
+import androidx.compose.foundation.content.consume
+import androidx.compose.foundation.content.contentReceiver
+import androidx.compose.foundation.content.hasMediaType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -100,6 +107,42 @@ actual fun rememberAttachmentPicker(
             }
 
             override fun pickFiles() = files.launch(arrayOf("*/*"))
+
+            @OptIn(ExperimentalFoundationApi::class)
+            @Composable
+            override fun imagePasteModifier(
+                onPaste: (suspend () -> Pair<List<OutgoingAttachment>, String?>) -> Unit,
+            ): Modifier {
+                val paste by rememberUpdatedState(onPaste)
+                val receiver = remember {
+                    // Keep the keyboard's URI grant, held in the transfer's extras, alive during the read.
+                    val pendingContent = mutableSetOf<TransferableContent>()
+                    ReceiveContentListener { content ->
+                        if ((content.source != TransferableContent.Source.Clipboard &&
+                                content.source != TransferableContent.Source.Keyboard) ||
+                            !content.hasMediaType(MediaType.Image)
+                        ) return@ReceiveContentListener content
+
+                        val uris = mutableListOf<Uri>()
+                        val remaining = content.consume { item ->
+                            val uri = item.uri
+                            if (uri?.scheme != ContentResolver.SCHEME_CONTENT || item.text != null ||
+                                uris.size >= OutgoingAttachment.MAX_COUNT
+                            ) false else uris.add(uri)
+                        }
+                        if (uris.isNotEmpty()) paste {
+                            pendingContent.add(content)
+                            try {
+                                readAttachments(context, uris, pastedImages = true)
+                            } finally {
+                                pendingContent.remove(content)
+                            }
+                        }
+                        remaining
+                    }
+                }
+                return Modifier.contentReceiver(receiver)
+            }
         }
     }
 }
@@ -109,11 +152,18 @@ actual fun rememberAttachmentPicker(
  * scaled down, everything within the per-file and per-pick limits. Returns what could be read and a
  * sentence for the first thing that couldn't.
  */
-suspend fun readAttachments(context: Context, uris: List<Uri>): Pair<List<OutgoingAttachment>, String?> {
+suspend fun readAttachments(context: Context, uris: List<Uri>): Pair<List<OutgoingAttachment>, String?> =
+    readAttachments(context, uris, pastedImages = false)
+
+private suspend fun readAttachments(
+    context: Context,
+    uris: List<Uri>,
+    pastedImages: Boolean,
+): Pair<List<OutgoingAttachment>, String?> {
     val results = withContext(Dispatchers.IO) {
         // Everything picked sits in memory until it's sent, so a pick has a budget as a whole too.
         var left = MAX_PICK_BYTES
-        uris.map { uri -> runCatching { readAttachment(context, uri, left).also { left -= it.bytes.size } } }
+        uris.map { uri -> runCatching { readAttachment(context, uri, left, pastedImages).also { left -= it.bytes.size } } }
     }
     val error = results.firstNotNullOfOrNull { result ->
         when (val e = result.exceptionOrNull()) {
@@ -160,10 +210,11 @@ actual fun rememberDecodedImage(bytes: ByteArray, maxEdge: Int): DecodedImage {
  * Reads one picked item: photos are upright, at most [MAX_EDGE] px and JPEG; anything else is sent as is.
  * [budget] is what's left of the pick's [MAX_PICK_BYTES] for what this adds.
  */
-private fun readAttachment(context: Context, uri: Uri, budget: Long): OutgoingAttachment {
+private fun readAttachment(context: Context, uri: Uri, budget: Long, pastedImage: Boolean = false): OutgoingAttachment {
     val resolver = context.contentResolver
     val name = resolver.displayName(uri) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "file"
     val mime = resolver.getType(uri) ?: guessMime(name)
+    if (pastedImage && !mime.startsWith("image/")) throw AttachmentProblem(Res.string.android_attach_not_image, name)
     val id = "att-${Random.nextLong().toULong().toString(16)}"
     val size = resolver.size(uri)
     if (mime.startsWith("image/") && mime != "image/gif" && mime != "image/svg+xml") {
@@ -183,7 +234,11 @@ private fun readAttachment(context: Context, uri: Uri, budget: Long): OutgoingAt
     }
     // Too large for one socket message: read as it goes up, never held here (the pick's budget is for what is).
     if (size != null && size > OutgoingAttachment.MAX_INLINE_BYTES) {
-        val source = streamedSource(size) { resolver.openInputStream(uri) ?: error("Couldn't read $name.") }
+        // Clipboard and keyboard grants may be gone when the draft is sent.
+        val source = if (pastedImage) {
+            val spooled = spool(context, uri, name)
+            streamedSource(spooled.length()) { spooled.inputStream() }
+        } else streamedSource(size) { resolver.openInputStream(uri) ?: error("Couldn't read $name.") }
         return OutgoingAttachment(id, name, mime, ByteArray(0), source = source)
     }
     if (size != null && size > budget) throw AttachmentProblem(Res.string.android_attach_too_much)
