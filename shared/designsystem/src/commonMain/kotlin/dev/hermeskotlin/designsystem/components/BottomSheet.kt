@@ -102,6 +102,7 @@ import dev.hermeskotlin.designsystem.typography
  * a drag-down, scrim tap or Back calls [onDismiss] once the sheet has slid out, which should set [visible] to false.
  * [onEscape], while set, takes the desktop's Escape instead: a sheet showing one of its items goes back to the list.
  * [anchor], on the desktop, is the button it opened from in window coordinates: it opens there as a popover.
+ * [fromBottom] keeps the bottom-edge presentation on desktop.
  */
 @Composable
 fun BottomSheet(
@@ -109,10 +110,15 @@ fun BottomSheet(
     onDismiss: () -> Unit,
     onEscape: (() -> Unit)? = null,
     anchor: Rect? = null,
+    fromBottom: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     OpenModals.Count(visible)
-    if (LocalDesktopLayout.current) DesktopSheet(visible, onDismiss, onEscape, anchor, content) else PhoneSheet(visible, onDismiss, content)
+    if (LocalDesktopLayout.current && !fromBottom) {
+        DesktopSheet(visible, onDismiss, onEscape, anchor, content)
+    } else {
+        PhoneSheet(visible, onDismiss, content)
+    }
 }
 
 /**

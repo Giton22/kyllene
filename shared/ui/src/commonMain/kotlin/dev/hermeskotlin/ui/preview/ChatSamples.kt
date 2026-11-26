@@ -69,6 +69,7 @@ internal object ChatSamples {
             id = "t1",
             name = "terminal",
             summary = "journalctl -u backup.service --since yesterday",
+            completed = true,
             durationSeconds = 1.2,
             input = "journalctl -u backup.service --since yesterday",
             output = "backup.sh[2214]: rsync: [receiver] mkstemp \"/mnt/nas/photos/.IMG_2231.jpg\" failed: No space left on device (28)\n" +
@@ -78,6 +79,7 @@ internal object ChatSamples {
             id = "t2",
             name = "terminal",
             summary = "df -h /mnt/nas",
+            completed = true,
             durationSeconds = 0.4,
             input = "df -h /mnt/nas",
             output = "Filesystem      Size  Used Avail Use% Mounted on\nnas:/backup     2.0T  2.0T     0 100% /mnt/nas",
@@ -86,6 +88,7 @@ internal object ChatSamples {
             id = "t3",
             name = "patch",
             summary = "backup.sh: keep the last 14 snapshots",
+            completed = true,
             durationSeconds = 0.3,
             input = "/opt/backup/backup.sh",
             diff = "@@ -12,3 +12,5 @@\n rsync -a --delete \"\$SRC\" \"\$DEST/\$(date +%F)\"\n+# Keep two weeks of snapshots; older ones filled the share.\n+ls -1d \"\$DEST\"/20* | head -n -14 | xargs -r rm -rf",
@@ -148,6 +151,9 @@ internal object ChatSamples {
                 TranscriptEvent.Process("Background process finished: check backup", "1 failed backup", failed = false),
             ), firstKey = "system-0")),
             answer,
+            // Scheduled jobs' messages to this chat: one that ran, and one reporting a problem.
+            ChatMessage.Event("job-1", TranscriptEvent.Routine("Morning check", "All 3 backups finished overnight.", result = true)),
+            ChatMessage.Event("job-2", TranscriptEvent.Routine(null, "The job could not reach the NAS.", failed = true, result = true)),
         ),
         notices = listOf(
             GatewayNotice("credits.depleted", "Credit access paused · run /topup to top up", GatewayNotice.Level.Error, GatewayNotice.Kind.Sticky),

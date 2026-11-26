@@ -108,6 +108,7 @@ class SessionsApi(private val client: HttpClient) {
         limit: Int = 200,
         profile: String? = null,
         offset: Int = 0,
+        inlineImages: Boolean = true,
     ): ApiResult<SessionMessagesPage> = apiCall {
         client.get(url.resolve("api/sessions/${sessionId.encodeURLPathPart()}/messages")) {
             profile?.let { parameter("profile", it) }
@@ -115,6 +116,7 @@ class SessionsApi(private val client: HttpClient) {
             if (offset > 0) parameter("offset", offset)
             parameter("order", "latest")
             parameter("include_compacted", true)
+            if (!inlineImages) parameter("inline_images", false)
         }
     }.map { it.body<SessionMessagesPage>() }
 

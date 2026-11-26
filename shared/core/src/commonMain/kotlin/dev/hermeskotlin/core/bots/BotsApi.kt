@@ -121,7 +121,8 @@ class BotsApi(private val connection: GatewayConnection) : BotChatBackend {
      * bot just made: any other open must never send it (each one is a model turn in the user's name).
      */
     suspend fun startWithIntro(profile: String): String {
-        val (runtime, stored) = startChat(profile)
+        // Not the chat a titled create would hand back: another client may have opened it first, and greeted it.
+        val (runtime, stored) = startChat(profile, reuse = false)
         client().request(
             "prompt.submit",
             buildJsonObject {
@@ -235,8 +236,9 @@ class BotsApi(private val connection: GatewayConnection) : BotChatBackend {
         return name
     }
 
-    private suspend fun startChat(profile: String): Pair<String, String> =
-        client().createTitledChat(profile, BOT_CHAT_TITLE, taken = { BotChatTakenException() }) {
+    /** [reuse]: on the session authority, the profile's Bot Chat when it has one (see [createTitledChat]). */
+    private suspend fun startChat(profile: String, reuse: Boolean = true): Pair<String, String> =
+        client().createTitledChat(profile, BOT_CHAT_TITLE, taken = { BotChatTakenException() }, reuse = reuse) {
             put("hidden", true)
             put("follow_profile_config", true)
         }

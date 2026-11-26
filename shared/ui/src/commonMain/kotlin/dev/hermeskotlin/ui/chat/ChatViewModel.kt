@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.core.voice.ReadAloudVoices
 import dev.hermeskotlin.core.voice.InMemoryReadAloudVoices
 import androidx.compose.foundation.text.input.TextFieldState
@@ -78,6 +79,9 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.debounce
@@ -443,6 +447,8 @@ class ChatViewModel(
     /** Files waiting in the composer for the next send. */
     val attachments: StateFlow<List<OutgoingAttachment>> = _attachments.asStateFlow()
 
+    private var imagePasteScope: CoroutineScope? = null
+
     /** Files picked in chats that aren't open, by [trayKey]; they live as long as the app does. */
     private val trays = mutableMapOf<String, List<OutgoingAttachment>>()
 
@@ -636,6 +642,7 @@ class ChatViewModel(
 
     /** Opens [target]'s chat in the host, with the transcript's file callbacks bound to that target. */
     private fun bind(target: ChatTarget) {
+        discardImagePastes()
         val chat = host.open(target.gateway.gatewayUrl, target.storedSessionId, target.title, target.profile, target.cwd)
         session.value = chat
         widgetSession.value = chat?.let { it to target }
@@ -956,6 +963,39 @@ class ChatViewModel(
         _attachments.update { it + fitting.take(room.coerceAtLeast(0)) }
     }
 
+    /** An accepted paste belongs to the draft even while a sheet covers its composer. */
+    internal fun pasteImages(owner: ChatTarget, read: suspend () -> Pair<List<OutgoingAttachment>, String?>) {
+        if (target?.sameChatAs(owner) != true || _editing.value != null) return
+        val chat = session.value ?: return
+        if (chat !== host.session.value || chat.ownerVersion != host.ownerVersion.value) return
+        val scope = imagePasteScope ?: CoroutineScope(
+            viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job]),
+        ).also { imagePasteScope = it }
+        scope.launch {
+            // Time out the wait even if the provider is still blocked in native I/O.
+            val reading = scope.async { read() }
+            try {
+                val result = withTimeoutOrNull(IMAGE_PASTE_TIMEOUT_MS) { reading.await() }
+                if (imagePasteScope !== scope || chat !== host.session.value || chat.ownerVersion != host.ownerVersion.value) return@launch
+                if (result == null) {
+                    showNotice(ComposerNotice.ImagePasteTimedOut)
+                    return@launch
+                }
+                val (picked, error) = result
+                error?.let(::showAttachmentError)
+                if (picked.isNotEmpty()) addAttachments(picked)
+            } finally {
+                reading.cancel()
+            }
+        }
+    }
+
+    private fun discardImagePastes() {
+        val previousReads = imagePasteScope
+        imagePasteScope = null
+        previousReads?.cancel()
+    }
+
     override fun removeAttachment(id: String) = _attachments.update { tray -> tray.filterNot { it.id == id } }
 
     override fun addComment(source: CommentSource, anchor: SelectionAnchor): Long {
@@ -965,6 +1005,11 @@ class ChatViewModel(
     }
 
     override fun removeComment(id: Long) = _comments.update { tray -> tray.filterNot { it.id == id } }
+
+    override fun reactToReply(key: String, reaction: ReplyReaction) {
+        val chat = session.value ?: return
+        viewModelScope.launch { chat.react(key, reaction) { session.value === chat } }
+    }
 
     override fun explain(source: CommentSource, anchor: SelectionAnchor) {
         val chat = session.value
@@ -1243,15 +1288,16 @@ class ChatViewModel(
      */
     override fun send(mode: RunningSend?) {
         val chat = session.value ?: return
-        val text = composer.text.toString()
+        val text = withoutEmptyListItem(composer.text)
         val attachments = _attachments.value
         val comments = _comments.value
         if (text.isBlank() && attachments.isEmpty() && comments.isEmpty()) return
         _editing.value?.let { key -> return sendEdit(chat, key, text, comments) }
-        val command = SlashCommand.parse(text.trim())
+        val command = SlashCommand.parse(text.trim()).takeIf { attachments.isEmpty() }
+        if (command?.name == "") return
+        discardImagePastes()
         // Commands run at once either way; they never become a turn to queue. Waiting comments stay for the next prompt.
-        if (command != null && attachments.isEmpty()) {
-            if (command.name.isEmpty()) return
+        if (command != null) {
             composer.clearText()
             runCommand(chat, command)
             return
@@ -1520,6 +1566,8 @@ class ChatViewModel(
         /** Typing pauses this long before the draft is written to storage. */
         const val DRAFT_SAVE_DEBOUNCE_MS = 400L
 
+        const val IMAGE_PASTE_TIMEOUT_MS = 30_000L
+
         /** What Explain asks of the agent about the selection. */
         const val EXPLAIN_NOTE = "Explain this in more detail."
 
@@ -1558,6 +1606,9 @@ sealed interface ComposerNotice {
 
     /** The Call Hermes shortcut's call couldn't start. */
     data object CallNotStarted : ComposerNotice
+
+    /** An Android clipboard provider didn't finish in time. */
+    data object ImagePasteTimedOut : ComposerNotice
 
     /** More files were picked than a message carries. */
     data class TooManyAttachments(val max: Int) : ComposerNotice

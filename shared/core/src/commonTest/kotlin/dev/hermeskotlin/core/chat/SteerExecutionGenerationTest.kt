@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -98,19 +99,88 @@ class SteerExecutionGenerationTest {
     }
 
     @Test
-    fun aStaleGenerationIsReadAgainAndTheSteerGoesOnce() = runTest(timeout = 5.seconds) {
-        // Attached at generation 1; the turn now running is 2, and no event of it arrived yet.
-        val authority = Authority().apply { resumeGeneration = { if (it == 1) 1L else 2L } }
+    fun aStaleGenerationGoesAsTheNextPromptNotIntoAnotherTurn() = runTest(timeout = 5.seconds) {
+        // Attached at generation 1; turn 1 ended and a queued prompt runs as 2, none of whose events arrived yet.
+        val authority = Authority()
         val (chat, gw) = authorityChat(authority)
         authority.running = 2
 
-        assertEquals(SendOutcome.Sent, chat.steer("use tabs"))
+        chat.steer("use tabs")
 
-        // The refusal names no current generation, so session.resume reads it; the steer goes once more with it.
-        assertEquals(listOf(1L, 2L), gw.sent("session.steer").map { it.generation() })
-        assertEquals(2, authority.resumes)
-        assertTrue(gw.sent("prompt.submit").isEmpty())
+        // Not steered into turn 2, which is another prompt's: it runs after it, as Desktop sends it.
+        assertEquals(listOf(1L), gw.sent("session.steer").map { it.generation() })
+        assertEquals(1, authority.resumes)
+        val submit = gw.sent("prompt.submit").single()
+        assertEquals("use tabs", submit["params"]?.jsonObject?.get("text")?.jsonPrimitive?.content)
         assertNull(chat.state.value.error)
+    }
+
+    @Test
+    fun refusalsBeforeAnyAgentSawItGoAsTheNextPrompt() = runTest(timeout = 5.seconds) {
+        for (reason in listOf("execution_not_ready", "unsupported_control")) {
+            val authority = Authority()
+            val (chat, gw) = authorityChat(authority)
+            gw.answer.let { base -> gw.answer = { if (it.method == "session.steer") it.error(4009, reason, reason) else base(it) } }
+
+            chat.steer("use tabs")
+
+            assertEquals("use tabs", gw.sent("prompt.submit").single()["params"]?.jsonObject?.get("text")?.jsonPrimitive?.content, reason)
+            assertNull(chat.state.value.error, reason)
+        }
+    }
+
+    @Test
+    fun aTurnThatCantBeReadGivesTheTextBackAndOffersARetry() = runTest(timeout = 5.seconds) {
+        val authority = Authority().apply { resumeGeneration = { null } }
+        val (chat, gw) = authorityChat(authority)
+        gw.answer.let { base -> gw.answer = { if (it.method == "session.resume") it.error(4004, "session not found") else base(it) } }
+
+        assertEquals(SendOutcome.NotSent, chat.steer("use tabs"))
+
+        assertTrue(gw.sent("session.steer").isEmpty())
+        assertTrue(gw.sent("prompt.submit").isEmpty())
+        assertTrue(chat.state.value.messages.none { (it as? ChatMessage.User)?.text == "use tabs" })
+        assertEquals("Couldn't reach the running reply, so the steer wasn't sent.", chat.state.value.error)
+        // Not left "Attaching", with no retry to offer.
+        assertIs<Attachment.Failed>(chat.state.value.attachment)
+        // The gateway turned the chat down, so no turn of it can be followed or stopped.
+        assertFalse(chat.state.value.running)
+    }
+
+    @Test
+    fun aSteerMissingFromTheTranscriptIsNotCalledSafeToResend() = runTest(timeout = 5.seconds) {
+        val authority = Authority().apply {
+            steerReply = { """{"status":"rejected","text":"use tabs","execution_generation":$it,"authority_epoch":3}""" }
+        }
+        val (chat, gw) = authorityChat(authority)
+        chat.steer("use tabs")
+        val key = chat.state.value.messages.single { (it as? ChatMessage.User)?.text == "use tabs" }.key
+        gw.socket.push(stamped("message.complete", 1, """{"text":"Done","status":"complete"}"""))
+        chat.state.first { !it.running }
+
+        chat.checkDelivery(key)
+
+        // The agent reads a steer into the turn, so no user row shows it even when it went in.
+        val bubble = assertIs<ChatMessage.User>(chat.state.value.messages.single { it.key == key })
+        assertEquals(SendCheck.Unknown, bubble.check)
+        assertTrue(gw.sent("prompt.submit").isEmpty())
+    }
+
+    @Test
+    fun aSteerCheckedMidTurnSaysItCantBeCheckedNotToWait() = runTest(timeout = 5.seconds) {
+        val authority = Authority().apply {
+            steerReply = { """{"status":"rejected","text":"use tabs","execution_generation":$it,"authority_epoch":3}""" }
+        }
+        val (chat, _) = authorityChat(authority)
+        chat.steer("use tabs")
+        val key = chat.state.value.messages.single { (it as? ChatMessage.User)?.text == "use tabs" }.key
+
+        chat.checkDelivery(key)
+
+        // "Check again once the turn ends" would send them to a check that can't settle it either.
+        assertTrue(chat.state.value.running)
+        assertEquals(SendCheck.Unknown, assertIs<ChatMessage.User>(chat.state.value.messages.single { it.key == key }).check)
+        assertEquals("A steer isn't saved in the conversation, so it can't be checked. See whether the reply followed it.", chat.state.value.error)
     }
 
     @Test
@@ -133,9 +203,9 @@ class SteerExecutionGenerationTest {
 
         chat.steer("use tabs")
 
-        // Refused before any agent saw it, and the turn read again isn't running: it goes as a prompt, once.
+        // Refused before any agent saw it: it goes as a prompt, once.
         assertEquals(1, gw.sent("session.steer").size)
-        assertEquals(2, authority.resumes)
+        assertEquals(1, authority.resumes)
         val submit = gw.sent("prompt.submit").single()
         assertEquals("use tabs", submit["params"]?.jsonObject?.get("text")?.jsonPrimitive?.content)
     }

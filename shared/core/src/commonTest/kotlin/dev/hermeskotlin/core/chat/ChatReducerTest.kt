@@ -68,6 +68,33 @@ class ChatReducerTest {
     }
 
     @Test
+    fun aStoredStoppedReplyReadsAsStopped() {
+        fun rows(json: String) = HermesJson.decodeFromString<List<SessionMessage>>("[$json]")
+        val user = """{"id":1,"role":"user","content":"next"}"""
+        // The streamed part on its own, a later step of a reply with tools, and a stop during a tool (a hidden row).
+        val alone = historyToMessages(rows("""$user,{"id":2,"role":"assistant","content":"Working","display_metadata":{"interrupted":true}}"""))
+        assertEquals(TurnOutcome.Interrupted, assertIs<ChatMessage.Assistant>(alone.last()).outcome)
+        assertEquals(2L, assertIs<ChatMessage.Assistant>(alone.last()).reactionRowId)
+        val tool = """{"id":2,"role":"assistant","content":"Checking.","tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},""" +
+            """{"id":3,"role":"tool","tool_call_id":"c1","content":"ok"}"""
+        val merged = historyToMessages(rows("""$user,$tool,{"id":4,"role":"assistant","content":"Then","display_metadata":{"interrupted":true}}"""))
+        assertEquals(TurnOutcome.Interrupted, assertIs<ChatMessage.Assistant>(merged.last()).outcome)
+        val hidden = historyToMessages(
+            rows("""$user,$tool,{"id":4,"role":"assistant","content":"","display_kind":"hidden","display_metadata":{"interrupted":true}}"""),
+        )
+        assertEquals(TurnOutcome.Interrupted, assertIs<ChatMessage.Assistant>(hidden.last()).outcome)
+        // A hidden row without the mark changes nothing, and one after a prompt doesn't mark the reply before it.
+        val unmarked = historyToMessages(rows("""$user,$tool,{"id":4,"role":"assistant","content":"","display_kind":"hidden"}"""))
+        assertEquals(null, assertIs<ChatMessage.Assistant>(unmarked.last()).outcome)
+        val afterPrompt = historyToMessages(rows("""{"id":0,"role":"assistant","content":"Hi"},$user,""" +
+            """{"id":2,"role":"assistant","content":"","display_kind":"hidden","display_metadata":{"interrupted":true}}"""))
+        assertEquals(null, afterPrompt.filterIsInstance<ChatMessage.Assistant>().single().outcome)
+        // A reply that wasn't stopped has no outcome.
+        val done = historyToMessages(rows("""$user,{"id":2,"role":"assistant","content":"Done."}"""))
+        assertEquals(null, assertIs<ChatMessage.Assistant>(done.last()).outcome)
+    }
+
+    @Test
     fun historyRetainsACommentaryOnlyAssistantRow() {
         val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"",
             "reasoning":"Old progress.","display_reasoning":"","display_commentary":["Public progress."]}""")
@@ -116,6 +143,78 @@ class ChatReducerTest {
         GatewayEvent(type, HermesJson.parseToJsonElement(payload), sessionId = "rt", seq = null)
 
     private fun ChatState.apply(vararg events: GatewayEvent) = events.fold(this) { state, e -> state.reduce(e) }
+
+    @Test
+    fun theSessionAuthorityReleasesThePromptItsTurnStartNames() {
+        val running = ChatState(
+            running = true,
+            messages = listOf(
+                ChatMessage.User("u1", "write it"),
+                ChatMessage.Assistant("a1", "Writing", streaming = true),
+                ChatMessage.User("q1", "then test", queued = true, admissionId = "ad1"),
+                ChatMessage.User("q2", "then ship", queued = true, admissionId = "ad2"),
+            ),
+        )
+        // Another client's turn: neither of ours goes.
+        val foreign = running.apply(
+            event("message.complete", """{"text":"Writing done","status":"complete"}"""),
+            GatewayEvent("message.start", HermesJson.parseToJsonElement("{}"), sessionId = "rt", seq = null, admissionId = "other"),
+        )
+        assertEquals(listOf(true, true), foreign.messages.filterIsInstance<ChatMessage.User>().drop(1).map { it.queued })
+        assertEquals(listOf("other"), foreign.startedAdmissions)
+        // Its start names the second: that one goes, though the first was queued earlier.
+        val named = running.apply(
+            event("message.complete", """{"text":"Writing done","status":"complete"}"""),
+            GatewayEvent("message.start", HermesJson.parseToJsonElement("{}"), sessionId = "rt", seq = null, admissionId = "ad2"),
+        )
+        assertEquals(listOf(true, false), named.messages.filterIsInstance<ChatMessage.User>().drop(1).map { it.queued })
+    }
+
+    @Test
+    fun aTurnStartBelowAReplyLeftOpenEndsThatTurn() {
+        // A resume said the intro ran (a tool going), and its end was missed: the queued prompt's own start ends it.
+        val missed = ChatState(
+            running = true,
+            todosLive = true,
+            usage = SessionUsage(input = 900),
+            turnStartUsage = SessionUsage(input = 100),
+            messages = listOf(
+                // The part a correction closed early, its tool still marked running.
+                ChatMessage.Assistant("a-1", "Looking", tools = listOf(ToolActivity("t0", "search", running = true))),
+                ChatMessage.User("c1", "shorter please"),
+                ChatMessage.Assistant("a0", "Hi, I'm", streaming = true, tools = listOf(ToolActivity("t1", "terminal", running = true))),
+                ChatMessage.User("q1", "first question", queued = true, admissionId = "ad1"),
+            ),
+        ).apply(GatewayEvent("message.start", HermesJson.parseToJsonElement("{}"), sessionId = "rt", seq = null, admissionId = "ad1"))
+        val (early, intro) = missed.messages.filterIsInstance<ChatMessage.Assistant>().take(2)
+        assertFalse(early.tools.single().running)
+        assertFalse(intro.streaming)
+        assertFalse(intro.tools.single().running)
+        assertFalse(missed.messages.filterIsInstance<ChatMessage.User>().last().queued)
+        // The new turn opens its own reply below the prompt and counts its usage from now, with no plan yet.
+        assertTrue((missed.messages.last() as ChatMessage.Assistant).streaming)
+        assertEquals(5, missed.messages.size)
+        assertEquals(SessionUsage(input = 900), missed.turnStartUsage)
+        assertFalse(missed.todosLive)
+        assertTrue(missed.running)
+    }
+
+    @Test
+    fun aQueuedPromptWhoseTurnEndedWaitsForNothing() {
+        // Its start was missed or read before the "queued" reply; the turn's end names it by its submission.
+        val ended = ChatState(
+            running = true,
+            messages = listOf(
+                ChatMessage.User("q1", "then test", queued = true, submissionId = "s1"),
+                ChatMessage.Assistant("a1", "Tested", streaming = true),
+            ),
+        ).apply(
+            event("message.complete", """{"text":"Tested","status":"complete","persisted_turn":{"user_row_id":7,"submission_id":"s1"}}"""),
+        )
+        val prompt = ended.messages.first() as ChatMessage.User
+        assertFalse(prompt.queued)
+        assertEquals(7L, prompt.rowId)
+    }
 
     @Test
     fun theNextTurnReleasesTheOldestQueuedPrompt() {
@@ -169,10 +268,34 @@ class ChatReducerTest {
         val reply = assertIs<ChatMessage.Assistant>(done.messages.last())
         assertEquals("There are 3 files.", reply.text)
         assertEquals("Let me look.", reply.reasoning)
-        assertEquals(ToolActivity("t1", "terminal", "ls -la", running = false, summary = "3 files", durationSeconds = 0.4), reply.tools.single())
+        assertEquals(ToolActivity("t1", "terminal", "ls -la", running = false, summary = "3 files", durationSeconds = 0.4, completed = true), reply.tools.single())
         assertFalse(reply.streaming)
         assertFalse(done.running)
         assertEquals(null, done.status)
+    }
+
+    @Test
+    fun interruptionDoesNotMarkAnUnfinishedCallCompleted() {
+        val state = ChatState()
+            .reduce(event("tool.start", """{"tool_id":"running","name":"terminal"}"""), now = 101.0)
+            .reduce(event("message.complete", """{"status":"interrupted"}"""), now = 102.0)
+        val tool = assertIs<ChatMessage.Assistant>(state.messages.single()).tools.single()
+        assertEquals(101.0, tool.startedAt)
+        assertFalse(tool.running)
+        assertFalse(tool.completed)
+    }
+
+    @Test
+    fun storedCallsNeedAResultForCompletionAndHaveNoPerCallStartTime() {
+        val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","timestamp":105,"tool_calls":[
+            {"id":"finished","type":"function","function":{"name":"terminal","arguments":"{}"}},
+            {"id":"missing","type":"function","function":{"name":"read_file","arguments":"{}"}}]}""")
+        val result = HermesJson.decodeFromString<SessionMessage>(
+            """{"role":"tool","tool_call_id":"finished","content":""}""",
+        )
+        val tools = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row, result)).single()).tools
+        assertEquals(listOf(true, false), tools.map { it.completed })
+        assertEquals(listOf(null, null), tools.map { it.startedAt })
     }
 
     @Test

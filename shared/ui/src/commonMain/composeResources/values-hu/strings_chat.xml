@@ -137,6 +137,11 @@
     <string name="chat_tool_changes">Változások</string>
     <string name="chat_tool_error">Hiba</string>
     <string name="chat_tool_output">Kimenet</string>
+    <string name="chat_tool_no_output">Nem rögzítettek kimenetet.</string>
+    <string name="chat_tool_details_page">Eszközrészletek</string>
+    <string name="chat_tool_completed">Befejezve</string>
+    <string name="chat_tool_duration">Időtartam: %1$s</string>
+    <string name="chat_tool_completion_unknown">A befejezés nincs megerősítve</string>
     <string name="chat_tool_still_running">Még fut…</string>
     <string name="chat_tool_risk">Ez a kimenet úgy tűnik, irányítani próbálja az ügynököt, vagy titkokhoz akar hozzáférni. Az ügynök utasítást kapott, hogy ne bízzon benne.</string>
     <string name="chat_tool_risk_found">Találat: %1$s</string>
@@ -251,6 +256,9 @@
 
     <string name="chat_event_compaction">A korábbi üzenetek összefoglalva</string>
     <string name="chat_event_routine">Lefutott a(z) „%1$s” rutin</string>
+    <string name="chat_event_routine_unnamed">Lefutott egy rutin</string>
+    <string name="chat_event_routine_problem">A(z) „%1$s” rutin problémát jelzett</string>
+    <string name="chat_event_routine_problem_unnamed">Egy rutin problémát jelzett</string>
     <string name="chat_event_failed_turn">Ez a kör nem fejeződött be.</string>
     <string name="chat_event_system_messages">Rendszerüzenetek · %1$d</string>
     <string name="chat_event_other_bot">a másik bot</string>
@@ -496,6 +504,11 @@
     <string name="chat_stop_reading">Felolvasás leállítása</string>
     <string name="chat_pause_reading">Felolvasás szüneteltetése</string>
     <string name="chat_resume_reading">Felolvasás folytatása</string>
+    <string name="chat_react_acknowledge">Értem</string>
+    <string name="chat_react_continue">Folytatás</string>
+    <string name="chat_react_verify">Ellenőrzés</string>
+    <string name="chat_react_explain">Magyarázat</string>
+    <string name="chat_reply_more">Továbbiak</string>
     <string name="chat_message_actions">Üzenetműveletek</string>
     <string name="chat_queued">Sorban · a feladat után megy el</string>
     <string name="chat_editing_in_composer">Szerkesztés a beviteli mezőben</string>

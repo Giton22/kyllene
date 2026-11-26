@@ -153,6 +153,11 @@
     <string name="chat_tool_changes">Changes</string>
     <string name="chat_tool_error">Error</string>
     <string name="chat_tool_output">Output</string>
+    <string name="chat_tool_no_output">No output was recorded.</string>
+    <string name="chat_tool_details_page">Tool details</string>
+    <string name="chat_tool_completed">Completed</string>
+    <string name="chat_tool_duration">Duration: %1$s</string>
+    <string name="chat_tool_completion_unknown">Completion unconfirmed</string>
     <string name="chat_tool_still_running">Still running…</string>
     <string name="chat_tool_risk">This output looks like it’s trying to steer the agent or reach secrets. The agent was told not to trust it.</string>
     <string name="chat_tool_risk_found">Found: %1$s</string>
@@ -273,6 +278,9 @@
     <!-- Rows the machinery writes into the chat -->
     <string name="chat_event_compaction">Earlier messages summarized</string>
     <string name="chat_event_routine">Routine “%1$s” ran</string>
+    <string name="chat_event_routine_unnamed">A routine ran</string>
+    <string name="chat_event_routine_problem">Routine “%1$s” reported a problem</string>
+    <string name="chat_event_routine_problem_unnamed">A routine reported a problem</string>
     <string name="chat_event_failed_turn">This turn did not complete.</string>
     <string name="chat_event_system_messages">System messages · %1$d</string>
     <string name="chat_event_other_bot">the other bot</string>
@@ -526,6 +534,11 @@
     <string name="chat_stop_reading">Stop reading</string>
     <string name="chat_pause_reading">Pause reading</string>
     <string name="chat_resume_reading">Resume reading</string>
+    <string name="chat_react_acknowledge">Got it</string>
+    <string name="chat_react_continue">Continue</string>
+    <string name="chat_react_verify">Verify</string>
+    <string name="chat_react_explain">Explain</string>
+    <string name="chat_reply_more">More</string>
     <string name="chat_message_actions">Message actions</string>
     <string name="chat_queued">Queued · sends after this task</string>
     <string name="chat_editing_in_composer">Editing in the composer</string>

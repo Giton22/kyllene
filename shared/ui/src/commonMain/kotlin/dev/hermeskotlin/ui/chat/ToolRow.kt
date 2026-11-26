@@ -75,11 +75,6 @@ import org.jetbrains.compose.resources.stringResource
  */
 @Composable
 internal fun ToolRow(tool: ToolActivity, messageKey: String? = null) {
-    // The input, changes and output can each be commented on, named after the call so the agent finds it.
-    fun source(part: String) = messageKey?.let {
-        val what = tool.detail?.lineSequence()?.firstOrNull()?.trim()?.takeIf { d -> d.isNotEmpty() }?.let { d -> " (“${d.take(80)}”)" }.orEmpty()
-        CommentSource(it, "the $part of your ${tool.name} tool call$what", code = true)
-    }
     val hasDetails = tool.input != null || tool.output != null || tool.diff != null || tool.risk != null
     // Saved: what was opened stays open when the activity is made again, as on unfolding a foldable.
     var expanded by rememberSaveable(tool.id) { mutableStateOf(false) }
@@ -139,17 +134,27 @@ internal fun ToolRow(tool: ToolActivity, messageKey: String? = null) {
             }
         }
         AnimatedVisibility(visible = expanded) {
-            Column(Modifier.padding(start = 24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                tool.risk?.let { RiskNote(it) }
-                tool.input?.let { Block(stringResource(Res.string.chat_tool_input), it, source = source("input")) }
-                tool.diff?.let { Block(stringResource(Res.string.chat_tool_changes), it, diff = true, source = source("changes")) }
-                tool.output?.let {
-                    Block(stringResource(if (tool.failed) Res.string.chat_tool_error else Res.string.chat_tool_output), it, source = source(if (tool.failed) "error" else "output"))
-                }
-                if (tool.running && tool.output == null) {
-                    Text(stringResource(Res.string.chat_tool_still_running), style = Theme[typography][caption], color = Theme[colors][textTertiary])
-                }
-            }
+            ToolDetailsContent(tool, messageKey, Modifier.padding(start = 24.dp))
+        }
+    }
+}
+
+@Composable
+internal fun ToolDetailsContent(tool: ToolActivity, messageKey: String?, modifier: Modifier = Modifier) {
+    // The input, changes and output can each be commented on, named after the call so the agent finds it.
+    fun source(part: String) = messageKey?.let {
+        val what = tool.detail?.lineSequence()?.firstOrNull()?.trim()?.takeIf { d -> d.isNotEmpty() }?.let { d -> " (“${d.take(80)}”)" }.orEmpty()
+        CommentSource(it, "the $part of your ${tool.name} tool call$what", code = true)
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        tool.risk?.let { RiskNote(it) }
+        tool.input?.let { Block(stringResource(Res.string.chat_tool_input), it, source = source("input")) }
+        tool.diff?.let { Block(stringResource(Res.string.chat_tool_changes), it, diff = true, source = source("changes")) }
+        tool.output?.let {
+            Block(stringResource(if (tool.failed) Res.string.chat_tool_error else Res.string.chat_tool_output), it, source = source(if (tool.failed) "error" else "output"))
+        }
+        if (tool.running && tool.output == null) {
+            Text(stringResource(Res.string.chat_tool_still_running), style = Theme[typography][caption], color = Theme[colors][textTertiary])
         }
     }
 }

@@ -421,7 +421,7 @@ private fun SubagentDetail(
                     if (showReasoning && message.reasoning.isNotBlank()) {
                         Reasoning(message.reasoning, streaming = false)
                     }
-                    if (message.tools.isNotEmpty()) Tools(message.tools, message.key)
+                    if (message.tools.isNotEmpty()) SubagentTranscriptTools(message.tools, message.key)
                     if (message.text.isNotBlank()) SelectionContainer { MarkdownText(message.text) }
                 }
                 else -> Unit

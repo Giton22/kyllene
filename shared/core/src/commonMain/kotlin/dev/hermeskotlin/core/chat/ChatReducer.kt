@@ -11,18 +11,22 @@ import kotlinx.serialization.json.contentOrNull
  * Folds one live session event (tui_gateway/contracts/events.py) into the chat. Events for other
  * sessions must be filtered out by the caller. Unknown event types leave the state unchanged.
  * Events carry no time, so [now] (epoch seconds, when it arrived) stamps the reply it finishes.
+ * [toolStartedAt] is null for delayed or replayed events whose original receipt time is unavailable.
  */
-fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
+fun ChatState.reduce(event: GatewayEvent, now: Double? = null, toolStartedAt: Double? = now): ChatState {
     val payload = event.payload as? JsonObject
     return when (event.type) {
-        "message.start" -> releaseQueued().withOpenReply { it }.copy(
-            running = true,
-            error = null,
-            // A new turn hasn't planned yet; the last plan is from before (a correction keeps its turn's plan).
-            todosLive = todosLive && running,
-            // No totals yet means the agent isn't built, and a new one counts from zero.
-            turnStartUsage = turnStartUsage.takeIf { running } ?: usage ?: SessionUsage(),
-        )
+        // Read from the released state: a missed turn's end it found no longer counts as running.
+        "message.start" -> releaseQueued(event.admissionId).let { before ->
+            before.withOpenReply { it }.copy(
+                running = true,
+                error = null,
+                // A new turn hasn't planned yet; the last plan is from before (a correction keeps its turn's plan).
+                todosLive = before.todosLive && before.running,
+                // No totals yet means the agent isn't built, and a new one counts from zero.
+                turnStartUsage = before.turnStartUsage.takeIf { before.running } ?: before.usage ?: SessionUsage(),
+            )
+        }
         "session.usage" -> copy(usage = SessionUsage.parse(payload?.get("usage") as? JsonObject) ?: usage)
         "message.delta" -> appendText(payload.string("text"))
         "message.interim" ->
@@ -44,6 +48,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
                 name = payload.string("name") ?: "tool",
                 detail = payload.string("context") ?: payload.string("preview"),
                 running = true,
+                startedAt = toolStartedAt,
                 input = ToolDetails.input(payload?.get("args"), payload.string("args_text")),
                 agentScreen = AgentScreen.from(payload.string("name") ?: "", payload?.get("args")),
             ).let { if (it.name == DELEGATE_TOOL) it.copy(tasks = delegatedTasks(payload?.get("args"), null)) else it }
@@ -58,6 +63,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
                 reply.copy(tools = reply.tools.map {
                     if (it.id != id) it else it.copy(
                         running = false,
+                        completed = true,
                         summary = payload.string("summary"),
                         durationSeconds = payload.double("duration_s"),
                         input = it.input ?: ToolDetails.input(payload?.get("args")),
@@ -96,7 +102,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
             copy(messages = messages + ChatMessage.Notice("notice-$keySeq", text), keySeq = keySeq + 1)
         } ?: this
         // The turn has ended, so a notice about the agent being built is stale even if its clear never came.
-        "message.complete" -> complete(payload, now).withoutAgentNotices()
+        "message.complete" -> complete(payload, now).withPromptRow(payload?.get("persisted_turn") as? JsonObject).withoutAgentNotices()
         "notification.show" -> showNotice(payload)
         "notification.clear" -> withoutNotice(payload.string("key"))
         "status.update" -> copy(status = payload.string("text")?.takeIf { it.isNotBlank() })
@@ -236,6 +242,9 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
         usage = finalUsage?.let { end -> turnStartUsage?.let { end - it } }?.takeIf { it.any },
         warning = warning,
         timestamp = now ?: base.timestamp,
+        // The completion receipt names the committed row even after the session rotates.
+        reactionRowId = (payload?.get("persisted_turn") as? JsonObject)
+            .long("final_assistant_row_id")?.takeIf { it > 0 } ?: base.reactionRowId,
     )
     // A turn that ended with nothing to show (e.g. interrupted at once) leaves no bubble, unless it failed or warns.
     val empty = reply.text.isBlank() && reply.reasoning.isBlank() && reply.tools.isEmpty() && reply.error == null && warning == null
@@ -247,6 +256,23 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
         }
     }
     return endTurn(updated, finalUsage).copy(keySeq = keySeq + 1)
+}
+
+/**
+ * Gives the prompt a finished turn ran the row it was stored at (`message.complete` `persisted_turn`), so it can be
+ * regenerated or edited. Only the session authority names the prompt there, by its `submission_id`: its
+ * `prompt.submit` answers before the row is written, so the reply has no `user_row_id`.
+ */
+private fun ChatState.withPromptRow(persisted: JsonObject?): ChatState {
+    val submission = persisted.string("submission_id") ?: return this
+    // Its turn has run, so it waits for nothing, whatever the order its start and its reply were read in.
+    if (messages.any { it is ChatMessage.User && it.submissionId == submission && it.queued }) {
+        return copy(messages = messages.map { if (it is ChatMessage.User && it.submissionId == submission) it.copy(queued = false) else it })
+            .withPromptRow(persisted)
+    }
+    val row = persisted.long("user_row_id") ?: return this
+    if (messages.none { it is ChatMessage.User && it.submissionId == submission && it.rowId == null }) return this
+    return copy(messages = messages.map { if (it is ChatMessage.User && it.submissionId == submission && it.rowId == null) it.copy(rowId = row) else it })
 }
 
 private fun ChatState.endTurn(messages: List<ChatMessage>, finalUsage: SessionUsage?) = copy(
@@ -264,12 +290,44 @@ private fun ChatState.endTurn(messages: List<ChatMessage>, finalUsage: SessionUs
 private fun List<ChatMessage>.openReplyIndex(): Int = indexOfLast { it is ChatMessage.Assistant && it.streaming }
 
 /**
- * A turn starting with no reply open is the gateway running what it queued: the oldest waiting prompt
- * goes first. With a reply still streaming, the start belongs to that turn and the queue keeps waiting.
+ * The prompt a starting turn runs stops waiting. The session authority names it by [admission]. Elsewhere, a turn
+ * starting with no reply open is the gateway running what it queued: the oldest waiting prompt goes first. With a
+ * reply still streaming, the start belongs to that turn and the queue keeps waiting.
  */
-private fun ChatState.releaseQueued(): ChatState {
+private fun ChatState.releaseQueued(admission: String?): ChatState {
+    if (admission != null) {
+        // The session authority names the admission the turn runs: that prompt goes, and no other.
+        val started = copy(startedAdmissions = (startedAdmissions - admission + admission).takeLast(STARTED_ADMISSIONS_KEPT))
+        val index = messages.indexOfFirst { it is ChatMessage.User && it.admissionId == admission }
+        if (index >= 0) {
+            val open = messages.openReplyIndex()
+            val released = messages.toMutableList().apply { set(index, (get(index) as ChatMessage.User).copy(queued = false)) }
+            // A reply still open above it is a turn whose end was missed (a resume that said running): it ended before
+            // this one began, so it ends here, tools and all, and this turn's reply goes below its prompt.
+            if (open !in 0 until index) return started.copy(messages = released)
+            // As at its end: no tool runs on, including in a part a correction closed early.
+            val ended = released.mapIndexed { i, message ->
+                if (message !is ChatMessage.Assistant || (i != open && message.tools.none { it.running })) {
+                    message
+                } else {
+                    message.copy(streaming = message.streaming && i != open, tools = message.tools.map { it.copy(running = false) })
+                }
+            }
+            return started.endTurn(ended, finalUsage = null)
+        }
+        // Another client's prompt, or ours before its reply is read. Only one queued without an id goes, as before:
+        // one with an id waits for its own.
+        return started.releaseQueuedInOrder { it.admissionId == null }
+    }
+    return releaseQueuedInOrder { true }
+}
+
+/** How many started admissions [ChatState.startedAdmissions] keeps: enough for the prompts one device can have in flight. */
+private const val STARTED_ADMISSIONS_KEPT = 16
+
+private fun ChatState.releaseQueuedInOrder(eligible: (ChatMessage.User) -> Boolean): ChatState {
     if (messages.openReplyIndex() >= 0) return this
-    val index = messages.indexOfFirst { it is ChatMessage.User && it.queued }
+    val index = messages.indexOfFirst { it is ChatMessage.User && it.queued && eligible(it) }
     if (index < 0) return this
     return copy(messages = messages.toMutableList().apply { set(index, (get(index) as ChatMessage.User).copy(queued = false)) })
 }
@@ -313,7 +371,15 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
     val messagedSinceUser = mutableSetOf<String>()
     var replyingTo: String? = null
     rows.forEachIndexed { index, row ->
-        if (row.isHidden) return@forEachIndexed
+        if (row.isHidden) {
+            // A stop during a tool closes the turn with a hidden row that holds the stopped mark
+            // (v0.23.4 agent/message_sanitization.py `close_interrupted_tool_sequence`): the reply it closes was stopped.
+            val last = messages.lastOrNull()
+            if (row.role == "assistant" && row.stopped && last is ChatMessage.Assistant) {
+                messages[messages.lastIndex] = last.copy(outcome = TurnOutcome.Interrupted)
+            }
+            return@forEachIndexed
+        }
         val key = row.id?.let { "row-$it" } ?: "h$index"
         if ((row.role == "user" || row.role == "assistant") && row.displayKind != "failed_turn") {
             TranscriptRows.compaction(row.text)?.let { checkpoint ->
@@ -330,8 +396,8 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     messages += ChatMessage.Notice(key, report.line, stored = true)
                     return@forEachIndexed
                 }
-                if (TranscriptRows.isNoise(row.text.trim(), row.displayKind)) return@forEachIndexed
-                TranscriptRows.classify(row.text, row.displayKind, deliveries)?.let { events ->
+                if (TranscriptRows.isNoise(row.text.trim(), row.displayKind, row.displayMetadata)) return@forEachIndexed
+                TranscriptRows.classify(row.text, row.displayKind, deliveries, row.displayMetadata)?.let { events ->
                     events.forEachIndexed { i, event ->
                         messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event, timestamp = row.timestamp)
                         replyingTo = (event as? TranscriptEvent.FromBot)?.takeUnless { from ->
@@ -374,11 +440,13 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                 // A step of the running turn is saved before its calls end: one with no result row yet still runs.
                 val runningTurn = turnStartedAt != null && row.timestamp != null && row.timestamp >= turnStartedAt
                 val tools = row.storedToolCalls.mapIndexed { i, call ->
-                    val result = call.id?.let(results::get)?.content
+                    val resultRow = call.id?.let(results::get)
+                    val result = resultRow?.content
                     ToolActivity(
                         id = call.id ?: "$key-$i",
                         name = call.name,
-                        running = runningTurn && call.id != null && call.id !in results,
+                        running = runningTurn && call.id != null && resultRow == null,
+                        completed = resultRow != null,
                         input = ToolDetails.input(call.arguments),
                         output = ToolDetails.output(result),
                         failed = ToolDetails.failed(result),
@@ -394,11 +462,22 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     val ended = before.timestamp
                     turnStartedAt != null && at != null && ended != null && at >= turnStartedAt && ended < turnStartedAt
                 }
+                // Like the completing receipt: use the final assistant row without calls. A silence marker
+                // can close the reply after visible text, but cannot make a standalone reply reactable.
+                val reactionRow = row.id?.takeIf {
+                    it > 0 && tools.isEmpty() && (text.isNotEmpty() || (silent && previous?.text?.isNotEmpty() == true))
+                }
                 if (previous != null) {
+                    // A later step with no reaction of its own (a goal's continuation, say) leaves the reply on the
+                    // row that holds the user's reaction, so it still shows and a tap changes that one.
+                    val keepTarget = reactionRow == null || (row.userReaction == null && previous.userReaction != null)
                     messages[messages.lastIndex] = previous.copy(
                         text = listOf(previous.text, text).filter { it.isNotEmpty() }.joinToString("\n\n"),
                         reasoning = listOf(previous.reasoning, reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
+                        reactionRowId = if (keepTarget) previous.reactionRowId else reactionRow,
+                        userReaction = if (keepTarget) previous.userReaction else row.userReaction,
                         tools = previous.tools + tools,
+                        outcome = if (row.stopped) TurnOutcome.Interrupted else previous.outcome,
                         // The reply is dated by its last step, when it finished.
                         timestamp = row.timestamp ?: previous.timestamp,
                     )
@@ -407,9 +486,13 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         key,
                         text = text,
                         reasoning = reasoning,
+                        reactionRowId = reactionRow,
+                        userReaction = row.userReaction.takeIf { reactionRow != null },
                         tools = tools,
                         repliedTo = replyingTo,
                         timestamp = row.timestamp,
+                        // Still reads as stopped once the transcript replaces the live copy.
+                        outcome = TurnOutcome.Interrupted.takeIf { row.stopped },
                     )
                 }
             }

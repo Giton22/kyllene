@@ -49,11 +49,13 @@ import io.ktor.http.headersOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runCurrent
@@ -229,6 +231,48 @@ class ChatViewModelTest {
     private fun attachment(id: String) = OutgoingAttachment(id, "$id.txt", "text/plain", byteArrayOf(1))
 
     @Test
+    fun sendingDropsAReadThatFinishesInTheNextDraft() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        val pending = CompletableDeferred<OutgoingAttachment>()
+        vm.composer.setTextAndPlaceCursorAtEnd("Look at this")
+        vm.pasteImages(target) { listOf(withContext(NonCancellable) { pending.await() }) to null }
+        try {
+            vm.send()
+            vm.composer.setTextAndPlaceCursorAtEnd("Next draft")
+            vm.pasteImages(target) { listOf(attachment("new")) to null }
+        } finally {
+            pending.complete(attachment("old"))
+        }
+
+        runCurrent()
+        assertEquals(listOf("new"), vm.attachments.value.map { it.id })
+        assertNull(vm.attachmentError.value)
+    }
+
+    @Test
+    fun aTimedOutImagePasteShowsAnErrorAndIgnoresALateImage() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        val target = ChatTarget(gateway, "s1", "Chat")
+        vm.open(target)
+        val result = CompletableDeferred<List<OutgoingAttachment>>()
+        vm.pasteImages(target) { withContext(NonCancellable) { result.await() } to null }
+        try {
+            advanceTimeBy(29_999)
+            assertNull(vm.attachmentError.value)
+
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(ComposerNotice.ImagePasteTimedOut, vm.attachmentError.value)
+        } finally {
+            result.complete(listOf(OutgoingAttachment("image", "copied.jpg", "image/jpeg", byteArrayOf(1))))
+        }
+        runCurrent()
+        assertTrue(vm.attachments.value.isEmpty())
+    }
+
+    @Test
     fun aDraftFromOutsideFillsTheNewChatWithoutSending() = runTest(dispatcher) {
         val (vm, _) = viewModel()
         val draft = ComposeDraft(text = "look at this", attachments = listOf(attachment("a"), attachment("b")), notice = "Only some fit.")
@@ -297,6 +341,19 @@ class ChatViewModelTest {
         vm.send(null)
         val create = sent.map { Json.parseToJsonElement(it).jsonObject }.first { it["method"]?.toString() == "\"session.create\"" }
         assertEquals("\"/srv/site\"", create["params"]?.jsonObject?.get("cwd")?.toString())
+    }
+
+    @Test
+    fun anEmptyListItemLeftAtTheEndIsntSent() = runTest(dispatcher) {
+        val (vm, _) = viewModel()
+        connection.start(gateway.gatewayUrl)
+        vm.connectionState.first { it is ConnectionState.Connected }
+        vm.open(ChatTarget(gateway, null, null, nonce = 1))
+        // What Enter after the last item leaves behind.
+        vm.composer.setTextAndPlaceCursorAtEnd("1. eggs\n2. bread\n3. ")
+        vm.send(null)
+        // The fake gateway can't start the chat, so what was sent comes back to the composer as it went out.
+        assertEquals("1. eggs\n2. bread", vm.composer.text.toString())
     }
 
     private val scribe = BotIdentity("scribe", "Scribe")

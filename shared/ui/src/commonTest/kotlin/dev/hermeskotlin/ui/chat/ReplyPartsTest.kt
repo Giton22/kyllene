@@ -6,33 +6,41 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.SquareTerminal
 import com.composables.icons.lucide.Wrench
 import dev.hermeskotlin.core.chat.ToolActivity
-import dev.hermeskotlin.ui.resources.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class ReplyPartsTest {
 
     @Test
-    fun theToolPillAddsUpTheTimedCalls() {
+    fun toolOffsetsTrackRecordedStartsIncludingParallelCallsAndGaps() {
         val tools = listOf(
-            ToolActivity("1", "terminal", durationSeconds = 30.4),
-            ToolActivity("2", "read_file", durationSeconds = 12.0),
+            ToolActivity("1", "terminal", durationSeconds = 3.0, startedAt = 100.0),
+            ToolActivity("2", "read_file", startedAt = 100.2),
             ToolActivity("3", "patch"),
+            ToolActivity("4", "read_file", startedAt = 106.04),
         )
 
-        assertEquals(ran(3) to "42s", workedLabel(tools))
-    }
-
-    private fun ran(count: Int) = Words.Count(Res.plurals.chat_tools_ran, count)
-
-    @Test
-    fun withNoTimesThePillSaysOnlyHowManyRan() {
-        assertEquals(ran(1) to null, workedLabel(listOf(ToolActivity("1", "terminal"))))
+        assertEquals(listOf("+0.0s", "+0.2s", null, "+6.0s"), toolTimelineOffsets(tools))
     }
 
     @Test
-    fun aMinuteOrMoreIsInMinutes() {
-        assertEquals(ran(2) to "1m 15s", workedLabel(listOf(ToolActivity("1", "a", durationSeconds = 60.0), ToolActivity("2", "b", durationSeconds = 15.0))))
+    fun toolOffsetsStayHiddenWhenTheFirstCallHasNoReliableStart() {
+        val tools = listOf(
+            ToolActivity("replayed", "terminal"),
+            ToolActivity("live", "read_file", startedAt = 106.0),
+        )
+
+        assertEquals(listOf(null, null), toolTimelineOffsets(tools))
+    }
+
+    @Test
+    fun longToolOffsetsKeepTheTimeColumnCompact() {
+        val tools = listOf(
+            ToolActivity("first", "terminal", startedAt = 100.0),
+            ToolActivity("later", "patch", startedAt = 176.0),
+            ToolActivity("last", "read_file", startedAt = 3825.4),
+        )
+        assertEquals(listOf("+0.0s", "+1m 16s", "+1h 2m"), toolTimelineOffsets(tools))
     }
 
     @Test

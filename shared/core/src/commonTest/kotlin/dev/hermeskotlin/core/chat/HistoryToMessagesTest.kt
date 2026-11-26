@@ -182,7 +182,12 @@ class HistoryToMessagesTest {
         assertEquals(
             listOf(
                 ChatMessage.User("row-1", "list files", rowId = 1, sentText = "list files"),
-                ChatMessage.Assistant("row-2", text = "There is one file.", tools = listOf(ToolActivity("c-terminal", "terminal", output = "a.txt"))),
+                ChatMessage.Assistant(
+                    "row-2",
+                    text = "There is one file.",
+                    tools = listOf(ToolActivity("c-terminal", "terminal", output = "a.txt", completed = true)),
+                    reactionRowId = 4,
+                ),
             ),
             messages,
         )
@@ -300,6 +305,53 @@ class HistoryToMessagesTest {
         assertEquals("plain", messages[0].sentText)
         assertEquals(1L, messages[0].rowId)
         assertEquals(null, messages[1].sentText)
+    }
+
+    @Test
+    fun incomingBotMessagesRemainVisibleWhenHermesMarksThemInternal() {
+        val body = "Please review `draft.md`."
+        val rows = listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("wake"), displayKind = "internal_notification"),
+            SessionMessage(
+                id = 2,
+                role = "user",
+                content = JsonPrimitive("Message from 🤖 Scribe (@scribe): $body"),
+                displayKind = "internal_notification",
+                timestamp = 200.0,
+            ),
+            SessionMessage(
+                id = 3,
+                role = "user",
+                content = JsonPrimitive("[Message from agent 'scribe'] Done."),
+                displayKind = "internal_notification",
+                timestamp = 210.0,
+            ),
+            SessionMessage(id = 4, role = "user", content = JsonPrimitive("Message from the scheduler: wake"), displayKind = "internal_notification"),
+            SessionMessage(id = 5, role = "user", content = JsonPrimitive("Message from 🤖 Scribe: wake"), displayKind = "internal_notification"),
+            SessionMessage(id = 6, role = "user", content = JsonPrimitive("Message from Scribe (@scribe): wake"), displayKind = "internal_notification"),
+        )
+
+        val messages = historyToMessages(rows).map { assertIs<ChatMessage.Event>(it) }
+        assertEquals(
+            listOf(TranscriptEvent.FromBot("Scribe", "scribe", body), TranscriptEvent.FromBot("scribe", null, "Done.")),
+            messages.map { it.event },
+        )
+        assertEquals(listOf(200.0, 210.0), messages.map { it.timestamp })
+    }
+
+    @Test
+    fun scheduledResultWithPlainSenderTextRemainsARoutine() {
+        val body = "Message from the scheduler: backup complete"
+        val row = SessionMessage(
+            id = 1,
+            role = "user",
+            content = JsonPrimitive(body),
+            displayKind = "internal_notification",
+            displayMetadata = Json.parseToJsonElement("""{"completion_note":[["cron","local","job"]]}"""),
+        )
+
+        val message = assertIs<ChatMessage.Event>(historyToMessages(listOf(row)).single())
+        assertEquals(body, assertIs<TranscriptEvent.Routine>(message.event).body)
     }
 
     @Test

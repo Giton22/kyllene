@@ -1,11 +1,12 @@
 package dev.hermeskotlin.desktop
 
 import dev.hermeskotlin.core.chat.ChatHost
-import dev.hermeskotlin.core.chat.ChatMessage
+import dev.hermeskotlin.core.chat.newFinishedReply
 import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.chat.TurnOutcome
+import dev.hermeskotlin.core.chat.replyTextOrNull
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.desktop.resources.*
@@ -27,6 +28,7 @@ data class DesktopNotice(
     val chatTitle: String?,
     val request: InputRequest? = null,
     val origin: DesktopNoticeOrigin? = null,
+    val replyPreview: String? = null,
 )
 
 /** The actual source lifetime, including for a chat window's separate host. */
@@ -78,15 +80,17 @@ internal fun noticesFor(
         }
     }
     if (previous?.running == true && !state.running && !focused && prefs.notifyReplies) {
-        val reply = state.messages.lastOrNull() as? ChatMessage.Assistant
+        val reply = state.newFinishedReply(previous)
         if (reply != null && reply.outcome != TurnOutcome.Interrupted) {
             val failed = reply.outcome == TurnOutcome.Error
             val text = (if (failed) reply.error ?: reply.text else reply.text).trim()
+            if (!failed && text.replyTextOrNull() == null) return notices
             notices += DesktopNotice(
                 title = if (failed) words.replyFailed else chat ?: words.replied,
                 body = text.lineSequence().firstOrNull { it.isNotBlank() }?.take(BODY_LIMIT) ?: words.replyIn,
                 sessionId = state.storedSessionId,
                 chatTitle = chat,
+                replyPreview = if (failed) null else desktopReplyPreview(text),
             )
         }
     }
