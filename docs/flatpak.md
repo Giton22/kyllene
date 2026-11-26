@@ -125,7 +125,12 @@ checksum together, checking the JCEF API version, rebuilding, and testing embedd
 content in the installed sandbox. Review native dependencies alongside JVM ones.
 The package uses XWayland under KDE Wayland. The entry point selects X11 for
 child runtimes, preventing Chromium from choosing an unavailable Wayland socket.
-Native Wayland is not qualified.
+Native Wayland is not qualified. The entry point also defaults `SKIKO_RENDER_API`
+to `SOFTWARE_FAST`, because Skia's OpenGL path tears while the window is made larger
+under XWayland (#405). A value already set wins, for example
+`flatpak run --env=SKIKO_RENDER_API=OPENGL app.kyllene.Kyllene.Devel`.
+Skia reads this variable before the `skiko.renderApi` system property, so in the
+Flatpak that property has no effect: use the variable.
 Voice remains separate work. Qualify secure storage on the target desktop before
 using personal credentials. A successful build alone does not
 qualify login, clipboard, window movement, portals or embedded content.
@@ -207,9 +212,27 @@ together, retaining the old device ID only for that gateway's later unregistrati
 A subsequent registration creates fresh material. Public gateway keys must be valid
 protocol-version-one P-256 points before they are pinned.
 
-This adds registration storage, not push reception or a background service. The
-desktop Notifications anywhere control remains hidden until receiving is supported.
-The existing authenticated registration coordinator and gateway protocol are reused.
+Notifications anywhere is off by default. On supported Linux storage, enabling it
+uses the existing gateway plugin installation consent and authenticated registration
+coordinator. While Kyllene is running, an outbound ntfy stream receives signed,
+encrypted bot replies, scheduled runs and test pings. Scheduled runs are saved in
+their source gateway's Inbox; only runs marked for notification produce a notice.
+Reply notifications follow the existing reply preference. Phone tools and incoming
+calls are not handled by this receiver. No remote images or message URLs are fetched.
+
+Replay IDs and the subscription cursor are saved encrypted before a message is handed
+to the app. Duplicates in the bounded recent-ID cache are dropped across reconnects
+and restarts; this is an at-most-once delivery attempt, not guaranteed delivery.
+Invalid, stale and future messages are rejected. Corrupt replay state is preserved
+and blocks receipt. Network failures reconnect with bounded backoff; Settings shows
+safe receiver guidance without exposing topic URLs. Turning the setting off, retiring
+its registration or changing gateway/profile invalidates queued actions. Open waits
+for sign-in and dialogs and rechecks ownership before opening its named bot session
+or Inbox run. It does not look up a missing bot session under a different owner.
+
+The receiver shares the app's lifetime, including the existing close-to-tray behavior
+where a tray is available. Explicit Quit stops it. This adds no daemon, autostart or
+cold-start notification actions; delivery while Kyllene is stopped is not promised.
 
 ### Gateway client certificates
 
@@ -370,6 +393,23 @@ not qualify KDE focus, context menus, portals other than the Secret portal
 through gnome-keyring, voice or live-provider behavior;
 real Bazzite acceptance remains a separate release gate.
 
+### Launcher actions
+
+The desktop entry offers **New chat**, **Quick entry** and **Call Hermes** (see
+[Call launcher action](#call-launcher-action)). Each can start the app; a later
+launch forwards its action to the existing instance. Quick entry opens the
+existing small composer and waits for the user to send a prompt.
+
+The entry handles the app's existing `herald://` links, including stored chats and
+bots. It does not claim `hermes://`, which belongs to Hermes Desktop. Launchers
+can use `herald://new-chat` and the desktop-only `herald://quick-entry` action.
+The latter is an exact action URI, without parameters or an extra path. On Linux,
+when the app is asked to come forward (a later launch, a link, the tray or a
+notification), it asks the window manager to activate its X11/Xwayland window;
+the manager may decline. This does not qualify a
+native Wayland backend. Global shortcut binding is a separate integration, and
+these entries don't set up automatic startup.
+
 ### Quick entry shortcut
 
 With **Settings → Desktop → Quick entry** enabled, Linux asks the desktop's
@@ -389,3 +429,36 @@ prompt. It needs the app running; launcher actions and login startup are separat
 Window focus follows the existing runtime/compositor rules. The pinned public
 JBR API cannot consume the portal's activation token, so native Wayland activation
 is not guaranteed. In-app shortcuts remain available without this portal.
+
+## Call launcher action
+
+The Linux application menu's **Call Hermes** action opens the existing voice-chat
+route. It calls the destination selected in **Default Call Target** for the
+current gateway, using the shared target lookup and cancellation. While the app
+runs, the launch hands the request to its window instead of opening a second one.
+An unavailable target reports the existing call error rather than choosing another
+destination. If signed out, the request waits for sign-in through the usual flow.
+The action starts a call and may use the microphone and configured voice provider.
+
+The equivalent explicit invocation is `flatpak run
+app.kyllene.Kyllene.Devel herald://voice-chat`.
+
+### Desktop notifications
+
+Linux notifications use the XDG Notification portal and the existing reply/request
+preferences. Their bodies are plain text. Open reveals the original chat window;
+Approve and Deny answer only the exact approval still pending in that source.
+Repeated actions are consumed once. Questions and other requests open the app.
+Open waits for an existing sign-in, modal, editor or plugin page to close,
+preserving its input, and rechecks ownership before revealing the chat.
+
+Notices from live chats expire when their source chat closes or is replaced. Separate chat windows
+retain their own notices across main-window chat and profile changes, and go on
+notifying; sign-out and gateway changes close them and revoke their notices. A
+completed profile selection revokes the main window's previous notices.
+Turning a notification preference off withdraws its portal notices. Explicit Quit
+also withdraws this process's portal notices; actions do not cold-start the application.
+Portal failures fall back to the existing tray notification where a tray is available.
+The desktop controls presentation and dismissal; the portal does not report whether
+a notice was shown or dismissed. Bringing its window forward remains subject to
+the compositor's focus policy.

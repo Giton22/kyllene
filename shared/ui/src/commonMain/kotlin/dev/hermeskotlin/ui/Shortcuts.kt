@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui
 
 import androidx.compose.runtime.Composable
+import dev.hermeskotlin.core.chat.ChatSession
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.State
@@ -31,6 +32,10 @@ sealed interface Shortcut {
     data object NewChat : Shortcut
     data object CommandPalette : Shortcut
     data object Settings : Shortcut
+    /** An external action reveals the currently owned chat rather than a page opened over it. */
+    data class RevealChat(val source: ChatSession, val current: () -> Boolean) : Shortcut
+    /** An owned notification waits for dialogs and sign-in before opening its destination. */
+    data class RevealNotice(val source: ChatSession?, val current: () -> Boolean, val open: () -> Unit) : Shortcut
     data object ToggleSidebar : Shortcut
     data object SearchChats : Shortcut
     data object NextChat : Shortcut
@@ -253,6 +258,16 @@ fun stepChat(at: Int, size: Int, forward: Boolean): Int = when {
     at !in 0 until size -> if (forward) 0 else size - 1
     forward -> (at + 1) % size
     else -> (at - 1 + size) % size
+}
+
+/**
+ * The row that takes the place of the one at [at] once it is gone from [listed]: the row after it, or the one
+ * before when it was the last. Null when it was the only row, or isn't in the list (-1).
+ */
+fun <T> neighbourAfterRemoving(listed: List<T>, at: Int): T? = when {
+    at !in listed.indices || listed.size < 2 -> null
+    at < listed.lastIndex -> listed[at + 1]
+    else -> listed[at - 1]
 }
 
 /**

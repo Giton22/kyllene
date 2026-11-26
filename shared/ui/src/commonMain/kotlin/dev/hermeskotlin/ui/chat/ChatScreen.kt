@@ -1,6 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
-import dev.hermeskotlin.ui.imeVisible
+import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
 import dev.hermeskotlin.ui.ShortcutHandler
@@ -25,6 +25,7 @@ import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
 import dev.hermeskotlin.core.bots.MentionQuery
+import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.core.chat.PathRefKind
 import dev.hermeskotlin.core.chat.PathRefQuery
 import dev.hermeskotlin.core.chat.completion
@@ -88,6 +89,7 @@ import androidx.compose.ui.layout.layout
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.draw.dropShadow
@@ -99,6 +101,7 @@ import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.Ellipsis
 import dev.hermeskotlin.designsystem.HeraldBrandBlue
 import dev.hermeskotlin.designsystem.HeraldMark
+import dev.hermeskotlin.designsystem.components.commitComposingOnEnter
 import dev.hermeskotlin.designsystem.components.glow
 import dev.hermeskotlin.designsystem.components.halo
 import dev.hermeskotlin.designsystem.dangerSoft
@@ -130,11 +133,11 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -174,6 +177,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.collectAsState
@@ -252,6 +256,8 @@ import com.composables.icons.lucide.TriangleAlert
 import com.composables.icons.lucide.Users
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.RefreshCw
+import com.composables.icons.lucide.Pause
+import com.composables.icons.lucide.Play
 import com.composables.icons.lucide.Square
 import com.composables.icons.lucide.Volume2
 import com.composables.icons.lucide.SquarePen
@@ -273,6 +279,7 @@ import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.core.chat.Attachment
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.TranscriptEvent
+import dev.hermeskotlin.core.chat.replyTextOrNull
 import dev.hermeskotlin.core.chat.GatewayNotice
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.OutgoingAttachment
@@ -341,7 +348,9 @@ import dev.hermeskotlin.ui.CopyableOnDesktop
 import dev.hermeskotlin.designsystem.components.VerticalScrollbar
 import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
+import dev.hermeskotlin.designsystem.LocalDesignWords
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
+import dev.hermeskotlin.designsystem.components.labelledIconWidth
 import dev.hermeskotlin.designsystem.components.CopyButton
 import dev.hermeskotlin.designsystem.components.Dialog
 import dev.hermeskotlin.designsystem.components.DropdownMenu
@@ -446,7 +455,8 @@ fun ChatScreen(
     var petsOpen by remember { mutableStateOf(false) }
     var journeyOpen by remember { mutableStateOf(false) }
     var usageOpen by remember { mutableStateOf(false) }
-    var processesOpen by remember { mutableStateOf(false) }
+    // Not keyed by the chat: the requests collector below holds this one state, and the sheet follows the chat.
+    var processesOpen by rememberSaveable { mutableStateOf(false) }
     var checkpointsOpen by remember { mutableStateOf(false) }
     var controlOpen by remember { mutableStateOf(false) }
     var focusComposer by remember { mutableIntStateOf(0) }
@@ -465,7 +475,8 @@ fun ChatScreen(
     val docked = previewing?.let { isDesktop && wide && it.kind != GatewayFileKind.Image } == true
     val railFile = previewing.takeIf { docked && railShown }
     // Over a sheet or a viewer, typing and shortcuts are the dialog's, not the chat's behind it.
-    val dialogOpen = modelsOpen || attachOpen || petsOpen || journeyOpen || usageOpen || processesOpen ||
+    val processesShown = processesOpen && ownsTranscript
+    val dialogOpen = modelsOpen || attachOpen || petsOpen || journeyOpen || usageOpen || processesShown ||
         checkpointsOpen || controlOpen || viewing != null || (previewing != null && !docked)
     // Esc in the rail is the viewer's own: back a file, then closed.
     ShortcutHandler(enabled = keysEnabled && docked) { shortcut ->
@@ -582,16 +593,25 @@ fun ChatScreen(
     val refs = if (isDesktop) refChoices(mention, pathRef, pathEntries) else emptyList()
     val density = LocalDensity.current
     val modelPillBounds = remember { mutableStateOf<Rect?>(null) }
+    val conversationKey = Triple(target.gateway.gatewayUrl, target.profile, target.storedSessionId)
+    val editing = viewModel.editing.collectAsStateWithLifecycle().value
+    val imagePaste = if (ownsTranscript && connected && keysEnabled && !dialogOpen && editing == null &&
+        attachments.size < OutgoingAttachment.MAX_COUNT
+    ) attachmentPicker.imagePasteModifier { read -> viewModel.pasteImages(target, read) } else Modifier
     Box(Modifier.fillMaxSize().onSizeChanged { paneWidth = with(density) { it.width.toDp() } }) {
     CompositionLocalProvider(LocalModelPillBounds provides modelPillBounds) {
     ChatView(
         // A bot's chat is titled "Bot Chat" on the gateway; the bot's name says more.
-        title = target.bot?.label ?: state.title?.takeIf { it.isNotBlank() } ?: target.title ?: stringResource(Res.string.chat_new_chat),
+        // A stored chat opened without its title (a branch, until its resume names it) isn't a new one.
+        title = target.bot?.label ?: state.title?.takeIf { it.isNotBlank() } ?: target.title
+            ?: stringResource(if (target.storedSessionId != null) Res.string.app_untitled_session else Res.string.chat_new_chat),
         titleFace = LocalBotFaces.current.let { faces ->
             faces.find(target.bot?.name)?.let { bot -> { BotAvatar(bot, faces.picture(bot), size = 22.dp) } }
         },
         state = if (readPosition == null || !ownsTranscript) state.copy(historyLoaded = false) else state,
-        conversationKey = Triple(target.gateway.gatewayUrl, target.profile, target.storedSessionId),
+        conversationKey = conversationKey,
+        savedViewport = { viewModel.viewportFor(conversationKey, target) },
+        onSaveViewport = viewModel::saveViewport,
         picker = picker,
         connected = connected,
         connectionLabel = connectionLabel(connection),
@@ -623,7 +643,7 @@ fun ChatScreen(
         notice = notice,
         actions = viewModel,
         widgetFiles = transcript.widgetFiles,
-        editing = viewModel.editing.collectAsStateWithLifecycle().value,
+        editing = editing,
         // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
         readUpTo = readPosition?.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
         onReadLatest = if (readPosition != null && ownsTranscript && screenShown && connected && state.historyRead && !state.running) {
@@ -658,6 +678,7 @@ fun ChatScreen(
         focusComposer = focusComposer,
         keysEnabled = keysEnabled && !dialogOpen,
         attachmentPicker = attachmentPicker.takeIf { isDesktop },
+        imagePaste = imagePaste,
         rail = railFile?.let { file ->
             {
                 FileViewer(file, onDismiss = { previewing = null }, load = viewModel::previewFile, download = viewModel::downloadFile, docked = true)
@@ -687,7 +708,7 @@ fun ChatScreen(
         onDismiss = { usageOpen = false },
     )
     ProcessesSheet(
-        visible = processesOpen,
+        visible = processesShown,
         controller = viewModel.processes,
         onStart = viewModel::watchProcesses,
         onKill = viewModel::killProcess,
@@ -758,6 +779,9 @@ internal fun ChatView(
     state: ChatState,
     /** Isolates the transcript's scroll state across gateways, profiles and chats. */
     conversationKey: Any? = null,
+    /** Where the reader was in this chat's list when it last left the screen, read as the list comes back. */
+    savedViewport: () -> TranscriptViewport? = { null },
+    onSaveViewport: ((TranscriptViewport) -> Unit)? = null,
     picker: ModelPickerState,
     connected: Boolean,
     /** Which way the link is down, shown under the title while not [connected]. */
@@ -828,6 +852,7 @@ internal fun ChatView(
     keysEnabled: Boolean = true,
     /** Takes files dropped on the chat and pasted into it (the desktop's). */
     attachmentPicker: AttachmentPicker? = null,
+    imagePaste: Modifier = Modifier,
     /** A panel at the right, beside the conversation: the desktop's file rail. */
     rail: (@Composable () -> Unit)? = null,
 ) {
@@ -851,8 +876,17 @@ internal fun ChatView(
         val voiceFull = voiceOn && !voiceFolded
         LaunchedEffect(voiceOn) { if (!voiceOn) voiceFolded = false }
         // A reply read aloud plays to its end with the phone put down, and stops if it leaves the chat
-        // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays.
-        KeepScreenOn(readAloud.key != null)
+        // (regenerated, or a reload that keys it anew), so its Stop is never gone while it plays. Paused for a minute,
+        // it may wait for good, so the screen goes dark as usual; a moment of other audio (a chime, a navigation
+        // prompt) pauses it too, and goes on by itself, so that doesn't turn the screen off.
+        val pausedForGood by produceState(false, readAloud.paused) {
+            value = false
+            if (readAloud.paused) {
+                delay(60_000)
+                value = true
+            }
+        }
+        KeepScreenOn(readAloud.key != null && !pausedForGood)
         // A chat whose transcript hasn't loaded yet hasn't lost it.
         LaunchedEffect(readAloud.key, state.messages, state.historyLoaded) {
             val key = readAloud.key ?: return@LaunchedEffect
@@ -885,7 +919,7 @@ internal fun ChatView(
             TopBar(
                 title = title,
                 titleFace = titleFace,
-                status = chatStatus(state, connected, connectionLabel, place),
+                status = if (!isDesktop && linkStatus != null) null else chatStatus(state, connected, connectionLabel, place),
                 onOpenSidebar = onOpenSidebar,
                 onNewChat = onNewChat,
                 onOpenMenu = onOpenMenu,
@@ -906,8 +940,10 @@ internal fun ChatView(
             // up over the greeting like a menu and the box being typed in doesn't move.
             // The lists' own height, measured as they open and fade out, is taken off: a composer that grows (lines,
             // attachments) stays centred as a whole.
-            var listsHeight by remember { mutableIntStateOf(0) }
-            val restingDock = (dockHeight - listsHeight).coerceAtLeast(0)
+            val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
+            var slashListHeight by remember(composerShown) { mutableIntStateOf(0) }
+            var referenceListsHeight by remember(composerShown) { mutableIntStateOf(0) }
+            val restingDock = (dockHeight - slashListHeight - referenceListsHeight).coerceAtLeast(0)
             val restingTop = (paneHeight - restingDock) * (1f + CENTRED_DOCK_BIAS) / 2f
             val dockTop = lerp(restingTop + restingDock - dockHeight, (paneHeight - dockHeight).toFloat(), toFoot).coerceAtLeast(0f)
             // Room under the greeting: down to the resting composer's top wherever it sits.
@@ -965,11 +1001,10 @@ internal fun ChatView(
             // and undo the fold; only the jump button and the pet follow the composer's real height.
             var composerShrink by remember { mutableIntStateOf(0) }
             val listInset = with(LocalDensity.current) { (dockHeight + composerShrink).toDp() }
-            // What scrolls under the composer is captured here and frosted behind it.
             val hazeState = rememberHazeState()
+            val controlHaze = if (isDesktop) null else rememberHazeState()
             // Comments wait in the composer, so the selection menus offer them only while it shows.
             var focusComment by remember { mutableStateOf<Long?>(null) }
-            val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
             // Type on the voice screen ends the call; the composer takes the keyboard once it's back.
             // Once the call is over the wish is spent either way: a question waiting in the composer's place
             // mustn't hand the keyboard over minutes later when it's answered.
@@ -1073,7 +1108,14 @@ internal fun ChatView(
             }
             Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { paneHeight = it.height; paneWidth = it.width }) {
                 Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
-                    if (wallpaper != null) ChatWallpaper(wallpaper, LocalAppSettings.current.wallpaperStrength, Modifier.fillMaxSize())
+                    if (wallpaper != null) {
+                        // Under the transcript in the blur around the jump button and the reconnect banner too.
+                        ChatWallpaper(
+                            wallpaper,
+                            LocalAppSettings.current.wallpaperStrength,
+                            Modifier.fillMaxSize().then(if (controlHaze != null) Modifier.hazeSource(controlHaze, zIndex = -1f) else Modifier),
+                        )
+                    }
                     if (state.historyLoaded && state.messages.isNotEmpty()) {
                         CompositionLocalProvider(
                             LocalMediaLoader provides actions::loadMedia,
@@ -1098,11 +1140,15 @@ internal fun ChatView(
                             key(conversationKey) {
                                 Messages(
                                     listed,
+                                    conversationKey = conversationKey,
+                                    savedViewport = savedViewport,
+                                    onSaveViewport = onSaveViewport,
                                     olderMessages = state.olderMessages,
                                     loadingOlder = state.loadingOlder,
                                     savedCopy = state.savedCopyAt != null,
                                     bottomInset = listInset,
                                     controlsInset = dockInset,
+                                    controlHaze = controlHaze,
                                     fold = composerFold,
                                     actions = actions,
                                     connected = connected,
@@ -1112,6 +1158,7 @@ internal fun ChatView(
                                     readUpTo = readUpTo,
                                     onReadLatest = onReadLatest,
                                     reading = readAloud.key,
+                                    readingPaused = readAloud.paused,
                                     // The voice chat and dictation have the speaker and the microphone.
                                     canReadAloud = hasSpeechPlayback && !voiceOn && !dictation.active,
                                     found = found,
@@ -1144,9 +1191,20 @@ internal fun ChatView(
                         }
                     }
                 }
-                // Over the top of the conversation: the link being made again, and an older page on its way.
                 var lastLinkStatus by remember { mutableStateOf("") }
                 if (linkStatus != null) lastLinkStatus = linkStatus
+                val opaqueComposer = LocalAppSettings.current.opaqueComposer && composerShown && !centred && toFoot >= 1f
+                val reconnectBanner: @Composable () -> Unit = {
+                    androidx.compose.animation.AnimatedVisibility(visible = linkStatus != null, enter = fadeIn(), exit = fadeOut()) {
+                        // On the opaque backing there's no transcript next to it to blur. It keeps the blur's room above
+                        // and below, so the dock doesn't jump when the backing comes or goes.
+                        val onBacking = opaqueComposer && controlHaze != null
+                        Box(Modifier.padding(vertical = if (onBacking) TranscriptControlRim else 0.dp)) {
+                            OfflineBanner(place, lastLinkStatus, controlHaze.takeUnless { onBacking }, onRetryConnection)
+                        }
+                    }
+                }
+                // Over the top of the conversation: other chats, the desktop link status and older pages.
                 Column(
                     Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1168,16 +1226,14 @@ internal fun ChatView(
                             )
                         }
                     }
-                    AnimatedVisibility(visible = linkStatus != null, enter = fadeIn(), exit = fadeOut()) {
-                        OfflineBanner(place, lastLinkStatus, onRetry = onRetryConnection)
-                    }
+                    if (isDesktop) reconnectBanner()
                     // A chat read from the device's copy says so, and how old it is, once the gateway is known to be away;
                     // while it's only being asked, the copy is replaced without a word.
                     var lastSavedAt by remember { mutableStateOf(0L) }
                     state.savedCopyAt?.let { lastSavedAt = it }
                     val showSaved = state.savedCopyAt != null && state.messages.isNotEmpty() && (state.historyError != null || !connected)
                     AnimatedVisibility(visible = showSaved, enter = fadeIn(), exit = fadeOut()) {
-                        // Offline, the banner above offers the retry; connected, the transcript itself failed to load.
+                        // Offline, the reconnect banner offers the retry; connected, the transcript itself failed to load.
                         SavedCopyPill(lastSavedAt, onRetry = if (connected) actions::retry else null)
                     }
                     AnimatedVisibility(visible = state.loadingOlder, enter = fadeIn(), exit = fadeOut()) {
@@ -1193,6 +1249,9 @@ internal fun ChatView(
                 ) {
                     Dock(
                         hazeState = hazeState,
+                        opaqueComposer = opaqueComposer,
+                        reconnectBanner = reconnectBanner.takeUnless { isDesktop },
+                        reconnectingInBanner = !isDesktop && linkStatus != null,
                         actions = actions,
                         placeholder = placeholder,
                         state = state,
@@ -1217,7 +1276,9 @@ internal fun ChatView(
                         composerFocus = composerFocus,
                         composerFold = composerFold,
                         onComposerShrink = { composerShrink = it },
-                        onListsHeight = { listsHeight = it },
+                        composerShown = composerShown,
+                        onSlashListHeight = { slashListHeight = it },
+                        onReferenceListsHeight = { referenceListsHeight = it },
                         onOpenModels = onOpenModels,
                         onAttach = onAttach,
                         onDictate = onDictate,
@@ -1225,6 +1286,7 @@ internal fun ChatView(
                         onOpenControl = onOpenControl,
                         voiceFull = voiceFull,
                         onExpandVoice = { voiceFolded = false },
+                        imagePaste = imagePaste,
                         onPasteFiles = { canAttach && keysEnabled && attachmentPicker?.pasteAttachments() == true },
                     )
                 }
@@ -1303,10 +1365,27 @@ private fun DropOverlay() {
     }
 }
 
+/** Covers the panels and composer, padding and gaps included, with the page colour when [hazeState] is given. */
+@Composable
+private fun ComposerBackdrop(hazeState: HazeState?, content: @Composable ColumnScope.() -> Unit) {
+    Box {
+        if (hazeState != null) {
+            Box(
+                Modifier.matchParentSize().hazeSource(hazeState)
+                    .background(Theme[colors][background].copy(alpha = 1f)),
+            )
+        }
+        Column(Modifier.fillMaxWidth(), content = content)
+    }
+}
+
 /** What floats at the bottom of the chat: banners, the live status, and the composer or the agent's question. */
 @Composable
 private fun ColumnScope.Dock(
     hazeState: HazeState,
+    opaqueComposer: Boolean,
+    reconnectBanner: (@Composable () -> Unit)?,
+    reconnectingInBanner: Boolean,
     actions: ChatActions,
     placeholder: String,
     state: ChatState,
@@ -1331,8 +1410,10 @@ private fun ColumnScope.Dock(
     composerFocus: FocusRequester,
     composerFold: ComposerFold,
     onComposerShrink: (Int) -> Unit,
-    /** How tall the `/` and `@` lists over the composer stand, as they open and fade out. */
-    onListsHeight: (Int) -> Unit = {},
+    composerShown: Boolean,
+    /** How tall the `/` list stands, as it opens and fades out. */
+    onSlashListHeight: (Int) -> Unit,
+    onReferenceListsHeight: (Int) -> Unit,
     onOpenModels: () -> Unit,
     onAttach: () -> Unit,
     onDictate: () -> Unit,
@@ -1342,6 +1423,7 @@ private fun ColumnScope.Dock(
     /** The voice chat is open over the whole screen. */
     voiceFull: Boolean,
     onExpandVoice: () -> Unit,
+    imagePaste: Modifier,
     /** A paste in the composer: true when it attached files, a picture or a long text (the desktop's). */
     onPasteFiles: () -> Boolean = { false },
 ) {
@@ -1366,166 +1448,179 @@ private fun ColumnScope.Dock(
     dictation.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissDictationError) }
     readAloud.error?.let { Banner(briefError(it), actionLabel = null, onAction = actions::dismissReadAloudError) }
     AnimatedVisibility(visible = notice != null) { NoticeLine(notice.orEmpty()) }
-    // One place says what's happening: the current action, with the status text and plan folded beneath.
-    AnimatedVisibility(visible = state.running, enter = fadeIn(), exit = fadeOut()) {
-        ProgressPanel(
-            step = currentStep(state),
-            status = state.status,
-            tool = state.runningTool(),
-            todos = state.livePlan(),
-            turnKey = runningTurnKey(state),
-            onStop = actions::interrupt,
-            // Not once it's over: the card fades out with the turn already ended.
-            canStop = connected && state.running,
-        )
-    }
-    if (!state.running) TodoPanel(state.todos, live = state.todosLive, hazeState = hazeState)
-    // The chat's automation sits here whether or not a turn runs: the goal works on its own between turns.
-    SessionControlStrip(state.control, hazeState, onOpen = onOpenControl)
-
-    if (state.inputRequests.isNotEmpty()) {
-        // The task's Stop is on the live task card above.
-        InputRequestPanel(state.inputRequests, connected, onAnswer = actions::answer, onStop = null)
-    } else if (voiceChat.phase != VoicePhase.Off) {
-        // Full screen, the voice screen has these; the panel would only animate unseen beneath it.
-        if (!voiceFull) {
-            VoicePanel(
-                hazeState = hazeState,
-                state = voiceChat,
-                onSkip = actions::skipSpeech,
-                onMute = actions::toggleVoiceMute,
-                onEnd = actions::stopVoiceChat,
-                onExpand = onExpandVoice,
-                onSendNow = actions::sendVoiceNow,
-            )
-        }
-    } else {
-        // Escape puts a desktop's open list away, as a menu's does, until the typing changes; the chat's own Escape
-        // (stopping a task) waits for the next press.
-        var dismissedAt by remember { mutableStateOf<String?>(null) }
-        val typedNow = actions.composer.text.toString()
-        val listsAway = dismissedAt != null && dismissedAt == typedNow
-        if (dismissedAt != null && !listsAway) dismissedAt = null
-        val slashShown = suggestions.isNotEmpty() && connected && !listsAway
-        // The suggestion Up and Down have marked on the desktop, reset as the list changes with the typing. The `/`
-        // list starts with none, so Enter still sends what's typed; the `@` lists start on the first, which Enter takes.
-        val markedState = remember(suggestions, mentions, refs) { mutableIntStateOf(-1) }
-        var marked by markedState
-        // The pointer marks the row it's on, on the desktop. One lambda per list, so a row's pointer handler, which
-        // keeps the one it started with, writes the mark the list shows.
-        val onMark: ((Int) -> Unit)? = if (isDesktop) remember(markedState) { { i: Int -> markedState.intValue = i } } else null
-        Column(Modifier.onSizeChanged { onListsHeight(it.height) }) {
-        AnimatedVisibility(visible = slashShown, enter = fadeIn(), exit = fadeOut()) {
-            // Kept through the fade-out, so the list doesn't empty before it leaves.
-            var shown by remember { mutableStateOf(suggestions) }
-            if (suggestions.isNotEmpty()) shown = suggestions
-            SlashSuggestions(shown, hazeState, marked = marked, onPick = actions::pickSuggestion, onMark = onMark)
-        }
-        AnimatedVisibility(visible = mentions.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
-            var shown by remember { mutableStateOf(mentions) }
-            if (mentions.isNotEmpty()) shown = mentions
-            MentionSuggestions(
-                remember(shown) { shown.map { MentionChoice(it.label, it.handle, it) } },
-                hazeState,
-                onPick = { choice -> choice.bot?.let(onMention) },
-                marked = if (isDesktop) marked.coerceAtLeast(0) else -1,
-                onMark = onMark,
-            )
-        }
-        // `@file:` and `@folder:` references: the kinds while `@` is typed, then the gateway's files and folders.
-        AnimatedVisibility(visible = refs.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
-            var shown by remember { mutableStateOf(refs) }
-            if (refs.isNotEmpty()) shown = refs
-            val fileLabel = stringResource(Res.string.chat_ref_file)
-            val folderLabel = stringResource(Res.string.chat_ref_folder)
-            MentionSuggestions(
-                remember(shown, fileLabel, folderLabel) {
-                    shown.map { ref ->
-                        val label = when (ref.kind) {
-                            PathRefKind.File -> fileLabel
-                            PathRefKind.Folder -> folderLabel
-                            null -> ref.label
-                        }
-                        MentionChoice(label, ref.shown, null, ref.icon)
-                    }
-                },
-                hazeState,
-                onPick = { choice -> shown.firstOrNull { it.shown == choice.handle }?.let(onRef) },
-                // While bots are listed too, the keys walk theirs: only one list shows a mark.
-                marked = if (isDesktop && mentions.isEmpty()) marked.coerceAtLeast(0) else -1,
-                onMark = onMark.takeIf { mentions.isEmpty() },
-            )
-        }
-        }
-        // Over an empty composer only: once the user types, their own words are the next message.
-        val replyShown = suggestedReply != null && connected && !state.running && !editing && actions.composer.text.isEmpty()
-        AnimatedVisibility(visible = replyShown, enter = fadeIn(), exit = fadeOut()) {
-            // Kept through the fade-out, so the chip doesn't empty before it leaves.
-            var shown by remember { mutableStateOf(suggestedReply) }
-            if (suggestedReply != null) shown = suggestedReply
-            shown?.let { reply ->
-                SuggestedReplyChip(
-                    reply.text,
-                    hazeState,
-                    onUse = { actions.useSuggestedReply(reply) },
-                    onDismiss = actions::dismissSuggestedReply,
-                )
+    // Escape puts a desktop's open list away, as a menu's does, until the typing changes; the chat's own Escape
+    // (stopping a task) waits for the next press.
+    var dismissedAt by remember(composerShown) { mutableStateOf<String?>(null) }
+    val typedNow = actions.composer.text.toString()
+    val listsAway = dismissedAt != null && dismissedAt == typedNow
+    if (dismissedAt != null && !listsAway) dismissedAt = null
+    val slashShown = suggestions.isNotEmpty() && connected && !listsAway
+    // The suggestion Up and Down have marked on the desktop, reset as the list changes with the typing. The `/`
+    // list starts with none, so Enter still sends what's typed; the `@` lists start on the first, which Enter takes.
+    val markedState = remember(composerShown, suggestions, mentions, refs) { mutableIntStateOf(-1) }
+    var marked by markedState
+    // The pointer marks the row it's on, on the desktop. One lambda per list, so a row's pointer handler, which
+    // keeps the one it started with, writes the mark the list shows.
+    val onMark: ((Int) -> Unit)? = if (isDesktop) remember(markedState) { { i: Int -> markedState.intValue = i } } else null
+    if (composerShown) {
+        Column(Modifier.onSizeChanged { onSlashListHeight(it.height) }) {
+            AnimatedVisibility(visible = slashShown, enter = fadeIn(), exit = fadeOut()) {
+                // Kept through the fade-out, so the list doesn't empty before it leaves.
+                var shown by remember { mutableStateOf(suggestions) }
+                if (suggestions.isNotEmpty()) shown = suggestions
+                SlashSuggestions(shown, hazeState, marked = marked, onPick = actions::pickSuggestion, onMark = onMark)
             }
         }
-        if (editing) {
-            Banner(
-                stringResource(Res.string.chat_editing_banner),
-                actionLabel = stringResource(Res.string.common_cancel),
-                onAction = actions::cancelEdit,
-                icon = Lucide.Pencil,
+    }
+    // The panels, `@` lists and composer frost their own backing. The `/` list above it still frosts the transcript.
+    val opaqueHaze = rememberHazeState().takeIf { opaqueComposer }
+    val panelHaze = opaqueHaze ?: hazeState
+    // One solid backing from the reconnect banner down to the composer, so no transcript shows between the panels.
+    ComposerBackdrop(opaqueHaze) {
+        reconnectBanner?.invoke()
+        // One place says what's happening: the current action, with the status text and plan folded beneath.
+        AnimatedVisibility(visible = state.running, enter = fadeIn(), exit = fadeOut()) {
+            ProgressPanel(
+                step = currentStep(state),
+                status = state.status,
+                tool = state.runningTool(),
+                todos = state.livePlan(),
+                turnKey = runningTurnKey(state),
+                onStop = actions::interrupt,
+                // Not once it's over: the card fades out with the turn already ended.
+                canStop = connected && state.running,
             )
         }
-        Composer(
-            editing = editing,
-            hazeState = hazeState,
-            actions = actions,
-            placeholder = placeholder,
-            state = state,
-            picker = picker,
-            connected = connected,
-            attachments = attachments,
-            dictation = dictation,
-            comments = comments,
-            focusComment = focusComment,
-            onCommentFocused = onCommentFocused,
-            focus = composerFocus,
-            fold = composerFold,
-            onShrink = onComposerShrink,
-            onOpenModels = onOpenModels,
-            onAttach = onAttach,
-            onDictate = onDictate,
-            onVoiceChat = onVoiceChat,
-            onKey = { event ->
-                // A bot named so far comes before "A file" / "A folder", which any short @ word offers too.
-                val listed = when {
-                    listsAway -> 0
-                    slashShown -> suggestions.size
-                    suggestions.isNotEmpty() -> 0
-                    mentions.isNotEmpty() -> mentions.size
-                    else -> refs.size
+        if (!state.running) TodoPanel(state.todos, live = state.todosLive, hazeState = panelHaze)
+        // The chat's automation sits here whether or not a turn runs: the goal works on its own between turns.
+        SessionControlStrip(state.control, panelHaze, onOpen = onOpenControl)
+
+        if (state.inputRequests.isNotEmpty()) {
+            // The task's Stop is on the live task card above.
+            InputRequestPanel(state.inputRequests, connected, onAnswer = actions::answer, onStop = null)
+        } else if (voiceChat.phase != VoicePhase.Off) {
+            // Full screen, the voice screen has these; the panel would only animate unseen beneath it.
+            if (!voiceFull) {
+                VoicePanel(
+                    hazeState = hazeState,
+                    state = voiceChat,
+                    onSkip = actions::skipSpeech,
+                    onMute = actions::toggleVoiceMute,
+                    onEnd = actions::stopVoiceChat,
+                    onExpand = onExpandVoice,
+                    onSendNow = actions::sendVoiceNow,
+                )
+            }
+        } else {
+            Column(Modifier.onSizeChanged { onReferenceListsHeight(it.height) }) {
+                AnimatedVisibility(visible = mentions.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
+                    var shown by remember { mutableStateOf(mentions) }
+                    if (mentions.isNotEmpty()) shown = mentions
+                    MentionSuggestions(
+                        remember(shown) { shown.map { MentionChoice(it.label, it.handle, it) } },
+                        panelHaze,
+                        onPick = { choice -> choice.bot?.let(onMention) },
+                        marked = if (isDesktop) marked.coerceAtLeast(0) else -1,
+                        onMark = onMark,
+                    )
                 }
-                val step = suggestionStep(event)
-                val at = if (slashShown) marked else marked.coerceAtLeast(0)
-                when {
-                    isPasteKey(event) -> !editing && onPasteFiles()
-                    isDesktop && listed > 0 && event.key == Key.Escape && event.type == KeyEventType.KeyDown ->
-                        true.also { dismissedAt = actions.composer.text.toString() }
-                    listed > 0 && step != null -> true.also { marked = moveHighlight(marked, step, listed) }
-                    !isPickKey(event) || listed == 0 -> false
-                    // Enter takes a `/` suggestion only once one is marked; Tab takes the first too.
-                    slashShown -> (marked in suggestions.indices || event.key == Key.Tab).also {
-                        if (it) actions.pickSuggestion(suggestions[at.coerceIn(suggestions.indices)])
+                // `@file:` and `@folder:` references: the kinds while `@` is typed, then the gateway's files and folders.
+                AnimatedVisibility(visible = refs.isNotEmpty() && suggestions.isEmpty() && !listsAway, enter = fadeIn(), exit = fadeOut()) {
+                    var shown by remember { mutableStateOf(refs) }
+                    if (refs.isNotEmpty()) shown = refs
+                    val fileLabel = stringResource(Res.string.chat_ref_file)
+                    val folderLabel = stringResource(Res.string.chat_ref_folder)
+                    MentionSuggestions(
+                        remember(shown, fileLabel, folderLabel) {
+                            shown.map { ref ->
+                                val label = when (ref.kind) {
+                                    PathRefKind.File -> fileLabel
+                                    PathRefKind.Folder -> folderLabel
+                                    null -> ref.label
+                                }
+                                MentionChoice(label, ref.shown, null, ref.icon)
+                            }
+                        },
+                        panelHaze,
+                        onPick = { choice -> shown.firstOrNull { it.shown == choice.handle }?.let(onRef) },
+                        // While bots are listed too, the keys walk theirs: only one list shows a mark.
+                        marked = if (isDesktop && mentions.isEmpty()) marked.coerceAtLeast(0) else -1,
+                        onMark = onMark.takeIf { mentions.isEmpty() },
+                    )
+                }
+            }
+            // Over an empty composer only: once the user types, their own words are the next message.
+            val replyShown = suggestedReply != null && connected && !state.running && !editing && actions.composer.text.isEmpty()
+            AnimatedVisibility(visible = replyShown, enter = fadeIn(), exit = fadeOut()) {
+                // Kept through the fade-out, so the chip doesn't empty before it leaves.
+                var shown by remember { mutableStateOf(suggestedReply) }
+                if (suggestedReply != null) shown = suggestedReply
+                shown?.let { reply ->
+                    SuggestedReplyChip(
+                        reply.text,
+                        panelHaze,
+                        onUse = { actions.useSuggestedReply(reply) },
+                        onDismiss = actions::dismissSuggestedReply,
+                    )
+                }
+            }
+            if (editing) {
+                Banner(
+                    stringResource(Res.string.chat_editing_banner),
+                    actionLabel = stringResource(Res.string.common_cancel),
+                    onAction = actions::cancelEdit,
+                    icon = Lucide.Pencil,
+                )
+            }
+            Composer(
+                editing = editing,
+                hazeState = panelHaze,
+                reconnectingInBanner = reconnectingInBanner,
+                actions = actions,
+                placeholder = placeholder,
+                state = state,
+                picker = picker,
+                connected = connected,
+                attachments = attachments,
+                dictation = dictation,
+                comments = comments,
+                focusComment = focusComment,
+                onCommentFocused = onCommentFocused,
+                focus = composerFocus,
+                fold = composerFold,
+                onShrink = onComposerShrink,
+                onOpenModels = onOpenModels,
+                onAttach = onAttach,
+                onDictate = onDictate,
+                onVoiceChat = onVoiceChat,
+                imagePaste = imagePaste,
+                onKey = { event ->
+                    // A bot named so far comes before "A file" / "A folder", which any short @ word offers too.
+                    val listed = when {
+                        listsAway -> 0
+                        slashShown -> suggestions.size
+                        suggestions.isNotEmpty() -> 0
+                        mentions.isNotEmpty() -> mentions.size
+                        else -> refs.size
                     }
-                    mentions.isNotEmpty() -> true.also { onMention(mentions[at.coerceIn(mentions.indices)]) }
-                    else -> true.also { onRef(refs[at.coerceIn(refs.indices)]) }
-                }
-            },
-        )
+                    val step = suggestionStep(event)
+                    val at = if (slashShown) marked else marked.coerceAtLeast(0)
+                    when {
+                        isPasteKey(event) -> !editing && onPasteFiles()
+                        isDesktop && listed > 0 && event.key == Key.Escape && event.type == KeyEventType.KeyDown ->
+                            true.also { dismissedAt = actions.composer.text.toString() }
+                        listed > 0 && step != null -> true.also { marked = moveHighlight(marked, step, listed) }
+                        !isPickKey(event) || listed == 0 -> false
+                        // Enter takes a `/` suggestion only once one is marked; Tab takes the first too.
+                        slashShown -> (marked in suggestions.indices || event.key == Key.Tab).also {
+                            if (it) actions.pickSuggestion(suggestions[at.coerceIn(suggestions.indices)])
+                        }
+                        mentions.isNotEmpty() -> true.also { onMention(mentions[at.coerceIn(mentions.indices)]) }
+                        else -> true.also { onRef(refs[at.coerceIn(refs.indices)]) }
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -1534,6 +1629,7 @@ private fun ComposerNotice.text(): String = when (this) {
     is ComposerNotice.Said -> text
     ComposerNotice.PromptNotSent -> stringResource(Res.string.chat_notice_prompt_not_sent)
     ComposerNotice.CallNotStarted -> stringResource(Res.string.chat_notice_call_not_started)
+    ComposerNotice.ImagePasteTimedOut -> stringResource(Res.string.android_attach_photo_failed)
     is ComposerNotice.TooManyAttachments -> stringResource(Res.string.chat_notice_too_many_files, max)
     is ComposerNotice.FileTooLarge -> stringResource(Res.string.chat_notice_file_too_large, name, megabytes)
 }
@@ -1859,9 +1955,22 @@ private val FOLLOW_UP_PROMPTS = listOf(
     Res.string.chat_prompt_follow_7,
 )
 
+/** Where the list opens: the end, following, or where a reader scrolled away from it last stood, by message. */
+internal data class ListPlace(val index: Int, val offset: Int, val pinned: Boolean)
+
+internal fun openingPlace(messages: List<ChatMessage>, saved: TranscriptViewport?): ListPlace {
+    val at = saved?.takeIf { !it.pinned }?.firstKey?.let { key -> messages.indexOfFirst { it.key == key } } ?: -1
+    // A message no longer loaded (the chat started over from its newest page) leaves nothing to come back to.
+    return if (at >= 0) ListPlace(at, saved!!.firstOffset.coerceAtLeast(0), pinned = false)
+    else ListPlace(messages.lastIndex.coerceAtLeast(0), LIST_END, pinned = true)
+}
+
 @Composable
 private fun Messages(
     messages: List<ChatMessage>,
+    conversationKey: Any?,
+    savedViewport: () -> TranscriptViewport?,
+    onSaveViewport: ((TranscriptViewport) -> Unit)?,
     /** The conversation goes back further than [messages]; nearing the top loads the page before. */
     olderMessages: Boolean,
     loadingOlder: Boolean,
@@ -1870,6 +1979,7 @@ private fun Messages(
     bottomInset: Dp,
     /** How high the dock really stands, for what floats just above it. */
     controlsInset: Dp,
+    controlHaze: HazeState?,
     /** Folds the composer by how near the reader is to the end. */
     fold: ComposerFold,
     actions: ChatActions,
@@ -1881,6 +1991,8 @@ private fun Messages(
     onReadLatest: (() -> Unit)? = null,
     /** The reply being read aloud, by its key. */
     reading: String? = null,
+    /** The reply being read is held where it is. */
+    readingPaused: Boolean = false,
     /** Replies offer Read aloud. */
     canReadAloud: Boolean = true,
     /** The message Find in chat is on, by its key, marked with an outline. */
@@ -1904,18 +2016,39 @@ private fun Messages(
     }
     // Laid out top-down and opened at the end. A list holds its place by the top of what's on screen, so a reply
     // growing below the lines being read leaves them where they are; following the bottom is done here instead.
-    val listState = rememberLazyListState(messages.lastIndex.coerceAtLeast(0), LIST_END)
+    // Back on screen after the list was taken down (the screen rebuilt on waking, or a spinner in its place), it
+    // comes back to where the reader was, and doesn't open again at the end or the "New messages" line.
+    // Not when the message the reader was on is gone: the list opens afresh then, "New messages" line and all.
+    val saved = remember { savedViewport()?.takeIf { it.pinned || !openingPlace(messages, it).pinned } }
+    val opening = remember { openingPlace(messages, saved) }
+    // Not saved with the screen: the view model has where the reader was, by message, which outlasts rows loaded
+    // or replaced meanwhile where an index would not.
+    val listState = remember { LazyListState(opening.index, opening.offset) }
+    // What the opening had worked out holds for the same read position (and the same saved copy or not) only.
+    fun restored(sameCopy: Boolean) = saved?.takeIf { it.readUpTo == readUpTo && (!sameCopy || it.savedCopy == savedCopy) }
     val scope = rememberCoroutineScope()
     val newest = messages.lastOrNull()
     val awayFromBottom by remember { derivedStateOf { listState.layoutInfo.hiddenBelow() > 600 } }
     // Following while the reader sits right at the end; where they drag to decides whether it carries on.
-    var pinned by remember { mutableStateOf(true) }
-    var readerNavigated by remember(readUpTo) { mutableStateOf(false) }
+    var pinned by remember { mutableStateOf(opening.pinned) }
+    var readerNavigated by remember(readUpTo) { mutableStateOf(restored(sameCopy = false)?.readerNavigated ?: false) }
     // Once the user sends from here, what follows is their own conversation, not news to mark or jump to.
-    var unreadSettled by remember(readUpTo) { mutableStateOf(false) }
+    var unreadSettled by remember(readUpTo) { mutableStateOf(restored(sameCopy = false)?.unreadSettled ?: false) }
     // The opening jump is done; only then may reaching the end mark the chat read. A saved copy giving way to
     // current history looks for the unread line again, so it waits for that too.
-    var positioned by remember(readUpTo, savedCopy) { mutableStateOf(readUpTo == null || unreadSettled) }
+    var positioned by remember(readUpTo, savedCopy) {
+        mutableStateOf(restored(sameCopy = true)?.positioned ?: (readUpTo == null || unreadSettled))
+    }
+    val oldest = messages.firstOrNull()?.key
+    var previousOldest by remember { mutableStateOf(oldest) }
+    SideEffect {
+        // A short newest page can fit in the viewport. Adding rows above it changes the bottom-aligned
+        // layout before the follow effect can react, so carry the bottom anchor into the new layout.
+        if (oldest.isOlderThan(previousOldest) && pinned && !listState.isScrollInProgress) {
+            listState.requestScrollToItem(messages.lastIndex, LIST_END)
+        }
+        previousOldest = oldest
+    }
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo }.collect { info ->
             when (followStep(pinned, info.hiddenBelow(), listState.isScrollInProgress)) {
@@ -1946,6 +2079,8 @@ private fun Messages(
     val readBack = remember(readBackTravel, fold) { ReadBackDetector(readBackTravel) { fold.heldOpen = false } }
     // A prompt just sent here is always shown, wherever the reader was. One sent elsewhere, or a stored one coming
     // in with history, only pulls a reader who hasn't moved.
+    // The newest message when the list came back where the reader was: it isn't news, so it pulls no one.
+    val newestWhenRestored = remember { newest?.key.takeIf { !opening.pinned } }
     LaunchedEffect(newest?.key) {
         // A fast submit can acknowledge the local prompt before the screen ever draws it pending.
         val sentHere = newest is ChatMessage.User && (newest.pending || newest.key.startsWith("local-"))
@@ -1953,25 +2088,50 @@ private fun Messages(
             unreadSettled = true
             positioned = true
         }
-        if (newest is ChatMessage.User && (sentHere || !readerNavigated)) {
+        if (newest is ChatMessage.User && (sentHere || (!readerNavigated && newest.key != newestWhenRestored))) {
             pinned = true
             listState.scrollToItem(messages.lastIndex, LIST_END)
         }
     }
-    // What the bottom held when the reader last saw it; anything since is new to them.
-    val tail = messages.lastOrNull()?.let { it.key to it.contentSize() }
-    var seenTail by remember { mutableStateOf(tail) }
-    LaunchedEffect(awayFromBottom, tail) { if (!awayFromBottom) seenTail = tail }
-    val newBelow = awayFromBottom && tail != seenTail
+    // How much reply the bottom holds; more of it arriving while the reader is away from the end is new to them.
+    val tail = messages.replyMark()
+    var replySeen by remember { mutableStateOf(ReplySeen(oldest, tail)) }
+    var previousReplyMessages by remember { mutableStateOf(messages) }
+    LaunchedEffect(awayFromBottom, messages) {
+        val arrivedWithPage = oldest.isOlderThan(replySeen.oldest) &&
+            messages.replyArrivedWithPage(previousReplyMessages, replySeen.mark)
+        replySeen = replySeen.next(awayFromBottom, oldest, tail, arrivedWithPage)
+        previousReplyMessages = messages
+    }
+    val newBelow = awayFromBottom && replySeen.new
     // Where the messages that came since the chat was last read begin. It stays put for the rest of this visit,
     // so reading on doesn't move or remove it under the reader; the next visit starts from the new last look.
     // Older pages load first while every loaded message is still new.
     // A saved copy may omit older unread messages or contain rows the gateway no longer serves.
     // Discover the boundary again against current history, without pulling a reader who has taken over.
-    var unreadFrom by remember(readUpTo, savedCopy) { mutableStateOf<String?>(null) }
-    var unreadPagesLoaded by remember(readUpTo, savedCopy) { mutableStateOf(0) }
+    var unreadFrom by remember(readUpTo, savedCopy) { mutableStateOf(restored(sameCopy = true)?.unreadFrom) }
+    var unreadPagesLoaded by remember(readUpTo, savedCopy) { mutableStateOf(restored(sameCopy = true)?.unreadPagesLoaded ?: 0) }
     // The oldest message when a page was last asked for: a reply streaming in reruns this before the page loads.
     var unreadPageAskedAt by remember(readUpTo, savedCopy) { mutableStateOf<String?>(null) }
+    // Kept as the list leaves the screen. Read through the latest composition: the values above are replaced, not
+    // changed, when the read position or the saved copy changes.
+    val viewport by rememberUpdatedState {
+        TranscriptViewport(
+            conversationKey = conversationKey,
+            firstKey = messages.getOrNull(listState.firstVisibleItemIndex)?.key,
+            firstOffset = listState.firstVisibleItemScrollOffset,
+            pinned = pinned,
+            readUpTo = readUpTo,
+            savedCopy = savedCopy,
+            readerNavigated = readerNavigated,
+            unreadSettled = unreadSettled,
+            positioned = positioned,
+            unreadFrom = unreadFrom,
+            unreadPagesLoaded = unreadPagesLoaded,
+        )
+    }
+    val saveViewport by rememberUpdatedState(onSaveViewport)
+    DisposableEffect(listState) { onDispose { saveViewport?.invoke(viewport()) } }
     LaunchedEffect(readUpTo, messages, olderMessages, loadingOlder, savedCopy) {
         if (readUpTo == null || unreadFrom != null || unreadSettled) return@LaunchedEffect
         if (messages.any { it is ChatMessage.User && it.pending }) {
@@ -2011,14 +2171,17 @@ private fun Messages(
         positioned = true
     }
     val readLatest by rememberUpdatedState(onReadLatest)
-    val messageCount by rememberUpdatedState(messages.size)
+    val renderedEnd by rememberUpdatedState(messages.size to newest?.key)
     // Asked again whenever the messages change, not just the tail: a page loaded above, or a row redrawn, can turn
     // down an ask made while the rendered list and the chat's differed for a frame.
     LaunchedEffect(listState, positioned, onReadLatest != null, messages) {
         if (!positioned || onReadLatest == null) return@LaunchedEffect
         snapshotFlow {
-            listState.layoutInfo.visibleItemsInfo.isNotEmpty() &&
-                listState.layoutInfo.totalItemsCount == messageCount && !listState.canScrollForward
+            val layout = listState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()
+            val (count, lastKey) = renderedEnd
+            lastVisible != null && lastVisible.key == lastKey &&
+                layout.totalItemsCount == count && !listState.canScrollForward
         }.collect { atEnd -> if (atEnd) readLatest?.invoke() }
     }
     val unservable = remember(messages) { unservableEchoes(messages) }
@@ -2047,7 +2210,8 @@ private fun Messages(
         val side = 16.dp + ((maxWidth - READING_WIDTH) / 2).coerceAtLeast(0.dp)
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize().nestedScroll(readBack),
+            modifier = Modifier.fillMaxSize().nestedScroll(readBack)
+                .then(if (controlHaze != null) Modifier.hazeSource(controlHaze) else Modifier),
             contentPadding = PaddingValues(start = side, end = side, top = 12.dp, bottom = 12.dp + bottomInset),
             verticalArrangement = Arrangement.spacedBy(if (isDesktop) 16.dp else 20.dp, Alignment.Bottom),
         ) {
@@ -2125,8 +2289,14 @@ private fun Messages(
                                     last = message.key == lastReply,
                                     unservable = unservable,
                                     reading = message.key == reading,
+                                    readingPaused = readingPaused,
                                     onReadAloud = if (canReadAloud) ({ text -> actions.readAloud(message.key, text) }) else null,
                                     onStopReading = actions::stopReading,
+                                    onReact = if (connected && chat.replyReactionsSupported) {
+                                        { reaction -> actions.reactToReply(message.key, reaction) }
+                                    } else null,
+                                    onPauseReading = actions::pauseReading,
+                                    onResumeReading = actions::resumeReading,
                                 )
                             }
                             // An answer to another bot's message folds under it; never while it's still being written.
@@ -2157,46 +2327,49 @@ private fun Messages(
             visible = awayFromBottom,
             enter = fadeIn() + scaleIn(),
             exit = fadeOut() + scaleOut(),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp + controlsInset),
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(bottom = 12.dp + controlsInset - if (controlHaze != null) TranscriptControlRim else 0.dp),
         ) {
             val shape = RoundedCornerShape(Theme[radii][radiusMedium])
             // A pointer-sized button on the desktop, named on a rest over it.
             val size = if (isDesktop) 34.dp else 40.dp
             val jumpLabel = stringResource(Res.string.chat_jump_latest)
-            Tooltip(if (isDesktop && !newBelow) jumpLabel else "") { UnstyledButton(
-                onClick = {
-                    readerNavigated = true
-                    scope.launch {
-                        listState.animateToEnd()
-                        pinned = true
-                    }
-                },
-                modifier = Modifier
-                    .heightIn(min = size)
-                    .handCursor()
-                    .widthIn(min = size)
-                    .clip(shape)
-                    .background(if (newBelow) Theme[colors][accent] else Theme[colors][surfaceElevated])
-                    .border(1.dp, if (newBelow) Theme[colors][accent] else Theme[colors][strokeStrong], shape)
-                    .animateContentSize(),
-                indication = rememberHoverIndication(Theme[colors][textColor]),
-            ) {
-                // Says "New reply" when something arrived below, not only by the arrow.
-                val tint = if (newBelow) Theme[colors][onAccent] else Theme[colors][textColor]
-                Row(
-                    Modifier.padding(horizontal = if (newBelow) 14.dp else 11.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+            TranscriptControlBackdrop(shape, controlHaze) {
+                Tooltip(if (isDesktop && !newBelow) jumpLabel else "") { UnstyledButton(
+                    onClick = {
+                        readerNavigated = true
+                        scope.launch {
+                            listState.animateToEnd()
+                            pinned = true
+                        }
+                    },
+                    modifier = Modifier
+                        .heightIn(min = size)
+                        .handCursor()
+                        .widthIn(min = size)
+                        .clip(shape)
+                        .background(if (newBelow) Theme[colors][accent] else Theme[colors][surfaceElevated])
+                        .border(1.dp, if (newBelow) Theme[colors][accent] else Theme[colors][strokeStrong], shape)
+                        .animateContentSize(),
+                    indication = rememberHoverIndication(Theme[colors][textColor]),
                 ) {
-                    UnstyledIcon(
-                        Lucide.ArrowDown,
-                        contentDescription = if (newBelow) null else jumpLabel,
-                        tint = tint,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    if (newBelow) Text(stringResource(Res.string.chat_new_reply), style = Theme[typography][label], color = tint)
-                }
-            } }
+                    // Says "New reply" when something arrived below, not only by the arrow.
+                    val tint = if (newBelow) Theme[colors][onAccent] else Theme[colors][textColor]
+                    Row(
+                        Modifier.padding(horizontal = if (newBelow) 14.dp else 11.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        UnstyledIcon(
+                            Lucide.ArrowDown,
+                            contentDescription = if (newBelow) null else jumpLabel,
+                            tint = tint,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        if (newBelow) Text(stringResource(Res.string.chat_new_reply), style = Theme[typography][label], color = tint)
+                    }
+                } }
+            }
         }
     }
 }
@@ -2300,14 +2473,61 @@ private suspend fun LazyListState.animateToEnd() {
     scrollToItem(last, LIST_END)
 }
 
-/** How much a message holds, so a reply growing at the bottom counts as new content. */
-private fun ChatMessage.contentSize(): Int = when (this) {
-    is ChatMessage.User -> text.length
-    is ChatMessage.Assistant -> text.length + reasoning.length + tools.size
-    is ChatMessage.Command -> output.length
-    is ChatMessage.Notice -> text.length
-    is ChatMessage.Event -> event.hashCode()
+/**
+ * How much there is to read at the chat's end, for the "New reply" pill: the latest prompt's length and the reply
+ * text written since it (all of it when no prompt is loaded). Thinking, tools, notices and other events add
+ * nothing, and keys aren't compared, so the live reply giving way to its stored row(s) isn't news.
+ */
+internal fun List<ChatMessage>.replyMark(): Pair<Int, Int> {
+    val prompt = indexOfLast { it is ChatMessage.User }
+    return (getOrNull(prompt)?.replyLength() ?: 0) to subList(prompt + 1, size).sumOf { it.replyLength() }
 }
+
+/**
+ * The text a reader would scroll down for: a prompt, a reply's answer, a command's output, or a turn having failed
+ * or ended with a warning. A reply's blank space isn't counted: the stream and the stored rows space its steps
+ * differently. A failure counts the same whatever it says, as the stored row may word it differently.
+ */
+private fun ChatMessage.replyLength(): Int = when (this) {
+    is ChatMessage.User -> text.length
+    is ChatMessage.Assistant -> text.count { !it.isWhitespace() } +
+        (if (error != null || outcome == TurnOutcome.Error) 1 else 0) + (if (warning != null) 1 else 0)
+    is ChatMessage.Command -> output.length
+    is ChatMessage.Event -> if (event is TranscriptEvent.FailedTurn) 1 else 0
+    is ChatMessage.Notice -> 0
+}
+
+private fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, mark: Pair<Int, Int>): Boolean {
+    val oldest = previous.firstOrNull()?.key ?: return false
+    val start = indexOfFirst { it.key == oldest }
+    // The page can bring the prompt for a partly loaded turn. Compare only the portion we already had.
+    if (start >= 0) return subList(start, size).replyMark() != mark
+
+    // If history folded the first assistant bubble into an older row, compare the transcript after that bubble.
+    val row = oldest.storedRowId() ?: return false
+    val boundary = indexOfLast { message -> message.key.storedRowId()?.let { it <= row } == true }
+    return boundary >= 0 && subList(boundary + 1, size).replyMark() != previous.subList(1, previous.size).replyMark()
+}
+
+/**
+ * The [replyMark] and oldest loaded row as they last were, and whether reply text has come ([new]) since the reader
+ * left the end. It stays new until they are back there, even if a later turn brings the mark back to what it was.
+ */
+internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val new: Boolean = false) {
+    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>, arrivedWithPage: Boolean = false): ReplySeen {
+        val arrived = if (oldest.isOlderThan(this.oldest)) arrivedWithPage else mark != this.mark
+        return ReplySeen(oldest, mark, new = away && (new || arrived))
+    }
+}
+
+private fun String?.isOlderThan(previous: String?): Boolean {
+    val before = previous.storedRowId() ?: return false
+    val now = storedRowId() ?: return false
+    return now < before
+}
+
+/** The stored row a message's key (`row-<id>`, as `historyToMessages` gives it) was made from, if any. */
+private fun String?.storedRowId(): Long? = this?.takeIf { it.startsWith("row-") }?.removePrefix("row-")?.substringBefore('-')?.toLongOrNull()
 
 /** Tells apart the ways the link can be down: none, being re-made, or needing a new sign-in. */
 @Composable
@@ -2335,31 +2555,39 @@ private const val UNREACHABLE = "Can't reach gateway"
 
 /** The banner over the chat while the gateway can't be reached: where, what's being done about it, and Retry now. */
 @Composable
-internal fun OfflineBanner(place: String?, status: String, onRetry: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp)
-            // The tint laid on the chat's page colour: the red wash it had on a plain page, but nothing under it shows through.
-            .background(Theme[colors][dangerSoft].compositeOver(Theme[colors][background]), RoundedCornerShape(Theme[radii][radiusMedium]))
-            .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
-            .semantics(mergeDescendants = true) {},
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        UnstyledIcon(Lucide.WifiOff, contentDescription = null, tint = Theme[colors][danger], modifier = Modifier.size(16.dp))
-        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-            // Announced once as it appears: the line under it changes with every attempt, and isn't.
-            Text(
-                stringResource(Res.string.chat_offline_title, offlineTitle(place)),
-                style = Theme[typography][bodySmall].copy(fontWeight = FontWeight.Medium),
-                color = Theme[colors][textColor],
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            )
-            val line = stringResource(Res.string.chat_offline_draft_kept, status)
-            CopyableOnDesktop { Text(line, style = Theme[typography][caption], color = Theme[colors][textSecondary]) }
+internal fun OfflineBanner(
+    place: String?,
+    status: String,
+    controlHaze: HazeState? = null,
+    onRetry: () -> Unit,
+) {
+    val shape = RoundedCornerShape(Theme[radii][radiusMedium])
+    val rim = if (controlHaze == null) 0.dp else TranscriptControlRim
+    TranscriptControlBackdrop(shape, controlHaze, Modifier.fillMaxWidth().padding(horizontal = 14.dp - rim)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                // Keep the banner itself opaque even as the nearby transcript softly fades out around it.
+                .background(Theme[colors][dangerSoft].compositeOver(Theme[colors][background]), shape)
+                .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+                .semantics(mergeDescendants = true) {},
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            UnstyledIcon(Lucide.WifiOff, contentDescription = null, tint = Theme[colors][danger], modifier = Modifier.size(16.dp))
+            Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                // Announced once as it appears: the line under it changes with every attempt, and isn't.
+                Text(
+                    stringResource(Res.string.chat_offline_title, offlineTitle(place)),
+                    style = Theme[typography][bodySmall].copy(fontWeight = FontWeight.Medium),
+                    color = Theme[colors][textColor],
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                val line = stringResource(Res.string.chat_offline_draft_kept, status)
+                CopyableOnDesktop { Text(line, style = Theme[typography][caption], color = Theme[colors][textSecondary]) }
+            }
+            RetryChip(stringResource(Res.string.chat_retry_now), onClick = onRetry)
         }
-        RetryChip(stringResource(Res.string.chat_retry_now), onClick = onRetry)
     }
 }
 
@@ -2803,9 +3031,15 @@ internal fun AssistantReply(
     unservable: List<GeneratedImage> = emptyList(),
     /** This reply is being read aloud: Stop shows in place of Read aloud. */
     reading: Boolean = false,
+    /** This reply's reading is held where it is: Resume shows in place of Pause. */
+    readingPaused: Boolean = false,
     /** Reads the reply's text, as shown, aloud; null when it can't be now. */
     onReadAloud: ((String) -> Unit)? = null,
     onStopReading: () -> Unit = {},
+    /** Sets or clears the user's reaction on this stored reply; null when it can't be now. */
+    onReact: ((ReplyReaction) -> Unit)? = null,
+    onPauseReading: () -> Unit = {},
+    onResumeReading: () -> Unit = {},
 ) {
     val settings = LocalAppSettings.current
     val showReasoning = settings.showReasoning && message.reasoning.isNotBlank()
@@ -2824,12 +3058,17 @@ internal fun AssistantReply(
     var contextMenuOpen by remember { mutableStateOf(false) }
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
-    val canMenu = isDesktop && !message.streaming && text.isNotBlank()
+    val actionable = !message.streaming && text.isNotBlank()
+    val canMenu = isDesktop && actionable
+    // A reply of only code or files has nothing to say, in either menu.
+    val speakable = remember(text, actionable) { actionable && readAloudText(text).isNotEmpty() }
     // Said by the menu and the icons alike; read here, as the menu is built outside composition.
     val copyLabel = stringResource(Res.string.chat_copy)
     val regenerateLabel = stringResource(Res.string.chat_regenerate)
     val branchLabel = stringResource(Res.string.chat_branch_here)
     val stopReadingLabel = stringResource(Res.string.chat_stop_reading)
+    val pauseReadingLabel = stringResource(Res.string.chat_pause_reading)
+    val resumeReadingLabel = stringResource(Res.string.chat_resume_reading)
     val readAloudLabel = stringResource(Res.string.chat_read_aloud)
     if (canMenu) {
         RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
@@ -2837,8 +3076,10 @@ internal fun AssistantReply(
                 RowMenuItem(copyLabel, Lucide.Copy) { scope.launch { clipboard.setClipEntry(plainTextClipEntry(text)) } },
                 onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
                 onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
+                if (reading) RowMenuItem(if (readingPaused) resumeReadingLabel else pauseReadingLabel, if (readingPaused) Lucide.Play else Lucide.Pause, run = if (readingPaused) onResumeReading else onPauseReading)
+                else null,
                 if (reading) RowMenuItem(stopReadingLabel, Lucide.Square, run = onStopReading)
-                else onReadAloud?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
+                else onReadAloud?.takeIf { speakable }?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
             )
         }
     }
@@ -2895,69 +3136,96 @@ internal fun AssistantReply(
             }
         }
         val usage = message.usage?.takeIf { settings.showUsage && !message.streaming }
-        val actionable = !message.streaming && text.isNotBlank()
-        // A reply of only code or files has nothing to say.
-        val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
-        if (isDesktop && (actionable || usage != null)) {
-            // A desktop reads a reply's tools from its own start, as desktop chat apps line them up, and shows
-            // them on the newest reply and under the pointer: older replies read without a row of icons each. They
-            // only fade, so nothing moves as the pointer passes; one with the keyboard in it stays shown.
+        val actions = if (actionable) listOfNotNull(
+            onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
+            onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
+            onReadAloud?.takeIf { !reading && speakable }?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
+        ) else emptyList()
+        val react = onReact.takeIf { !message.streaming && message.reactionRowId != null }
+        val reaction = message.userReaction.takeUnless { message.streaming }
+        val hasMore = actions.isNotEmpty() || react != null
+        if (actionable || usage != null || react != null || reaction != null) {
             var keysInside by remember { mutableStateOf(false) }
-            val shown = last || hovered || keysInside
+            var moreOpen by remember { mutableStateOf(false) }
+            LaunchedEffect(hasMore) { if (!hasMore) moreOpen = false }
+            val shown = !isDesktop || last || hovered || keysInside || (moreOpen && hasMore) || reading
+            val iconSize = if (isDesktop) 32.dp else MinTouchTarget
+            // A desktop shows the row on the newest reply and under the pointer; older replies read without it. It only
+            // fades, so nothing moves as the pointer passes and Tab still reaches it (one with the keyboard in it stays
+            // shown); faded out, it isn't read out either. The chosen reaction stays shown on every reply.
             val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
-            Row(
-                Modifier.trimEndTop(end = 0.dp, top = 4.dp).offset(x = (-10).dp).alpha(alpha).onFocusChanged { keysInside = it.hasFocus },
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (actionable) {
-                    // Pointer-sized, as the icons beside it are.
-                    CopyButton(text, Modifier.size(32.dp))
-                    onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, Modifier) }
-                    onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, Modifier) }
-                }
-                usage?.let {
-                    val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(it.input), compactCount(it.output))
-                    Text(
-                        replyUsage(it.input, it.output),
-                        style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
-                        color = Theme[colors][textMuted],
-                        // On one line in a narrow window at the largest text, as on the phone.
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 8.dp).semantics { contentDescription = spoken },
-                    )
-                }
-            }
-        } else if (actionable || usage != null) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // The count takes only what the actions leave: at the largest text it ellipsizes instead of squeezing them out.
-                if (usage != null) {
-                    val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
-                    Text(
-                        replyUsage(usage.input, usage.output),
-                        style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
-                        color = Theme[colors][textMuted],
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).semantics { contentDescription = spoken },
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
-                if (actionable) {
-                    // On the end, under the thumb of the hand holding the phone; Copy, the one used most, sits last.
-                    // Copy's padding trimmed off the end lines its icon up with the reply's edge; all of them lose 4dp on top to sit close under it.
-                    val action = Modifier.trimEndTop(end = 0.dp, top = 4.dp)
-                    onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, action) }
-                    onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, action) }
-                    when {
-                        reading -> ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, action)
-                        speakable && onReadAloud != null -> ReplyAction(Lucide.Volume2, readAloudLabel, { onReadAloud(text) }, action)
+            // Faded out, it takes no taps either: a touchscreen never hovers to show it first.
+            val hidden = if (shown) Modifier else Modifier.clearAndSetSemantics {}.ignoringPresses()
+            val moreLabel = stringResource(Res.string.chat_reply_more)
+            val usageText = usage?.let { replyUsage(it.input, it.output) }
+            val usageStyle = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily)
+            BoxWithConstraints(Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)) {
+                val copyWidth = if (actionable) {
+                    val size = ButtonSize.Small
+                    maxOf(size.labelledIconWidth(copyLabel), size.labelledIconWidth(LocalDesignWords.current.copied)) + 2.dp
+                } else 0.dp
+                val moreWidth = if (hasMore) ButtonSize.Small.labelledIconWidth(moreLabel) + 2.dp else 0.dp
+                val usageMeasurer = rememberTextMeasurer()
+                val usageWidth = if (usageText != null) with(LocalDensity.current) {
+                    usageMeasurer.measure(usageText, style = usageStyle, maxLines = 1, softWrap = false).size.width.toDp()
+                } else 0.dp
+                // The chosen reaction's icon; one from another client's set with no icon to match shows as its emoji.
+                val badgeWidth = when {
+                    reaction == null -> 0.dp
+                    reactionIcon(reaction) != null -> ReplyReactionBadgeIcon + ReplyReactionBadgePadding * 2 + 2.dp
+                    else -> with(LocalDensity.current) {
+                        usageMeasurer.measure(reaction, style = Theme[typography][body], maxLines = 1, softWrap = false).size.width.toDp() +
+                            ReplyReactionBadgePadding * 2 + 2.dp
                     }
-                    CopyButton(text, Modifier.trimEndTop(end = 16.dp, top = 4.dp).size(MinTouchTarget))
+                }
+                val playbackWidth = if (reading) (iconSize + 2.dp) * 2 else 0.dp
+                val labelled = copyWidth + moreWidth + usageWidth + badgeWidth + playbackWidth <= maxWidth
+                Row(
+                    Modifier.fillMaxWidth().onFocusChanged { keysInside = it.hasFocus }.focusGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (usage != null && usageText != null) {
+                        val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
+                        Text(
+                            usageText,
+                            style = usageStyle,
+                            color = Theme[colors][textMuted],
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).alpha(alpha)
+                                .then(if (shown) Modifier.semantics { contentDescription = spoken } else hidden),
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (reading) {
+                        if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, Modifier.size(iconSize))
+                        else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, Modifier.size(iconSize))
+                        ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, Modifier.size(iconSize))
+                    }
+                    if (actionable) Box(hidden.alpha(alpha)) {
+                        if (labelled) CopyButton(text, visibleLabel = copyLabel)
+                        else CopyButton(text, modifier = Modifier.size(iconSize), label = copyLabel)
+                    }
+                    if (reaction != null) ReplyReactionBadge(reaction)
+                    if (hasMore) Box(hidden.alpha(alpha)) {
+                        ReplyMoreMenu(
+                            actions, moreLabel, labelled, moreOpen, { moreOpen = it },
+                            onReact = react, selectedReaction = reaction,
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+/** Swallows presses before the children see them, so a faded-out control can't be tapped unseen. */
+private fun Modifier.ignoringPresses(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            awaitPointerEvent(PointerEventPass.Initial).changes.forEach { if (it.pressed || it.previousPressed) it.consume() }
         }
     }
 }
@@ -3101,8 +3369,9 @@ internal val ChatMessage.sentAt: Double?
 
 private fun ChatMessage.isNewerThan(readUpTo: Double): Boolean = when (this) {
     is ChatMessage.User -> (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
-    // A reply with no time yet is still being written, so it came after the last look.
-    is ChatMessage.Assistant -> (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
+    // Anchor the line before the first streamed word. A finished silent reply no longer needs it.
+    is ChatMessage.Assistant -> (streaming || text.replyTextOrNull() != null) &&
+        (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
     // Another bot writing in is news even when this bot stays silent. The machinery's own rows (deliveries,
     // routines, failures) aren't: the line goes above something the person would want to read.
     is ChatMessage.Event -> event is TranscriptEvent.FromBot && (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
@@ -3815,6 +4084,7 @@ internal fun ComposerTextInput(
     modifier: Modifier = Modifier,
     maxHeightInLines: Int = 8,
     onTextLayout: (Density.(getResult: () -> TextLayoutResult?) -> Unit)? = null,
+    onSend: (() -> Unit)? = null,
     placeholder: @Composable () -> Unit,
 ) {
     BasicTextField(
@@ -3823,8 +4093,10 @@ internal fun ComposerTextInput(
         cursorBrush = SolidColor(Theme[colors][accent]),
         lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = maxHeightInLines),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+        // A line break after `1. item` or `- item` starts the next item.
+        inputTransformation = ContinueLists,
         onTextLayout = onTextLayout,
-        modifier = modifier.semantics(mergeDescendants = true) {},
+        modifier = modifier.commitComposingOnEnter(state, ContinueLists).sendOnHardwareCtrlEnter(state, onSend).semantics(mergeDescendants = true) {},
         decorator = { innerTextField ->
             Box(Modifier.fillMaxWidth().pointerHoverIcon(PointerIcon.Text, overrideDescendants = true).clipToBounds()) {
                 if (state.text.isEmpty()) {
@@ -3847,6 +4119,7 @@ internal fun ComposerTextInput(
 @Composable
 private fun Composer(
     hazeState: HazeState,
+    reconnectingInBanner: Boolean,
     actions: ChatActions,
     placeholder: String,
     state: ChatState,
@@ -3868,6 +4141,7 @@ private fun Composer(
     onVoiceChat: () -> Unit,
     /** A prompt is being edited: it can't go out mid-turn, as the gateway won't cut the chat while a task runs. */
     editing: Boolean,
+    imagePaste: Modifier,
     /** The desktop's keys in the field before its own: a paste that attaches, a suggestion picked. */
     onKey: (KeyEvent) -> Boolean = { false },
 ) {
@@ -3886,11 +4160,7 @@ private fun Composer(
     var focused by remember { mutableStateOf(false) }
     // Up and Down through this chat's earlier prompts, from the desktop's keyboard.
     val recall = remember(state.storedSessionId) { PromptRecall() }
-    // Back hides the keyboard but leaves the field focused, and a focused field brings the keyboard back on
-    // the next relayout (opening a tool card, the menu). Put away means done typing, so let go of the focus.
-    val keyboardUp = imeVisible
-    val focusManager = LocalFocusManager.current
-    LaunchedEffect(keyboardUp) { if (!keyboardUp && focused) focusManager.clearFocus() }
+    ReleaseFocusWhenKeyboardPutAway(focused)
     // How open the composer stands, 1 open to 0 folded to a line. It tracks the scroll as it goes, and springs
     // across when a tap, the keyboard or a draft holds it open or lets go.
     val open = remember { Animatable(1f) }
@@ -3927,6 +4197,7 @@ private fun Composer(
                         state = actions.composer,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
                             .onFocusChanged { fold.typing = it.hasFocus }
+                            .then(imagePaste)
                             .then(
                                 if (!enterSends) {
                                     Modifier
@@ -3938,10 +4209,13 @@ private fun Composer(
                                 },
                             ),
                         maxHeightInLines = if (isDesktop) 14 else 8,
+                        onSend = {
+                            onComposerKey(ComposerKey.Send, actions, state, recall, connected, editing, attachments, comments)
+                        },
                         placeholder = {
                             Text(
                                 when {
-                                    !connected -> stringResource(Res.string.chat_composer_reconnecting)
+                                    !connected && !reconnectingInBanner -> stringResource(Res.string.chat_composer_reconnecting)
                                     comments.isNotEmpty() -> stringResource(Res.string.chat_composer_anything_else)
                                     // Mid-task a message joins the running task, by Queue or Steer.
                                     state.running -> stringResource(Res.string.chat_composer_add_to_task)
@@ -4004,7 +4278,7 @@ private fun Composer(
             {
                 FoldedComposer(
                     placeholder = when {
-                        !connected -> stringResource(Res.string.chat_composer_reconnecting)
+                        !connected && !reconnectingInBanner -> stringResource(Res.string.chat_composer_reconnecting)
                         state.running -> stringResource(Res.string.chat_composer_add_to_task)
                         else -> placeholder
                     },

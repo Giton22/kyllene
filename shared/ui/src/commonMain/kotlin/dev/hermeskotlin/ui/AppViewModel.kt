@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import dev.hermeskotlin.ui.chat.BotIdentity
 import dev.hermeskotlin.core.chat.ChatHost
+import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.chat.ChatLinks
 import dev.hermeskotlin.core.chat.ComposeDraft
 import dev.hermeskotlin.core.chat.DraftStart
@@ -205,6 +206,7 @@ class AppViewModel(
                 .filterNotNull()
                 .collect { link ->
                     links.consume(link)
+                    if (!link.current()) return@collect
                     cancelPendingCall()
                     if (link.draft?.start == DraftStart.VoiceChat) {
                         openDefaultCall()
@@ -214,7 +216,10 @@ class AppViewModel(
                     val bot = link.bot
                     val stored = link.storedSessionId
                     when {
-                        bot != null -> openBotLink(bot, link.title, stored, link.draft, stored?.let { lastLook(it, profile = bot) })
+                        bot != null -> {
+                            val readUpTo = stored?.let { lastLook(it, profile = bot) }
+                            if (link.current()) openBotLink(bot, link.title, stored, link.draft, readUpTo)
+                        }
                         stored == null -> newChat(link.draft)
                         open != stored -> openSession(stored, link.title ?: getString(Res.string.app_chat_fallback_title), lastLook(stored, currentProfile()))
                         // Usually the notification is for the chat left open: the reply came in while away.
@@ -318,6 +323,18 @@ class AppViewModel(
         }
     }
 
+    /** A notification leaves gateway-add for its still-owned live target, without reloading a remembered chat. */
+    fun returnToChat(source: ChatSession, target: ChatTarget): Boolean {
+        val route = _route.value
+        if ((route as? Route.Connect)?.canCancel != true) return false
+        if (host.session.value !== source || host.ownerVersion.value != source.ownerVersion ||
+            source.gateway != target.gateway.gatewayUrl || source.profile != target.profile) return false
+        cancelPendingCall()
+        certs.clear()
+        _route.value = Route.Chat(target)
+        return true
+    }
+
     /**
      * Makes [gateway] the current one: its chats when it still holds a session, else its sign-in. With [fresh], a new
      * chat there rather than the one the user left off in (switched from an empty chat, to start one there).
@@ -381,7 +398,7 @@ class AppViewModel(
     }
 
     /** Opens a stored chat; [readUpTo] is how far it had been read, when it has new messages since. */
-    fun openSession(sessionId: String, title: String, readUpTo: Double? = null) {
+    fun openSession(sessionId: String, title: String?, readUpTo: Double? = null) {
         cancelPendingCall()
         val gateway = signedInGateway() ?: return
         _route.value = Route.Chat(ChatTarget(gateway, sessionId, title, profile = currentProfile(), readUpTo = readUpTo))
@@ -561,6 +578,7 @@ class AppViewModel(
         if (profile == currentProfile()) return
         viewModelScope.launch {
             profiles.set(gateway.gatewayUrl, profile)
+            host.invalidateOwner()
             _route.value = home(gateway, fresh)
         }
     }

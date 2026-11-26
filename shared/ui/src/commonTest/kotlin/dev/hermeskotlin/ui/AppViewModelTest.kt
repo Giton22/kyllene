@@ -82,10 +82,18 @@ class AppViewModelTest {
     private val work = SavedGateway("https://hermes.work.example")
 
     private val links = ChatLinks()
+    private lateinit var chatHost: ChatHost
     private var botTransport: BotTransport? = null
     private var profileGate: CompletableDeferred<Unit>? = null
+    private var lastChatGate: CompletableDeferred<Unit>? = null
+    private var pushSeenGate: CompletableDeferred<Unit>? = null
     private val disk = InMemoryKeyValueStore()
     private val store = object : KeyValueStore by disk {
+        override suspend fun get(key: String): String? {
+            if (key.startsWith("chat.last.v1.")) lastChatGate?.await()
+            if (key.startsWith("chat.seen.v1.")) pushSeenGate?.await()
+            return disk.get(key)
+        }
         override suspend fun put(key: String, value: String) {
             if (key.startsWith("profile.v1.")) profileGate?.await()
             disk.put(key, value)
@@ -131,12 +139,137 @@ class AppViewModelTest {
     private fun TestScope.viewModel(callStore: SettingsStore? = null, certs: ClientCertAliases = ClientCertAliases()): AppViewModel {
         val connection = GatewayConnection(auth, openSocket = { _, _ -> botTransport ?: error("no socket in tests") }, scope = backgroundScope)
         val host = ChatHost(connection, SessionsApi(client), backgroundScope)
+        chatHost = host
         callSettings = callStore ?: SettingsStore(store, backgroundScope)
         val push = PushSetup(PushApi(connection), NoPushKeys, connection, gateways, SettingsStore(store, backgroundScope), backgroundScope) { "Test" }
         return AppViewModel(gateways, auth, connection, lastChats, host, ProfileStore(store), links, BotChats(if (botTransport == null) NoBotChats else dev.hermeskotlin.core.bots.BotsApi(connection)), push, access, callSettings, SessionsApi(client), BotsApi(connection), cache, seen, certs = certs)
     }
 
     private val seen = SeenStore(store) { 1_000.0 }
+
+    @Test
+    fun cancelledProfilePersistenceKeepsTheAuthoritativeNotificationOwner() = runTest {
+        cookies.addCookie(Url(home.url), Cookie("session", "test"))
+        gateways.save(home)
+        val vm = viewModel()
+        vm.route.first { it is Route.Chat }
+        val original = chatHost.open(home.gatewayUrl, null, "First")
+        val version = original.ownerVersion
+        val gate = CompletableDeferred<Unit>()
+        profileGate = gate
+        vm.switchProfile("work")
+        assertEquals(version, chatHost.ownerVersion.value)
+        gate.cancel()
+        assertEquals(version, chatHost.ownerVersion.value)
+        assertSame(original, chatHost.session.value)
+    }
+
+    @Test
+    fun completedProfileRoundTripInvalidatesTheOriginalSourceBeforeHostReplacement() = runTest {
+        cookies.addCookie(Url(home.url), Cookie("session", "test"))
+        gateways.save(home)
+        val vm = viewModel()
+        vm.route.first { it is Route.Chat }
+        val original = chatHost.open(home.gatewayUrl, null, "First")
+        val version = original.ownerVersion
+        vm.switchProfile("work")
+        assertEquals("work", vm.chatsProfile.value)
+        vm.switchProfile(null)
+        assertNull(vm.chatsProfile.value)
+        assertTrue(chatHost.ownerVersion.value > version)
+        assertSame(original, chatHost.session.value)
+        assertEquals(version, original.ownerVersion)
+    }
+
+    @Test
+    fun signingInAgainToTheSameGatewayCannotRestoreTheOldNotificationOwner() = runTest {
+        cookies.addCookie(Url(home.url), Cookie("session", "test"))
+        gateways.save(home)
+        val vm = viewModel()
+        vm.route.first { it is Route.Chat }
+        val original = chatHost.open(home.gatewayUrl, null, "First")
+        val version = original.ownerVersion
+        vm.signOut()
+        assertIs<Route.SignIn>(vm.route.value)
+        cookies.addCookie(Url(home.url), Cookie("session", "different"))
+        vm.onSignedIn(home)
+        assertIs<Route.Chat>(vm.route.value)
+        val reopened = chatHost.open(home.gatewayUrl, null, "Again")
+        assertTrue(reopened.ownerVersion > version)
+        assertEquals(version, original.ownerVersion)
+    }
+
+    @Test
+    fun cancelledHomeLoadAfterPersistedSelectionDoesNotRestoreTheOldOwner() = runTest {
+        cookies.addCookie(Url(home.url), Cookie("session", "test"))
+        gateways.save(home)
+        val vm = viewModel()
+        vm.route.first { it is Route.Chat }
+        val original = chatHost.open(home.gatewayUrl, null, "First")
+        val gate = CompletableDeferred<Unit>()
+        lastChatGate = gate
+        vm.switchProfile("work")
+        assertEquals("work", ProfileStore(store).get(home.gatewayUrl))
+        assertTrue(chatHost.ownerVersion.value > original.ownerVersion)
+        gate.cancel()
+        assertSame(original, chatHost.session.value)
+        assertTrue(chatHost.ownerVersion.value > original.ownerVersion)
+        val fresh = chatHost.open(home.gatewayUrl, null, "Work", "work")
+        assertEquals(chatHost.ownerVersion.value, fresh.ownerVersion)
+        assertTrue(fresh.ownerVersion > original.ownerVersion)
+    }
+
+    @Test
+    fun notificationReturnsFromGatewayAddToItsLiveTargetWithoutReplacingTheSourceOrDraft() = runTest {
+        cookies.addCookie(Url(home.url), Cookie("session", "test"))
+        gateways.save(home)
+        val vm = viewModel()
+        vm.route.first { it is Route.Chat }
+        vm.newChat(ComposeDraft(text = "Keep this unsent"))
+        runCurrent()
+        val target = assertIs<Route.Chat>(vm.route.value).target
+        val source = chatHost.open(home.gatewayUrl, null, "Live source")
+        vm.addGateway()
+        assertIs<Route.Connect>(vm.route.value)
+        assertTrue(vm.returnToChat(source, target))
+        assertSame(target, assertIs<Route.Chat>(vm.route.value).target)
+        assertSame(source, chatHost.session.value)
+        assertEquals("Keep this unsent", target.draft?.text)
+    }
+
+    @Test
+    fun notificationCannotReturnToAReplacedSourceOrAnotherGatewayTarget() = runTest {
+        cookies.addCookie(Url(home.url), Cookie("session", "test"))
+        gateways.save(home)
+        val vm = viewModel()
+        vm.route.first { it is Route.Chat }
+        val target = assertIs<Route.Chat>(vm.route.value).target
+        val source = chatHost.open(home.gatewayUrl, null, "Old source")
+        vm.addGateway()
+        assertFalse(vm.returnToChat(source, target.copy(gateway = work)))
+        chatHost.close()
+        val current = chatHost.open(home.gatewayUrl, null, "Current source")
+        assertFalse(vm.returnToChat(source, target))
+        assertIs<Route.Connect>(vm.route.value)
+        assertSame(current, chatHost.session.value)
+    }
+
+    @Test
+    fun notificationDoesNotInterruptAnAddingGatewaysSignInFlow() = runTest {
+        cookies.addCookie(Url(home.url), Cookie("session", "test"))
+        gateways.save(home)
+        val vm = viewModel()
+        vm.route.first { it is Route.Chat }
+        val target = assertIs<Route.Chat>(vm.route.value).target
+        val source = chatHost.open(home.gatewayUrl, null, "Live source")
+        vm.addGateway()
+        vm.onGatewayChosen(work)
+        val signIn = assertIs<Route.SignIn>(vm.route.value)
+        assertTrue(signIn.adding)
+        assertFalse(vm.returnToChat(source, target))
+        assertSame(signIn, vm.route.value)
+        assertSame(source, chatHost.session.value)
+    }
 
     // Push is never registered; bot-call tests supply their own connected RPC transport.
     private object NoPushKeys : PushKeys {
@@ -684,6 +817,55 @@ class AppViewModelTest {
 
         assertNull(cache.savedList(home.gatewayUrl, null, SessionListFilter.Recent))
         assertNotNull(cache.savedList(other.gatewayUrl, null, SessionListFilter.Recent))
+    }
+
+    @Test
+    fun aCurrentPushLinkOpensOnlyItsNamedBotSession() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val app = viewModel()
+        app.awaitChat(home)
+        links.openOwnedBot("worker", "Worker", "push-session", current = { true })
+        val target = assertIs<Route.Chat>(app.route.value).target
+        assertEquals(home, target.gateway)
+        assertEquals("worker", target.profile)
+        assertEquals("push-session", target.storedSessionId)
+        assertNull(links.pending.value)
+    }
+
+    @Test
+    fun aQueuedPushLinkIsDroppedIfItsOwnerChangedBeforeReturningFromSignIn() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val app = viewModel()
+        app.awaitChat(home)
+        var owned = true
+        app.addGateway()
+        app.onGatewayChosen(work)
+        assertIs<Route.SignIn>(app.route.value)
+        links.openOwnedBot("worker", "Worker", "push-session", current = { owned })
+        owned = false
+        app.cancelAddGateway()
+        val restored = app.awaitChat(home)
+        assertFalse(restored.target.storedSessionId == "push-session")
+        assertNull(links.pending.value)
+    }
+
+    @Test
+    fun aPushLinkRechecksOwnershipAfterReadingItsLastSeenState() = runTest {
+        gateways.save(home)
+        signedIn(home)
+        val app = viewModel()
+        val before = app.awaitChat(home)
+        var owned = true
+        val gate = CompletableDeferred<Unit>()
+        pushSeenGate = gate
+        links.openOwnedBot("worker", "Worker", "push-session", current = { owned })
+        assertSame(before, app.route.value)
+        owned = false
+        gate.complete(Unit)
+        assertSame(before, app.route.value)
+        assertNull(links.pending.value)
     }
 
     @Test

@@ -112,7 +112,8 @@ data class KnownPhone(
  * The gateway side of push, over the dashboard socket: the herald-push plugin is installed with the same
  * call as Desktop's Plugins hub, and talked to through its `/herald-push` command, which only answers the
  * dashboard (never a messaging platform). Registering over this authenticated link is what makes the
- * gateway keys the phone pins trustworthy.
+ * gateway keys the phone pins trustworthy. A gateway that runs the socket on its session authority takes a
+ * command only in a chat, so there the command runs in a hidden chat of its own.
  */
 class PushApi(private val connection: GatewayConnection) {
 
@@ -431,23 +432,70 @@ class PushApi(private val connection: GatewayConnection) {
 
     /** What `/herald-push <arg>` printed, or null when the plugin isn't loaded. */
     private suspend fun output(arg: String): String? {
+        val rpc = client()
+        // The session authority runs a command only in a chat, and answers a plugin's as `exec`.
+        val authority = rpc.sessionAuthority
         val reply = try {
-            client().request(
-                "command.dispatch",
-                buildJsonObject {
-                    put("name", PLUGIN_COMMAND)
-                    put("arg", arg)
-                },
-            )
+            if (authority) dispatchInChat(rpc, arg) else dispatch(rpc, arg, null)
         } catch (e: RpcException) {
-            // 4018: no such command, i.e. the plugin isn't loaded.
-            if (e.code == NOT_A_COMMAND) return null
+            // 4018, or the authority's `unsupported_command`: no such command, i.e. the plugin isn't loaded.
+            if (e.code == NOT_A_COMMAND || (authority && e.refusal() == UNSUPPORTED_COMMAND)) return null
             throw e
         }
         val obj = reply as? JsonObject ?: return null
-        if ((obj["type"] as? JsonPrimitive)?.contentOrNull != "plugin") return null
+        val type = (obj["type"] as? JsonPrimitive)?.contentOrNull
+        if (type != "plugin" && !(authority && type == "exec")) return null
         return (obj["output"] as? JsonPrimitive)?.contentOrNull
     }
+
+    private suspend fun dispatch(rpc: JsonRpcClient, arg: String, chat: String?): JsonElement = rpc.request(
+        "command.dispatch",
+        buildJsonObject {
+            if (chat != null) put("session_id", chat)
+            put("name", PLUGIN_COMMAND)
+            put("arg", arg)
+        },
+    )
+
+    /** [dispatch] in [rpc]'s command chat; one that is gone (`not_found`) is opened again, once. */
+    private suspend fun dispatchInChat(rpc: JsonRpcClient, arg: String): JsonElement {
+        val chat = commandChat(rpc)
+        return try {
+            dispatch(rpc, arg, chat)
+        } catch (e: RpcException) {
+            if (e.refusal() != NOT_FOUND) throw e
+            dispatch(rpc, arg, commandChat(rpc, gone = chat))
+        }
+    }
+
+    private val openingChat = Mutex()
+
+    /** The command chat open on a connection, by its client: a chat is attached to the socket that opened it. */
+    private var openChat: Pair<JsonRpcClient, String>? = null
+
+    /**
+     * The hidden chat the plugin's commands run in on [rpc], a session-authority connection, which runs none
+     * without a chat. Opened by title, which such a gateway resumes when it has the chat: one per gateway, not
+     * one per connection, and never in the chat list. [gone] is an id the gateway no longer knows.
+     */
+    private suspend fun commandChat(rpc: JsonRpcClient, gone: String? = null): String = openingChat.withLock {
+        openChat?.takeIf { it.first === rpc && it.second != gone }?.second ?: run {
+            val opened = rpc.request(
+                "session.create",
+                buildJsonObject {
+                    put("title", COMMAND_CHAT_TITLE)
+                    put("hidden", true)
+                },
+            ) as? JsonObject
+            val id = (opened?.get("session_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }
+                ?: throw RpcException(0, "The gateway didn't open a chat for the plugin's commands.")
+            openChat = rpc to id
+            id
+        }
+    }
+
+    /** Why the session authority refused: `error.data.reason`, which it also sends as the message. */
+    private fun RpcException.refusal(): String = reason ?: message
 
     private fun client(): JsonRpcClient = (connection.state.value as? ConnectionState.Connected)?.client
         ?: throw RpcException(0, "Not connected to the gateway.")
@@ -471,6 +519,11 @@ class PushApi(private val connection: GatewayConnection) {
         /** The oldest plugin that lists, orders and removes phones; older ones work without the list. */
         const val PHONE_LIST_PLUGIN_VERSION = "0.3.1"
         private const val NOT_A_COMMAND = 4018
+        private const val NOT_FOUND = "not_found"
+        private const val UNSUPPORTED_COMMAND = "unsupported_command"
+
+        /** The title the hidden command chat is opened and found again by. */
+        internal const val COMMAND_CHAT_TITLE = "Kyllene plugin commands"
         private const val INSTALL_TIMEOUT_MS = 180_000L
         private const val BRIEF_ERROR_CHARS = 160
 

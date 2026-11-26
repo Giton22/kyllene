@@ -113,7 +113,7 @@ internal fun DelegationCard(call: ToolActivity) {
 
 /** A surface card; a live one has an accent edge and a soft accent glow, a finished one a hairline. */
 @Composable
-private fun SubagentCard(row: SubagentRow, onStop: (String) -> Unit) {
+internal fun SubagentCard(row: SubagentRow, onStop: ((String) -> Unit)? = null) {
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     val live = row.status.live
     val soft = Theme[colors][accentSoft]
@@ -132,7 +132,7 @@ private fun SubagentCard(row: SubagentRow, onStop: (String) -> Unit) {
 }
 
 @Composable
-private fun SubagentRowView(row: SubagentRow, onStop: (String) -> Unit) {
+private fun SubagentRowView(row: SubagentRow, onStop: ((String) -> Unit)?) {
     var expanded by remember(row.key) { mutableStateOf(false) }
     val live = row.status.live
     val hasMore = row.activity.isNotEmpty() || row.summary != null || row.filesWritten.isNotEmpty() || row.goal.length > 80
@@ -170,7 +170,7 @@ private fun SubagentRowView(row: SubagentRow, onStop: (String) -> Unit) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            row.subagentId?.let { id -> StopButton { onStop(id) } }
+            if (onStop != null) row.subagentId?.let { id -> StopButton { onStop(id) } }
         }
         Column(Modifier.padding(start = 34.dp, end = 8.dp, bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             // Collapsed, one line says where it's at: what it's doing now, or how it ended.

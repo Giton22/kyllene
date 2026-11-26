@@ -7,6 +7,7 @@ import dev.hermeskotlin.core.profiles.UI_META_ATTEMPTS
 import dev.hermeskotlin.core.profiles.writeUiMeta
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.rpc.RpcException
+import dev.hermeskotlin.core.sessions.closeChat
 import dev.hermeskotlin.core.sessions.createTitledChat
 import dev.hermeskotlin.core.sessions.putStartInstruction
 import kotlinx.serialization.json.JsonObject
@@ -50,13 +51,16 @@ class ThreadsApi(private val connection: GatewayConnection) {
      */
     suspend fun startChat(profile: String?, title: String, cwd: String?, instruction: String? = null): Pair<String, String> =
         client().createTitledChat(profile, title, taken = { ThreadTitleTakenException(title) }) {
-            cwd?.let { put("cwd", it) }
+            cwd?.let {
+                put("cwd", it)
+                put("cwd_explicit", true)
+            }
             putStartInstruction(instruction)
         }
 
     /** Lets go of the runtime [runtime] of a chat about to be deleted; a failure is ignored. */
     suspend fun close(runtime: String) {
-        runCatching { client().request("session.close", buildJsonObject { put("session_id", runtime) }) }
+        runCatching { client().closeChat(runtime) }
     }
 
     /** The `ui_meta` block and its revision as `profiles.list` has them for the profile [name]. */

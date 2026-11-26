@@ -9,6 +9,11 @@ import androidx.compose.ui.window.DialogProperties
 internal actual val imeVisible: Boolean
     @Composable get() = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
+// Not detected yet (it would take GameController's GCKeyboard). With a keyboard attached, iOS still shows its
+// shortcut bar as the keyboard, so the composer keeps its focus while one is in use.
+internal actual val hardwareKeyboard: Boolean
+    @Composable get() = false
+
 internal actual fun fullScreenDialogProperties() = DialogProperties(usePlatformDefaultWidth = false, usePlatformInsets = false)
 
 // A phone's Return starts a new line; Send is the button.

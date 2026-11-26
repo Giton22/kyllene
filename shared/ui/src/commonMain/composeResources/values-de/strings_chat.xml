@@ -192,6 +192,10 @@
         <item quantity="other">%1$d laufen</item>
     </plurals>
     <string name="chat_processes_empty">Nichts läuft. Dev-Server, Builds und Watcher, die der Agent im Hintergrund startet, erscheinen hier.</string>
+    <string name="chat_processes_subagents">Subagenten</string>
+    <string name="chat_processes_subagents_unavailable">Der Status der Subagenten ist nicht verfügbar.</string>
+    <string name="chat_processes_shell">Shell-Prozesse</string>
+    <string name="chat_processes_shell_empty">Keine Shell-Prozesse im Hintergrund.</string>
     <string name="chat_processes_finished">Beendet</string>
     <string name="chat_process_hide_output">Ausgabe ausblenden</string>
     <string name="chat_process_show_output">Ausgabe zeigen</string>
@@ -238,6 +242,9 @@
 
     <string name="chat_event_compaction">Frühere Nachrichten zusammengefasst</string>
     <string name="chat_event_routine">Routine „%1$s“ lief</string>
+    <string name="chat_event_routine_unnamed">Eine Routine lief</string>
+    <string name="chat_event_routine_problem">Routine „%1$s“ meldete ein Problem</string>
+    <string name="chat_event_routine_problem_unnamed">Eine Routine meldete ein Problem</string>
     <string name="chat_event_failed_turn">Dieser Zug wurde nicht abgeschlossen.</string>
     <string name="chat_event_system_messages">Systemnachrichten · %1$d</string>
     <string name="chat_event_other_bot">der andere Bot</string>
@@ -481,6 +488,13 @@
     <string name="chat_regenerate">Neu erzeugen</string>
     <string name="chat_read_aloud">Vorlesen</string>
     <string name="chat_stop_reading">Vorlesen stoppen</string>
+    <string name="chat_pause_reading">Vorlesen pausieren</string>
+    <string name="chat_resume_reading">Vorlesen fortsetzen</string>
+    <string name="chat_react_acknowledge">Verstanden</string>
+    <string name="chat_react_continue">Fortfahren</string>
+    <string name="chat_react_verify">Überprüfen</string>
+    <string name="chat_react_explain">Erklären</string>
+    <string name="chat_reply_more">Mehr</string>
     <string name="chat_message_actions">Aktionen für die Nachricht</string>
     <string name="chat_queued">Eingereiht · wird nach dieser Aufgabe gesendet</string>
     <string name="chat_editing_in_composer">Wird im Eingabefeld bearbeitet</string>

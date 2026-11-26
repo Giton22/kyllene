@@ -36,6 +36,10 @@ import androidx.compose.ui.unit.dp
 internal expect val imeVisible: Boolean
     @Composable get
 
+/** Whether a hardware keyboard is attached and usable (Bluetooth, USB, a keyboard cover). */
+internal expect val hardwareKeyboard: Boolean
+    @Composable get
+
 /** A dialog that covers the whole window, under the system bars too (the media viewer). */
 internal expect fun fullScreenDialogProperties(): DialogProperties
 

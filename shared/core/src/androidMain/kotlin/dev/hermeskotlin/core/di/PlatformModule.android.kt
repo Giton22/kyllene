@@ -16,6 +16,7 @@ import dev.hermeskotlin.core.voice.DeviceDictation
 import dev.hermeskotlin.core.voice.DeviceLock
 import android.app.KeyguardManager
 import dev.hermeskotlin.core.voice.AndroidSpeechPlayer
+import dev.hermeskotlin.core.voice.ChatAudioRoute
 import dev.hermeskotlin.core.voice.ReadAloudVoices
 import dev.hermeskotlin.core.voice.FileReadAloudVoices
 import dev.hermeskotlin.core.voice.LiveCalls
@@ -34,8 +35,10 @@ actual val platformModule: Module = module {
     // The browser sign-in comes back through this link; the app's manifest gives it to HeraldActivity.
     single<LoopbackReceiver> { LoopbackHttpReceiver("${androidContext().packageName}:/signed-in") }
     single { WallpaperStore(FileBlobFile(File(androidContext().filesDir, "wallpaper.jpg")), get()) }
-    factory<VoiceRecorder> { AndroidVoiceRecorder() }
-    single<SpeechPlayer> { AndroidSpeechPlayer(androidContext()) }
+    // The recorder opens the call microphone while the player holds a chained chat's call routing (#408).
+    single { ChatAudioRoute() }
+    factory<VoiceRecorder> { AndroidVoiceRecorder(route = get()) }
+    single<SpeechPlayer> { AndroidSpeechPlayer(androidContext(), get()) }
     single<ReadAloudVoices> { FileReadAloudVoices(File(androidContext().cacheDir, "read-aloud")) }
     // One per screen, like the recorder: the chat and the assistant panel each stop only their own.
     factory<DeviceDictation> { AndroidDeviceDictation(androidContext()) }

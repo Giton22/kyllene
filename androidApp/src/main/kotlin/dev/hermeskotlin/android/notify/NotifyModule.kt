@@ -18,6 +18,7 @@ import dev.hermeskotlin.core.inbox.InboxApi
 import dev.hermeskotlin.core.inbox.InboxNotices
 import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushSetup
+import dev.hermeskotlin.core.voice.ReadAloudKeepAlive
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.core.wear.WatchRelay
 import org.koin.android.ext.koin.androidApplication
@@ -43,7 +44,9 @@ val notifyModule = module {
     single { CallOpeners() }
     single { RequestAnswers(get(), get(), get(), get(), get()) }
     single { VoiceCallKeeper(androidContext()) } bind VoiceKeepAlive::class
-    single { ChatNotifier(androidContext(), get(), get(), get(), get(), get(), get(), get<WatchRelay>().busy) }
+    single { ReadAloudKeeper(androidContext()) } bind ReadAloudKeepAlive::class
+    single { ChatServiceKeeper(androidContext()) }
+    single { ChatNotifier(get(), get(), get(), get(), get(), get(), get(), get<WatchRelay>().busy) }
     single { WatchNotifier(get(), get(), get(), get(), get(), get(), get(), get()) }
     single { BotNotifier(androidContext(), get(), get(), get(), get(), get(), get(), get(), get()) }
     single { RoomNotifier(get(), get(), get(), get(), get(), get()) }

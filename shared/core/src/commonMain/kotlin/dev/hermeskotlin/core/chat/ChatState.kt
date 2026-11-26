@@ -41,7 +41,7 @@ data class ToolRisk(val findings: List<String>, val redacted: Boolean = false) {
 
 enum class TurnOutcome { Complete, Interrupted, Error }
 
-/** A prompt that went out but got no reply: the link dropped or the gateway didn't answer in time. */
+/** Delivery status for a prompt kept in the transcript for checking or resending. */
 enum class SendCheck {
     /** Looking for it in the stored transcript. */
     Checking,
@@ -49,7 +49,7 @@ enum class SendCheck {
     /** The transcript couldn't tell: it may be running, so it shouldn't simply be sent again. */
     Unknown,
 
-    /** A later check found it missing from the transcript: Hermes never got it, so it's safe to resend. */
+    /** The gateway rejected the prompt or a transcript check found it missing, so it's safe to resend. */
     NotReceived,
 }
 
@@ -65,7 +65,7 @@ enum class SendOutcome {
     /** It never reached Hermes; the bubble is gone, so the text should go back to the composer. */
     NotSent,
 
-    /** It went out without a reply and its bubble stays, marked by a [SendCheck], to check or resend from. */
+    /** Its bubble stays, marked by a [SendCheck], so delivery can be checked or the prompt resent. */
     Unsettled,
 }
 
@@ -74,11 +74,23 @@ enum class SendOutcome {
  * A prompt whose delivery isn't known yet, as it went out. [files] are the `@file:` references it carried, each
  * with its card: they stay in the session's workspace, so a resend refers to them again.
  */
+/** An image staged on the gateway by `image.attach_bytes`, passed in `prompt.submit` `attachments` on session authority. */
+internal data class StagedImage(val path: String, val mime: String)
+
 internal class UnsettledPrompt(
     val text: String,
     val display: String?,
     val startsTurn: Boolean,
     val files: List<Pair<String, ShownAttachment>> = emptyList(),
+    val images: List<Pair<StagedImage, ShownAttachment>> = emptyList(),
+    val keepRejected: Boolean = false,
+    /**
+     * For a [keepRejected] prompt, whose text can repeat word for word: how many prompts holding it the transcript
+     * showed when it went. One more there later means it arrived.
+     */
+    val copiesBefore: Int = 0,
+    /** Went by `session.steer`: the agent reads it into the turn, so no user row of the transcript shows it. */
+    val steer: Boolean = false,
 )
 
 sealed interface ChatMessage {
@@ -103,6 +115,10 @@ sealed interface ChatMessage {
         val timestamp: Double? = null,
         /** A large attachment going up over HTTP before the prompt is sent; null once it's up. */
         val upload: UploadProgress? = null,
+        /** The `submission_id` it went out with on the session authority, which names it when its turn reports its row. */
+        val submissionId: String? = null,
+        /** The `admission_id` the session authority gave it, which its turn's events carry; null elsewhere. */
+        val admissionId: String? = null,
     ) : ChatMessage
 
     /** One reply: streamed text, reasoning and the tools it ran. [streaming] until `message.complete`. */
@@ -125,6 +141,8 @@ sealed interface ChatMessage {
          * (live events carry no time). Null while it streams.
          */
         val timestamp: Double? = null,
+        val reactionRowId: Long? = null,
+        val userReaction: String? = null,
     ) : ChatMessage
 
     /**
@@ -195,6 +213,7 @@ data class ChatState(
     val loadingOlder: Boolean = false,
     val messages: List<ChatMessage> = emptyList(),
     val attachment: Attachment = Attachment.Detached,
+    val replyReactionsSupported: Boolean = true,
     /** A turn is running on the gateway (ours or one started elsewhere). */
     val running: Boolean = false,
     /** Transient `status.update` line while a turn runs. */
@@ -221,6 +240,11 @@ data class ChatState(
     val subagents: List<Subagent> = emptyList(),
     /** The part of the running turn's reply shown before a mid-turn correction; the turn continues below it. */
     val correctedReplyKey: String? = null,
+    /**
+     * The session authority's latest admissions whose turns have started, so a prompt whose `prompt.submit` reply
+     * ("queued") is read after its own turn began isn't marked queued.
+     */
+    val startedAdmissions: List<String> = emptyList(),
     /** The session's goal, loop and heartbeat, null when it has none (`session.control.update`). */
     val control: SessionControl? = null,
     /** Source of unique keys for messages created on this device. */

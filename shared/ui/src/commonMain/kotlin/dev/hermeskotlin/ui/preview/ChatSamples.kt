@@ -143,6 +143,9 @@ internal object ChatSamples {
                 TranscriptEvent.Process("Background process finished: check backup", "1 failed backup", failed = false),
             ), firstKey = "system-0")),
             answer,
+            // Scheduled jobs' messages to this chat: one that ran, and one reporting a problem.
+            ChatMessage.Event("job-1", TranscriptEvent.Routine("Morning check", "All 3 backups finished overnight.", result = true)),
+            ChatMessage.Event("job-2", TranscriptEvent.Routine(null, "The job could not reach the NAS.", failed = true, result = true)),
         ),
         notices = listOf(
             GatewayNotice("credits.depleted", "Credit access paused · run /topup to top up", GatewayNotice.Level.Error, GatewayNotice.Kind.Sticky),

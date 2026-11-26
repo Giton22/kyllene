@@ -698,14 +698,14 @@ suspend fun InboxStore.markNoticeRead(gatewayUrl: String?, key: String?): Boolea
  * A tapped Inbox notification, waiting for the app to show it: the sidebar opens on the Inbox, at [key]'s run
  * when it is one ([InboxRun.key]), at the list when it is null.
  */
-data class InboxLink(val key: String?)
+data class InboxLink(val key: String?, val current: () -> Boolean = { true })
 
 class InboxLinks {
     private val _pending = MutableStateFlow<InboxLink?>(null)
     val pending: StateFlow<InboxLink?> = _pending.asStateFlow()
 
-    fun open(key: String?) {
-        _pending.value = InboxLink(key)
+    fun open(key: String?, current: () -> Boolean = { true }) {
+        _pending.value = InboxLink(key, current)
     }
 
     /** Takes [link] once it's shown, unless a newer one came meanwhile. */
