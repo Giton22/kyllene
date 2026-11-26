@@ -18,7 +18,8 @@ fun SessionMessage.readableReplyText(): String? {
 fun List<SessionMessage>.hasUnreadBotMessage(readUpTo: Double): Boolean = any { row ->
     val at = row.timestamp ?: return@any false
     at > readUpTo + SEEN_SLACK_SECONDS && (row.readableReplyText() != null ||
-        row.role == "user" && !row.isHidden && AgentMessage.parse(row.text.trim()) != null)
+        row.role == "user" && !row.isHidden &&
+            AgentMessage.parse(row.text, requireEnvelope = row.displayKind == "internal_notification") != null)
 }
 
 /** A silent completion can leave the previous, already finished reply at the end of the chat. */

@@ -37,6 +37,17 @@ class ReplyActivityTest {
     }
 
     @Test
+    fun internalRowsThatOnlyResembleBotMessagesStayRead() {
+        val wake = SessionMessage(
+            role = "user",
+            content = JsonPrimitive("Message from scheduler: Wake up"),
+            displayKind = "internal_notification",
+            timestamp = 120.0,
+        )
+        assertFalse(listOf(wake).hasUnreadBotMessage(100.0))
+    }
+
+    @Test
     fun realRepliesAndIncomingBotMessagesStillCount() {
         val reply = SessionMessage(role = "assistant", displayContent = JsonPrimitive("Done."), timestamp = 120.0)
         val incoming = SessionMessage(role = "user", content = JsonPrimitive("Message from 🤖 Rook (@rook): Check the result"),
