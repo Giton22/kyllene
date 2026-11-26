@@ -84,6 +84,11 @@ internal class UnsettledPrompt(
     val files: List<Pair<String, ShownAttachment>> = emptyList(),
     val images: List<Pair<StagedImage, ShownAttachment>> = emptyList(),
     val keepRejected: Boolean = false,
+    /**
+     * For a [keepRejected] prompt, whose text can repeat word for word: how many prompts holding it the transcript
+     * showed when it went. One more there later means it arrived.
+     */
+    val copiesBefore: Int = 0,
     /** Went by `session.steer`: the agent reads it into the turn, so no user row of the transcript shows it. */
     val steer: Boolean = false,
 )

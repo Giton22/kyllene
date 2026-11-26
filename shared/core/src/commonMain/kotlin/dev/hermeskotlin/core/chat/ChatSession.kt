@@ -107,6 +107,9 @@ class ChatSession(
     private val sendMutex = Mutex()
     private val reactionMutex = Mutex()
 
+    /** Replies whose reaction is being saved now. */
+    private val reacting = MutableStateFlow(emptySet<String>())
+
     /**
      * The socket [ChatState.runtimeSessionId] was attached on. Runtime ids belong to the
      * socket: after a reconnect or a relogin the cached id must not go out on the new
@@ -257,12 +260,23 @@ class ChatSession(
         voiceLive: VoiceLiveTurn? = null,
     ): SendOutcome = submitPrompt(text, attachments, display, queue, voiceLive, resent = emptyList())
 
-    /** Use the stored row address; the newest row can change while a menu is open. */
+    /**
+     * Sets or clears the user's reaction on the stored reply [replyKey], by its row: the newest row can change
+     * meanwhile. Reactions go one at a time; another tap on the same reply while its reaction is still being saved
+     * is ignored, as the same emoji again would take it off after its follow-up has gone.
+     */
     suspend fun react(replyKey: String, reaction: ReplyReaction, stillOpen: () -> Boolean) {
         val reply = _state.value.messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey }
             ?.takeUnless { it.streaming } ?: return
         val rowId = reply.reactionRowId ?: return
-        reactionMutex.withLock { reactToStoredReply(reply, rowId, reaction, stillOpen) }
+        var claimed = false
+        reacting.update { keys -> (replyKey !in keys).also { claimed = it }.let { if (it) keys + replyKey else keys } }
+        if (!claimed) return
+        try {
+            reactionMutex.withLock { reactToStoredReply(reply, rowId, reaction, stillOpen) }
+        } finally {
+            reacting.update { it - replyKey }
+        }
     }
 
     private suspend fun reactToStoredReply(
@@ -288,13 +302,15 @@ class ChatSession(
             } catch (e: RpcException) {
                 if (e.code != METHOD_NOT_FOUND) throw e
                 client.markReplyReactionsUnsupported()
+                if (stillOpen()) _state.update { it.copy(error = "This gateway doesn't support reactions. Update Hermes to use them.") }
                 return
             }
             val returned = result?.get("reactions") as? JsonArray
                 ?: throw RpcException(0, "The gateway did not confirm the reaction.")
             val emoji = userReactionEmoji(returned)
             historyMutex.withLock {
-                if (!stillOpen() || connectedClient() !== client || liveRuntimeId(client) != runtimeId) return
+                // Saved on the gateway by its stored row, which a re-attach or reconnect meanwhile doesn't change.
+                if (!stillOpen()) return
                 rows = rows.map { row ->
                     if (row.id == rowId) {
                         val metadata = displayMetadataObject(row.displayMetadata).orEmpty()
@@ -338,6 +354,9 @@ class ChatSession(
         val visible = trimmed.ifEmpty {
             if (attachments.any { it.kind == AttachmentKind.Image } || resentImages.isNotEmpty()) IMAGE_ONLY_PROMPT else ""
         }
+        val copiesBefore = if (keepRejected) _state.value.messages.count {
+            it is ChatMessage.User && !it.pending && it.check == null && it.text.contains(visible)
+        } else 0
         val key = "local-${_state.value.keySeq}"
         _state.update {
             it.copy(
@@ -454,7 +473,7 @@ class ChatSession(
             // An error reply is the gateway turning it down; anything else after it went out is no verdict.
             if (submitted && e !is RpcException) {
                 val arrived = if (startsTurn) findInTranscript(visible, key, promptsBefore) else null
-                val prompt = UnsettledPrompt(text, display, startsTurn, files.toList(), stagedImages.toList(), keepRejected)
+                val prompt = UnsettledPrompt(text, display, startsTurn, files.toList(), stagedImages.toList(), keepRejected, copiesBefore)
                 return settleUnanswered(key, arrived, prompt) {
                     detach(uploadClient, uploadRuntimeId, queuedImages)
                 }
@@ -462,8 +481,8 @@ class ChatSession(
             detach(uploadClient, uploadRuntimeId, queuedImages)
             val refused = SessionRefusal.of(e)
             if (keepRejected) {
-                unsettled[key] = UnsettledPrompt(text, display, startsTurn, keepRejected = true)
-                retainRejectedPrompt(key, refused?.let { "${it.title}. ${it.detail}" } ?: e.message ?: "Couldn't send the message.")
+                unsettled[key] = UnsettledPrompt(text, display, startsTurn, keepRejected = true, copiesBefore = copiesBefore)
+                retainRejectedPrompt(key, e.message ?: "Couldn't send the message.", refused)
             } else {
                 _state.update { state ->
                     state.copy(
@@ -529,11 +548,12 @@ class ChatSession(
     }
 
     /** A generated prompt has no composer draft to restore. Keep its bubble available to resend. */
-    private fun retainRejectedPrompt(key: String, error: String): SendOutcome {
+    private fun retainRejectedPrompt(key: String, error: String, refused: SessionRefusal? = null): SendOutcome {
         _state.update { state ->
             state.copy(
-                error = error,
-                refused = null,
+                // A refusal says why with its own guidance, as for any prompt; the bubble stays to resend from.
+                error = if (refused != null) null else error,
+                refused = refused,
                 messages = state.messages.updateUser(key) { it.copy(pending = false, check = SendCheck.NotReceived) },
             )
         }
@@ -2978,13 +2998,16 @@ class ChatSession(
         // The running turn's saved steps apart from the reply before them, to fold into its live reply below.
         val stored = historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged)
         // A prompt sent without a reply that the transcript now has arrived after all.
-        val storedPrompts = stored.mapNotNullTo(HashSet()) { (it as? ChatMessage.User)?.text }
+        val storedPrompts = stored.mapNotNull { (it as? ChatMessage.User)?.text }
         // Only the gateway's transcript says a prompt arrived; the saved copy is from before it.
         val unsettled = if (savedCopyAt != null) live else {
             live.filterNot { message ->
                 if (message !is ChatMessage.User || message.check == null) return@filterNot false
-                // Reactions can submit the same prompt verbatim. Let the delivery check establish which attempt arrived.
-                unsettled[message.key]?.keepRejected != true && storedPrompts.any { it.contains(message.text) }
+                val prompt = unsettled[message.key]
+                // A reaction's follow-up can repeat an earlier one word for word: it arrived once the transcript
+                // holds one more copy than when it went.
+                if (prompt?.keepRejected == true) storedPrompts.count { it.contains(message.text) } > prompt.copiesBefore
+                else storedPrompts.any { it.contains(message.text) }
             }
         }
         // Steps of the running turn are saved as it goes, and the live copy repeats them: show them once.

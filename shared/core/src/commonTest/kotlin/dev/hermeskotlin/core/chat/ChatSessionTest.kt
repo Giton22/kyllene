@@ -145,7 +145,8 @@ class ChatSessionTest {
 
         assertFalse(chat.state.value.replyReactionsSupported)
         assertFalse(otherChat.state.value.replyReactionsSupported)
-        assertNull(chat.state.value.error)
+        // Said once, so the emoji going away isn't a mystery.
+        assertTrue(chat.state.value.error.orEmpty().contains("doesn't support reactions"), chat.state.value.error)
         assertEquals(1, transport.sent.value.count { it.isCall("message.react") })
         assertTrue(transport.sent.value.none { it.isCall("prompt.submit") })
     }
@@ -249,6 +250,9 @@ class ChatSessionTest {
 
     @Test
     fun aRejectedReactionFollowUpCanBeResentWithoutTogglingTheEmoji() = runTest {
+        // A previous application of the same reaction submitted the identical prompt.
+        val earlier = checkNotNull(ReplyReaction.Acknowledge.prompt("Hi! What next?"))
+        history = history.removeSuffix("]}") + """,{"id":3,"role":"user","content":${JsonPrimitive(earlier)}}]}"""
         val (chat, transport) = resumedChat(backgroundScope, mapOf(
             "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"👍"}]}""",
             "prompt.submit" to "error:4000",
@@ -258,8 +262,7 @@ class ChatSessionTest {
         val failed = chat.state.value.messages.filterIsInstance<ChatMessage.User>().single { it.check == SendCheck.NotReceived }
         val firstPrompt = transport.sent.value.single { it.isCall("prompt.submit") }.param("text")
         assertEquals(firstPrompt, failed.text)
-        // A previous application of the same reaction could have submitted the identical prompt.
-        history = history.removeSuffix("]}") + """,{"id":3,"role":"user","content":${JsonPrimitive(failed.text)}}]}"""
+        assertEquals(earlier, failed.text)
         chat.retry()
         testScheduler.runCurrent()
         assertTrue(chat.state.value.messages.any { it.key == "row-3" })
@@ -273,6 +276,8 @@ class ChatSessionTest {
 
     @Test
     fun anEarlierIdenticalPromptDoesNotHideAnUnconfirmedReactionFollowUp() = runTest {
+        val earlier = checkNotNull(ReplyReaction.Acknowledge.prompt("Hi! What next?"))
+        history = history.removeSuffix("]}") + """,{"id":3,"role":"user","content":${JsonPrimitive(earlier)}}]}"""
         val (chat, transport) = resumedChat(backgroundScope, mapOf(
             "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"👍"}]}""",
             "prompt.submit" to SILENT,
@@ -284,13 +289,70 @@ class ChatSessionTest {
         reacting.await()
         val uncertain = chat.state.value.messages.filterIsInstance<ChatMessage.User>().single { it.check == SendCheck.Unknown }
 
-        history = history.removeSuffix("]}") + """,{"id":3,"role":"user","content":${JsonPrimitive(uncertain.text)}}]}"""
         historyFails = false
         chat.retry()
         testScheduler.runCurrent()
 
         assertTrue(chat.state.value.messages.any { it.key == "row-3" })
         assertTrue(chat.state.value.messages.any { it.key == uncertain.key && it is ChatMessage.User && it.check == SendCheck.Unknown })
+    }
+
+    @Test
+    fun anUnconfirmedReactionFollowUpSettlesOnceTheTranscriptHasIt() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"▶️"}]}""",
+            "prompt.submit" to SILENT,
+        ))
+        historyFails = true
+        val reacting = backgroundScope.async { chat.react("row-2", ReplyReaction.Continue) { true } }
+        transport.awaitSent { it.isCall("prompt.submit") }
+        transport.serverClose(1006)
+        reacting.await()
+        val uncertain = chat.state.value.messages.filterIsInstance<ChatMessage.User>().single { it.check == SendCheck.Unknown }
+
+        // It did arrive: the transcript now holds it, and the uncertain copy, with its Resend, goes.
+        history = history.removeSuffix("]}") + """,{"id":3,"role":"user","content":${JsonPrimitive(uncertain.text)}}]}"""
+        historyFails = false
+        chat.retry()
+        testScheduler.runCurrent()
+
+        val prompts = chat.state.value.messages.filterIsInstance<ChatMessage.User>().filter { it.text == uncertain.text }
+        assertEquals(listOf("row-3"), prompts.map { it.key })
+    }
+
+    @Test
+    fun aRefusedReactionFollowUpSaysWhyAndKeepsItsBubble() = runTest {
+        val (chat, _) = resumedChat(backgroundScope, mapOf(
+            "message.react" to """{"row_id":2,"reactions":[{"author":"user","emoji":"▶️"}]}""",
+            "prompt.submit" to "error:4090:SESSION_NOT_OWNED",
+        ))
+
+        chat.react("row-2", ReplyReaction.Continue) { true }
+
+        assertEquals(SessionRefusal.OpenElsewhere, chat.state.value.refused)
+        assertNull(chat.state.value.error)
+        assertTrue(chat.state.value.messages.any { it is ChatMessage.User && it.check == SendCheck.NotReceived })
+    }
+
+    @Test
+    fun aSecondTapOnTheSameReplyWhileItsReactionSavesIsIgnored() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "message.react" to SILENT,
+            "prompt.submit" to """{"status":"started"}""",
+        ))
+        val first = async { chat.react("row-2", ReplyReaction.Verify) { true } }
+        val firstCall = transport.awaitSent { it.isCall("message.react") }
+        // A double tap: the same emoji again would take it off once the first had sent its follow-up.
+        chat.react("row-2", ReplyReaction.Verify) { true }
+        testScheduler.runCurrent()
+
+        transport.push("""{"jsonrpc":"2.0","id":${firstCall["id"]},"result":{"row_id":2,"reactions":[{"author":"user","emoji":"🔍"}]}}""")
+        first.await()
+        testScheduler.runCurrent()
+
+        assertEquals(1, transport.sent.value.count { it.isCall("message.react") })
+        assertEquals(1, transport.sent.value.count { it.isCall("prompt.submit") })
+        assertEquals("🔍", chat.state.value.messages.filterIsInstance<ChatMessage.Assistant>().single { it.key == "row-2" }.userReaction)
     }
 
     @Test
