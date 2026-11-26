@@ -868,6 +868,26 @@ internal fun ChatView(
     loadSubagentTranscript: suspend (String, String?) -> SubagentTranscriptRead? = { _, _ -> null },
     onOpenToolDetails: () -> Unit = {},
 ) {
+    val composerFocus = remember { FocusRequester() }
+    var focusComment by remember { mutableStateOf<Long?>(null) }
+    val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
+    val commentHost = remember(comments, actions, composerShown) {
+        if (!composerShown) return@remember null
+        object : CommentHost {
+            override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
+                when (action) {
+                    SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
+                    SelectionAction.Explain -> actions.explain(source, anchor)
+                    SelectionAction.AskAside -> {
+                        actions.askAside(source, anchor)
+                        composerFocus.requestFocus()
+                    }
+                }
+            }
+            override fun highlights(messageKey: String) =
+                comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
+        }
+    }
     var selectedDelegationReply by rememberSaveable(conversationKey) { mutableStateOf<String?>(null) }
     var selectedSubagentKey by rememberSaveable(conversationKey) { mutableStateOf<String?>(null) }
     fun closeSubagents() {
@@ -981,26 +1001,6 @@ internal fun ChatView(
             val key = readAloud.key ?: return@LaunchedEffect
             if (state.historyLoaded && state.messages.none { it.key == key }) actions.stopReading()
         }
-        val composerFocus = remember { FocusRequester() }
-        var focusComment by remember { mutableStateOf<Long?>(null) }
-        val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
-        val commentHost = remember(comments, actions, composerShown) {
-            if (!composerShown) return@remember null
-            object : CommentHost {
-                override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
-                    when (action) {
-                        SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
-                        SelectionAction.Explain -> actions.explain(source, anchor)
-                        SelectionAction.AskAside -> {
-                            actions.askAside(source, anchor)
-                            composerFocus.requestFocus()
-                        }
-                    }
-                }
-                override fun highlights(messageKey: String) =
-                    comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
-            }
-        }
         // The rail takes the right of the screen; the conversation centres in what's left.
         if (desktopRail != null || showToolDetails) {
             Box(
@@ -1054,7 +1054,6 @@ internal fun ChatView(
             // up over the greeting like a menu and the box being typed in doesn't move.
             // The lists' own height, measured as they open and fade out, is taken off: a composer that grows (lines,
             // attachments) stays centred as a whole.
-            val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
             var slashListHeight by remember(composerShown) { mutableIntStateOf(0) }
             var referenceListsHeight by remember(composerShown) { mutableIntStateOf(0) }
             val restingDock = (dockHeight - slashListHeight - referenceListsHeight).coerceAtLeast(0)
