@@ -524,6 +524,7 @@
     <string name="chat_react_continue">Continue</string>
     <string name="chat_react_verify">Verify</string>
     <string name="chat_react_explain">Explain</string>
+    <string name="chat_reply_more">More</string>
     <string name="chat_message_actions">Message actions</string>
     <string name="chat_queued">Queued · sends after this task</string>
     <string name="chat_editing_in_composer">Editing in the composer</string>

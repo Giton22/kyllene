@@ -494,6 +494,7 @@
     <string name="chat_react_continue">Folytatás</string>
     <string name="chat_react_verify">Ellenőrzés</string>
     <string name="chat_react_explain">Magyarázat</string>
+    <string name="chat_reply_more">Továbbiak</string>
     <string name="chat_message_actions">Üzenetműveletek</string>
     <string name="chat_queued">Sorban · a feladat után megy el</string>
     <string name="chat_editing_in_composer">Szerkesztés a beviteli mezőben</string>
