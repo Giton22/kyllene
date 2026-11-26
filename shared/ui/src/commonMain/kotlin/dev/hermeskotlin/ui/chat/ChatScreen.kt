@@ -3049,7 +3049,9 @@ internal fun AssistantReply(
                     if (actionable) Spacer(Modifier.width(6.dp))
                     for (choice in ReplyReaction.entries) {
                         if (react != null || choice == reaction) {
-                            ReplyReactionButton(choice, choice == reaction, react?.let { { it(choice) } }, alpha = alpha)
+                            // Hidden ones take no taps: one sends a prompt at once, and a touchscreen never hovers to show them.
+                            val tap = react?.takeIf { shown || choice == reaction }?.let { { it(choice) } }
+                            ReplyReactionButton(choice, choice == reaction, tap, alpha = alpha)
                         }
                     }
                 }
