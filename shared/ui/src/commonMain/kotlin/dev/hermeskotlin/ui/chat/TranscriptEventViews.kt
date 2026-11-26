@@ -106,17 +106,7 @@ internal fun TranscriptEventRow(event: TranscriptEvent) {
             tint = if (event.failed) Theme[colors][danger] else Theme[colors][textTertiary],
             body = event.output.takeIf { it.isNotBlank() }?.let { { Monospace(it) } },
         )
-        is TranscriptEvent.Routine -> FoldedLine(
-            icon = if (event.failed) Lucide.CircleAlert else Lucide.AlarmClock,
-            title = when (val name = event.name) {
-                null -> stringResource(if (event.failed) Res.string.chat_event_routine_problem_unnamed else Res.string.chat_event_routine_unnamed)
-                else -> stringResource(if (event.failed) Res.string.chat_event_routine_problem else Res.string.chat_event_routine, name)
-            },
-            tint = if (event.failed) Theme[colors][danger] else Theme[colors][textTertiary],
-            // A job's message to this chat is the reason it ran: shown open, its words a tap from folding away.
-            initiallyOpen = event.result,
-            body = event.body.takeIf { it.isNotBlank() }?.let { { MarkdownText(it) } },
-        )
+        is TranscriptEvent.Routine -> RoutineDisclosure(event)
         is TranscriptEvent.FailedTurn -> FoldedLine(
             icon = Lucide.CircleAlert,
             title = event.text.ifBlank { stringResource(Res.string.chat_event_failed_turn) },
@@ -129,15 +119,28 @@ internal fun TranscriptEventRow(event: TranscriptEvent) {
     }
 }
 
+@Composable
+private fun RoutineDisclosure(event: TranscriptEvent.Routine) {
+    val icon = if (event.failed) Lucide.CircleAlert else Lucide.AlarmClock
+    val title = when (val name = event.name) {
+        null -> stringResource(if (event.failed) Res.string.chat_event_routine_problem_unnamed else Res.string.chat_event_routine_unnamed)
+        else -> stringResource(if (event.failed) Res.string.chat_event_routine_problem else Res.string.chat_event_routine, name)
+    }
+    val tint = if (event.failed) Theme[colors][danger] else Theme[colors][textTertiary]
+    if (event.body.isBlank()) FoldedLine(icon, title, tint, body = null)
+    else AdaptiveTranscriptDisclosure(
+        icon = { UnstyledIcon(icon, null, tint = tint, modifier = Modifier.size(15.dp)) },
+        label = title,
+        initiallyOpen = event.result,
+    ) { CopyableOnDesktop { MarkdownText(event.body) } }
+}
+
 /** The same disclosure as Reasoning; open, each entry is its own line, its words a tap further. */
 @Composable
 private fun SystemMessages(entries: List<TranscriptEvent>) {
-    var expanded by remember { mutableStateOf(false) }
-    Disclosure(
+    AdaptiveTranscriptDisclosure(
         icon = { UnstyledIcon(Lucide.Settings, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp)) },
         label = stringResource(Res.string.chat_event_system_messages, entries.size),
-        expanded = expanded,
-        onToggle = { expanded = !expanded },
     ) {
         // Counted from the newest, as the group is keyed: one opened stays open when an earlier page adds entries above.
         Column { entries.forEachIndexed { i, entry -> key(entries.size - i) { TranscriptEventRow(entry) } } }
