@@ -3507,8 +3507,12 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
     if (!live.text.startsWithIgnoringSpaces(saved.text)) return this
     val commentary = (saved.commentary + live.commentary).distinctCommentary()
     val shown = if (commentary.isEmpty()) "" else live.text.commentaryParagraphs()
+    val prose by lazy { COMMENTARY_NON_PROSE.replace(shown, " ") }
     val folded = live.copy(
-        commentary = commentary.filterNot { it.commentaryParagraphs() in shown },
+        commentary = commentary.filterNot {
+            val paragraph = it.commentaryParagraphs()
+            paragraph in shown || prose.containsJoinedCommentary(paragraph.removeSurrounding("\n\n"))
+        },
         // Folded before, the live reply leads with the saved reasoning and has streamed on from there.
         reasoning = if (live.reasoning.startsWithIgnoringSpaces(saved.reasoning)) live.reasoning
             else listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
@@ -3538,6 +3542,30 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
 /** Keep paragraph boundaries when comparing a saved update to text already shown by the stream. */
 private fun String.commentaryParagraphs(): String =
     replace("\r\n", "\n").split("\n\n").joinToString("\n\n", prefix = "\n\n", postfix = "\n\n") { it.trim() }
+
+// Relaxed sentence matching is for prose. A URL or code span can contain the same punctuation.
+private val COMMENTARY_NON_PROSE =
+    Regex("""```[\s\S]*?(?:```|$)|`+[^`\n]*`+|[a-z][a-z0-9+.-]*://\S+""", RegexOption.IGNORE_CASE)
+
+/** Match a whole update when adjacent streamed sentences lost the separator between them. */
+private fun String.containsJoinedCommentary(update: String): Boolean {
+    if (update.isEmpty()) return false
+    var start = indexOf(update)
+    while (start >= 0) {
+        val end = start + update.length
+        val startsAtBoundary = startsWith("\n\n", start - 2) ||
+            (start > 0 && this[start - 1] in ".!?" && startsJoinedSentence(start))
+        val endsAtBoundary = startsWith("\n\n", end) ||
+            (update.last() in ".!?" && startsJoinedSentence(end))
+        if (startsAtBoundary && endsAtBoundary) return true
+        start = indexOf(update, start + 1)
+    }
+    return false
+}
+
+// Leave uppercase suffixes such as a dotted ".COM" alone.
+private fun String.startsJoinedSentence(at: Int): Boolean =
+    getOrNull(at)?.isUpperCase() == true && getOrNull(at + 1)?.isUpperCase() != true
 
 /**
  * The streaming reply that is the running turn's: it carries on from the gateway's copy ([inflightText]), and has

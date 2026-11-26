@@ -3376,8 +3376,8 @@ internal val ChatMessage.sentAt: Double?
 
 private fun ChatMessage.isNewerThan(readUpTo: Double): Boolean = when (this) {
     is ChatMessage.User -> (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
-    // Anchor the line before the first streamed word. A finished silent reply no longer needs it.
-    is ChatMessage.Assistant -> (streaming || text.replyTextOrNull() != null) &&
+    // Anchor the line before the first streamed word and keep it for finished replies with public text.
+    is ChatMessage.Assistant -> (streaming || text.replyTextOrNull() != null || commentary.isNotEmpty()) &&
         (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
     // Another bot writing in is news even when this bot stays silent. The machinery's own rows (deliveries,
     // routines, failures) aren't: the line goes above something the person would want to read.

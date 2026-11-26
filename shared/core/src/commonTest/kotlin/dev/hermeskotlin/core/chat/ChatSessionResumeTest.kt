@@ -344,6 +344,33 @@ class ChatSessionResumeTest {
     }
 
     @Test
+    fun foldingSavedStepsRecognizesCommentaryRunTogetherWithOtherSentences() {
+        val row = lenient.decodeFromString<SessionMessage>(
+            """{"id":2,"role":"assistant","timestamp":101,"display_commentary":["Checking."]}""",
+        )
+        val saved = historyToMessages(listOf(row), turnStartedAt = 100.0)
+        val examples = listOf(
+            "Checking.Done." to emptyList(),
+            "Earlier.Checking.\n\nDone." to emptyList(),
+            "Earlier.Checking.Done." to emptyList(),
+            "Checking.com" to listOf("Checking."),
+            "Checking.COM" to listOf("Checking."),
+            "See https://example.Checking.Com/path" to listOf("Checking."),
+            "Run `Example.Checking.Parser`." to listOf("Checking."),
+            "```\nExample.Checking.Parser\n```" to listOf("Checking."),
+            "Still Checking." to listOf("Checking."),
+        )
+
+        examples.forEach { (text, expected) ->
+            val live = ChatMessage.Assistant("live-0", text = text, streaming = true)
+            val folded = (saved + live).withSavedStepsInLiveReply(100.0, live.text, turnReplyKey = live.key)
+            val reply = assertIs<ChatMessage.Assistant>(folded.single())
+            assertEquals(text, reply.text)
+            assertEquals(expected, reply.commentary, text)
+        }
+    }
+
+    @Test
     fun aFoldAgainKeepsTheLiveCopyOfARunningTool() {
         // Folded once; the saved row came again while its tool still ran, with no result row yet.
         val rows = savedFirstStep().dropLast(1).map { lenient.decodeFromString<SessionMessage>(it) }
