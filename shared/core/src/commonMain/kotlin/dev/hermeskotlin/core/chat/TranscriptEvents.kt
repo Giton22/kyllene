@@ -65,7 +65,9 @@ object TranscriptRows {
      * `display_metadata`, which tells a scheduled job's message apart from the wakes that share its kind.
      */
     fun isNoise(row: String, displayKind: String?, displayMetadata: JsonElement? = null): Boolean =
-        (displayKind == "internal_notification" && routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
+        (displayKind == "internal_notification" &&
+            AgentMessage.parse(row, requireEnvelope = true) == null &&
+            routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
             row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
 
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
@@ -94,7 +96,8 @@ object TranscriptRows {
         displayMetadata: JsonElement? = null,
     ): List<TranscriptEvent>? {
         val row = text.trim()
-        AgentMessage.parse(row)?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body)) }
+        AgentMessage.parse(row, requireEnvelope = displayKind == "internal_notification")
+            ?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body)) }
         routine(row)?.let { return listOf(it) }
         if (displayKind == "internal_notification") scheduledResult(row, displayMetadata)?.let { return listOf(it) }
         if (displayKind == "process_complete" || displayKind == "async_delegation_complete" || PROCESS.matches(row)) {
