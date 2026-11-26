@@ -161,6 +161,15 @@
     <string name="chat_plan_done_of">%1$d / %2$d kész</string>
     <string name="chat_stop_task">Feladat leállítása</string>
 
+    <plurals name="chat_subagent_count">
+        <item quantity="one">%1$d alügynök</item>
+        <item quantity="other">%1$d alügynök</item>
+    </plurals>
+    <string name="chat_subagent_transcript">Alügynök átirata</string>
+    <string name="chat_subagent_open_transcript">Átirat megnyitása</string>
+    <string name="chat_subagent_instructions">Feladatutasítások</string>
+    <string name="chat_subagent_transcript_unavailable">A teljes átirat nem érhető el</string>
+    <string name="chat_subagent_transcript_empty">Még nincs üzenet az átiratban</string>
     <string name="chat_subagent_activity">Tevékenység</string>
     <string name="chat_subagent_result">Eredmény</string>
     <string name="chat_subagent_what_went_wrong">Mi romlott el</string>

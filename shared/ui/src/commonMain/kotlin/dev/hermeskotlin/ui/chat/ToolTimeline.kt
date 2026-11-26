@@ -214,7 +214,7 @@ private fun liveToolPreview(tool: ToolActivity, detail: String): String {
 
 /** One kind of tool, using the existing circles and overlap from the original Tools header. */
 @Composable
-private fun ToolKindIcon(icon: ImageVector) {
+internal fun ToolKindIcon(icon: ImageVector) {
     Box(
         Modifier
             .size(24.dp)

@@ -10,6 +10,7 @@ import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.rpc.RpcTimeoutException
+import dev.hermeskotlin.core.rpc.TransportClosedException
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.sessions.distinctCommentary
@@ -2323,6 +2324,31 @@ class ChatSession(
         } catch (e: Exception) {
             _state.update { it.copy(error = e.message ?: "Couldn't stop the subagent.") }
         }
+    }
+
+    /** Read a delegated child's stored transcript through this chat's attached parent session. */
+    suspend fun subagentTranscript(subagentId: String, cursor: String?): SubagentTranscriptRead? {
+        val client = connectedClient() ?: return null
+        val runtimeId = liveRuntimeId(client) ?: return null
+        val read = try {
+            val result = client.request("session.transcript", buildJsonObject {
+                put("session_id", runtimeId)
+                put("subagent_id", subagentId)
+                cursor?.let { put("cursor", it) }
+            }) as? JsonObject
+            result?.let { decodeSubagentTranscript(it, runtimeId, subagentId) }
+                ?: SubagentTranscriptRead.Retryable
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: TransportClosedException) {
+            // Pending RPCs can fail before the connection state publishes the detach.
+            return null
+        } catch (e: Exception) {
+            if (e is RpcException && e.code == METHOD_NOT_FOUND) SubagentTranscriptRead.Unsupported
+            else SubagentTranscriptRead.Retryable
+        }
+        if (connectedClient() !== client || liveRuntimeId(client) != runtimeId) return null
+        return read
     }
 
     /** The link on which `subagent.list` came back "no such method": that gateway only sends subagent events. */

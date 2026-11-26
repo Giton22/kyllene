@@ -22,6 +22,8 @@ import dev.hermeskotlin.ui.hasSpeechPlayback
 import dev.hermeskotlin.ui.hasVoice
 import dev.hermeskotlin.ui.windowControlsHeight
 import dev.hermeskotlin.ui.isDesktop
+import dev.hermeskotlin.ui.fullScreenDialogProperties
+import dev.hermeskotlin.ui.DialogStatusBarAppearance
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
 import dev.hermeskotlin.core.bots.MentionQuery
@@ -37,9 +39,9 @@ import kotlin.coroutines.cancellation.CancellationException
 import dev.hermeskotlin.core.media.GatewayFileKind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.foundation.layout.width
 import org.koin.compose.koinInject
 import com.composables.icons.lucide.File
@@ -281,6 +283,7 @@ import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.TranscriptEvent
 import dev.hermeskotlin.core.chat.replyTextOrNull
 import dev.hermeskotlin.core.chat.GatewayNotice
+import dev.hermeskotlin.core.chat.SubagentTranscriptRead
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.OutgoingAttachment
 import dev.hermeskotlin.core.chat.SendCheck
@@ -353,6 +356,7 @@ import dev.hermeskotlin.designsystem.components.MinTouchTarget
 import dev.hermeskotlin.designsystem.components.labelledIconWidth
 import dev.hermeskotlin.designsystem.components.CopyButton
 import dev.hermeskotlin.designsystem.components.Dialog
+import androidx.compose.ui.window.Dialog as WindowDialog
 import dev.hermeskotlin.designsystem.components.DropdownMenu
 import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.MenuAction
@@ -642,6 +646,10 @@ fun ChatScreen(
         placeholder = stringResource(remember(target.copy(cwd = null, draft = null)) { (if (target.storedSessionId == null) NEW_CHAT_PROMPTS else FOLLOW_UP_PROMPTS).random() }),
         notice = notice,
         actions = viewModel,
+        onOpenSubagentTranscript = { if (docked) previewing = null },
+        loadSubagentTranscript = { id, cursor ->
+            if (ownsTranscript) viewModel.loadSubagentTranscript(target, id, cursor) else null
+        },
         widgetFiles = transcript.widgetFiles,
         editing = editing,
         // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
@@ -856,11 +864,74 @@ internal fun ChatView(
     imagePaste: Modifier = Modifier,
     /** A panel at the right, beside the conversation: the desktop's file rail. */
     rail: (@Composable () -> Unit)? = null,
+    onOpenSubagentTranscript: () -> Unit = {},
+    loadSubagentTranscript: suspend (String, String?) -> SubagentTranscriptRead? = { _, _ -> null },
     onOpenToolDetails: () -> Unit = {},
 ) {
+    val composerFocus = remember { FocusRequester() }
+    var focusComment by remember { mutableStateOf<Long?>(null) }
+    val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
+    val commentHost = remember(comments, actions, composerShown) {
+        if (!composerShown) return@remember null
+        object : CommentHost {
+            override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
+                when (action) {
+                    SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
+                    SelectionAction.Explain -> actions.explain(source, anchor)
+                    SelectionAction.AskAside -> {
+                        actions.askAside(source, anchor)
+                        composerFocus.requestFocus()
+                    }
+                }
+            }
+            override fun highlights(messageKey: String) =
+                comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
+        }
+    }
+    var selectedDelegationReply by rememberSaveable(conversationKey) { mutableStateOf<String?>(null) }
+    var selectedSubagentKey by rememberSaveable(conversationKey) { mutableStateOf<String?>(null) }
+    fun closeSubagents() {
+        selectedDelegationReply = null
+        selectedSubagentKey = null
+    }
+    val subagents = remember(state.messages, state.subagents) {
+        if (state.subagents.isEmpty()) state.subagents else {
+            val owners = state.messages.asSequence().filterIsInstance<ChatMessage.Assistant>()
+                .flatMap { it.tools.asSequence() }.filter { it.name == "delegate_task" }
+                .flatMap { call -> call.tasks.mapNotNull { task -> task.transcriptId?.let { it to call.id } } }
+                .toMap()
+            state.subagents.map { child -> owners[child.id]?.let { child.copy(toolId = it) } ?: child }
+        }
+    }
+    val inspected = remember(state.messages, subagents, selectedDelegationReply, selectedSubagentKey) {
+        val reply = selectedDelegationReply ?: return@remember null
+        val selected = selectedSubagentKey ?: return@remember null
+        selectedDelegationRow(state.messages, subagents, reply, selected)
+    }
+    val subagentInspector: (@Composable () -> Unit)? = inspected?.let { row ->
+        {
+            key(conversationKey, selectedDelegationReply, selectedSubagentKey) {
+                CompositionLocalProvider(
+                    LocalCommentHost provides commentHost,
+                    LocalMediaLoader provides actions::loadMedia,
+                    LocalOpenImage provides onViewImage,
+                    LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
+                ) {
+                    SubagentInspector(
+                        selected = row,
+                        runtimeId = state.runtimeSessionId.takeIf { connected },
+                        load = loadSubagentTranscript,
+                        onStop = actions::stopSubagent,
+                        onDismiss = ::closeSubagents,
+                        desktop = isDesktop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+    }
     val density = LocalDensity.current
     var chatPaneWidth by remember { mutableStateOf(0.dp) }
-    val canDockTools = isDesktop
     var toolSelection by rememberSaveable(conversationKey) { mutableStateOf<Pair<String, String>?>(null) }
     val selectedTool = toolSelection
     val toolReplyKey = selectedTool?.first
@@ -871,16 +942,27 @@ internal fun ChatView(
                 ?.tools?.filter { it.name != MESSAGE_AGENT_TOOL }?.takeIf { it.isNotEmpty() }
         }
     }
-    // Opening a different inspector or losing the owning reply ends this selection.
     LaunchedEffect(rail != null, inspectedTools != null) {
         if (rail != null || inspectedTools == null) toolSelection = null
     }
-    val showToolDetails = inspectedTools != null && rail == null
-    val toolRailWidth = (chatPaneWidth * 0.44f).coerceIn(200.dp, 520.dp).coerceAtMost(chatPaneWidth * 0.62f)
+    val showToolDetails = inspectedTools != null && rail == null && subagentInspector == null
+    val detailRailWidth = (chatPaneWidth * 0.44f).coerceIn(200.dp, 520.dp).coerceAtMost(chatPaneWidth * 0.62f)
+    val inspectorInRail = isDesktop && rail == null && subagentInspector != null
+    val desktopRail = if (inspectorInRail) subagentInspector else rail
     val railWidth = when {
-        showToolDetails && canDockTools -> toolRailWidth
+        inspectorInRail || (showToolDetails && isDesktop) -> detailRailWidth
         rail != null -> RAIL_WIDTH
         else -> 0.dp
+    }
+    val fullTranscriptOpen = !isDesktop && subagentInspector != null
+    if (fullTranscriptOpen) {
+        WindowDialog(onDismissRequest = ::closeSubagents, properties = fullScreenDialogProperties()) {
+            val backgroundColor = Theme[colors][background]
+            DialogStatusBarAppearance(lightBackground = backgroundColor.luminance() > 0.5f)
+            Box(Modifier.fillMaxSize().background(backgroundColor).windowInsetsPadding(WindowInsets.safeDrawing)) {
+                subagentInspector?.invoke()
+            }
+        }
     }
     val canAttach = attachmentPicker != null && connected && attachments.size < OutgoingAttachment.MAX_COUNT
     var dropping by remember { mutableStateOf(false) }
@@ -919,36 +1001,16 @@ internal fun ChatView(
             val key = readAloud.key ?: return@LaunchedEffect
             if (state.historyLoaded && state.messages.none { it.key == key }) actions.stopReading()
         }
-        val composerFocus = remember { FocusRequester() }
-        var focusComment by remember { mutableStateOf<Long?>(null) }
-        val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
-        val commentHost = remember(comments, actions, composerShown) {
-            if (!composerShown) return@remember null
-            object : CommentHost {
-                override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
-                    when (action) {
-                        SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
-                        SelectionAction.Explain -> actions.explain(source, anchor)
-                        SelectionAction.AskAside -> {
-                            actions.askAside(source, anchor)
-                            composerFocus.requestFocus()
-                        }
-                    }
-                }
-                override fun highlights(messageKey: String) =
-                    comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
-            }
-        }
         // The rail takes the right of the screen; the conversation centres in what's left.
-        if (rail != null || showToolDetails) {
+        if (desktopRail != null || showToolDetails) {
             Box(
                 Modifier.align(Alignment.TopEnd).width(railWidth).fillMaxHeight()
                     .background(Theme[colors][background]).border(1.dp, Theme[colors][stroke]),
             ) {
-                if (rail != null) rail()
+                if (desktopRail != null) desktopRail()
                 else if (inspectedTools != null && selectedTool != null) key(toolReplyKey) {
                     CompositionLocalProvider(LocalCommentHost provides commentHost) {
-                        ToolDetailsViewer(inspectedTools, selectedTool.first, selectedTool.second, docked = canDockTools) {
+                        ToolDetailsViewer(inspectedTools, selectedTool.first, selectedTool.second, docked = isDesktop) {
                             toolSelection = null
                         }
                     }
@@ -992,7 +1054,6 @@ internal fun ChatView(
             // up over the greeting like a menu and the box being typed in doesn't move.
             // The lists' own height, measured as they open and fade out, is taken off: a composer that grows (lines,
             // attachments) stays centred as a whole.
-            val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
             var slashListHeight by remember(composerShown) { mutableIntStateOf(0) }
             var referenceListsHeight by remember(composerShown) { mutableIntStateOf(0) }
             val restingDock = (dockHeight - slashListHeight - referenceListsHeight).coerceAtLeast(0)
@@ -1070,7 +1131,7 @@ internal fun ChatView(
             }
             val shortcutScope = rememberCoroutineScope()
             // The desktop's keys for the chat; a voice chat over it has the screen.
-            ShortcutHandler(enabled = keysEnabled && !voiceFull && !(showToolDetails && !canDockTools)) { shortcut ->
+            ShortcutHandler(enabled = keysEnabled && !fullTranscriptOpen && !voiceFull && !(showToolDetails && !isDesktop)) { shortcut ->
                 when (shortcut) {
                     Shortcut.FocusComposer -> composerShown.also { if (it) composerFocus.requestFocus() }
                     Shortcut.FindInChat -> true.also {
@@ -1156,7 +1217,15 @@ internal fun ChatView(
                             LocalOpenImage provides onViewImage,
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
-                            LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
+                            LocalSubagents provides SubagentContext(
+                                subagents,
+                                onStop = (actions::stopSubagent).takeIf { connected && state.runtimeSessionId != null },
+                            ) { reply, selected ->
+                                toolSelection = null
+                                onOpenSubagentTranscript()
+                                selectedDelegationReply = reply
+                                selectedSubagentKey = selected
+                            },
                             LocalAgentScreenChat provides state.storedSessionId,
                             LocalScreenViews provides LocalAgentScreens.current.let { screens ->
                                 // Worked out again when a tool call changes, not on every token of a reply.
@@ -1169,6 +1238,7 @@ internal fun ChatView(
                             LocalAgentScreenSend provides actions::sendPrompt,
                             LocalCommentHost provides commentHost,
                             LocalOpenToolDetails provides { replyKey, toolId ->
+                                closeSubagents()
                                 onOpenToolDetails()
                                 toolSelection = replyKey to toolId
                             },
@@ -3140,7 +3210,7 @@ internal fun AssistantReply(
         if (showTools) if (message.streaming) LiveSteps(listedTools, message.key) else Tools(listedTools, message.key)
         if (generated.isNotEmpty()) ReplyMediaList(remember(generated) { generated.map { it.asMedia() } })
         // Shown whatever the tool-activity setting: the work happens out of sight, in other agents.
-        message.tools.filter { it.name == "delegate_task" }.forEach { DelegationCard(it) }
+        DelegationActivity(message.tools.filter { it.name == "delegate_task" }, message.key)
         // Messages to other bots, said whatever the tool-activity setting: they're part of the conversation.
         message.tools.filter { it.name == MESSAGE_AGENT_TOOL }.forEach { MessagedLine(it) }
         if (text.isNotBlank()) {
@@ -3775,6 +3845,79 @@ internal fun Reasoning(text: String, streaming: Boolean) {
         // On the desktop it's text to select and copy like the reply's, with the same right-click menu.
         if (isDesktop) PlatformCommentableSelection(onAction = null, content = body) else body()
     }
+}
+
+@Composable
+internal fun SubagentTranscriptTools(tools: List<ToolActivity>, messageKey: String) {
+    var expanded by rememberSaveable(messageKey) { mutableStateOf(false) }
+    val icons = remember(tools) { tools.map { toolIcon(it.name) }.distinct().take(3) }
+    val (ranWords, took) = workedLabel(tools)
+    val ran = ranWords.text()
+    val expandedState = stringResource(if (expanded) Res.string.chat_expanded else Res.string.chat_collapsed)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // A pill: up to three of the kinds of tool it used, overlapping, then how many ran and for how long.
+        // It's drawn 36dp tall, but the full touch height around it takes the tap.
+        val pill = CircleShape
+        val interaction = remember { MutableInteractionSource() }
+        Box(
+            Modifier
+                .heightIn(min = MinTouchTarget)
+                .handCursor()
+                .clickable(interaction, indication = null) { expanded = !expanded }
+                .semantics {
+                    contentDescription = listOfNotNull(ran, took).joinToString(", ")
+                    stateDescription = expandedState
+                },
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Row(
+                Modifier
+                    .clearAndSetSemantics {}
+                    .heightIn(min = 36.dp)
+                    .clip(pill)
+                    .background(Theme[colors][surface], pill)
+                    .border(1.dp, Theme[colors][stroke], pill)
+                    .indication(interaction, rememberHoverIndication(Theme[colors][textSecondary]))
+                    .padding(start = 6.dp, end = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) { icons.forEach { ToolKindIcon(it) } }
+                Text(ran, style = Theme[typography][caption], color = Theme[colors][textSecondary])
+                took?.let { Text("· $it", style = Theme[typography][caption], color = Theme[colors][textMuted]) }
+                UnstyledIcon(
+                    if (expanded) Lucide.ChevronDown else Lucide.ChevronRight,
+                    contentDescription = null,
+                    tint = Theme[colors][textMuted],
+                    modifier = Modifier.size(13.dp),
+                )
+            }
+        }
+        if (expanded) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Theme[colors][stroke], RoundedCornerShape(Theme[radii][radiusMedium]))
+                    .background(Theme[colors][surface], RoundedCornerShape(Theme[radii][radiusMedium]))
+                    .padding(12.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // Keyed, so a row opened before the activity was made again is restored by its tool, not its place.
+                    tools.forEach { key(it.id) { ToolRow(it, messageKey) } }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * "Ran 3 tools" and the time they took between them ("42s"), for the reply's tool pill; no time when none
+ * was timed. It's the tools' own time added up, not the turn's: calls run side by side each count.
+ */
+internal fun workedLabel(tools: List<ToolActivity>): Pair<Words, String?> {
+    val timed = tools.mapNotNull { it.durationSeconds }
+    val ran = Words.Count(Res.plurals.chat_tools_ran, tools.size)
+    return ran to timed.takeIf { it.isNotEmpty() }?.let { formatDuration(it.sum()) }
 }
 
 /** A tool's kind, as a small icon. */

@@ -179,6 +179,15 @@
     <string name="chat_stop_task">Stop the task</string>
 
     <!-- Subagents -->
+    <plurals name="chat_subagent_count">
+        <item quantity="one">%1$d subagent</item>
+        <item quantity="other">%1$d subagents</item>
+    </plurals>
+    <string name="chat_subagent_transcript">Subagent transcript</string>
+    <string name="chat_subagent_open_transcript">Open transcript</string>
+    <string name="chat_subagent_instructions">Task instructions</string>
+    <string name="chat_subagent_transcript_unavailable">Full transcript unavailable</string>
+    <string name="chat_subagent_transcript_empty">No transcript messages yet</string>
     <string name="chat_subagent_activity">Activity</string>
     <string name="chat_subagent_result">Result</string>
     <string name="chat_subagent_what_went_wrong">What went wrong</string>

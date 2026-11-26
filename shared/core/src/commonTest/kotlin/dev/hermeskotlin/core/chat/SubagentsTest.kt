@@ -3,6 +3,7 @@ package dev.hermeskotlin.core.chat
 import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.sessions.SessionMessage
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -25,6 +26,109 @@ class SubagentsTest {
     private fun ChatState.call() = messages.filterIsInstance<ChatMessage.Assistant>().single().tools.single { it.name == "delegate_task" }
 
     private fun ChatState.rows() = subagentRows(call(), subagents)
+
+    @Test
+    fun backgroundDispatchKeepsTranscriptIdsEvenWhenOneTaskWasRefused() {
+        val result = HermesJson.parseToJsonElement(
+            """{"status":"dispatched","goals":["Refused","Read","Write"],"subagent_ids":[null,"child-b"],"refused":[{"task_index":0,"status":"error","error":"No available backend"}]}""",
+        )
+        val tasks = delegatedTasks(null, result)
+        val rows = subagentRows(ToolActivity("delegate", "delegate_task", running = false, tasks = tasks), emptyList())
+        assertEquals(listOf(null, null, "child-b"), rows.map { it.transcriptId })
+        assertTrue(rows.all { it.subagentId == null })
+        assertTrue(rows.first().refused)
+        assertEquals(SubagentStatus.Failed, rows.first().status)
+        assertEquals("No available backend", rows.first().summary)
+        assertEquals(2, rows.count { !it.refused })
+    }
+
+    @Test
+    fun onlyTheRequestedChildIsAcceptedAndProjectedToolRowsAreShown() {
+        val wire = HermesJson.parseToJsonElement(
+            """{"session_id":"parent","subagent_id":"child","available":true,"running":false,"reset":true,"next_cursor":"opaque","rows":[
+                {"row_kind":"message","role":"user","text":"Read the docs","row_id":1},
+                {"row_kind":"message","role":"tool","name":"terminal","args":{"command":"ls"},"tool_call_id":"call-a"},
+                {"row_kind":"message","role":"assistant","text":"Done","display_commentary":["I found the file."]},
+                {"row_kind":"compaction","role":"system","text":"Internal summary"}]}""",
+        ) as JsonObject
+        assertNull(decodeSubagentTranscript(wire, "parent", "other"))
+        val page = requireNotNull(decodeSubagentTranscript(wire, "parent", "child"))
+        assertEquals("opaque", page.nextCursor)
+        val messages = subagentTranscriptMessages(page.rows)
+        assertEquals("Read the docs", (messages[0] as ChatMessage.User).text)
+        val reply = messages[1] as ChatMessage.Assistant
+        assertEquals("Done", reply.text)
+        assertEquals(listOf("I found the file."), reply.commentary)
+        assertEquals("", reply.reasoning)
+        assertEquals("terminal", reply.tools.single().name)
+        assertEquals(2, messages.size)
+    }
+
+    @Test
+    fun projectedResultsKeepDistinctOccurrencesAcrossPages() {
+        fun decode(rows: String): SubagentTranscriptPage {
+            val payload = HermesJson.parseToJsonElement(
+                """{"session_id":"parent","subagent_id":"child","available":true,"rows":$rows}""",
+            ) as JsonObject
+            return requireNotNull(decodeSubagentTranscript(payload, "parent", "child"))
+        }
+        val first = decode(
+            """[{"role":"tool","name":"write_file","tool_call_id":"repeat","args":{"path":"a"},"content":"first write"}]""",
+        )
+        val second = decode(
+            """[{"role":"tool","name":"write_file","tool_call_id":"repeat","truncated":true,"text":"second write"}]""",
+        )
+        val tools = subagentTranscriptMessages(first.rows + second.rows).filterIsInstance<ChatMessage.Assistant>().single().tools
+        assertEquals(2, tools.map { it.id }.distinct().size)
+        assertEquals(listOf("first write", "second write"), tools.map { it.output })
+        assertEquals("a", tools.first().input)
+    }
+
+    @Test
+    fun transcriptPollingRecoversWithTheLastCursorAndMergesReplayedRows() = runTest {
+        val first = SessionMessage(id = 10, role = "assistant", content = JsonPrimitive("First"))
+        val updated = first.copy(content = JsonPrimitive("Updated"))
+        val second = SessionMessage(id = 11, role = "assistant", content = JsonPrimitive("Second"))
+        val tool = SessionMessage(role = "tool", toolName = "read_file", content = JsonPrimitive("Result"))
+        fun page(cursor: String?, running: Boolean, vararg rows: SessionMessage) =
+            SubagentTranscriptPage(rows.toList(), cursor, reset = false, available = true, running = running, hasRows = rows.isNotEmpty())
+        val reads = listOf(
+            page("first", true, first, tool),
+            SubagentTranscriptRead.Retryable,
+            page(null, true, first, tool),
+            page("first", true, updated),
+            page("last", false, second),
+            page("last", false, second),
+        ).iterator()
+        val cursors = mutableListOf<String?>()
+        var rows = emptyList<SessionMessage>()
+        pollSubagentTranscript(
+            load = { cursor ->
+                cursors += cursor
+                reads.next()
+            },
+            isChildLive = { true },
+        ) { available, current ->
+            assertTrue(available)
+            rows = current
+        }
+
+        assertEquals(listOf(null, "first", "first", "first", "first", "last"), cursors)
+        assertEquals(listOf(updated, tool, second), rows)
+    }
+
+    @Test
+    fun pollingRetriesAnInitialTransientFailureButStopsOnUnsupported() = runTest {
+        var attempts = 0
+        var result: Boolean? = null
+        pollSubagentTranscript(
+            load = { if (++attempts == 1) SubagentTranscriptRead.Retryable else SubagentTranscriptRead.Unsupported },
+            isChildLive = { true },
+        ) { available, _ -> result = available }
+
+        assertEquals(2, attempts)
+        assertEquals(false, result)
+    }
 
     @Test
     fun aDelegationListsItsTasksBeforeAnySubagentStarts() {

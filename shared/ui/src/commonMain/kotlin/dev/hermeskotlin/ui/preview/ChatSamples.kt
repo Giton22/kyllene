@@ -1,6 +1,11 @@
 package dev.hermeskotlin.ui.preview
 
 import androidx.compose.foundation.text.input.TextFieldState
+import dev.hermeskotlin.core.chat.SubagentTranscriptPage
+import dev.hermeskotlin.core.sessions.SessionMessage
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import dev.hermeskotlin.core.chat.ApprovalChoice
 import dev.hermeskotlin.core.chat.Attachment
 import dev.hermeskotlin.core.chat.TranscriptEvent
@@ -373,6 +378,28 @@ internal object ChatSamples {
             ),
         ),
     )
+
+    fun subagentTranscript(id: String): SubagentTranscriptPage? {
+        val task = subagents.subagents.firstOrNull { it.id == id } ?: return null
+        val reply = task.summary ?: task.thinking ?: "I started checking the backup files."
+        return SubagentTranscriptPage(
+            rows = buildList {
+                add(SessionMessage(role = "user", content = JsonPrimitive(task.goal)))
+                if (id == "s2") {
+                    add(SessionMessage(
+                        role = "tool", toolName = "read_file",
+                        toolCalls = buildJsonObject { put("path", "/opt/backup/march-snapshot.csv") },
+                    ))
+                    add(SessionMessage(
+                        role = "tool", toolName = "terminal",
+                        toolCalls = buildJsonObject { put("command", "du -sh /mnt/nas/*") },
+                    ))
+                }
+                add(SessionMessage(role = "assistant", content = JsonPrimitive(reply)))
+            },
+            nextCursor = null, reset = true, available = true, running = task.status.live, hasRows = true,
+        )
+    }
 
     /** A hands-free voice chat, a live call listening, so Mute shows. */
     val voice: ChatState = reply

@@ -43,6 +43,10 @@ internal expect val hardwareKeyboard: Boolean
 /** A dialog that covers the whole window, under the system bars too (the media viewer). */
 internal expect fun fullScreenDialogProperties(): DialogProperties
 
+/** Match the status icons to the surface of an edge-to-edge dialog. */
+@Composable
+internal expect fun DialogStatusBarAppearance(lightBackground: Boolean)
+
 /** Whether there's a real keyboard to write with, so Enter sends and Shift+Enter starts a line (the desktop). */
 internal expect val enterSends: Boolean
 

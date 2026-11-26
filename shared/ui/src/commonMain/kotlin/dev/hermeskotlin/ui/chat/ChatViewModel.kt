@@ -13,6 +13,7 @@ import dev.hermeskotlin.core.chat.BackgroundProcess
 import dev.hermeskotlin.core.chat.Checkpoint
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatMessage
+import dev.hermeskotlin.core.chat.SubagentTranscriptRead
 import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.threads.ChatThread
 import dev.hermeskotlin.core.threads.ThreadsRepository
@@ -1442,6 +1443,14 @@ class ChatViewModel(
 
     /** Regenerate and edit change the stored transcript, so only while it [can change][canChangeChat]. */
     private fun canRewind(state: ChatState) = state.canChangeChat(connectionState.value is ConnectionState.Connected)
+
+    internal suspend fun loadSubagentTranscript(owner: ChatTarget, id: String, cursor: String?): SubagentTranscriptRead? {
+        val chat = session.value ?: return null
+        fun stillOwnsChat() = session.value === chat && host.session.value === chat &&
+            target?.copy(readUpTo = null) == owner.copy(readUpTo = null)
+        if (!stillOwnsChat()) return null
+        return chat.subagentTranscript(id, cursor).takeIf { stillOwnsChat() }
+    }
 
     override fun stopSubagent(subagentId: String) {
         val chat = session.value ?: return

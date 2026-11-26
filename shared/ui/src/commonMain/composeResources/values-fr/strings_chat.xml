@@ -161,6 +161,15 @@
     <string name="chat_plan_done_of">%1$d sur %2$d terminées</string>
     <string name="chat_stop_task">Arrêter la tâche</string>
 
+    <plurals name="chat_subagent_count">
+        <item quantity="one">%1$d sous-agent</item>
+        <item quantity="other">%1$d sous-agents</item>
+    </plurals>
+    <string name="chat_subagent_transcript">Transcription du sous-agent</string>
+    <string name="chat_subagent_open_transcript">Ouvrir la transcription</string>
+    <string name="chat_subagent_instructions">Instructions de la tâche</string>
+    <string name="chat_subagent_transcript_unavailable">Transcription complète indisponible</string>
+    <string name="chat_subagent_transcript_empty">Aucun message dans la transcription pour le moment</string>
     <string name="chat_subagent_activity">Activité</string>
     <string name="chat_subagent_result">Résultat</string>
     <string name="chat_subagent_what_went_wrong">Ce qui a échoué</string>

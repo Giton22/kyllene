@@ -441,6 +441,52 @@ class ChatSessionTest {
     }
 
     @Test
+    fun childTranscriptUsesTheAttachedParentAndOpaqueCursor() = runTest {
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "session.transcript" to """{"session_id":"rt1","subagent_id":"child","available":true,"running":true,"reset":false,"next_cursor":"next","rows":[{"role":"assistant","row_id":15,"text":"Still working"}]}""",
+        ))
+
+        val page = assertIs<SubagentTranscriptPage>(chat.subagentTranscript("child", "cursor"))
+        assertEquals("next", page.nextCursor)
+        assertEquals(15L, page.rows.single().id)
+        assertEquals("Still working", page.rows.single().text)
+        val request = transport.awaitSent { it.isCall("session.transcript") }
+        assertEquals("rt1", request.param("session_id"))
+        assertEquals("child", request.param("subagent_id"))
+        assertEquals("cursor", request.param("cursor"))
+    }
+
+    @Test
+    fun oldGatewayAndTransientChildTranscriptErrorsAreDistinguishable() = runTest {
+        val (chat, _) = resumedChat(backgroundScope, mapOf("session.transcript" to "error:-32601"))
+        assertEquals(SubagentTranscriptRead.Unsupported, chat.subagentTranscript("child", null))
+
+        gateway.answer = { "error:4001" }
+        assertEquals(SubagentTranscriptRead.Retryable, chat.subagentTranscript("child", null))
+    }
+
+    @Test
+    fun childTranscriptReadFromThePreviousRuntimeIsDiscarded() = runTest {
+        val (connection, transports) = reconnectingSetup(backgroundScope, mapOf(
+            "session.resume" to """{"session_id":"rt1","running":false}""",
+            "session.transcript" to SILENT,
+        ))
+        val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+        val firstTransport = transports.last()
+        val oldRead = backgroundScope.async { chat.subagentTranscript("child", null) }
+        firstTransport.awaitSent { it.isCall("session.transcript") }
+
+        gateway.answer = { call ->
+            if (call.method == "session.resume") """{"session_id":"rt2","running":false}""" else "{}"
+        }
+        firstTransport.serverClose(1006)
+        chat.state.first { it.runtimeSessionId == "rt2" }
+        assertNull(oldRead.await())
+    }
+
+    @Test
     fun openingAChatSkipsStructuredTextPartsWithoutLosingTheTranscript() = runTest {
         history = """{"session_id":"stored-1","messages":[
             {"id":1,"role":"user","content":[{"text":"Hello"},{"text":{"value":"unsupported"}}]},
