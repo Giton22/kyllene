@@ -16,7 +16,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -74,6 +79,8 @@ fun Button(
     leadingIcon: ImageVector? = null,
     /** An icon after the label instead, like the arrow on "Continue". */
     trailingIcon: ImageVector? = null,
+    /** Spoken label when it needs to differ from what the button shows. */
+    accessibleLabel: String? = null,
 ) {
     val shape = CircleShape
     val (container, content) = when (variant) {
@@ -100,6 +107,7 @@ fun Button(
         onClick = onClick,
         enabled = enabled && !loading,
         modifier = modifier
+            .then(if (accessibleLabel == null) Modifier else Modifier.semantics { contentDescription = accessibleLabel })
             .handCursor(enabled && !loading)
             .defaultMinSize(minHeight = if (LocalDesktopLayout.current) size.desktopHeight else size.height)
             .alpha(if (enabled) 1f else 0.45f)
@@ -114,7 +122,7 @@ fun Button(
     ) {
         ProvideContentColor(content) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(ButtonIconGap),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 when {
@@ -131,12 +139,26 @@ fun Button(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier.weight(1f, fill = false)
+                        .then(if (accessibleLabel == null) Modifier else Modifier.clearAndSetSemantics {}),
                 )
                 if (trailingIcon != null && !loading) {
                     UnstyledIcon(trailingIcon, contentDescription = null, modifier = Modifier.size(size.iconSize), tint = content)
                 }
             }
         }
+    }
+}
+
+private val ButtonIconGap = 8.dp
+
+/** Width for one line of [text] in a ghost button with a leading icon. */
+@Composable
+fun ButtonSize.labelledIconWidth(text: String): Dp {
+    val measurer = rememberTextMeasurer()
+    val style = Theme[typography][label].copy(fontSize = fontSize, fontWeight = FontWeight.Medium)
+    return with(LocalDensity.current) {
+        (measurer.measure(text, style = style, maxLines = 1, softWrap = false).size.width +
+            2 * horizontalPadding.roundToPx() + iconSize.roundToPx() + ButtonIconGap.roundToPx()).toDp()
     }
 }

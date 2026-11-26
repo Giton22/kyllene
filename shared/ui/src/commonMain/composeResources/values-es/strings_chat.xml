@@ -494,6 +494,7 @@
     <string name="chat_react_continue">Continuar</string>
     <string name="chat_react_verify">Verificar</string>
     <string name="chat_react_explain">Explicar</string>
+    <string name="chat_reply_more">Más</string>
     <string name="chat_message_actions">Acciones del mensaje</string>
     <string name="chat_queued">En cola · se envía después de esta tarea</string>
     <string name="chat_editing_in_composer">Editando en el cuadro de texto</string>

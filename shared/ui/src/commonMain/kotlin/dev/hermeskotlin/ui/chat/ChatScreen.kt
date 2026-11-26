@@ -89,6 +89,7 @@ import androidx.compose.ui.layout.layout
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.ui.draw.dropShadow
@@ -136,6 +137,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -344,7 +346,9 @@ import dev.hermeskotlin.ui.CopyableOnDesktop
 import dev.hermeskotlin.designsystem.components.VerticalScrollbar
 import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
+import dev.hermeskotlin.designsystem.LocalDesignWords
 import dev.hermeskotlin.designsystem.components.MinTouchTarget
+import dev.hermeskotlin.designsystem.components.labelledIconWidth
 import dev.hermeskotlin.designsystem.components.CopyButton
 import dev.hermeskotlin.designsystem.components.Dialog
 import dev.hermeskotlin.designsystem.components.DropdownMenu
@@ -3020,103 +3024,96 @@ internal fun AssistantReply(
         val actionable = !message.streaming && text.isNotBlank()
         // A reply of only code or files has nothing to say.
         val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
-        // The user's reaction, saved on the reply's stored row: one of four, and the same again takes it off.
+        val actions = if (actionable) listOfNotNull(
+            onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
+            onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
+            onReadAloud?.takeIf { !reading && speakable }?.let { read -> RowMenuItem(readAloudLabel, Lucide.Volume2) { read(text) } },
+        ) else emptyList()
         val react = onReact.takeIf { !message.streaming && message.reactionRowId != null }
-        val chosen = message.userReaction.takeUnless { message.streaming }
-        val reaction = chosen?.let { emoji -> ReplyReaction.entries.firstOrNull { it.emoji == emoji } }
-        // One set on another client from its own set (Desktop's ❤️, say) shows too, so a tap here doesn't replace it unseen.
-        val otherReaction = chosen.takeIf { reaction == null }
-        val reactable = react != null || chosen != null
-        if (isDesktop && (actionable || usage != null || reactable)) {
-            // A desktop reads a reply's tools from its own start, as desktop chat apps line them up, and shows
-            // them on the newest reply and under the pointer: older replies read without a row of icons each. They
-            // only fade, so nothing moves as the pointer passes; one with the keyboard in it stays shown. A chosen
-            // reaction stays shown on every reply, in its place among the four.
+        val reaction = message.userReaction.takeUnless { message.streaming }
+        val hasMore = actions.isNotEmpty() || react != null
+        if (actionable || usage != null || react != null || reaction != null) {
             var keysInside by remember { mutableStateOf(false) }
-            val shown = last || hovered || keysInside
+            var moreOpen by remember { mutableStateOf(false) }
+            LaunchedEffect(hasMore) { if (!hasMore) moreOpen = false }
+            val shown = !isDesktop || last || hovered || keysInside || (moreOpen && hasMore) || reading
+            val iconSize = if (isDesktop) 32.dp else MinTouchTarget
+            // A desktop shows the row on the newest reply and under the pointer; older replies read without it. It only
+            // fades, so nothing moves as the pointer passes and Tab still reaches it (one with the keyboard in it stays
+            // shown); faded out, it isn't read out either. The chosen reaction stays shown on every reply.
             val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
-            Row(
-                Modifier.trimEndTop(end = 0.dp, top = 4.dp).offset(x = (-10).dp).onFocusChanged { keysInside = it.hasFocus },
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val faded = Modifier.alpha(alpha)
-                if (actionable) {
-                    // Pointer-sized, as the icons beside it are.
-                    CopyButton(text, faded.size(32.dp))
-                    onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, faded) }
-                    onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, faded) }
-                }
-                if (reactable) {
-                    if (actionable) Spacer(Modifier.width(6.dp))
-                    otherReaction?.let { OtherReactionBadge(it) }
-                    for (choice in ReplyReaction.entries) {
-                        if (react != null || choice == reaction) {
-                            // Hidden ones take no taps: one sends a prompt at once, and a touchscreen never hovers to show them.
-                            val tap = react?.takeIf { shown || choice == reaction }?.let { { it(choice) } }
-                            ReplyReactionButton(choice, choice == reaction, tap, alpha = alpha)
-                        }
+            // Faded out, it takes no taps either: a touchscreen never hovers to show it first.
+            val hidden = if (shown) Modifier else Modifier.clearAndSetSemantics {}.ignoringPresses()
+            val moreLabel = stringResource(Res.string.chat_reply_more)
+            val usageText = usage?.let { replyUsage(it.input, it.output) }
+            val usageStyle = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily)
+            BoxWithConstraints(Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)) {
+                val copyWidth = if (actionable) {
+                    val size = ButtonSize.Small
+                    maxOf(size.labelledIconWidth(copyLabel), size.labelledIconWidth(LocalDesignWords.current.copied)) + 2.dp
+                } else 0.dp
+                val moreWidth = if (hasMore) ButtonSize.Small.labelledIconWidth(moreLabel) + 2.dp else 0.dp
+                val usageMeasurer = rememberTextMeasurer()
+                val usageWidth = if (usageText != null) with(LocalDensity.current) {
+                    usageMeasurer.measure(usageText, style = usageStyle, maxLines = 1, softWrap = false).size.width.toDp()
+                } else 0.dp
+                // The chosen reaction's icon; one from another client's set with no icon to match shows as its emoji.
+                val badgeWidth = when {
+                    reaction == null -> 0.dp
+                    reactionIcon(reaction) != null -> ReplyReactionBadgeIcon + ReplyReactionBadgePadding * 2 + 2.dp
+                    else -> with(LocalDensity.current) {
+                        usageMeasurer.measure(reaction, style = Theme[typography][body], maxLines = 1, softWrap = false).size.width.toDp() +
+                            ReplyReactionBadgePadding * 2 + 2.dp
                     }
                 }
-                usage?.let {
-                    val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(it.input), compactCount(it.output))
-                    Text(
-                        replyUsage(it.input, it.output),
-                        style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
-                        color = Theme[colors][textMuted],
-                        // On one line in a narrow window at the largest text, as on the phone.
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = faded.padding(start = 8.dp).semantics { contentDescription = spoken },
-                    )
-                }
-            }
-        } else if (actionable || usage != null || reactable) {
-            // On the newest reply all four reactions sit in their own row above the reply's tools, from its start; an
-            // older reply keeps only the one chosen, so the transcript doesn't fill with rows of emoji.
-            if (reactable && (last || chosen != null)) Row(
-                Modifier.offset(x = (-7).dp).trimEndTop(end = 0.dp, top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                otherReaction?.let { OtherReactionBadge(it) }
-                for (choice in ReplyReaction.entries) {
-                    if (last && react != null || choice == reaction) {
-                        ReplyReactionButton(choice, choice == reaction, react?.let { { it(choice) } })
+                val playbackWidth = if (reading) (iconSize + 2.dp) * 2 else 0.dp
+                val labelled = copyWidth + moreWidth + usageWidth + badgeWidth + playbackWidth <= maxWidth
+                Row(
+                    Modifier.fillMaxWidth().onFocusChanged { keysInside = it.hasFocus }.focusGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (usage != null && usageText != null) {
+                        val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
+                        Text(
+                            usageText,
+                            style = usageStyle,
+                            color = Theme[colors][textMuted],
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).alpha(alpha)
+                                .then(if (shown) Modifier.semantics { contentDescription = spoken } else hidden),
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (reading) {
+                        if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, Modifier.size(iconSize))
+                        else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, Modifier.size(iconSize))
+                        ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, Modifier.size(iconSize))
+                    }
+                    if (actionable) Box(hidden.alpha(alpha)) {
+                        if (labelled) CopyButton(text, visibleLabel = copyLabel)
+                        else CopyButton(text, modifier = Modifier.size(iconSize), label = copyLabel)
+                    }
+                    if (reaction != null) ReplyReactionBadge(reaction)
+                    if (hasMore) Box(hidden.alpha(alpha)) {
+                        ReplyMoreMenu(
+                            actions, moreLabel, labelled, moreOpen, { moreOpen = it },
+                            onReact = react, selectedReaction = reaction,
+                        )
                     }
                 }
             }
-            if (actionable || usage != null) Row(verticalAlignment = Alignment.CenterVertically) {
-                // The count takes only what the actions leave: at the largest text it ellipsizes instead of squeezing them out.
-                if (usage != null) {
-                    val spoken = stringResource(Res.string.chat_reply_tokens_spoken, compactCount(usage.input), compactCount(usage.output))
-                    Text(
-                        replyUsage(usage.input, usage.output),
-                        style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
-                        color = Theme[colors][textMuted],
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).semantics { contentDescription = spoken },
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
-                if (actionable) {
-                    // On the end, under the thumb of the hand holding the phone; Copy, the one used most, sits last.
-                    // Copy's padding trimmed off the end lines its icon up with the reply's edge; all of them lose 4dp on top to sit close under it.
-                    val action = Modifier.trimEndTop(end = 0.dp, top = 4.dp)
-                    onBranch?.let { ReplyAction(Lucide.GitBranch, branchLabel, it, action) }
-                    onRegenerate?.let { ReplyAction(Lucide.RefreshCw, regenerateLabel, it, action) }
-                    when {
-                        reading -> {
-                            if (readingPaused) ReplyAction(Lucide.Play, resumeReadingLabel, onResumeReading, action)
-                            else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, action)
-                            ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, action)
-                        }
-                        speakable && onReadAloud != null -> ReplyAction(Lucide.Volume2, readAloudLabel, { onReadAloud(text) }, action)
-                    }
-                    CopyButton(text, Modifier.trimEndTop(end = 16.dp, top = 4.dp).size(MinTouchTarget))
-                }
-            }
+        }
+    }
+}
+
+/** Swallows presses before the children see them, so a faded-out control can't be tapped unseen. */
+private fun Modifier.ignoringPresses(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            awaitPointerEvent(PointerEventPass.Initial).changes.forEach { if (it.pressed || it.previousPressed) it.consume() }
         }
     }
 }

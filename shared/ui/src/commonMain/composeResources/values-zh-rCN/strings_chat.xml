@@ -481,6 +481,7 @@
     <string name="chat_react_continue">继续</string>
     <string name="chat_react_verify">验证</string>
     <string name="chat_react_explain">解释</string>
+    <string name="chat_reply_more">更多</string>
     <string name="chat_message_actions">消息操作</string>
     <string name="chat_queued">已排队 · 此任务完成后发送</string>
     <string name="chat_editing_in_composer">正在输入框中编辑</string>
