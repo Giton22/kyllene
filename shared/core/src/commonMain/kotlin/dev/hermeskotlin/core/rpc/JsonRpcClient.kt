@@ -47,6 +47,11 @@ data class GatewayEvent(
      * [executionGeneration]: the id its `prompt.submit` gave the prompt that turn runs. Null on other gateways.
      */
     val admissionId: String? = null,
+    /**
+     * The session authority's `replay_epoch` of the session the event belongs to (gateway/session_events.py), which
+     * its [seq] counts in. Null on the legacy gateway, whose seqs count in `gateway.ready`'s epoch.
+     */
+    val replayEpoch: String? = null,
 )
 
 /**
@@ -310,6 +315,7 @@ class JsonRpcClient(
                 seq = params["seq"]?.jsonPrimitive?.longOrNull,
                 executionGeneration = (params["execution_generation"] as? JsonPrimitive)?.longOrNull,
                 admissionId = (params["admission_id"] as? JsonPrimitive)?.contentOrNull,
+                replayEpoch = (params["replay_epoch"] as? JsonPrimitive)?.contentOrNull,
             ),
         )
     }
