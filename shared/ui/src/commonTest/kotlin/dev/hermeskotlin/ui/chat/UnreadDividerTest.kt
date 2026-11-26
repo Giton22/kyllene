@@ -76,6 +76,12 @@ class UnreadDividerTest {
     }
 
     @Test
+    fun aToolsOnlyTurnDoesNotGetTheNewMessagesLine() {
+        val messages = listOf(ChatMessage.Assistant("silent", timestamp = 200.0, reasoning = "working"))
+        assertNull(firstUnreadKey(messages, readUpTo = 100.0))
+    }
+
+    @Test
     fun theMachinerysOwnRowsAreNotWhereTheLineGoes() {
         val messages = listOf(prompt("p1", 100.0), failedTurn("f1"), reply("r2", 210.0))
 

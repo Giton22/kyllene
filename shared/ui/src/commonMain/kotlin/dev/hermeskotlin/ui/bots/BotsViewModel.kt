@@ -26,6 +26,7 @@ import dev.hermeskotlin.core.rooms.DesktopRoom
 import dev.hermeskotlin.core.rooms.parseDesktopRooms
 import dev.hermeskotlin.core.chat.AttentionTracker
 import dev.hermeskotlin.core.chat.ChatHost
+import dev.hermeskotlin.core.chat.hasUnreadBotMessage
 import dev.hermeskotlin.core.connection.ConnectionState
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -538,6 +539,7 @@ class BotsViewModel(
             chats.note(roster.bots)
             val ordered = roster.bots.forRoster()
             val unread = unread(url, ordered)
+            if (gateway.value != url) return
             // Desktop's rooms ride the roster's default row, so they refresh without a call of their own.
             val desktopRooms = parseDesktopRooms(roster.bots.firstOrNull { it.isDefault || it.name == Bot.DEFAULT }?.uiMeta)
             _state.update { it.regroup(ordered).copy(loading = false, error = null, unsupported = false, unread = unread, desktopRooms = desktopRooms) }
@@ -585,8 +587,36 @@ class BotsViewModel(
         // A chat just begun has nothing in it to read.
         if (bot.canonicalSession?.messageCount == 0) return@mapNotNull null
         val chat = bot.chatSummary() ?: return@mapNotNull null
-        bot.name.takeIf { seenStore.seen(url, bot.name).first().isUnread(chat, resolvedId = bot.canonicalSession?.openId) }
+        val tip = bot.canonicalSession?.openId ?: return@mapNotNull null
+        val seen = seenStore.seen(url, bot.name).first()
+        if (!seen.isUnread(chat, resolvedId = tip)) return@mapNotNull null
+        val looked = maxOf(seen.lastLook(chat.id), seen.lastLook(tip))
+        val hasMessage = hasUnreadBotHistory(url, bot.name, tip, looked)
+        val latest = seenStore.seen(url, bot.name).first()
+        bot.name.takeIf {
+            maxOf(latest.lastLook(chat.id), latest.lastLook(tip)) == looked &&
+                (hasMessage ?: (bot.name in _state.value.unread))
+        }
     }.toSet()
+
+    // Roster activity also advances on tool calls. Check the underlying history, including when
+    // many silent steps came in after the last readable message.
+    private suspend fun hasUnreadBotHistory(url: GatewayUrl, profile: String, tip: String, looked: Double): Boolean? {
+        val pageSize = 100
+        var offset = 0
+        var lastPageStart: Long? = null
+        while (gateway.value == url) {
+            val result = sessions.messages(url, tip, limit = pageSize, profile = profile, offset = offset, inlineImages = false)
+            val rows = (result as? ApiResult.Success)?.value?.messages ?: return null
+            val firstId = rows.firstOrNull()?.id
+            if (firstId != null && firstId == lastPageStart) return null
+            lastPageStart = firstId
+            if (rows.hasUnreadBotMessage(looked)) return true
+            if (rows.size < pageSize || rows.all { it.timestamp?.let { at -> at <= looked } == true }) return false
+            offset += rows.size
+        }
+        return null
+    }
 
     private fun loadAvatars(bots: List<Bot>) {
         val wanted = bots.filter { it.hasAvatar && avatarsAsked.add(it.name) }
