@@ -119,6 +119,22 @@ class ChatReducerTest {
     }
 
     @Test
+    fun commentaryRepeatedAcrossTheStepsOfAReplyShowsOnce() {
+        val rows = listOf(1.0, 2.0).map { at ->
+            HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"","timestamp":$at,
+                "display_reasoning":"","display_commentary":["Running the tests."]}""")
+        }
+        assertEquals(listOf("Running the tests."), assertIs<ChatMessage.Assistant>(historyToMessages(rows).single()).commentary)
+    }
+
+    @Test
+    fun fallbackLeavesOneBlankLineWhereCommentaryWasTakenOut() {
+        val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"Done.",
+            "reasoning":"Plan A\r\n\r\nProgress.\r\n\r\nPlan B","display_commentary":["Progress."]}""")
+        assertEquals("Plan A\n\nPlan B", assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single()).reasoning)
+    }
+
+    @Test
     fun olderHistoryKeepsReasoningAndDoesNotReadRawProviderSidecars() {
         val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"Done.",
             "reasoning":"Legacy summary.","display_reasoning":null,"display_commentary":null,

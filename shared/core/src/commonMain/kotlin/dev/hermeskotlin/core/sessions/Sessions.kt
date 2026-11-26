@@ -197,7 +197,8 @@ data class SessionMessage(
                 val wholeLines = Regex("^" + Regex.escape(update) + "$", RegexOption.MULTILINE)
                 lines = wholeLines.replace(lines, "")
             }
-            return lines.trim()
+            // A removed paragraph leaves its blank lines behind: one blank line parts what's left.
+            return lines.replace(Regex("\n{3,}"), "\n\n").trim()
         }
 
     /** Image parts of a multimodal row (`image_url` / `image` / `input_image`). */
