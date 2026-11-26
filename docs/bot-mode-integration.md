@@ -141,7 +141,7 @@ Classify a row **before** picking a bubble, in this order:
 | hidden / `[System:` / heartbeat | `display_kind:"hidden"`; user row starting `[System:`; `^\[Background process \S+ heartbeat #\d+ ` | nothing |
 | failed turn | `display_kind:"failed_turn"` (legacy rows are typed on read) | muted system notice |
 | process / delivery result | `display_kind` `process_complete` or `async_delegation_complete`; or an untyped user row matching `^\[IMPORTANT: Background process [\s\S]*\]$` | **Delivery outcome** when the Command has `bot_mode_dm.py --run-delivery` or `--wait-reply`, or the `proc_…` id matches an earlier `message_agent` ack's `process_id`. Otherwise one collapsed line with `display_metadata.display_text`, output in monospace on tap. Batches are split on `\n\n(?=\[IMPORTANT: )`. |
-| message from another bot | user row matching AGENT_MESSAGE_RE (`AgentMessage.kt`) | a small centred note: the sender's face (from the handle; `hermes` means default) and "Message from X", body collapsed, no edit. *(Done as a card; make it collapsed and add the face.)* |
+| message from another bot | user row matching the parser in `AgentMessage.kt`. For `display_kind:"internal_notification"`, it must have the full `Message from 🤖 Name (@handle): …` sender stamp or the legacy `[Message from agent 'name'] …` form. | a small centred note: the sender's face (from the handle; `hermes` means default) and "Message from X", body collapsed, no edit. *(Done as a card; make it collapsed and add the face.)* |
 | reply to that message | the next settled assistant row after an agent note | collapse to "↗ Replied to X · show reply", except while streaming and except when this bot itself messaged X earlier in the same exchange (`agent-delivery.tsx:48-83`) |
 | compaction handoff | user or assistant row starting `[CONTEXT COMPACTION — REFERENCE ONLY]`, unless a real prompt follows the summary end marker | reference text inside System messages |
 | routine output | user row starting `[Cronjob "<name>" output — scheduled job, not the user…]\n\n` | routine name and content inside System messages |
@@ -155,8 +155,9 @@ Adjacent routine outputs (not scheduled-job results), compaction handoffs, succe
 collapsed **System messages · N** disclosure with a gear icon, styled like Reasoning. Expanding it shows
 those entries in order. Replies, other bots' messages, delivery outcomes and failures remain outside the
 group. Gateway-hidden rows remain hidden; `display_content` takes precedence over raw stored content.
-User rows typed `internal_notification` are also shown when their `completion_note` names only `cron`, or
-when they match a known cron envelope above. Wakes, watch notes and heartbeats share the kind and remain hidden.
+User rows typed `internal_notification` are shown when they carry a bot-message envelope or a known cron
+envelope above, or when their `completion_note` names only `cron`. Wakes, watch notes and heartbeats share
+the kind and remain hidden.
 
 **Delivery outcome** (parse the process `Output:`):
 - plain text, `{"reply",…,"status":"settled"}` or `Reply from X:` → "💬 Reply from @x", collapsed. Strip

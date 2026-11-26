@@ -138,7 +138,7 @@ class NotificationActionReceiver : BroadcastReceiver(), KoinComponent {
         val reply = relay.phoneTurnEnds(chat, sent) ?: return
         if (reply.outcome == TurnOutcome.Interrupted || settings.settings.value?.notifyReplies == false) return
         val failed = reply.outcome == TurnOutcome.Error
-        val text = (if (failed) reply.error ?: reply.text else reply.text).ifBlank { notifications.finished }
+        val text = if (failed) reply.error ?: reply.text else reply.text
         // Notifications are posted from the main thread, as the notifiers do.
         withContext(Dispatchers.Main) { notifications.postReply(storedId, chat.state.value.title, text, failed) }
     }

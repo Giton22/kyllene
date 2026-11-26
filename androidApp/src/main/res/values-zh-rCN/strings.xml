@@ -62,7 +62,6 @@
     <string name="notification_deny">拒绝</string>
 
     <string name="notification_turn_failed_text">这一轮失败了。</string>
-    <string name="notification_done">完成。</string>
     <string name="notification_finished">已结束。</string>
     <string name="notification_message_hermes">给 Hermes 发消息</string>
     <string name="notification_turn_failed">这一轮失败了</string>

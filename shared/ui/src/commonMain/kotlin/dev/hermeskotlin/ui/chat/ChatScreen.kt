@@ -177,6 +177,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.collectAsState
@@ -278,6 +279,7 @@ import dev.hermeskotlin.designsystem.rememberHoverIndication
 import dev.hermeskotlin.core.chat.Attachment
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.TranscriptEvent
+import dev.hermeskotlin.core.chat.replyTextOrNull
 import dev.hermeskotlin.core.chat.GatewayNotice
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.OutgoingAttachment
@@ -592,6 +594,10 @@ fun ChatScreen(
     val density = LocalDensity.current
     val modelPillBounds = remember { mutableStateOf<Rect?>(null) }
     val conversationKey = Triple(target.gateway.gatewayUrl, target.profile, target.storedSessionId)
+    val editing = viewModel.editing.collectAsStateWithLifecycle().value
+    val imagePaste = if (ownsTranscript && connected && keysEnabled && !dialogOpen && editing == null &&
+        attachments.size < OutgoingAttachment.MAX_COUNT
+    ) attachmentPicker.imagePasteModifier { read -> viewModel.pasteImages(target, read) } else Modifier
     Box(Modifier.fillMaxSize().onSizeChanged { paneWidth = with(density) { it.width.toDp() } }) {
     CompositionLocalProvider(LocalModelPillBounds provides modelPillBounds) {
     ChatView(
@@ -637,7 +643,7 @@ fun ChatScreen(
         notice = notice,
         actions = viewModel,
         widgetFiles = transcript.widgetFiles,
-        editing = viewModel.editing.collectAsStateWithLifecycle().value,
+        editing = editing,
         // Only for the chat it was taken for, not one the screen moved on to (a branch, a fresh start).
         readUpTo = readPosition?.readUpTo?.takeIf { state.storedSessionId == target.storedSessionId },
         onReadLatest = if (readPosition != null && ownsTranscript && screenShown && connected && state.historyRead && !state.running) {
@@ -672,6 +678,7 @@ fun ChatScreen(
         focusComposer = focusComposer,
         keysEnabled = keysEnabled && !dialogOpen,
         attachmentPicker = attachmentPicker.takeIf { isDesktop },
+        imagePaste = imagePaste,
         rail = railFile?.let { file ->
             {
                 FileViewer(file, onDismiss = { previewing = null }, load = viewModel::previewFile, download = viewModel::downloadFile, docked = true)
@@ -845,6 +852,7 @@ internal fun ChatView(
     keysEnabled: Boolean = true,
     /** Takes files dropped on the chat and pasted into it (the desktop's). */
     attachmentPicker: AttachmentPicker? = null,
+    imagePaste: Modifier = Modifier,
     /** A panel at the right, beside the conversation: the desktop's file rail. */
     rail: (@Composable () -> Unit)? = null,
 ) {
@@ -1278,6 +1286,7 @@ internal fun ChatView(
                         onOpenControl = onOpenControl,
                         voiceFull = voiceFull,
                         onExpandVoice = { voiceFolded = false },
+                        imagePaste = imagePaste,
                         onPasteFiles = { canAttach && keysEnabled && attachmentPicker?.pasteAttachments() == true },
                     )
                 }
@@ -1414,6 +1423,7 @@ private fun ColumnScope.Dock(
     /** The voice chat is open over the whole screen. */
     voiceFull: Boolean,
     onExpandVoice: () -> Unit,
+    imagePaste: Modifier,
     /** A paste in the composer: true when it attached files, a picture or a long text (the desktop's). */
     onPasteFiles: () -> Boolean = { false },
 ) {
@@ -1583,6 +1593,7 @@ private fun ColumnScope.Dock(
                 onAttach = onAttach,
                 onDictate = onDictate,
                 onVoiceChat = onVoiceChat,
+                imagePaste = imagePaste,
                 onKey = { event ->
                     // A bot named so far comes before "A file" / "A folder", which any short @ word offers too.
                     val listed = when {
@@ -1618,6 +1629,7 @@ private fun ComposerNotice.text(): String = when (this) {
     is ComposerNotice.Said -> text
     ComposerNotice.PromptNotSent -> stringResource(Res.string.chat_notice_prompt_not_sent)
     ComposerNotice.CallNotStarted -> stringResource(Res.string.chat_notice_call_not_started)
+    ComposerNotice.ImagePasteTimedOut -> stringResource(Res.string.android_attach_photo_failed)
     is ComposerNotice.TooManyAttachments -> stringResource(Res.string.chat_notice_too_many_files, max)
     is ComposerNotice.FileTooLarge -> stringResource(Res.string.chat_notice_file_too_large, name, megabytes)
 }
@@ -2027,6 +2039,16 @@ private fun Messages(
     var positioned by remember(readUpTo, savedCopy) {
         mutableStateOf(restored(sameCopy = true)?.positioned ?: (readUpTo == null || unreadSettled))
     }
+    val oldest = messages.firstOrNull()?.key
+    var previousOldest by remember { mutableStateOf(oldest) }
+    SideEffect {
+        // A short newest page can fit in the viewport. Adding rows above it changes the bottom-aligned
+        // layout before the follow effect can react, so carry the bottom anchor into the new layout.
+        if (oldest.isOlderThan(previousOldest) && pinned && !listState.isScrollInProgress) {
+            listState.requestScrollToItem(messages.lastIndex, LIST_END)
+        }
+        previousOldest = oldest
+    }
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo }.collect { info ->
             when (followStep(pinned, info.hiddenBelow(), listState.isScrollInProgress)) {
@@ -2073,9 +2095,14 @@ private fun Messages(
     }
     // How much reply the bottom holds; more of it arriving while the reader is away from the end is new to them.
     val tail = messages.replyMark()
-    val oldest = messages.firstOrNull()?.key
     var replySeen by remember { mutableStateOf(ReplySeen(oldest, tail)) }
-    LaunchedEffect(awayFromBottom, oldest, tail) { replySeen = replySeen.next(awayFromBottom, oldest, tail) }
+    var previousReplyMessages by remember { mutableStateOf(messages) }
+    LaunchedEffect(awayFromBottom, messages) {
+        val arrivedWithPage = oldest.isOlderThan(replySeen.oldest) &&
+            messages.replyArrivedWithPage(previousReplyMessages, replySeen.mark)
+        replySeen = replySeen.next(awayFromBottom, oldest, tail, arrivedWithPage)
+        previousReplyMessages = messages
+    }
     val newBelow = awayFromBottom && replySeen.new
     // Where the messages that came since the chat was last read begin. It stays put for the rest of this visit,
     // so reading on doesn't move or remove it under the reader; the next visit starts from the new last look.
@@ -2144,14 +2171,17 @@ private fun Messages(
         positioned = true
     }
     val readLatest by rememberUpdatedState(onReadLatest)
-    val messageCount by rememberUpdatedState(messages.size)
+    val renderedEnd by rememberUpdatedState(messages.size to newest?.key)
     // Asked again whenever the messages change, not just the tail: a page loaded above, or a row redrawn, can turn
     // down an ask made while the rendered list and the chat's differed for a frame.
     LaunchedEffect(listState, positioned, onReadLatest != null, messages) {
         if (!positioned || onReadLatest == null) return@LaunchedEffect
         snapshotFlow {
-            listState.layoutInfo.visibleItemsInfo.isNotEmpty() &&
-                listState.layoutInfo.totalItemsCount == messageCount && !listState.canScrollForward
+            val layout = listState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()
+            val (count, lastKey) = renderedEnd
+            lastVisible != null && lastVisible.key == lastKey &&
+                layout.totalItemsCount == count && !listState.canScrollForward
         }.collect { atEnd -> if (atEnd) readLatest?.invoke() }
     }
     val unservable = remember(messages) { unservableEchoes(messages) }
@@ -2467,18 +2497,33 @@ private fun ChatMessage.replyLength(): Int = when (this) {
     is ChatMessage.Notice -> 0
 }
 
+private fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, mark: Pair<Int, Int>): Boolean {
+    val oldest = previous.firstOrNull()?.key ?: return false
+    val start = indexOfFirst { it.key == oldest }
+    // The page can bring the prompt for a partly loaded turn. Compare only the portion we already had.
+    if (start >= 0) return subList(start, size).replyMark() != mark
+
+    // If history folded the first assistant bubble into an older row, compare the transcript after that bubble.
+    val row = oldest.storedRowId() ?: return false
+    val boundary = indexOfLast { message -> message.key.storedRowId()?.let { it <= row } == true }
+    return boundary >= 0 && subList(boundary + 1, size).replyMark() != previous.subList(1, previous.size).replyMark()
+}
+
 /**
  * The [replyMark] and oldest loaded row as they last were, and whether reply text has come ([new]) since the reader
  * left the end. It stays new until they are back there, even if a later turn brings the mark back to what it was.
  */
 internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val new: Boolean = false) {
-    /** A mark that changes as an earlier stored row becomes the oldest is an older page loading above, which isn't news. */
-    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>): ReplySeen {
-        val was = this.oldest.storedRowId()
-        val now = oldest.storedRowId()
-        val olderPage = was != null && now != null && now < was
-        return ReplySeen(oldest, mark, new = away && (new || (mark != this.mark && !olderPage)))
+    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>, arrivedWithPage: Boolean = false): ReplySeen {
+        val arrived = if (oldest.isOlderThan(this.oldest)) arrivedWithPage else mark != this.mark
+        return ReplySeen(oldest, mark, new = away && (new || arrived))
     }
+}
+
+private fun String?.isOlderThan(previous: String?): Boolean {
+    val before = previous.storedRowId() ?: return false
+    val now = storedRowId() ?: return false
+    return now < before
 }
 
 /** The stored row a message's key (`row-<id>`, as `historyToMessages` gives it) was made from, if any. */
@@ -3324,8 +3369,9 @@ internal val ChatMessage.sentAt: Double?
 
 private fun ChatMessage.isNewerThan(readUpTo: Double): Boolean = when (this) {
     is ChatMessage.User -> (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
-    // A reply with no time yet is still being written, so it came after the last look.
-    is ChatMessage.Assistant -> (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
+    // Anchor the line before the first streamed word. A finished silent reply no longer needs it.
+    is ChatMessage.Assistant -> (streaming || text.replyTextOrNull() != null) &&
+        (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
     // Another bot writing in is news even when this bot stays silent. The machinery's own rows (deliveries,
     // routines, failures) aren't: the line goes above something the person would want to read.
     is ChatMessage.Event -> event is TranscriptEvent.FromBot && (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
@@ -4095,6 +4141,7 @@ private fun Composer(
     onVoiceChat: () -> Unit,
     /** A prompt is being edited: it can't go out mid-turn, as the gateway won't cut the chat while a task runs. */
     editing: Boolean,
+    imagePaste: Modifier,
     /** The desktop's keys in the field before its own: a paste that attaches, a suggestion picked. */
     onKey: (KeyEvent) -> Boolean = { false },
 ) {
@@ -4150,6 +4197,7 @@ private fun Composer(
                         state = actions.composer,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 28.dp).padding(horizontal = 12.dp).focusRequester(focus)
                             .onFocusChanged { fold.typing = it.hasFocus }
+                            .then(imagePaste)
                             .then(
                                 if (!enterSends) {
                                     Modifier

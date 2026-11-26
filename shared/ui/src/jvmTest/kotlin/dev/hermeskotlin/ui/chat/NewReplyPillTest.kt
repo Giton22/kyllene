@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -18,6 +19,8 @@ import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.ToolActivity
+import dev.hermeskotlin.core.chat.historyToMessages
+import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.designsystem.AccentPalette
 import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import dev.hermeskotlin.designsystem.hermesTheme
@@ -25,6 +28,7 @@ import dev.hermeskotlin.ui.preview.PreviewChatActions
 import dev.hermeskotlin.ui.voice.DictationState
 import dev.hermeskotlin.ui.voice.VoiceChatState
 import kotlin.test.Test
+import kotlinx.serialization.json.JsonPrimitive
 
 /** The jump-to-end pill says "New reply" for reply text below the reader, not for the agent thinking or using tools. */
 @OptIn(ExperimentalTestApi::class)
@@ -81,6 +85,45 @@ class NewReplyPillTest {
         onNodeWithText("New reply").assertDoesNotExist()
 
         runOnIdle { messages = older + page + ChatMessage.Assistant("live-1", reasoning = "Trying the next step", error = "Model unavailable") }
+        waitForIdle()
+        onNodeWithText("New reply").assertIsDisplayed()
+    }
+
+    @Test
+    fun aReplyArrivingWhenTheOldestBubbleMergesIsStillNew() = runComposeUiTest {
+        val tail = SessionMessage(
+            id = 61,
+            role = "assistant",
+            content = JsonPrimitive((1..45).joinToString("\n\n") { "A long reply, paragraph $it." }),
+        )
+        val start = SessionMessage(id = 2, role = "assistant", content = JsonPrimitive("Start of the long reply."))
+        val prompt = SessionMessage(id = 1, role = "user", content = JsonPrimitive("Tell me more."))
+        val answer = ChatMessage.Assistant("live-1", text = "New answer below")
+        val newestPage = historyToMessages(listOf(tail))
+        val olderPageJoined = historyToMessages(listOf(prompt, start, tail))
+        var messages by mutableStateOf(newestPage)
+        var visit by mutableStateOf(0)
+        setContent { key(visit) { Conversation(messages) } }
+
+        fun scrollBack() {
+            onNode(hasScrollToIndexAction()).performMouseInput { moveTo(center); scroll(-10000f) }
+            waitForIdle()
+        }
+        scrollBack()
+        onNodeWithText("New reply").assertDoesNotExist()
+
+        runOnIdle { messages = olderPageJoined }
+        waitForIdle()
+        onNodeWithText("New reply").assertDoesNotExist()
+
+        // Start from the partial reply again so the prepend and the answer land in the same update.
+        runOnIdle {
+            messages = newestPage
+            visit++
+        }
+        waitForIdle()
+        scrollBack()
+        runOnIdle { messages = olderPageJoined + answer }
         waitForIdle()
         onNodeWithText("New reply").assertIsDisplayed()
     }
