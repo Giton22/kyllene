@@ -266,7 +266,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Rooms: attach photos and files on gateways advertising `groups.attachment.upload` (8 files, 12 MB each, 25 MB per message)
 - [x] Rooms: select message text to copy a passage, or copy a bot's whole message with its Markdown; also in read-only Desktop rooms
 - [x] Rooms: gateway file links open in the existing viewer, with Save and Share through the speaking bot's profile
-- [x] Rooms: scroll up for older messages (`groups.log` read back a window at a time, the reader's place kept)
+- [x] Rooms: scroll up for older messages (`groups.log` read back a window at a time, the reader's place kept); a room opens at its newest message, not scrolling down from its oldest
 - [x] Rooms: notifications for bots' lines while Kyllene is out of sight (one conversation per room, a tap opens it), and an unread dot on room rows
 - [x] Rooms: @mention a member (`@` lists Everyone and the members with their faces; the composer says who answers first, by the gateway's own rule)
 - [x] Rooms: who's replying and who's next, read off the room's log; a member that passes says so
