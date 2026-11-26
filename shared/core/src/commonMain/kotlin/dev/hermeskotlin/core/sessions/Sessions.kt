@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /**
@@ -156,6 +157,9 @@ data class SessionMessage(
     @SerialName("display_commentary") val displayCommentary: List<String>? = null,
 ) {
     val userReaction: String? get() = userReactionEmoji(displayMetadataObject(displayMetadata)?.get("reactions"))
+
+    /** The part of a reply a stopped turn had streamed, which hermes-agent marks (v0.23.4 agent/turn_api_call.py). */
+    val stopped: Boolean get() = (displayMetadataObject(displayMetadata)?.get("interrupted") as? JsonPrimitive)?.booleanOrNull == true
 
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()

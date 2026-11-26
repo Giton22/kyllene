@@ -464,6 +464,7 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         reactionRowId = if (keepTarget) previous.reactionRowId else reactionRow,
                         userReaction = if (keepTarget) previous.userReaction else row.userReaction,
                         tools = previous.tools + tools,
+                        outcome = if (row.stopped) TurnOutcome.Interrupted else previous.outcome,
                         // The reply is dated by its last step, when it finished.
                         timestamp = row.timestamp ?: previous.timestamp,
                     )
@@ -477,6 +478,8 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         tools = tools,
                         repliedTo = replyingTo,
                         timestamp = row.timestamp,
+                        // Still reads as stopped once the transcript replaces the live copy.
+                        outcome = TurnOutcome.Interrupted.takeIf { row.stopped },
                     )
                 }
             }

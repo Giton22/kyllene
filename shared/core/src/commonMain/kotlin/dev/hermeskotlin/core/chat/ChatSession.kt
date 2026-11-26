@@ -2794,7 +2794,12 @@ class ChatSession(
                 // unseen, so it's read again. A turn from another client may be the kickoff of a goal it just typed
                 // into a chat that had none, so that one is read whatever the strip shows.
                 if (controlUnpublished(anyChat = foreignTurn)) scope.launch { refreshControl() }
-                if (foreignTurn || rewound) {
+                // The receipt names the reply's row only for a turn that completed (v0.23.4
+                // agent/persisted_turn_receipt.py), but a stopped one is stored too: its row is read, so it can be reacted to.
+                val payload = event.payload as? JsonObject
+                val stoppedUnnamed = payload.string("status") == "interrupted" &&
+                    (payload?.get("persisted_turn") as? JsonObject).long("final_assistant_row_id") == null
+                if (foreignTurn || rewound || stoppedUnnamed) {
                     foreignTurn = false
                     rewound = false
                     scope.launch { loadHistory() }
