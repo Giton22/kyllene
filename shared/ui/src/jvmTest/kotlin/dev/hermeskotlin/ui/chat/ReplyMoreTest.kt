@@ -1,6 +1,9 @@
 package dev.hermeskotlin.ui.chat
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
@@ -111,5 +114,36 @@ class ReplyMoreTest {
         runOnIdle { latest.value = true }
         onNodeWithContentDescription("Copy").assertHasClickAction()
         onNodeWithContentDescription("More").assertHasClickAction()
+    }
+
+    @Test
+    fun theMenuOpensAwayFromTheNearerEdgeOfTheWindow() = runComposeUiTest {
+        val atTop = mutableStateOf(true)
+        setContent {
+            HermesTheme(ColorScheme.Light) {
+                Column(Modifier.fillMaxSize()) {
+                    if (!atTop.value) Spacer(Modifier.weight(1f))
+                    AssistantReply(
+                        message = ChatMessage.Assistant(key = "reply", text = "Done.", reactionRowId = 3),
+                        onBranch = {},
+                        onRegenerate = {},
+                        last = true,
+                        onReact = {},
+                    )
+                }
+            }
+        }
+
+        // Near the top it opens downwards: pushed up past the top, its first rows would sit under the status bar.
+        onNodeWithContentDescription("More").performClick()
+        var more = onNodeWithContentDescription("More").fetchSemanticsNode().boundsInRoot
+        assertTrue(onNodeWithText("Got it").fetchSemanticsNode().boundsInRoot.top >= more.bottom)
+        onNodeWithText("Got it").performClick()
+
+        // Low on the screen, as replies usually are, it opens upwards, over the reply.
+        runOnIdle { atTop.value = false }
+        onNodeWithContentDescription("More").performClick()
+        more = onNodeWithContentDescription("More").fetchSemanticsNode().boundsInRoot
+        assertTrue(onNodeWithText("Regenerate").fetchSemanticsNode().boundsInRoot.bottom <= more.top)
     }
 }
