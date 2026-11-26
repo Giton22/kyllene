@@ -30,6 +30,8 @@
     <string name="settings_section_appearance">外观</string>
     <string name="settings_section_chat">对话</string>
     <string name="settings_section_voice">语音</string>
+    <string name="settings_system_calling">Android 通话控制</string>
+    <string name="settings_system_calling_detail">通过 Android Auto、Wear OS 和蓝牙耳机控制 GPT-Live 通话。</string>
     <string name="settings_section_notifications">通知</string>
     <string name="settings_section_phone">手机</string>
     <string name="settings_section_privacy">隐私</string>
@@ -287,4 +289,7 @@
     <string name="managed_update_restart_title">重启 Kyllene？</string>
     <string name="managed_update_restart_warning">请结束通话并保存工作。重启将关闭所有窗口，未保存的更改和附件可能会丢失。</string>
     <string name="managed_update_restart_now">立即重启</string>
+    <string name="voice_muted_by_android">已被 Android 静音</string>
+    <string name="voice_muted_in_kyllene">已在 Kyllene 中静音</string>
+    <string name="voice_error_system_activation">Android 无法激活通话。请重试。</string>
 </resources>

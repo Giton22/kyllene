@@ -37,6 +37,8 @@ import com.composables.icons.lucide.MicOff
 import com.composables.icons.lucide.Phone
 import com.composables.icons.lucide.PhoneOff
 import dev.hermeskotlin.designsystem.surface3
+import dev.hermeskotlin.ui.voice.muteControlLabel
+import dev.hermeskotlin.ui.voice.muteStatus
 import dev.hermeskotlin.ui.voice.VoicePhase
 import dev.hermeskotlin.ui.components.ProvideAppWords
 import kotlinx.coroutines.delay
@@ -114,10 +116,10 @@ internal fun IncomingCallView(caller: String, why: String, onAnswer: () -> Unit,
 }
 
 @Composable
-private fun CallButton(name: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
+private fun CallButton(name: String, icon: ImageVector, color: Color, onClick: () -> Unit, enabled: Boolean = true) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.size(72.dp).clip(CircleShape).background(color).clickable(role = Role.Button, onClick = onClick),
+            Modifier.size(72.dp).clip(CircleShape).background(color).clickable(enabled = enabled, role = Role.Button, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
             UnstyledIcon(icon, contentDescription = name, tint = Theme[colors][onAccent], modifier = Modifier.size(30.dp))
@@ -172,6 +174,9 @@ internal fun InCallView(state: PhoneCallState, seconds: Long, onMute: () -> Unit
                 overflow = TextOverflow.Ellipsis,
             )
             Text(callStatusText(callStatus(state, seconds)), style = Theme[typography][body], color = Theme[colors][textSecondary], textAlign = TextAlign.Center)
+            muteStatus(voice)?.let { status ->
+                Text(stringResource(status), style = Theme[typography][label], color = Theme[colors][textSecondary])
+            }
         }
         // What was said last, as captions: Hermes's words, or yours.
         val caption = state.error ?: voice.caption
@@ -206,10 +211,11 @@ internal fun InCallView(state: PhoneCallState, seconds: Long, onMute: () -> Unit
         ) {
             if (mutable) {
                 CallButton(
-                    stringResource(if (voice.muted) Res.string.voice_unmute else Res.string.voice_mute),
+                    muteControlLabel(voice),
                     if (voice.muted) Lucide.MicOff else Lucide.Mic,
                     if (voice.muted) Theme[colors][accent] else Theme[colors][surface3],
                     onMute,
+                    enabled = !voice.mutedBySystem,
                 )
             }
             CallButton(stringResource(Res.string.voice_end), Lucide.PhoneOff, Theme[colors][danger], onEnd)

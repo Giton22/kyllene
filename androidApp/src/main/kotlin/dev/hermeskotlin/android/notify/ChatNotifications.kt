@@ -259,7 +259,7 @@ class ChatNotifications(
     }
 
     /** The ongoing notification of a voice chat kept up like a call ([VoiceCallService]): back to it, or [end] it. */
-    fun voiceCall(end: PendingIntent): Notification = base(CHANNEL_VOICE)
+    fun voiceCall(end: PendingIntent, telecomName: String? = null): Notification = base(CHANNEL_VOICE)
         .setContentTitle(str(R.string.notification_voice_title))
         .setContentText(str(R.string.notification_voice_text))
         .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -267,7 +267,10 @@ class ChatNotifications(
         .setAutoCancel(false)
         .setSilent(true)
         .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-        .addAction(0, str(R.string.notification_voice_end), end)
+        .apply {
+            if (telecomName == null) addAction(0, str(R.string.notification_voice_end), end)
+            else setStyle(NotificationCompat.CallStyle.forOngoingCall(Person.Builder().setName(telecomName).build(), end))
+        }
         .build()
 
     /**
@@ -417,6 +420,16 @@ class ChatNotifications(
         // Herald on the watch rings itself, with an Answer that talks there: this phone's call isn't shown on it too,
         // unless the watch doesn't say it rings ([showOnWatch]).
         val watchRings = alsoRings?.ring(call) == true
+        if (call.agent != null) managedCalls?.ring(
+            call.id, call.title?.takeIf { it.isNotBlank() } ?: "Hermes",
+            onAnswer = {
+                answer(call.id)?.let { open ->
+                    runCatching { context.startActivity(open) }
+                        .onFailure { decline(call.id) }
+                }
+            },
+            onReject = { decline(call.id) },
+        )
         manager.notify(call.id, CALL_ID, callNotification(call, localOnly = watchRings))
         HandlerCompat.postDelayed(main, { rangOut(call.id) }, call.timer, RING_MS)
         return true
@@ -577,6 +590,7 @@ class ChatNotifications(
             it - requestId
         }
         call?.let {
+            managedCalls?.stopRinging(requestId)
             main.removeCallbacksAndMessages(it.timer)
             alsoRings?.stop(requestId)
         }
@@ -603,6 +617,12 @@ class ChatNotifications(
                     addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }
             }
+    }
+
+    internal var managedCalls: TelecomLiveCalls? = null
+
+    internal fun finishManagedCall(id: String) {
+        managedCalls?.finishIncoming(id)
     }
 
     /** The call screen's Answer: the same as the notification's. */

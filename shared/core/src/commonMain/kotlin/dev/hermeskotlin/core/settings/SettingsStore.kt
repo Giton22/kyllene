@@ -99,6 +99,8 @@ data class AppSettings(
     /** The gateway's Next Prompt plugin's suggested next message, over the composer once a turn ends. */
     val suggestedReplies: Boolean = true,
     val voicePause: VoicePause = VoicePause.Normal,
+    /** Use Android's call controls for live voice after the user has enabled the system calling account. */
+    val androidSystemCalling: Boolean = false,
     /** Default call destination per saved gateway; absence starts a new conversation in its selected profile. */
     val callTargets: Map<String, CallTarget> = emptyMap(),
     /** The mic for dictation in the composer and on an empty chat. Off, it goes, and the model name gets the room. */
@@ -210,6 +212,8 @@ data class AppSettings(
     /** Desktop: the sidebar's width in dp, as its edge was last dragged to. */
     val sidebarWidth: Int = 304,
 )
+
+fun AppSettings.canUseAndroidSystemCalling(accountReady: Boolean): Boolean = androidSystemCalling && accountReady
 
 /** The Pebble's prompts until they're edited. */
 val DEFAULT_PEBBLE_PROMPTS = listOf("Summarize my day", "What's running?", "What needs my attention?")

@@ -30,6 +30,8 @@
     <string name="settings_section_appearance">Aparência</string>
     <string name="settings_section_chat">Conversa</string>
     <string name="settings_section_voice">Voz</string>
+    <string name="settings_system_calling">Controles de chamadas do Android</string>
+    <string name="settings_system_calling_detail">Controle chamadas do GPT-Live com Android Auto, Wear OS e fones de ouvido Bluetooth.</string>
     <string name="settings_section_notifications">Notificações</string>
     <string name="settings_section_phone">Telefone</string>
     <string name="settings_section_privacy">Privacidade</string>
@@ -289,4 +291,7 @@
     <string name="managed_update_restart_title">Reiniciar o Kyllene?</string>
     <string name="managed_update_restart_warning">Encerre as chamadas e salve seu trabalho. Reiniciar fecha todas as janelas; alterações e anexos não salvos podem ser perdidos.</string>
     <string name="managed_update_restart_now">Reiniciar agora</string>
+    <string name="voice_muted_by_android">Silenciado pelo Android</string>
+    <string name="voice_muted_in_kyllene">Silenciado no Kyllene</string>
+    <string name="voice_error_system_activation">O Android não conseguiu ativar a chamada. Tente novamente.</string>
 </resources>

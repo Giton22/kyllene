@@ -13,6 +13,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- A voice chat goes on with the screen off, like a call (VoiceCallService). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <!-- A reply read aloud goes on with the screen off, like music (ReadAloudService). -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- With Notifications anywhere, pick the ntfy stream up again after the phone restarts. -->
@@ -46,9 +48,12 @@
     <!--
         Calls for an answer (Settings → Phone tools → Calls, off until turned on): an approval or a question rings over
         the lock screen. Android 14 and later grant it to calling apps only, so the user allows it from that row.
-        Herald never places a phone call: it has no CALL_PHONE.
     -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- The optional Telecom account handles internet calls without a cellular radio. -->
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false" />
     <!-- Location is one optional tool: a phone or tablet without GPS still installs Herald. -->
     <uses-feature
         android:name="android.hardware.location"
@@ -392,7 +397,7 @@
         <service
             android:name=".notify.VoiceCallService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone|phoneCall" />
 
         <service
             android:name=".notify.ReadAloudService"

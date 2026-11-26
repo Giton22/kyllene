@@ -256,6 +256,7 @@ fun SettingsScreen(
     val check by viewModel.check.collectAsStateWithLifecycle()
     val push by viewModel.pushStatus.collectAsStateWithLifecycle()
     val pushTest by viewModel.pushTest.collectAsStateWithLifecycle()
+    val showAndroidCallControls = androidCallControlsAvailable()
     val wallpaper by viewModel.wallpaper.collectAsStateWithLifecycle()
     var wallpaperError by remember { mutableStateOf<String?>(null) }
     val chooseWallpaper = rememberWallpaperPicker(
@@ -309,6 +310,7 @@ fun SettingsScreen(
         onOpenPhoneTools = { phoneToolsOpen = true },
         botFaces = botFaces,
         onChooseCallTarget = { callTargetOpen = true },
+        showAndroidCallControls = showAndroidCallControls,
         appIcon = appIcons.current,
         onOpenAppIcon = { appIconOpen = true },
         language = appLanguage(language.picked),
@@ -417,6 +419,7 @@ internal fun SettingsView(
     onOpenPhoneTools: () -> Unit = {},
     botFaces: BotFaces = BotFaces(),
     onChooseCallTarget: () -> Unit = {},
+    showAndroidCallControls: Boolean = false,
     appIcon: AppIcon = AppIcon.Blue,
     onOpenAppIcon: () -> Unit = {},
     /** The language picked in Settings › Language; null for System default. */
@@ -714,6 +717,11 @@ internal fun SettingsView(
                 if (hasVoice) Section(stringResource(Res.string.settings_section_voice)) {
                     CallTargetRow(settings.callTargets[gatewayUrl] ?: CallTarget(), botFaces, onChooseCallTarget)
                     Divider()
+                    if (showAndroidCallControls) {
+                        SystemCallingSetting(settings.androidSystemCalling) { enabled ->
+                            onUpdate { it.copy(androidSystemCalling = enabled) }
+                        }
+                    }
                     SwitchRow(
                         title = stringResource(Res.string.settings_dictation),
                         detail = stringResource(Res.string.settings_dictation_detail),

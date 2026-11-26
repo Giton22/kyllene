@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.getString
@@ -56,6 +57,7 @@ internal class LiveConversation(
     private val opener: String? = null,
     /** The session has answered or failed; finishing transport setup alone is not a result. */
     private val onConnectionResult: suspend () -> Unit = {},
+    private val onReady: suspend () -> Unit = {},
 ) {
     private val transcript = ArrayList<LiveFragment>()
     private var eventSeq = 0
@@ -90,6 +92,14 @@ internal class LiveConversation(
     private val heldBack = mutableSetOf<String>()
     /** The voice was told how to ask for Hermes. */
     private var steered = false
+    private var closed = false
+
+    /** Also used when system-call setup ends before [run] takes over the audio. */
+    fun close() {
+        if (closed) return
+        closed = true
+        call.close()
+    }
 
     /** The chat so far, for the voice to open with. */
     fun history(): List<LiveHistoryMessage> = liveHistory(
@@ -112,17 +122,36 @@ internal class LiveConversation(
         try {
             connect()
         } catch (e: CancellationException) {
-            call.close()
+            close()
             throw e
         } catch (e: Exception) {
-            call.close()
+            close()
             return@coroutineScope e.message ?: getString(Res.string.voice_error_live_start)
         }
         state.update { it.copy(phase = VoicePhase.Listening) }
+        val activation = Mutex()
+        var activated = false
+        suspend fun activateSystemCall(): Boolean = activation.withLock {
+            if (ended.isCompleted) return@withLock false
+            if (activated) return@withLock true
+            try {
+                onReady()
+                activated = true
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                ended.complete(getString(Res.string.voice_error_system_activation))
+                false
+            }
+        }
         val poll = launch {
             while (isActive) {
                 val speaking = call.speaking()
-                if (speaking) onConnectionResult()
+                if (speaking) {
+                    if (!activateSystemCall()) return@launch
+                    onConnectionResult()
+                }
                 state.update {
                     it.copy(
                         phase = when {
@@ -143,7 +172,10 @@ internal class LiveConversation(
             for (raw in call.events) {
                 when (val event = parseLiveEvent(raw)) {
                     is LiveEvent.Transcript -> {
-                        if (event.fragment.speaker == LiveFragment.Speaker.Assistant) onConnectionResult()
+                        if (event.fragment.speaker == LiveFragment.Speaker.Assistant) {
+                            if (!activateSystemCall()) break
+                            onConnectionResult()
+                        }
                         transcript += event.fragment
                         if (transcript.size > MAX_FRAGMENTS) transcript.subList(0, transcript.size - KEPT_FRAGMENTS).clear()
                         caption(event.fragment)
@@ -220,6 +252,7 @@ internal class LiveConversation(
                         break
                     }
                     LiveEvent.Started -> {
+                        if (!activateSystemCall()) break
                         onConnectionResult()
                         started.complete(Unit)
                     }
@@ -257,7 +290,7 @@ internal class LiveConversation(
             taking?.cancel()
             delegation?.cancel()
             call.send(LiveCommands.close())
-            call.close()
+            close()
         }
     }
 

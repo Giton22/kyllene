@@ -30,6 +30,8 @@
     <string name="settings_section_appearance">Apparence</string>
     <string name="settings_section_chat">Conversation</string>
     <string name="settings_section_voice">Voix</string>
+    <string name="settings_system_calling">Commandes d’appel Android</string>
+    <string name="settings_system_calling_detail">Contrôlez les appels GPT-Live avec Android Auto, Wear OS et les casques Bluetooth.</string>
     <string name="settings_section_notifications">Notifications</string>
     <string name="settings_section_phone">Téléphone</string>
     <string name="settings_section_privacy">Confidentialité</string>
@@ -289,4 +291,7 @@
     <string name="managed_update_restart_title">Redémarrer Kyllene ?</string>
     <string name="managed_update_restart_warning">Terminez les appels et enregistrez votre travail. Le redémarrage ferme toutes les fenêtres ; les modifications et pièces jointes non enregistrées risquent d’être perdues.</string>
     <string name="managed_update_restart_now">Redémarrer maintenant</string>
+    <string name="voice_muted_by_android">Micro coupé par Android</string>
+    <string name="voice_muted_in_kyllene">Micro coupé dans Kyllene</string>
+    <string name="voice_error_system_activation">Android n’a pas pu activer l’appel. Réessaie.</string>
 </resources>

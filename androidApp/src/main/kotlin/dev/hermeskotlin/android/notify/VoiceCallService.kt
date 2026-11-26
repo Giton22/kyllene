@@ -10,7 +10,13 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import dev.hermeskotlin.core.settings.SettingsStore
+import dev.hermeskotlin.core.voice.LiveSystemCall
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +32,8 @@ class VoiceCallService : Service() {
     private val notifications: ChatNotifications by inject()
     private val keeper: VoiceCallKeeper by inject()
 
+    private var callNotification: Job? = null
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_END) {
             keeper.end()
@@ -34,28 +42,33 @@ class VoiceCallService : Service() {
         val end = PendingIntent.getService(
             this, 0, Intent(this, VoiceCallService::class.java).setAction(ACTION_END), PendingIntent.FLAG_IMMUTABLE,
         )
-        // Into the foreground first, always: a service started this way and stopped before it is a crash.
-        try {
-            ServiceCompat.startForeground(
-                this,
-                ChatNotifications.VOICE_ID,
-                notifications.voiceCall(end),
-                // Types are Android 10+; the microphone one, 11+.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0,
-            )
-        } catch (e: Exception) {
-            // Android 14+ refuses a microphone service without the permission, or from the background.
-            Log.w("VoiceCallService", "Couldn't keep the voice chat up", e)
-            keeper.lost()
+        // Enter the foreground immediately, then update the notification when Telecom registers the call.
+        if (!foreground(end, keeper.telecomName.value)) return START_NOT_STICKY
+        if (!keeper.started()) {
             stopSelf()
-            return START_NOT_STICKY
+        } else {
+            callNotification?.cancel()
+            callNotification = CoroutineScope(Dispatchers.Main.immediate).launch {
+                keeper.telecomName.collect { name -> if (keeper.holding) foreground(end, name) }
+            }
         }
-        // The chat ended while it was starting: it was left to stop here.
-        if (!keeper.started()) stopSelf()
         return START_NOT_STICKY
     }
 
+    private fun foreground(end: PendingIntent, name: String?): Boolean = try {
+        var type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0
+        if (name != null && Build.VERSION.SDK_INT >= 34) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL
+        ServiceCompat.startForeground(this, ChatNotifications.VOICE_ID, notifications.voiceCall(end, name), type)
+        true
+    } catch (e: Exception) {
+        Log.w("VoiceCallService", "Couldn't keep the voice chat up", e)
+        keeper.lost()
+        stopSelf()
+        false
+    }
+
     override fun onDestroy() {
+        callNotification?.cancel()
         keeper.stopped()
         super.onDestroy()
     }
@@ -71,7 +84,21 @@ class VoiceCallService : Service() {
  * [VoiceKeepAlive] on Android: holds [VoiceCallService] up for the voice chat. All on the main thread, as the
  * service's callbacks and the voice chat are.
  */
-class VoiceCallKeeper(private val context: Context) : VoiceKeepAlive {
+class VoiceCallKeeper(private val context: Context, settings: SettingsStore) : VoiceKeepAlive {
+
+    internal val telecom = TelecomLiveCalls(context, settings)
+    internal val telecomName = telecom.name
+    override val incomingLiveCall = telecom.incoming
+
+    override fun supportsAndroidCallControls() = telecom.supported
+
+    override suspend fun registerLiveCall(name: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? =
+        if (holding) telecom.register(name, onMute, onEnd) else null
+
+    override fun attachIncomingLiveCall(id: String, onMute: (Boolean) -> Unit, onEnd: () -> Unit): LiveSystemCall? =
+        if (holding) telecom.attachIncoming(id, onMute, onEnd) else null
+
+    override fun handOffIncomingCallToApp(id: String): Boolean = telecom.handOffIncomingCallToApp(id)
 
     private var onEnd: (() -> Unit)? = null
     private var onLost: (() -> Unit)? = null

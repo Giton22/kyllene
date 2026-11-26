@@ -66,6 +66,8 @@ android {
         }
     }
 
+    testOptions.unitTests.isIncludeAndroidResources = true
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -115,6 +117,7 @@ dependencies {
     implementation(projects.shared.ui)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.telecom)
     // Links in replies open in a Custom Tab; App lock asks through BiometricPrompt (needs a FragmentActivity).
     implementation(libs.androidx.browser)
     implementation(libs.androidx.biometric)
@@ -126,5 +129,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     // The Pebble companion's link to Kyllene's Pebble watchapp (pebbleApp), through the Pebble phone app.
     implementation(libs.pebblekit2.client)
+    testImplementation(libs.junit4)
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.robolectric)
     debugImplementation(libs.compose.ui.tooling)
 }

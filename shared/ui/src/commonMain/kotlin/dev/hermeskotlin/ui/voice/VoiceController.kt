@@ -91,6 +91,9 @@ data class VoiceChatState(
     val live: Boolean = false,
     /** The microphone is off in a live call. */
     val muted: Boolean = false,
+    /** Android can keep the microphone muted independently of Kyllene's mute control. */
+    val mutedBySystem: Boolean = false,
+    val systemCall: Boolean = false,
     /** The latest words said, as captions: yours, or the voice's when [captionIsVoice]. */
     val caption: String? = null,
     val captionIsVoice: Boolean = false,
@@ -201,6 +204,8 @@ class VoiceController(
      */
     @Volatile private var dictationFinished = false
     private var live: LiveConversation? = null
+    private var liveAppMuted = false
+    private var liveSystemMuted = false
     private var held = false
     /** The room's quiet floor as the chat's last listen over the voice left it, for the next one. */
     private var roomFloor = 0f
@@ -237,6 +242,8 @@ class VoiceController(
         pauseMs: Long = VoiceActivity().silenceMs,
         opener: CallReason? = null,
         ringback: Boolean = false,
+        callName: String? = null,
+        incomingSystemCallId: String? = null,
     ) {
         if (chatJob?.isActive == true) return
         cancelDictation()
@@ -272,11 +279,16 @@ class VoiceController(
                 } else null
                 // Asked while the live check goes on: a chained chat needs it before its first listen.
                 val talkOver = async { audio.bargeIn(gateway, profile) }
-                if (startLive(session, gateway, profile, opener) { ringing?.cancelAndJoin() }) {
+                if (startLive(session, gateway, profile, opener, callName, incomingSystemCallId) { ringing?.cancelAndJoin() }) {
                     talkOver.cancel()
                     return@launch
                 }
                 ringing?.cancelAndJoin()
+                // Chained voice owns its own audio. Only continue if Telecom still has the answered call to hand off.
+                if (incomingSystemCallId != null && keepAlive?.handOffIncomingCallToApp(incomingSystemCallId) != true) {
+                    talkOver.cancel()
+                    return@launch
+                }
                 converseChained(session, gateway, profile, pauseMs, opener, talkOver)
             } finally {
                 ringing?.cancel()
@@ -396,16 +408,46 @@ class VoiceController(
      * Runs a GPT-Live call when the profile picked it and it can start; false to fall back to the chained chat
      * (another mode, no OpenAI key on the gateway, an older gateway, or no WebRTC on this device).
      */
-    private suspend fun startLive(session: ChatSession, gateway: GatewayUrl, profile: String?, opener: CallReason?, onConnectionResult: suspend () -> Unit): Boolean {
+    private suspend fun startLive(
+        session: ChatSession, gateway: GatewayUrl, profile: String?, opener: CallReason?,
+        callName: String?, incomingSystemCallId: String?, onConnectionResult: suspend () -> Unit,
+    ): Boolean {
         val calls = liveCalls ?: return false
         val status = audio.voiceLiveStatus(gateway, profile)
         if (status !is ApiResult.Success || !status.value.live) return false
         val call = calls.create() ?: return false
         _chat.value = VoiceChatState(VoicePhase.Connecting, live = true)
-        val conversation = LiveConversation(call, session, _chat, deviceLock, opener?.liveOpener(), onConnectionResult)
+        var systemCall: dev.hermeskotlin.core.voice.LiveSystemCall? = null
+        val conversation = LiveConversation(
+            call, session, _chat, deviceLock, opener?.liveOpener(), onConnectionResult,
+            onReady = { systemCall?.activate() },
+        )
+        liveAppMuted = false
+        liveSystemMuted = false
         live = conversation
         var error: String? = null
         try {
+            if (held && (opener == null || incomingSystemCallId != null)) {
+                val onMute: (Boolean) -> Unit = { muted ->
+                    if (live === conversation) {
+                        liveSystemMuted = muted
+                        updateLiveMute(conversation)
+                    }
+                }
+                val onEnd: () -> Unit = { if (live === conversation) stopChat() }
+                systemCall = if (incomingSystemCallId != null) {
+                    keepAlive?.attachIncomingLiveCall(incomingSystemCallId, onMute, onEnd)
+                } else {
+                    val name = callName ?: session.state.value.title?.takeIf { it.isNotBlank() } ?: "Kyllene"
+                    keepAlive?.registerLiveCall(name, onMute, onEnd)
+                }
+                if (systemCall != null) {
+                    call.useSystemAudioRouting()
+                    _chat.update { it.copy(systemCall = true) }
+                }
+            }
+            // A hung up or timed-out incoming call must not start a separate conversation.
+            if (incomingSystemCallId != null && systemCall == null) return true
             error = conversation.run {
                 call.connect { offer ->
                     when (val answer = audio.startVoiceLive(gateway, offer, conversation.history(), profile)) {
@@ -415,6 +457,8 @@ class VoiceController(
                 }
             }
         } finally {
+            systemCall?.close()
+            conversation.close()
             // A chat started again on this screen meanwhile has its own call and panel; this one leaves them be.
             if (live === conversation) live = null
             val mine = currentCoroutineContext().job
@@ -427,14 +471,19 @@ class VoiceController(
     fun toggleMute() {
         val conversation = live
         if (conversation != null) {
-            val muted = !_chat.value.muted
-            conversation.setMuted(muted)
-            _chat.update { it.copy(muted = muted) }
+            if (!liveSystemMuted) liveAppMuted = !liveAppMuted
+            updateLiveMute(conversation)
         } else if (chained != null) {
             // Chained chat: every listen waits while it's set, and one in flight is cut off. Not while the chat still
             // checks for a live call, which would start unmuted.
             _chat.update { it.copy(muted = !it.muted) }
         }
+    }
+
+    private fun updateLiveMute(conversation: LiveConversation) {
+        val muted = liveAppMuted || liveSystemMuted
+        if (_chat.value.muted != muted) conversation.setMuted(muted)
+        _chat.update { it.copy(muted = muted, mutedBySystem = liveSystemMuted) }
     }
 
     fun stopChat() {

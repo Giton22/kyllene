@@ -34,6 +34,7 @@ import org.koin.androidx.viewmodel.ext.android.viewModel
 class PhoneCallActivity : ComponentActivity() {
 
     private val notifications: ChatNotifications by inject()
+    private val keeper: VoiceCallKeeper by inject()
     private val model: PhoneCallModel by viewModel()
 
     private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -58,17 +59,26 @@ class PhoneCallActivity : ComponentActivity() {
             ended.error?.let { Toast.makeText(this@PhoneCallActivity, it, Toast.LENGTH_LONG).show() }
             // Never on the line: the question waits in the shade, without a sound, as the toast just said why.
             ended.notAsked?.let { call -> call.request?.let { notifications.postRequest(call.storedSessionId, call.caller, it, quiet = true) } }
+            intent.getStringExtra(NotificationActionReceiver.EXTRA_REQUEST_ID)?.let(notifications::finishManagedCall)
             finish()
         }
         // A rotation keeps the model: a call on the line, or one being picked up, carries on there.
         if (model.state.value != null) return
-        if (model.pickingUp != null) return unlockThenTalk()
+        model.pickingUp?.let {
+            watchPendingSystemCall(it.systemCallId)
+            return unlockThenTalk()
+        }
         val requestId = intent.getStringExtra(NotificationActionReceiver.EXTRA_REQUEST_ID)
         val ringing = requestId?.let { notifications.ringing.value[it] }
         val chat = ringing?.storedSessionId
         // A call from the agent may have no chat on this gateway (Desktop's, say): it talks in a new one.
         if (requestId == null || ringing == null || (chat == null && ringing.agent == null)) return finish()
-        model.pickUp(PickedUpCall(requestId, chat, ringing.title?.takeIf { it.isNotBlank() } ?: "Hermes", ringing.request, ringing.agent))
+        val managedId = requestId.takeIf(keeper.telecom::answerFromPhone)
+        model.pickUp(PickedUpCall(
+            requestId, chat, ringing.title?.takeIf { it.isNotBlank() } ?: "Hermes", ringing.request, ringing.agent,
+            managedId,
+        ))
+        watchPendingSystemCall(managedId)
         // Picked up: it stops ringing at once, whatever comes next.
         notifications.answered(requestId)
         unlockThenTalk()
@@ -79,6 +89,14 @@ class PhoneCallActivity : ComponentActivity() {
         super.onNewIntent(intent)
         val requestId = intent.getStringExtra(NotificationActionReceiver.EXTRA_REQUEST_ID) ?: return
         if (requestId != model.pickingUp?.id) notifications.decline(requestId)
+    }
+
+    private fun watchPendingSystemCall(id: String?) {
+        if (id == null) return
+        lifecycleScope.launch {
+            keeper.telecom.incoming.first { it != id }
+            if (model.pickingUp?.systemCallId == id) leave(null)
+        }
     }
 
     private fun unlockThenTalk() {
@@ -96,6 +114,8 @@ class PhoneCallActivity : ComponentActivity() {
 
     private fun withMicrophone() {
         if (isFinishing || isDestroyed) return
+        val managedId = model.pickingUp?.systemCallId
+        if (managedId != null && keeper.telecom.incoming.value != managedId) return leave(null)
         val permission = Manifest.permission.RECORD_AUDIO
         if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) model.start()
         else microphone.launch(permission)
@@ -109,6 +129,7 @@ class PhoneCallActivity : ComponentActivity() {
             call.request?.let { notifications.postRequest(call.storedSessionId, call.caller, it) }
             call.agent?.end(CallOutcome.Declined)
         }
+        intent.getStringExtra(NotificationActionReceiver.EXTRA_REQUEST_ID)?.let(notifications::finishManagedCall)
         why?.let { Toast.makeText(this, it, Toast.LENGTH_LONG).show() }
         finish()
     }

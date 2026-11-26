@@ -30,6 +30,8 @@
     <string name="settings_section_appearance">Darstellung</string>
     <string name="settings_section_chat">Chat</string>
     <string name="settings_section_voice">Stimme</string>
+    <string name="settings_system_calling">Android-Anrufsteuerung</string>
+    <string name="settings_system_calling_detail">GPT-Live-Anrufe über Android Auto, Wear OS und Bluetooth-Headsets steuern.</string>
     <string name="settings_section_notifications">Benachrichtigungen</string>
     <string name="settings_section_phone">Telefon</string>
     <string name="settings_section_privacy">Privatsphäre</string>
@@ -289,4 +291,7 @@
     <string name="managed_update_restart_title">Kyllene neu starten?</string>
     <string name="managed_update_restart_warning">Beende Anrufe und speichere deine Arbeit. Der Neustart schließt alle Fenster; ungespeicherte Änderungen und Anhänge können verloren gehen.</string>
     <string name="managed_update_restart_now">Jetzt neu starten</string>
+    <string name="voice_muted_by_android">Von Android stummgeschaltet</string>
+    <string name="voice_muted_in_kyllene">In Kyllene stummgeschaltet</string>
+    <string name="voice_error_system_activation">Android konnte den Anruf nicht aktivieren. Versuche es erneut.</string>
 </resources>

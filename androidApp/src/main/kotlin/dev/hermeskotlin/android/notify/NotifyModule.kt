@@ -33,6 +33,7 @@ val notifyModule = module {
         // A voice chat or a call already on, here or from the watch, has you: a question there is asked on it, and
         // one elsewhere waits as a notification, not rung over it.
         ChatNotifications(androidContext(), get()).apply {
+            managedCalls = koin.get<VoiceCallKeeper>().telecom
             voiceOn = { koin.get<VoiceCallKeeper>().holding || koin.get<WatchRelay>().onCall }
             quietUntil = {
                 val now = LocalTime.now()
@@ -43,7 +44,7 @@ val notifyModule = module {
     // Why the agent called, from the call picked up on the watch to the call the watch starts.
     single { CallOpeners() }
     single { RequestAnswers(get(), get(), get(), get(), get()) }
-    single { VoiceCallKeeper(androidContext()) } bind VoiceKeepAlive::class
+    single { VoiceCallKeeper(androidContext(), get()) } bind VoiceKeepAlive::class
     single { ReadAloudKeeper(androidContext()) } bind ReadAloudKeepAlive::class
     single { ChatServiceKeeper(androidContext()) }
     single { ChatNotifier(get(), get(), get(), get(), get(), get(), get(), get<WatchRelay>().busy) }

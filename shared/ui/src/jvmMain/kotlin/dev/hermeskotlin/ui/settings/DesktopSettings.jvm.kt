@@ -32,3 +32,6 @@ actual fun rememberPhoneToolAccess(): PhoneToolAccess = remember {
         override fun request(tool: PhoneTool) = Unit
     }
 }
+
+@Composable
+internal actual fun androidCallControlsAvailable(): Boolean = false
