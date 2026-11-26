@@ -172,6 +172,10 @@ class BotsViewModel(
     /** Bots whose chats the gateway was asked to watch on this connection. */
     private val watched = mutableSetOf<String>()
 
+    /** Roster reads asked for, and the one whose answer shows. */
+    private var rosterReads = 0L
+    private var rosterShown = 0L
+
 
     init {
         // While the roster shows, or a Desktop room's copy read from it: read it now, then on every change
@@ -553,6 +557,7 @@ class BotsViewModel(
 
     private suspend fun refreshNow() {
         val url = gateway.value ?: return
+        val read = ++rosterReads
         try {
             val roster = api.roster()
             if (gateway.value != url) return
@@ -560,6 +565,10 @@ class BotsViewModel(
             if (gateway.value != url) return
             val ordered = roster.bots.forRoster()
             val chatIds = ordered.associate { it.name to it.canonicalSession?.id }
+            // Reads overlap (the poll, an event, an action's own read) and can finish out of order: one asked
+            // before the roster now shown is older than it, e.g. from before a bot was removed.
+            if (read < rosterShown) return
+            rosterShown = read
             // Desktop's rooms ride the roster's default row, so they refresh without a call of their own.
             val desktopRooms = parseDesktopRooms(roster.bots.firstOrNull { it.isDefault || it.name == Bot.DEFAULT }?.uiMeta)
             _state.update { state ->
@@ -619,7 +628,9 @@ class BotsViewModel(
             val mayBeUnread = session.messageCount != 0 && seen.isUnread(chat, resolvedId = tip)
             val unread = if (mayBeUnread) {
                 checked[bot.name]?.takeIf { it.session == session && it.readUpTo == looked }?.unread
-                    ?: hasUnreadBotHistory(url, bot.name, tip, looked) ?: return
+                    // A history that can't be read keeps the badge; before one was read here, the activity answers.
+                    ?: hasUnreadBotHistory(url, bot.name, tip, looked, whenUnreadable = true.takeUnless { bot.name in checked })
+                    ?: return
             } else false
 
             val latest = seenStore.seen(url, bot.name).first()
@@ -638,23 +649,30 @@ class BotsViewModel(
 
     // Roster activity also advances on tool calls. Check the underlying history, including when
     // many silent steps came in after the last readable message.
-    private suspend fun hasUnreadBotHistory(url: GatewayUrl, profile: String, tip: String, looked: Double): Boolean? {
+    private suspend fun hasUnreadBotHistory(
+        url: GatewayUrl,
+        profile: String,
+        tip: String,
+        looked: Double,
+        /** The answer when a page can't be read. */
+        whenUnreadable: Boolean?,
+    ): Boolean? {
         val pageSize = 100
         var offset = 0
         var previous: List<SessionMessage>? = null
         repeat(UNREAD_HISTORY_PAGE_LIMIT) {
             if (gateway.value != url) return null
             val result = sessions.messages(url, tip, limit = pageSize, profile = profile, offset = offset, inlineImages = false)
-            val rows = (result as? ApiResult.Success)?.value?.messages ?: return null
+            val rows = (result as? ApiResult.Success)?.value?.messages ?: return whenUnreadable
             val firstId = rows.firstOrNull()?.id
             if ((firstId != null && firstId == previous?.firstOrNull()?.id) || rows == previous) return null
             if (rows.hasUnreadBotMessage(looked)) return true
-            val newest = rows.asSequence().mapNotNull { it.timestamp }.maxOrNull()
-            if (rows.size < pageSize || (newest != null && newest <= looked)) return false
+            // Pages go back in time: one that reaches the last look has nothing newer behind it.
+            if (rows.size < pageSize || rows.any { it.timestamp?.let { at -> at <= looked } == true }) return false
             previous = rows
             offset += rows.size
         }
-        // Older pages may still contain a reply. Keep the last known badge when we run out of pages.
+        // A very long run of steps since the last look: older pages may still hold a reply, so it isn't known.
         return null
     }
 

@@ -35,6 +35,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -90,6 +91,9 @@ class BotsViewModelTakenTest {
         private val createFails: Boolean = false,
         var fixedRoster: String? = null,
     ) : RpcTransport {
+        /** While set, a roster read's answer (the roster as it was when asked) comes this many ms late. */
+        var holdRosterMs: Long? = null
+
         private val inbound = Channel<String>(Channel.UNLIMITED).apply {
             val payload = if (authority) """{"session_authority":true}""" else "{}"
             trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":$payload}}""")
@@ -108,7 +112,9 @@ class BotsViewModelTakenTest {
             val params = message["params"]?.jsonObject ?: JsonObject(emptyMap())
             requests += method to params
             val reply = answer(method, params)
+            val hold = holdRosterMs.takeIf { method == "profiles.list" }
             scope.launch {
+                hold?.let { delay(it) }
                 inbound.send(
                     if (reply is Refused) """{"jsonrpc":"2.0","id":$id,"error":{"code":${reply.code},"message":"${reply.message}"}}"""
                     else """{"jsonrpc":"2.0","id":$id,"result":$reply}""",
@@ -400,6 +406,55 @@ class BotsViewModelTakenTest {
         // The second bot's badge confirms the worker has finished the first bot's scan.
         assertEquals(setOf("after"), vm.state.first { "after" in it.unread }.unread)
         return offsets
+    }
+
+    @Test
+    fun aPageThatReachesTheLastLookEndsTheScan() = runTest(dispatcher, timeout = 10.seconds) {
+        // Pages go back in time: the oldest row here is from before the last look (1000), so nothing on the next
+        // page is new, even though most of this one came after it.
+        val offsets = scannedOffsets { offset ->
+            if (offset == 0) {
+                val rows = toolRows()
+                rows[0] = """{"id":1,"role":"tool","timestamp":900}"""
+                historyPage(*rows)
+            } else historyPage(readableReply)
+        }
+        assertEquals(listOf(0), offsets)
+    }
+
+    @Test
+    fun aHistoryThatCantBeReadBeforeAnyBadgeGoesByTheActivity() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        val vm = viewModel(socket) { profile, _ ->
+            if (profile == "after") historyPage(readableReply) else HttpStatusCode.ServiceUnavailable to "{}"
+        }
+        vm.bind(gateway.gatewayUrl)
+        // `work` was active after the last look (1100 > 1000) and its history couldn't say otherwise.
+        assertEquals(setOf("work", "after"), vm.state.first { "after" in it.unread }.unread)
+    }
+
+    @Test
+    fun anOlderRosterReadThatAnswersLastIsDropped() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        val vm = viewModel(socket) { _, _ -> historyPage() }
+        vm.bind(gateway.gatewayUrl)
+        vm.state.first { it.all.size == 2 }
+
+        // A read asked while both bots were there is slow to answer; meanwhile `after` is removed and a newer
+        // read shows that.
+        socket.holdRosterMs = 10_000
+        vm.refresh()
+        runCurrent()
+        socket.holdRosterMs = null
+        socket.fixedRoster = historyRoster()
+        vm.refresh()
+        assertEquals(listOf("work"), vm.state.first { it.all.size == 1 }.all.map { it.name })
+
+        // The slow answer comes in (well inside the request's 30 s timeout) and changes nothing.
+        delay(15_000)
+        assertEquals(3, socket.sent("profiles.list").size)
+        assertEquals(listOf("work"), vm.state.value.all.map { it.name })
+        assertNull(vm.state.value.error)
     }
 
     @Test
