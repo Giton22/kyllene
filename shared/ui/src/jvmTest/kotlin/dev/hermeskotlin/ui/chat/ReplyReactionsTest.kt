@@ -25,6 +25,13 @@ class ReplyReactionsTest {
     private val labels = listOf("Got it", "Continue", "Verify", "Explain")
 
     @Test
+    fun eachReactionAndDesktopsOwnSetShowAsIcons() {
+        for (reaction in ReplyReaction.entries) assertTrue(reactionIcon(reaction.emoji) != null, "$reaction has no icon")
+        for (emoji in listOf("❤️", "👍", "👎", "😂", "‼️", "❓")) assertTrue(reactionIcon(emoji) != null, "$emoji has no icon")
+        assertEquals(null, reactionIcon("🎉"))
+    }
+
+    @Test
     fun newestReplyShowsTheFourReactionsInItsRowAndTogglesOne() = runComposeUiTest {
         val selected = mutableStateOf<ReplyReaction?>(null)
         setContent {
