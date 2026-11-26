@@ -63,6 +63,7 @@
     <string name="notification_deny">Elutasítás</string>
 
     <string name="notification_turn_failed_text">A kör sikertelen volt.</string>
+    <string name="notification_finished">Befejeződött.</string>
     <string name="notification_message_hermes">Üzenet Hermesnek</string>
     <string name="notification_turn_failed">Sikertelen kör</string>
     <string name="notification_hermes_replied">Hermes válaszolt</string>

@@ -70,6 +70,7 @@ class ChatNotifications(
     private fun str(id: Int, vararg args: Any): String = context.getString(id, *args)
 
     /** What a finished turn says when its reply has no words. */
+    val finished: String get() = str(R.string.notification_finished)
 
     /**
      * Creates the channels, or renames them: made again with the same ids after the language changes, Android keeps
