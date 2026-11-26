@@ -124,6 +124,23 @@ class ReplyReactionsPhoneTest {
     }
 
     @Test
+    fun anOlderReplyShowsAReactionSetOnAnotherClient() {
+        composeRule.setContent {
+            HermesTheme(ColorScheme.Light) {
+                AssistantReply(
+                    ChatMessage.Assistant(key = "reply", text = "Earlier.", reactionRowId = 5, userReaction = "❤️"),
+                    onBranch = {},
+                    onRegenerate = {},
+                    last = false,
+                    onReact = {},
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("❤️").assertIsDisplayed().assertIsSelected()
+        for (label in labels) composeRule.onNodeWithContentDescription(label).assertDoesNotExist()
+    }
+
+    @Test
     fun aReplyWithoutAStoredRowOffersNone() {
         composeRule.setContent {
             HermesTheme(ColorScheme.Light) {

@@ -77,6 +77,27 @@ class ReplyReactionsTest {
             }
         }
         onNodeWithContentDescription("Explain").assertIsDisplayed().assertIsSelected()
+        // The faded ones take no taps and aren't read out.
+        for (label in labels - "Explain") onNodeWithContentDescription(label).assertDoesNotExist()
+    }
+
+    @Test
+    fun aReactionFromAnotherClientsSetShowsBesideTheFour() = runComposeUiTest {
+        setContent {
+            HermesTheme(ColorScheme.Dark) {
+                CompositionLocalProvider(LocalDesktopLayout provides true) {
+                    AssistantReply(
+                        message = ChatMessage.Assistant(key = "reply", text = "Ready.", reactionRowId = 3, userReaction = "❤️"),
+                        onBranch = {},
+                        onRegenerate = {},
+                        last = true,
+                        onReact = {},
+                    )
+                }
+            }
+        }
+        onNodeWithContentDescription("❤️").assertIsDisplayed().assertIsSelected()
+        for (label in labels) onNodeWithContentDescription(label).assertIsDisplayed().assertIsNotSelected()
     }
 
     @Test

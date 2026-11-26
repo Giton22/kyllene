@@ -69,34 +69,58 @@ internal fun ReplyReactionButton(
     val label = reaction.label()
     // Square like the reply's other icons: 32dp under a mouse, the full 48dp under a thumb.
     val target = if (desktop) 32.dp else MinTouchTarget
-    val ring = if (desktop) 28.dp else 34.dp
+    val hidden = onClick == null && !selected
     val button = @Composable { outer: Modifier ->
         UnstyledButton(
             onClick = { onClick?.invoke() },
             enabled = onClick != null,
             modifier = outer.handCursor(onClick != null).size(target).clip(CircleShape).alpha(if (selected) 1f else alpha)
-                .semantics {
+                // One faded out and taking no taps isn't read out either.
+                .then(if (hidden) Modifier.clearAndSetSemantics {} else Modifier.semantics {
                     contentDescription = label
                     this.selected = selected
                     role = Role.Button
-                },
+                }),
             indication = rememberHoverIndication(Theme[colors][textTertiary], CircleShape),
         ) {
-            Box(
-                Modifier.size(ring)
-                    .background(if (selected) Theme[colors][accentSoft] else Color.Transparent, CircleShape)
-                    .border(1.dp, if (selected) Theme[colors][accent] else Color.Transparent, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    reaction.emoji,
-                    style = Theme[typography][body].copy(fontSize = if (desktop) 14.sp else 16.sp, lineHeight = if (desktop) 16.sp else 20.sp),
-                    singleLine = true,
-                    // The unchosen ones stay quiet beside the reply's grey icons.
-                    modifier = Modifier.alpha(if (selected) 1f else 0.8f).clearAndSetSemantics {},
-                )
-            }
+            ReactionEmoji(reaction.emoji, selected)
         }
     }
     if (desktop) Tooltip(label, modifier) { button(Modifier) } else button(modifier)
+}
+
+/** A reaction the user set on another client from outside these four: shown as chosen, read out by its emoji. */
+@Composable
+internal fun OtherReactionBadge(emoji: String, modifier: Modifier = Modifier) {
+    val target = if (LocalDesktopLayout.current) 32.dp else MinTouchTarget
+    Box(
+        modifier.size(target).semantics(mergeDescendants = true) {
+            contentDescription = emoji
+            selected = true
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        ReactionEmoji(emoji, selected = true)
+    }
+}
+
+/** The emoji, in a ring when it's the one chosen. */
+@Composable
+private fun ReactionEmoji(emoji: String, selected: Boolean) {
+    val desktop = LocalDesktopLayout.current
+    val ring = if (desktop) 28.dp else 34.dp
+    Box(
+        Modifier.size(ring)
+            .background(if (selected) Theme[colors][accentSoft] else Color.Transparent, CircleShape)
+            .border(1.dp, if (selected) Theme[colors][accent] else Color.Transparent, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            emoji,
+            style = Theme[typography][body].copy(fontSize = if (desktop) 14.sp else 16.sp, lineHeight = if (desktop) 16.sp else 20.sp),
+            singleLine = true,
+            // The unchosen ones stay quiet beside the reply's grey icons.
+            modifier = Modifier.alpha(if (selected) 1f else 0.8f).clearAndSetSemantics {},
+        )
+    }
 }

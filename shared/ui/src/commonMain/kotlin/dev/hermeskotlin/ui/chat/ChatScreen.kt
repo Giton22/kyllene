@@ -3022,9 +3022,11 @@ internal fun AssistantReply(
         val speakable = if (actionable) remember(text) { readAloudText(text).isNotEmpty() } else false
         // The user's reaction, saved on the reply's stored row: one of four, and the same again takes it off.
         val react = onReact.takeIf { !message.streaming && message.reactionRowId != null }
-        val reaction = message.userReaction.takeUnless { message.streaming }
-            ?.let { emoji -> ReplyReaction.entries.firstOrNull { it.emoji == emoji } }
-        val reactable = react != null || reaction != null
+        val chosen = message.userReaction.takeUnless { message.streaming }
+        val reaction = chosen?.let { emoji -> ReplyReaction.entries.firstOrNull { it.emoji == emoji } }
+        // One set on another client from its own set (Desktop's ❤️, say) shows too, so a tap here doesn't replace it unseen.
+        val otherReaction = chosen.takeIf { reaction == null }
+        val reactable = react != null || chosen != null
         if (isDesktop && (actionable || usage != null || reactable)) {
             // A desktop reads a reply's tools from its own start, as desktop chat apps line them up, and shows
             // them on the newest reply and under the pointer: older replies read without a row of icons each. They
@@ -3047,6 +3049,7 @@ internal fun AssistantReply(
                 }
                 if (reactable) {
                     if (actionable) Spacer(Modifier.width(6.dp))
+                    otherReaction?.let { OtherReactionBadge(it) }
                     for (choice in ReplyReaction.entries) {
                         if (react != null || choice == reaction) {
                             // Hidden ones take no taps: one sends a prompt at once, and a touchscreen never hovers to show them.
@@ -3071,10 +3074,11 @@ internal fun AssistantReply(
         } else if (actionable || usage != null || reactable) {
             // On the newest reply all four reactions sit in their own row above the reply's tools, from its start; an
             // older reply keeps only the one chosen, so the transcript doesn't fill with rows of emoji.
-            if (reactable && (last || reaction != null)) Row(
+            if (reactable && (last || chosen != null)) Row(
                 Modifier.offset(x = (-7).dp).trimEndTop(end = 0.dp, top = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                otherReaction?.let { OtherReactionBadge(it) }
                 for (choice in ReplyReaction.entries) {
                     if (last && react != null || choice == reaction) {
                         ReplyReactionButton(choice, choice == reaction, react?.let { { it(choice) } })
