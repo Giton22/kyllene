@@ -50,6 +50,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalWindowInfo
 import com.composables.icons.lucide.Monitor
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -268,6 +270,21 @@ fun SettingsScreen(
     var checkOpen by remember { mutableStateOf(false) }
     var phoneToolsOpen by remember { mutableStateOf(false) }
     var callTargetOpen by remember { mutableStateOf(false) }
+    var assistantTargetOpen by remember(gateway.url, profile) { mutableStateOf(false) }
+    var assistantUser by remember(gateway.url, profile) { mutableStateOf<String?>(null) }
+    var assistantChecking by remember(gateway.url, profile) { mutableStateOf(true) }
+    LaunchedEffect(gateway.url, profile, assistantTargetOpen) {
+        if (!isDesktop) {
+            assistantUser = null
+            assistantChecking = true
+            if (!assistantTargetOpen) {
+                val user = viewModel.assistantUser(gateway)
+                currentCoroutineContext().ensureActive()
+                assistantUser = user
+                assistantChecking = false
+            }
+        }
+    }
     var appIconOpen by remember { mutableStateOf(false) }
     var startInstructionOpen by remember { mutableStateOf(false) }
     var sidebarPagesOpen by remember { mutableStateOf(false) }
@@ -279,10 +296,10 @@ fun SettingsScreen(
     val language = rememberLanguageChoice()
     val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
     LaunchedEffect(gateway, profile) { viewModel.bind(gateway, profile) }
-    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen && !startInstructionOpen && !callTargetOpen && !languageOpen && !connectedDevicesOpen && !sidebarPagesOpen, onBack = onBack)
+    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen && !startInstructionOpen && !callTargetOpen && !assistantTargetOpen && !languageOpen && !connectedDevicesOpen && !sidebarPagesOpen, onBack = onBack)
     // A page opened over Settings takes the keyboard from the search, so nothing typed there lands in a hidden query.
     val focus = LocalFocusManager.current
-    val pageOver = phoneToolsOpen || appIconOpen || startInstructionOpen || callTargetOpen || languageOpen || connectedDevicesOpen || sidebarPagesOpen
+    val pageOver = phoneToolsOpen || appIconOpen || startInstructionOpen || callTargetOpen || assistantTargetOpen || languageOpen || connectedDevicesOpen || sidebarPagesOpen
     LaunchedEffect(pageOver) { if (pageOver) focus.clearFocus() }
     // The desktop lists the sections beside the page; they say here where they start.
     val anchors = remember { mutableStateMapOf<String, Int>() }
@@ -310,6 +327,10 @@ fun SettingsScreen(
         onOpenPhoneTools = { phoneToolsOpen = true },
         botFaces = botFaces,
         onChooseCallTarget = { callTargetOpen = true },
+        assistantTarget = settings.assistantTargets[gateway.url]?.get(profile.orEmpty())?.takeIf { it.userId == assistantUser },
+        assistantAccountVerified = assistantUser != null,
+        assistantChecking = assistantChecking || assistantTargetOpen,
+        onChooseAssistantTarget = { assistantUser = null; assistantChecking = true; assistantTargetOpen = true },
         appIcon = appIcons.current,
         onOpenAppIcon = { appIconOpen = true },
         language = appLanguage(language.picked),
@@ -321,9 +342,24 @@ fun SettingsScreen(
         onInstallSuggestions = viewModel::installSuggestions,
         onCheckSuggestions = viewModel::checkSuggestions,
     ) }
-    if (callTargetOpen) CallTargetPicker(gateway, viewModel, botFaces, onDismiss = { callTargetOpen = false }) { target ->
+    if (callTargetOpen) CallTargetPicker(gateway, viewModel, botFaces, onDismiss = { callTargetOpen = false }) { target, _ ->
         viewModel.update { it.copy(callTargets = it.callTargets + (gateway.url to target)) }
         callTargetOpen = false
+    }
+    if (assistantTargetOpen) key(gateway.url, profile) {
+        CallTargetPicker(gateway, viewModel, botFaces, onDismiss = { assistantUser = null; assistantChecking = true; assistantTargetOpen = false }, assistant = true, profile = profile) { target, user ->
+            if (target.sessionId == null) {
+                viewModel.update { prefs -> prefs.copy(assistantTargets = prefs.assistantTargets +
+                    (gateway.url to (prefs.assistantTargets[gateway.url].orEmpty() - profile.orEmpty()))) }
+            } else if (user != null) {
+                viewModel.update { prefs -> prefs.copy(assistantTargets = prefs.assistantTargets +
+                    (gateway.url to (prefs.assistantTargets[gateway.url].orEmpty() +
+                        (profile.orEmpty() to dev.hermeskotlin.core.settings.AssistantTarget(user, target.sessionId, target.label))))) }
+            }
+            assistantUser = null
+            assistantChecking = true
+            assistantTargetOpen = false
+        }
     }
     if (phoneToolsOpen) PhoneToolsScreen(onBack = { phoneToolsOpen = false })
     if (startInstructionOpen) {
@@ -419,6 +455,10 @@ internal fun SettingsView(
     onOpenPhoneTools: () -> Unit = {},
     botFaces: BotFaces = BotFaces(),
     onChooseCallTarget: () -> Unit = {},
+    assistantTarget: dev.hermeskotlin.core.settings.AssistantTarget? = null,
+    assistantAccountVerified: Boolean = true,
+    assistantChecking: Boolean = false,
+    onChooseAssistantTarget: () -> Unit = {},
     appIcon: AppIcon = AppIcon.Blue,
     onOpenAppIcon: () -> Unit = {},
     /** The language picked in Settings › Language; null for System default. */
@@ -723,6 +763,19 @@ internal fun SettingsView(
                 }
 
                 if (hasVoice) Section(stringResource(Res.string.settings_section_voice)) {
+                    if (!isDesktop) {
+                        NavRow(
+                            title = stringResource(Res.string.settings_assistant_target),
+                            detail = when {
+                                assistantChecking -> stringResource(Res.string.common_checking)
+                                !assistantAccountVerified -> stringResource(Res.string.assistant_target_account_error)
+                                else -> assistantTarget?.sessionId?.let { assistantTarget.label } ?: stringResource(Res.string.assistant_target_new)
+                            },
+                            icon = Lucide.MessagesSquare,
+                            onClick = onChooseAssistantTarget,
+                        )
+                        Divider()
+                    }
                     CallTargetRow(settings.callTargets[gatewayUrl] ?: CallTarget(), botFaces, onChooseCallTarget)
                     Divider()
                     SwitchRow(
@@ -1309,7 +1362,7 @@ internal fun Divider() {
 private fun CallTargetRow(target: CallTarget, faces: BotFaces, onClick: () -> Unit) {
     val bot = target.profile?.let { name -> faces.bots.firstOrNull { it.name == name } ?: Bot(name = name, displayName = target.label) }
     val title = stringResource(Res.string.settings_call_target)
-    val label = bot?.label ?: target.label
+    val label = if (target.profile == null && target.sessionId == null) stringResource(Res.string.call_target_new_session) else bot?.label ?: target.label
     val detail = stringResource(Res.string.settings_call_target_detail)
     if (!settingShown(title, label, detail)) return
     Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick).padding(horizontal = 14.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {

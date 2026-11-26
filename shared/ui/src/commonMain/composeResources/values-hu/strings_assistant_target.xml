@@ -1,0 +1,10 @@
+<resources>
+    <string name="settings_assistant_target">Digitális asszisztens csevegése</string>
+    <string name="assistant_target_new">Új csevegés</string>
+    <string name="assistant_target_new_detail">Új csevegés indítása a telefonos asszisztens minden megnyitásakor.</string>
+    <string name="assistant_target_unavailable">Nem sikerült megnyitni az asszisztenshez kiválasztott csevegést. Ellenőrizd a kapcsolatot, vagy válassz másik csevegést a Beállítások → Digitális asszisztens csevegése menüpontban.</string>
+    <string name="assistant_target_account_error">Nem sikerült ellenőrizni a bejelentkezett fiókot. Próbáld újra.</string>
+    <string name="call_target_search_placeholder">Keresés azonosító vagy üzenet alapján</string>
+    <string name="call_target_search_detail">Keresés az azonosító eleje vagy az üzenet szövege alapján. Legfeljebb 30 találat.</string>
+    <string name="call_target_no_matches">Nincs egyező munkamenet.</string>
+</resources>

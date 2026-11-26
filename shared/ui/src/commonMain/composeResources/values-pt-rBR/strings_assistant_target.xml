@@ -1,0 +1,10 @@
+<resources>
+    <string name="settings_assistant_target">Chat do assistente digital</string>
+    <string name="assistant_target_new">Novo chat</string>
+    <string name="assistant_target_new_detail">Inicie um novo chat sempre que abrir o assistente do celular.</string>
+    <string name="assistant_target_unavailable">Não foi possível abrir o chat selecionado para o assistente. Verifique a conexão ou escolha outro chat em Configurações → Chat do assistente digital.</string>
+    <string name="assistant_target_account_error">Não foi possível verificar a conta conectada. Tente de novo.</string>
+    <string name="call_target_search_placeholder">Buscar por ID ou mensagem</string>
+    <string name="call_target_search_detail">Busque pelo início do ID ou pelo texto da mensagem. Até 30 resultados.</string>
+    <string name="call_target_no_matches">Nenhuma sessão correspondente.</string>
+</resources>

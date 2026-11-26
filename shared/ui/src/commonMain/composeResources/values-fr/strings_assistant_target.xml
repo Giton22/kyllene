@@ -1,0 +1,10 @@
+<resources>
+    <string name="settings_assistant_target">Chat de l’assistant numérique</string>
+    <string name="assistant_target_new">Nouveau chat</string>
+    <string name="assistant_target_new_detail">Démarrer un nouveau chat à chaque ouverture de l’assistant du téléphone.</string>
+    <string name="assistant_target_unavailable">Impossible d’ouvrir le chat sélectionné pour l’assistant. Vérifiez la connexion ou choisissez un autre chat dans Paramètres → Chat de l’assistant numérique.</string>
+    <string name="assistant_target_account_error">Impossible de vérifier le compte connecté. Réessayez.</string>
+    <string name="call_target_search_placeholder">Rechercher par ID ou message</string>
+    <string name="call_target_search_detail">Recherchez par début d’ID ou par texte du message. Jusqu’à 30 résultats.</string>
+    <string name="call_target_no_matches">Aucune session ne correspond.</string>
+</resources>

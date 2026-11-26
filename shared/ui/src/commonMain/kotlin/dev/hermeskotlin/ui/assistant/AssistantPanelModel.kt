@@ -30,6 +30,8 @@ import dev.hermeskotlin.ui.chat.withoutEmptyListItem
 import dev.hermeskotlin.ui.chat.replySpeaker
 import dev.hermeskotlin.ui.voice.VoiceController
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
@@ -41,6 +43,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -97,8 +100,8 @@ fun interface ScreenCropper {
 }
 
 /**
- * The assistant panel shown over another app: a new chat with the gateway Kyllene is signed in to, whose
- * first prompt carries what was on the screen. The chat is its own, not the app's open one, so calling
+ * The assistant panel shown over another app: a new or picked chat on the signed-in gateway, with
+ * the current screen available when the user chooses to include it. The chat is its own, not the app's open one, so calling
  * the assistant up never takes the user away from a chat running in Kyllene; "Open in Kyllene" hands it over.
  *
  * Lives as long as one panel; [close] when the platform tears it down.
@@ -147,6 +150,9 @@ class AssistantPanelModel(
     private val _circledPart = MutableStateFlow<ScreenContext?>(null)
     val circledPart: StateFlow<ScreenContext?> = _circledPart.asStateFlow()
 
+    private val _shown = MutableStateFlow(false)
+    internal val shown: StateFlow<Boolean> = _shown.asStateFlow()
+
     /** Counts call-ups, so what happens on each one (listening) happens again on the next. */
     private val _shows = MutableStateFlow(0)
     val shows: StateFlow<Int> = _shows.asStateFlow()
@@ -161,6 +167,14 @@ class AssistantPanelModel(
 
     val connectionState get() = connection.state
 
+    private val _targetUnavailable = MutableStateFlow(false)
+    val targetUnavailable: StateFlow<Boolean> = _targetUnavailable.asStateFlow()
+    private val _targetVerified = MutableStateFlow(false)
+    val targetVerified: StateFlow<Boolean> = _targetVerified.asStateFlow()
+    private val _checkingTarget = MutableStateFlow(true)
+    val checkingTarget: StateFlow<Boolean> = _checkingTarget.asStateFlow()
+    private var binding: Job? = null
+    private var selectedTarget: dev.hermeskotlin.core.settings.AssistantTarget? = null
     private var gateway: SavedGateway? = null
     private var profile: String? = null
     private var sessionScope: CoroutineScope? = null
@@ -176,32 +190,96 @@ class AssistantPanelModel(
     private val speakerLock = Mutex()
 
     init {
-        scope.launch { bind() }
+        rebind()
     }
 
     /** Takes up the gateway Kyllene is on, its picked profile and a new chat there. */
+    private fun rebind() {
+        binding?.cancel()
+        voice.cancelDictation()
+        _targetVerified.value = false
+        _checkingTarget.value = true
+        if (_session.value == null) _phase.value = AssistantPhase.Loading
+        _targetUnavailable.value = false
+        binding = scope.launch {
+            try { bind() }
+            finally { if (currentCoroutineContext().isActive) _checkingTarget.value = false }
+        }
+    }
+
+    fun retryTarget() = rebind()
+
     private suspend fun bind() {
-        // The last gateway's bot doesn't answer here, signed in or not. Under the lock, so a read that's just
-        // finishing (cancelling is only a request) can't put it back.
+        val saved = gateways.current()
+        if (saved == null || !auth.hasStoredSession(saved.gatewayUrl)) {
+            clearChat()
+            clearSpeaker()
+            gateway = null
+            _phase.value = AssistantPhase.SignedOut
+            return
+        }
+        val nextProfile = profiles.get(saved.gatewayUrl)
+        val prefs = settings?.settings?.filterNotNull()?.first()
+        val candidate = prefs?.assistantTargets?.get(saved.url)?.get(nextProfile.orEmpty())
+        val same = gateway == saved && profile == nextProfile && selectedTarget?.userId == candidate?.userId && selectedTarget?.sessionId == candidate?.sessionId
+        if (!same) {
+            clearChat()
+            clearSpeaker()
+            _phase.value = AssistantPhase.Loading
+        }
+        gateway = saved
+        profile = nextProfile
+        selectedTarget = candidate
+        val identity = if (candidate != null) auth.me(saved.gatewayUrl) else null
+        val user = (identity as? ApiResult.Success)?.value?.userId
+        val target = candidate?.takeIf { it.userId == user }
+        val available = target?.sessionId?.let { sessions.totals(saved.gatewayUrl, it, nextProfile) }
+        // REST reads may finish after the foreground app has moved to another context.
+        if (gateways.current() != saved || profiles.get(saved.gatewayUrl) != nextProfile) {
+            clearChat()
+            rebind()
+            return
+        }
+        if (candidate != null && (identity !is ApiResult.Success || user == null)) {
+            if (identity == ApiResult.SessionExpired || identity == ApiResult.InvalidCredentials ||
+                identity is ApiResult.Failed && identity.status in setOf(401, 403)) {
+                clearChat()
+                clearSpeaker()
+                _phase.value = AssistantPhase.SignedOut
+            } else {
+                // A failed read isn't evidence that a live, same-context chat has gone away.
+                _phase.value = AssistantPhase.Ready
+            }
+            return
+        }
+        if (candidate != target) {
+            clearChat()
+            clearSpeaker()
+            selectedTarget = target
+        }
+        if (available != null && available !is ApiResult.Success) {
+            if (available == ApiResult.SessionExpired || available == ApiResult.InvalidCredentials ||
+                available is ApiResult.Failed && available.status in setOf(401, 403, 404)) {
+                clearChat()
+                _targetUnavailable.value = true
+            }
+            _phase.value = AssistantPhase.Ready
+            return
+        }
+        connection.start(saved.gatewayUrl)
+        if (_session.value == null || target?.sessionId == null && _session.value?.state?.value?.hasConversation == true) newChat(target?.sessionId)
+        _targetVerified.value = true
+        _phase.value = AssistantPhase.Ready
+        if (!speakerSettled && speakerJob?.isActive != true) readSpeaker(saved, nextProfile)
+    }
+
+    private suspend fun clearSpeaker() {
         speakerJob?.cancel()
         speakerLock.withLock {
             speakerReads++
             _speaker.value = null
             speakerSettled = false
         }
-        val saved = gateways.current()
-        if (saved == null || !auth.hasStoredSession(saved.gatewayUrl)) {
-            gateway = null
-            _phase.value = AssistantPhase.SignedOut
-            return
-        }
-        gateway = saved
-        profile = profiles.get(saved.gatewayUrl)
-        // Already running when Kyllene is open; otherwise the panel brings the socket up while the user speaks.
-        connection.start(saved.gatewayUrl)
-        newChat()
-        _phase.value = AssistantPhase.Ready
-        readSpeaker(saved, profile)
     }
 
     /**
@@ -245,10 +323,11 @@ class AssistantPanelModel(
     }
 
     /**
-     * A fresh start for another call-up: a new chat, and the screen to come. [expectText] and
+     * Another call-up: the configured chat, and a fresh screen capture. [expectText] and
      * [expectScreenshot] say which parts the platform will send, so a quick question waits for them.
      */
     fun begin(expectText: Boolean, expectScreenshot: Boolean) {
+        _shown.value = true
         voice.cancelDictation()
         composer.clearText()
         _includeScreen.value = false
@@ -266,19 +345,21 @@ class AssistantPanelModel(
         }
         // The panel outlives a call-up, and Kyllene may have switched gateways since: the socket is shared, so
         // the chat must move along with it.
-        val current = gateways.list.value.current
-        if (_phase.value != AssistantPhase.Loading && current?.url != gateway?.url) scope.launch { bind() }
-        else {
-            // The last call-up's chat goes on in the sessions list; an unused one is simply kept.
-            if (_session.value?.state?.value?.hasConversation == true) newChat()
-            // Couldn't tell last time which bot answers, or get its picture (offline, say): ask again now.
-            gateway?.takeIf { !speakerSettled && speakerJob?.isActive != true }?.let { readSpeaker(it, profile) }
-        }
+        rebind()
         _shows.update { it + 1 }
     }
 
     /** Back after stepping aside (for Android's microphone prompt): the same chat and screen, listening again. */
-    fun resume() = _shows.update { it + 1 }
+    fun resume() {
+        _shown.value = true
+        _shows.update { it + 1 }
+    }
+
+    /** Dismissal gives up the microphone, including a start waiting on target validation. */
+    fun hide() {
+        _shown.value = false
+        voice.cancelDictation()
+    }
 
     private var listenedOn = -1
 
@@ -287,7 +368,7 @@ class AssistantPanelModel(
      * (circling replaces it), and coming back from circling must not start listening, which sends.
      */
     fun claimListening(show: Int): Boolean {
-        if (show == listenedOn) return false
+        if (!_shown.value || !_targetVerified.value || show != _shows.value || _phase.value != AssistantPhase.Ready || _targetUnavailable.value || show == listenedOn) return false
         listenedOn = show
         return true
     }
@@ -309,15 +390,18 @@ class AssistantPanelModel(
     }
 
     /**
-     * Sends what was typed with what the user chose to show: a circled part, else (on the first
-     * question) the whole screen if they added it.
+     * Sends what was typed with what the user chose to show: a circled part, else the current
+     * screen if they added it.
      */
     fun send() {
+        if (_phase.value != AssistantPhase.Ready || !_targetVerified.value || _targetUnavailable.value) return
+        val invocation = callUp
         val text = withoutEmptyListItem(composer.text).trim()
         val session = _session.value ?: return
-        val first = !session.state.value.hasConversation
+        val saved = gateway ?: return
+        val sendProfile = profile
         val circled = _circledPart.value
-        val wholeScreen = circled == null && first && _includeScreen.value
+        val wholeScreen = circled == null && _includeScreen.value
         if (text.isEmpty() && circled == null && !wholeScreen) return
         composer.clearText()
         // Asking moved on from whatever the microphone last missed.
@@ -331,16 +415,40 @@ class AssistantPanelModel(
                 wholeScreen -> awaitScreen().toAttachments()
                 else -> emptyList()
             }
+            // Screen capture can suspend while the app changes profile, gateway or account.
+            if (invocation != callUp) return@launch
+            if (gateways.current() != saved || profiles.get(saved.gatewayUrl) != sendProfile || _session.value !== session) {
+                voice.cancelDictation()
+                restoreDraft(text)
+                // The capture belongs to the old context; retry the words only after explicit submission.
+                _screen.value = ScreenCapture(callUp = callUp + 1)
+                _includeScreen.value = false
+                _circledPart.value = null
+                _circling.value = false
+                circledFull = null
+                rebind()
+                return@launch
+            }
+            if (!_targetVerified.value || _targetUnavailable.value) {
+                restoreDraft(text)
+                return@launch
+            }
             // What was shown alone still asks something.
             val prompt = text.ifEmpty { if (circled != null) CIRCLED_PROMPT else if (attachments.isNotEmpty()) SCREEN_ONLY_PROMPT else return@launch }
             val sent = session.send(prompt, attachments)
             // Not sent: the words go back where they were typed, and what was shown stays for the retry.
-            if (!sent && composer.text.isEmpty()) composer.setTextAndPlaceCursorAtEnd(text)
+            if (!sent) restoreDraft(text)
             if (sent) {
                 _includeScreen.value = false
                 if (_circledPart.value.let { it === circled || it === part }) _circledPart.value = null
             }
         }
+    }
+
+    private fun restoreDraft(text: String) {
+        if (text.isEmpty()) return
+        val current = composer.text.toString()
+        composer.setTextAndPlaceCursorAtEnd(listOf(text, current).filter { it.isNotEmpty() }.joinToString("\n"))
     }
 
     /** Freezes the screen for circling; only with a screenshot, since that is what gets circled. */
@@ -392,6 +500,7 @@ class AssistantPanelModel(
 
     /** Dictates into the composer and sends what was said, as an assistant does. */
     fun toggleDictation() {
+        if (_phase.value != AssistantPhase.Ready || !_targetVerified.value || _targetUnavailable.value) return
         val saved = gateway ?: return
         if (voice.dictation.value.recording) return voice.finishDictation()
         val engine = settings?.let { (it.settings.value ?: AppSettings()).dictationEngine } ?: DictationEngine.Gateway
@@ -418,32 +527,39 @@ class AssistantPanelModel(
     }
 
     fun stop() {
+        if (!_targetVerified.value) return
         val session = _session.value ?: return
-        scope.launch { session.interrupt() }
+        scope.launch { if (_targetVerified.value && _session.value === session) session.interrupt() }
     }
 
     fun answer(request: InputRequest, result: JsonObject) {
+        if (!_targetVerified.value) return
         val session = _session.value ?: return
-        scope.launch { session.answer(request, result) }
+        scope.launch { if (_targetVerified.value && _session.value === session) session.answer(request, result) }
     }
 
     /** The chat's id once it exists on the gateway, for opening it in Kyllene. */
-    fun storedSessionId(): String? = _session.value?.state?.value?.storedSessionId?.takeIf { _session.value?.state?.value?.hasConversation == true }
+    fun storedSessionId(): String? = _session.value?.state?.value?.storedSessionId?.takeIf { _targetVerified.value && _session.value?.state?.value?.hasConversation == true }
 
     fun close() {
-        voice.cancelDictation()
+        hide()
         _session.value?.stop()
         scope.cancel()
     }
 
-    private fun newChat() {
-        val saved = gateway ?: return
+    private fun clearChat() {
         _session.value?.stop()
         sessionScope?.cancel()
+        _session.value = null
+    }
+
+    private fun newChat(storedId: String? = null) {
+        val saved = gateway ?: return
+        clearChat()
         val childScope = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
         sessionScope = childScope
         _session.value = ChatSession(
-            saved.gatewayUrl, null, null, connection, sessions, childScope, profile,
+            saved.gatewayUrl, storedId, null, connection, sessions, childScope, profile,
             startInstruction = { settings?.startInstruction() },
         ).also { it.start() }
     }

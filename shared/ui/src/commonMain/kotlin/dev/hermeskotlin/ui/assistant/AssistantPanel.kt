@@ -1,5 +1,7 @@
 package dev.hermeskotlin.ui.assistant
 
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -36,6 +38,7 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -118,6 +121,7 @@ import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.stringResource
 import dev.hermeskotlin.ui.chat.AppMark
 import dev.hermeskotlin.ui.chat.BarButton
+import dev.hermeskotlin.ui.KeepScreenOn
 import dev.hermeskotlin.ui.chat.BarStatus
 import dev.hermeskotlin.ui.chat.ComposerButton
 import dev.hermeskotlin.ui.chat.ContinueLists
@@ -197,6 +201,7 @@ private fun Panel(
     onOpenScreenSettings: () -> Unit,
     onClose: () -> Unit,
 ) {
+    AssistantScreenOn(model)
     AssistantBackdrop(onClose) {
         val circling by model.circling.collectAsState()
         if (circling) {
@@ -205,9 +210,25 @@ private fun Panel(
             MessengerEdge(model, Modifier.fillMaxSize())
         } else {
             MessengerEdge(model, Modifier.fillMaxSize())
-            Card(model, microphoneAllowed, onOpenHerald, onAllowMicrophone, onOpenScreenSettings, onClose)
+            AssistantPanelCard(model, microphoneAllowed, onOpenHerald, onAllowMicrophone, onOpenScreenSettings, onClose)
         }
     }
+}
+
+/** The overlay outlives onHide; hidden gateway work must not hold the display awake. */
+@Composable
+internal fun AssistantScreenOn(model: AssistantPanelModel) {
+    val shown by model.shown.collectAsState()
+    val phase by model.phase.collectAsState()
+    val checking by model.checkingTarget.collectAsState()
+    val session by model.session.collectAsState()
+    val chat by key(session) {
+        (session?.state ?: remember { emptyFlow() }).collectAsState(ChatState())
+    }
+    val dictation by model.voice.dictation.collectAsState()
+    val reading by model.voice.reading.collectAsState()
+    val sending = chat.messages.any { it is ChatMessage.User && it.pending }
+    KeepScreenOn(shown && (checking || phase == AssistantPhase.Loading || dictation.active || sending || chat.running || reading.key != null))
 }
 
 /** The dimmed screen behind the card, which closes the panel when tapped. */
@@ -233,6 +254,9 @@ internal data class AssistantCardState(
     val includeScreen: Boolean = false,
     val circled: ScreenContext? = null,
     val dictation: DictationState = DictationState(),
+    val targetUnavailable: Boolean = false,
+    val targetVerified: Boolean = true,
+    val checkingTarget: Boolean = false,
 )
 
 /** What the card does: [AssistantPanelModel]'s calls, or nothing in a preview. */
@@ -242,13 +266,14 @@ internal interface AssistantActions {
     fun stop()
     fun answer(request: InputRequest, result: JsonObject)
     fun toggleDictation()
+    fun retryTarget()
     fun setIncludeScreen(include: Boolean)
     fun startCircling()
     fun dropCircled()
 }
 
 @Composable
-private fun Card(
+internal fun AssistantPanelCard(
     model: AssistantPanelModel,
     microphoneAllowed: Boolean,
     onOpenHerald: (String?) -> Unit,
@@ -257,8 +282,13 @@ private fun Card(
     onClose: () -> Unit,
 ) {
     val phase by model.phase.collectAsState()
+    val targetUnavailable by model.targetUnavailable.collectAsState()
+    val targetVerified by model.targetVerified.collectAsState()
+    val checkingTarget by model.checkingTarget.collectAsState()
     val session by model.session.collectAsState()
-    val chat by (session?.state ?: remember { emptyFlow() }).collectAsState(ChatState())
+    val chat by key(session) {
+        (session?.state ?: remember { emptyFlow() }).collectAsState(ChatState())
+    }
     val connection by model.connectionState.collectAsState()
     val screen by model.screen.collectAsState()
     val includeScreen by model.includeScreen.collectAsState()
@@ -268,10 +298,13 @@ private fun Card(
     val speaker by model.speaker.collectAsState()
 
     // Calling the assistant up is asking to talk: listen straight away, on every call-up, when the app may.
-    if (phase == AssistantPhase.Ready) {
-        LaunchedEffect(model, shows, microphoneAllowed) {
-            if (microphoneAllowed && !chat.hasConversation && !dictation.active && model.claimListening(shows)) model.toggleDictation()
-        }
+    LaunchedEffect(model, shows, microphoneAllowed) {
+        if (!microphoneAllowed) return@LaunchedEffect
+        // Target validation and the previous recognizer can finish after this call-up was drawn.
+        combine(model.phase, model.targetUnavailable, model.targetVerified, model.voice.dictation) { ready, unavailable, verified, speech ->
+            ready == AssistantPhase.Ready && verified && !unavailable && !speech.active
+        }.first { it }
+        if (model.claimListening(shows)) model.toggleDictation()
     }
     val actions = remember(model) {
         object : AssistantActions {
@@ -280,6 +313,7 @@ private fun Card(
             override fun stop() = model.stop()
             override fun answer(request: InputRequest, result: JsonObject) = model.answer(request, result)
             override fun toggleDictation() = model.toggleDictation()
+            override fun retryTarget() = model.retryTarget()
             override fun setIncludeScreen(include: Boolean) = model.setIncludeScreen(include)
             override fun startCircling() = model.startCircling()
             override fun dropCircled() = model.dropCircled()
@@ -289,7 +323,7 @@ private fun Card(
     ProvideReplySpeaker(speaker) {
         AssistantCard(
             state = AssistantCardState(
-                phase, chat, connection is ConnectionState.Connected, connectionLabel(connection), screen, includeScreen, circled, dictation,
+                phase, chat, connection is ConnectionState.Connected, connectionLabel(connection), screen, includeScreen, circled, dictation, targetUnavailable, targetVerified, checkingTarget,
             ),
             actions = actions,
             microphoneAllowed = microphoneAllowed,
@@ -442,12 +476,22 @@ private fun ColumnScope.Ready(
             Text(currentAction(chat), style = Theme[typography][caption], color = Theme[colors][textSecondary], maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
-    (chat.error ?: state.dictation.error?.let(::briefError))?.let {
-        Text(it, style = Theme[typography][bodySmall], color = Theme[colors][danger], modifier = Modifier.padding(start = 6.dp, end = 6.dp, bottom = 10.dp))
+    val targetMessage = when {
+        state.checkingTarget -> stringResource(Res.string.common_checking)
+        state.targetUnavailable -> stringResource(Res.string.assistant_target_unavailable)
+        !state.targetVerified -> stringResource(Res.string.assistant_target_account_error)
+        else -> chat.error ?: state.dictation.error?.let(::briefError)
+    }
+    targetMessage?.let {
+        Text(it, style = Theme[typography][bodySmall], color = Theme[colors][if (state.checkingTarget) textSecondary else danger], modifier = Modifier.padding(start = 6.dp, end = 6.dp, bottom = 10.dp))
+    }
+
+    if (!state.checkingTarget && !state.targetVerified) {
+        Button(stringResource(Res.string.call_target_try_again), onClick = actions::retryTarget)
     }
 
     if (chat.inputRequests.isNotEmpty()) {
-        InputRequestPanel(chat.inputRequests, connected, onAnswer = actions::answer, onStop = actions::stop.takeIf { chat.running })
+        InputRequestPanel(chat.inputRequests, connected && state.targetVerified, onAnswer = actions::answer, onStop = actions::stop.takeIf { chat.running })
         return
     }
     Composer(state, actions, connected, microphoneAllowed, onAllowMicrophone, onOpenScreenSettings)
@@ -501,8 +545,8 @@ private fun Composer(
     val screen = state.screen
     val circled = state.circled
     val dictation = state.dictation
-    // The whole screen goes with the first question only.
-    val includeScreen = state.includeScreen && !chat.hasConversation
+    // Each invocation offers only its current capture; sending clears the opt-in.
+    val includeScreen = state.includeScreen
     val hasText = actions.composer.text.isNotBlank()
     val shape = RoundedCornerShape(Theme[radii][radiusXLarge])
     var focused by remember { mutableStateOf(false) }
@@ -510,8 +554,8 @@ private fun Composer(
     ReleaseFocusWhenKeyboardPutAway(focused)
     val tray: (@Composable () -> Unit)? = when {
         circled != null -> { { CircledChip(circled, onCircleAgain = actions::startCircling, onRemove = actions::dropCircled) } }
-        !chat.hasConversation && screen.missed -> { { ScreenUnavailable(onOpenScreenSettings) } }
-        !chat.hasConversation && !(screen.context.isEmpty && screen.pending == 0) -> {
+        screen.missed -> { { ScreenUnavailable(onOpenScreenSettings) } }
+        !(screen.context.isEmpty && screen.pending == 0) -> {
             { ScreenChip(screen, included = state.includeScreen, onIncluded = actions::setIncludeScreen) }
         }
         else -> null
@@ -566,15 +610,15 @@ private fun Composer(
             }
             Spacer(Modifier.weight(1f))
             if (canDictate) {
-                DictationButton(dictation, onClick = actions::toggleDictation, enabled = !chat.running || dictation.active)
+                DictationButton(dictation, onClick = actions::toggleDictation, enabled = state.targetVerified && !state.targetUnavailable && (!chat.running || dictation.active))
             } else {
-                DictationButton(dictation, onClick = onAllowMicrophone, enabled = true)
+                DictationButton(dictation, onClick = onAllowMicrophone, enabled = state.targetVerified && !state.targetUnavailable)
             }
             if (chat.running && !hasText) {
-                SendButton(SendIcon.Stop, onClick = actions::stop, enabled = connected)
+                SendButton(SendIcon.Stop, onClick = actions::stop, enabled = connected && state.targetVerified)
             } else {
                 // Something shown is sendable alone: it asks "What's this?" or about the screen.
-                SendButton(SendIcon.Send, onClick = actions::send, enabled = connected && (hasText || circled != null || includeScreen))
+                SendButton(SendIcon.Send, onClick = actions::send, enabled = connected && state.targetVerified && !state.targetUnavailable && (hasText || circled != null || includeScreen))
             }
         }
     }
