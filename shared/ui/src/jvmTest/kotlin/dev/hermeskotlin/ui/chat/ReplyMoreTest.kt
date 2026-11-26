@@ -9,10 +9,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.isFocused
@@ -34,6 +38,8 @@ import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.designsystem.HermesTheme
 import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import dev.hermeskotlin.ui.LocalAppSettings
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -99,6 +105,33 @@ class ReplyMoreTest {
         runOnIdle { assertTrue(reading.value && !paused.value) }
         onNodeWithContentDescription("Stop reading").assertIsDisplayed().performClick()
         runOnIdle { assertEquals(false, reading.value) }
+    }
+
+    @OptIn(ExperimentalComposeUiApi::class)
+    @Test
+    fun copyIncludesSavedProgressAndWorksWithoutAnAnswer() = runComposeUiTest {
+        var copied: String? = null
+        val clipboard = object : Clipboard {
+            override suspend fun getClipEntry(): ClipEntry? = null
+            override suspend fun setClipEntry(clipEntry: ClipEntry?) {
+                copied = (clipEntry?.nativeClipEntry as? Transferable)?.getTransferData(DataFlavor.stringFlavor) as? String
+            }
+        }
+        setContent {
+            HermesTheme(ColorScheme.Dark) {
+                CompositionLocalProvider(LocalClipboard provides clipboard) {
+                    Column {
+                        AssistantReply(ChatMessage.Assistant("a1", text = "Done.", commentary = listOf("Checking.")), null, null, true)
+                        AssistantReply(ChatMessage.Assistant("a2", commentary = listOf("Checking again.")), null, null, true)
+                    }
+                }
+            }
+        }
+        onAllNodes(hasContentDescription("Copy"))[0].performClick()
+        runOnIdle { assertEquals("Checking.\n\nDone.", copied) }
+        onAllNodes(hasContentDescription("Copy") or hasContentDescription("Copied"))[1].performClick()
+        runOnIdle { assertEquals("Checking again.", copied) }
+        onNodeWithContentDescription("More").assertDoesNotExist()
     }
 
     @Test

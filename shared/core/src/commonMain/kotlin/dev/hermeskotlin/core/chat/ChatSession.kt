@@ -12,6 +12,7 @@ import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.rpc.RpcTimeoutException
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
+import dev.hermeskotlin.core.sessions.distinctCommentary
 import dev.hermeskotlin.core.sessions.putStartInstruction
 import dev.hermeskotlin.core.slash.SlashCommand
 import dev.hermeskotlin.core.slash.SlashResult
@@ -3504,7 +3505,14 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
     if (live.key != turnReplyKey && live.key != inflightReplyKey(inflightText)) return this
     // Steps are saved apart and joined with blank lines; the stream runs them together. Spacing aside, the same.
     if (!live.text.startsWithIgnoringSpaces(saved.text)) return this
+    val commentary = (saved.commentary + live.commentary).distinctCommentary()
+    val shown = if (commentary.isEmpty()) "" else live.text.commentaryParagraphs()
+    val prose by lazy { COMMENTARY_NON_PROSE.replace(shown, " ") }
     val folded = live.copy(
+        commentary = commentary.filterNot {
+            val paragraph = it.commentaryParagraphs()
+            paragraph in shown || prose.containsJoinedCommentary(paragraph.removeSurrounding("\n\n"))
+        },
         // Folded before, the live reply leads with the saved reasoning and has streamed on from there.
         reasoning = if (live.reasoning.startsWithIgnoringSpaces(saved.reasoning)) live.reasoning
             else listOf(saved.reasoning, live.reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
@@ -3530,6 +3538,34 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
         removeAt(savedAt)
     }
 }
+
+/** Keep paragraph boundaries when comparing a saved update to text already shown by the stream. */
+private fun String.commentaryParagraphs(): String =
+    replace("\r\n", "\n").split("\n\n").joinToString("\n\n", prefix = "\n\n", postfix = "\n\n") { it.trim() }
+
+// Relaxed sentence matching is for prose. A URL or code span can contain the same punctuation.
+private val COMMENTARY_NON_PROSE =
+    Regex("""```[\s\S]*?(?:```|$)|`+[^`\n]*`+|[a-z][a-z0-9+.-]*://\S+""", RegexOption.IGNORE_CASE)
+
+/** Match a whole update when adjacent streamed sentences lost the separator between them. */
+private fun String.containsJoinedCommentary(update: String): Boolean {
+    if (update.isEmpty()) return false
+    var start = indexOf(update)
+    while (start >= 0) {
+        val end = start + update.length
+        val startsAtBoundary = startsWith("\n\n", start - 2) ||
+            (start > 0 && this[start - 1] in ".!?" && startsJoinedSentence(start))
+        val endsAtBoundary = startsWith("\n\n", end) ||
+            (update.last() in ".!?" && startsJoinedSentence(end))
+        if (startsAtBoundary && endsAtBoundary) return true
+        start = indexOf(update, start + 1)
+    }
+    return false
+}
+
+// Leave uppercase suffixes such as a dotted ".COM" alone.
+private fun String.startsJoinedSentence(at: Int): Boolean =
+    getOrNull(at)?.isUpperCase() == true && getOrNull(at + 1)?.isUpperCase() != true
 
 /**
  * The streaming reply that is the running turn's: it carries on from the gateway's copy ([inflightText]), and has
@@ -3604,7 +3640,7 @@ internal fun ChatState.sealReplyBefore(key: String): ChatState {
     val open = messages.indexOfLast { it is ChatMessage.Assistant && it.streaming }
     if (prompt < 0 || open !in 0 until prompt) return this
     val reply = messages[open] as ChatMessage.Assistant
-    if (reply.text.isBlank() && reply.reasoning.isBlank() && reply.tools.isEmpty()) {
+    if (reply.text.isBlank() && reply.reasoning.isBlank() && reply.commentary.isEmpty() && reply.tools.isEmpty()) {
         return copy(messages = messages.toMutableList().apply { removeAt(open) })
     }
     return copy(

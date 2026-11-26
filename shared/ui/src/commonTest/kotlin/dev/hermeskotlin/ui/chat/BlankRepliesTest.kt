@@ -12,6 +12,7 @@ class BlankRepliesTest {
     private val messages = listOf(
         ChatMessage.User("u1", "Thanks, that is all."),
         thought,
+        ChatMessage.Assistant("update", commentary = listOf("Checking the result.")),
         ChatMessage.Assistant("a2", text = "Done.", reasoning = "Short."),
         ChatMessage.Assistant("a3", reasoning = "Ran it.", tools = listOf(ToolActivity(id = "t1", name = "terminal"))),
         ChatMessage.Assistant("a4", reasoning = "Thinking.", streaming = true),
