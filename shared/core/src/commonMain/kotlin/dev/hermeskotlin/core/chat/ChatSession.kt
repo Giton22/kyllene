@@ -2794,12 +2794,7 @@ class ChatSession(
                 // unseen, so it's read again. A turn from another client may be the kickoff of a goal it just typed
                 // into a chat that had none, so that one is read whatever the strip shows.
                 if (controlUnpublished(anyChat = foreignTurn)) scope.launch { refreshControl() }
-                // The receipt names the reply's row only for a turn that completed (v0.23.4
-                // agent/persisted_turn_receipt.py), but a stopped one is stored too: its row is read, so it can be reacted to.
-                val payload = event.payload as? JsonObject
-                val stoppedUnnamed = payload.string("status") == "interrupted" &&
-                    (payload?.get("persisted_turn") as? JsonObject).long("final_assistant_row_id") == null
-                if (foreignTurn || rewound || stoppedUnnamed) {
+                if (foreignTurn || rewound || stoppedUnnamed(event.payload as? JsonObject)) {
                     foreignTurn = false
                     rewound = false
                     scope.launch { loadHistory() }
@@ -3536,6 +3531,19 @@ private fun String.startsWithIgnoringSpaces(prefix: String): Boolean {
  * The reply still marked streaming from a turn that ended while the link was down and couldn't be replayed. The
  * transcript just read holds the turn, so the live copy goes; when it couldn't be read, the copy stays, closed.
  */
+/**
+ * A stopped turn's `message.complete` whose reply is stored but not named, so the transcript is read for its row.
+ * The receipt names the reply's row only for a turn that completed (v0.23.4 agent/persisted_turn_receipt.py), but a
+ * stopped one is stored too. Only with a receipt that lists stored rows: without one, nothing says the reply was
+ * stored, and a read could drop the live copy. Row 0 names nothing, as the reducer reads it.
+ */
+internal fun stoppedUnnamed(payload: JsonObject?): Boolean {
+    val receipt = payload?.get("persisted_turn") as? JsonObject ?: return false
+    return payload.string("status") == "interrupted" &&
+        (receipt["row_ids"] as? JsonArray)?.isNotEmpty() == true &&
+        receipt.long("final_assistant_row_id")?.takeIf { it > 0 } == null
+}
+
 internal fun ChatState.withoutStaleReply(): ChatState {
     if (messages.none { it is ChatMessage.Assistant && it.streaming }) return this
     return copy(

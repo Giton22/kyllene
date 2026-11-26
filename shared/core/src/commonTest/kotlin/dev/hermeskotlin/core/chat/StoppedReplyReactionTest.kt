@@ -1,6 +1,7 @@
 package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.connection.ConnectionState
+import dev.hermeskotlin.core.network.HermesJson
 import dev.hermeskotlin.core.rpc.FakeGateway
 import dev.hermeskotlin.core.rpc.FakeTransport
 import dev.hermeskotlin.core.rpc.event
@@ -12,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -200,6 +202,42 @@ class StoppedReplyReactionTest {
             chat.state.first { !it.running && historyReads > reads }
             val shown = chat.state.first { s -> s.messages.any { it.key == "row-4" } }
             assertTrue(shown.replies().none { it.reactable() && it.reactionRowId != 2L }, "$mode: ${shown.replies()}")
+            // The stopped mark is on the hidden row, and the reply it closes still reads as stopped.
+            assertEquals(TurnOutcome.Interrupted, shown.replies().last().outcome, "$mode: ${shown.replies()}")
+            chat.stop()
+        }
+    }
+
+    @Test
+    fun onlyAStoppedTurnWithStoredRowsButNoNamedReplyIsRead() {
+        fun read(payload: String) = stoppedUnnamed(HermesJson.decodeFromString<JsonObject>(payload))
+        assertTrue(read(stopped("Working on it")))
+        // Row 0 names nothing, as the reducer reads it.
+        assertTrue(read("""{"status":"interrupted","persisted_turn":{"row_ids":[3,4],"final_assistant_row_id":0}}"""))
+        assertFalse(read("""{"status":"interrupted","persisted_turn":{"row_ids":[3,4],"final_assistant_row_id":4}}"""))
+        // No receipt, or one with no rows, doesn't say the reply was stored: a read could drop the live copy.
+        assertFalse(read("""{"text":"Working on it","status":"interrupted"}"""))
+        assertFalse(read("""{"status":"interrupted","persisted_turn":{"row_ids":[]}}"""))
+        assertFalse(read("""{"status":"complete","persisted_turn":{"row_ids":[3,4]}}"""))
+        assertFalse(read("""{"status":"error","persisted_turn":{"row_ids":[3,4]}}"""))
+    }
+
+    @Test
+    fun aReceiptNamingRowZeroStillReadsTheStoppedReply() = runTest(timeout = 10.seconds) {
+        for (mode in modes) {
+            val (chat, transport) = chat(backgroundScope, mode)
+            streamTurn(chat, transport, mode)
+            rows += """,{"id":3,"role":"user","content":"next"},""" +
+                """{"id":4,"role":"assistant","content":"Working on it","display_metadata":{"interrupted":true}}"""
+
+            chat.interrupt()
+            transport.awaitSent { it.isCall("session.interrupt") }
+            // Row 0 names nothing, as the reducer reads it too.
+            transport.push(mode.event("message.complete",
+                """{"text":"Working on it","status":"interrupted","persisted_turn":{"row_ids":[3,4],"user_row_id":3,"final_assistant_row_id":0}}"""))
+
+            val reply = chat.state.first { s -> !s.running && s.replies().last().reactionRowId != null }.replies().last()
+            assertEquals(4L, reply.reactionRowId, "$mode: $reply")
             chat.stop()
         }
     }
