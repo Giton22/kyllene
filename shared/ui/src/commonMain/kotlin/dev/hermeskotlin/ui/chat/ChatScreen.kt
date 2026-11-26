@@ -217,7 +217,6 @@ import com.composables.icons.lucide.Brain
 import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.ChevronDown
 import com.composables.icons.lucide.ChevronRight
-import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.CircleAlert
 import com.composables.icons.lucide.CircleCheck
 import com.composables.icons.lucide.Clock
@@ -3834,7 +3833,7 @@ internal fun Disclosure(
             Text(label, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary], maxLines = 1, overflow = TextOverflow.Ellipsis)
             UnstyledIcon(
                 when {
-                    opensPreview -> Lucide.ExternalLink
+                    opensPreview -> Lucide.FileText
                     expanded -> Lucide.ChevronDown
                     else -> Lucide.ChevronRight
                 },
