@@ -455,11 +455,14 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     it > 0 && tools.isEmpty() && (text.isNotEmpty() || (silent && previous?.text?.isNotEmpty() == true))
                 }
                 if (previous != null) {
+                    // A later step with no reaction of its own (a goal's continuation, say) leaves the reply on the
+                    // row that holds the user's reaction, so it still shows and a tap changes that one.
+                    val keepTarget = reactionRow == null || (row.userReaction == null && previous.userReaction != null)
                     messages[messages.lastIndex] = previous.copy(
                         text = listOf(previous.text, text).filter { it.isNotEmpty() }.joinToString("\n\n"),
                         reasoning = listOf(previous.reasoning, reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
-                        reactionRowId = reactionRow ?: previous.reactionRowId,
-                        userReaction = if (reactionRow == null) previous.userReaction else row.userReaction,
+                        reactionRowId = if (keepTarget) previous.reactionRowId else reactionRow,
+                        userReaction = if (keepTarget) previous.userReaction else row.userReaction,
                         tools = previous.tools + tools,
                         // The reply is dated by its last step, when it finished.
                         timestamp = row.timestamp ?: previous.timestamp,

@@ -26,6 +26,17 @@ class ReplyReactionTest {
     }
 
     @Test
+    fun aLaterStepWithoutAReactionKeepsTheReplyOnTheRowThatHasOne() {
+        // A goal's continuation adds an assistant row with no prompt between: one reply, still showing its 👍.
+        val first = HermesJson.decodeFromString<SessionMessage>("""{"id":10,"role":"assistant","content":"Step one done",
+            "display_metadata":{"reactions":[{"author":"user","emoji":"👍"}]}}""")
+        val next = SessionMessage(id = 12, role = "assistant", content = JsonPrimitive("Step two done"))
+        val reply = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(first, next)).single())
+        assertEquals(10L, reply.reactionRowId)
+        assertEquals("👍", reply.userReaction)
+    }
+
+    @Test
     fun aReactionInMetadataHeldAsAStringIsRead() {
         // Older backends send display_metadata as a string holding the object.
         val answer = HermesJson.decodeFromString<SessionMessage>("""{"id":42,"role":"assistant","content":"Done",
