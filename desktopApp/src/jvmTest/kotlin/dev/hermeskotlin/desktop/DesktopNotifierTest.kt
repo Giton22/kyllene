@@ -61,7 +61,7 @@ class DesktopNotifierTest {
     @Test
     fun aFinishedReplyIsToldByItsFirstLine() {
         val notices = noticesFor(running(), done("\nAll green.\nDetails follow"), focused = false, prefs, mutableSetOf())
-        assertEquals(listOf(DesktopNotice("Release", "All green.", "s1", "Release")), notices)
+        assertEquals(listOf(DesktopNotice("Release", "All green.", "s1", "Release", replyPreview = "All green.")), notices)
     }
 
     @Test

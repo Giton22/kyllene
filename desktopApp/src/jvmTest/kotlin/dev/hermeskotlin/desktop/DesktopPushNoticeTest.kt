@@ -1,6 +1,9 @@
 package dev.hermeskotlin.desktop
 
 import dev.hermeskotlin.core.push.PushMessage
+import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
+import dev.hermeskotlin.core.storage.KeyValueStore
+import java.security.MessageDigest
 import java.util.Locale
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -62,9 +65,27 @@ class DesktopPushNoticeTest {
     }
 
     @Test fun hiddenOrForegroundRepliesAndDisabledReplyNoticesAreQuiet() = runTest {
-        assertNull(desktopPushNotice(bot, { true }, botHidden = { it == "worker" }))
+        assertNull(desktopPushNotice(bot, { true }, hiddenBots = setOf("worker")))
         assertNull(desktopPushNotice(bot, { true }, foreground = true))
         assertNull(desktopPushNotice(bot, { true }, notifyReplies = false))
+    }
+
+    @Test fun unavailableRosterDoesNotRevealReplyAndAnEmptyRosterStillAllowsIt() = runTest {
+        val url = "https://example.invalid"
+        val store = InMemoryKeyValueStore()
+        val failing = object : KeyValueStore by store {
+            override suspend fun get(key: String): String? = error("Store unavailable")
+        }
+        assertNull(desktopPushNotice(bot, { true }, hiddenBots = DesktopPushBots(store).names(url)))
+        assertNull(desktopPushNotice(bot, { true }, hiddenBots = DesktopPushBots(failing).names(url)))
+
+        val key = "desktop.push.hidden." +
+            MessageDigest.getInstance("SHA-256").digest(url.toByteArray()).joinToString("") { "%02x".format(it) }
+        store.put(key, "")
+        val known = DesktopPushBots(store).names(url)
+        assertEquals(emptySet(), known)
+        assertTrue(desktopPushNotice(bot, { true }, hiddenBots = known) != null)
+        assertNull(DesktopPushBots(store).names("https://elsewhere.invalid"))
     }
 
     @Test fun pingAndUnsupportedTypesNeverFetchOrActOnPhoneRequests() = runTest {

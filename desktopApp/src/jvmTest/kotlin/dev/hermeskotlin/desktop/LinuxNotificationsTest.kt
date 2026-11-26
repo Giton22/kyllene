@@ -12,7 +12,9 @@ class LinuxNotificationsTest {
     private class Delivery : NotificationDelivery {
         val shown = linkedMapOf<String, PortalNotice>()
         val removed = mutableListOf<String>()
-        override fun add(id: String, notice: PortalNotice) { shown[id] = notice }
+        var added = 0
+            private set
+        override fun add(id: String, notice: PortalNotice) { added++; shown[id] = notice }
         override fun remove(id: String) { removed += id; shown.remove(id) }
         override fun close() = Unit
     }
@@ -41,6 +43,38 @@ class LinuxNotificationsTest {
         assertEquals(1, opened)
         notifications.action(id, first.defaultAction)
         assertEquals(1, opened)
+    }
+
+    @Test
+    fun liveAndPushRepliesPostOnceInEitherOrder() {
+        val reply = reply.copy(replyPreview = "Ready")
+        for (pushFirst in listOf(false, true)) {
+            val sink = Delivery()
+            val notices = LinuxNotifications(sink, actionLabels = { labels }) { prefs }
+            val live = owner.copy(profile = "default")
+            val push = owner.copy(profile = null)
+            notices.post(reply, if (pushFirst) push else live, fromPush = pushFirst)
+            notices.post(reply, if (pushFirst) live else push, fromPush = !pushFirst)
+            assertEquals(1, sink.added)
+            assertEquals(1, sink.shown.size)
+        }
+    }
+
+    @Test
+    fun distinctOwnersAndUnpairedOrLaterRepliesStillPost() {
+        var nanos = 0L
+        val notices = LinuxNotifications(delivery, actionLabels = { labels }, nowNanos = { nanos }) { prefs }
+        val reply = reply.copy(replyPreview = "Ready")
+        notices.post(reply, owner, fromPush = true)
+        notices.post(reply, owner, fromPush = true)
+        notices.post(reply.copy(sessionId = "another"), owner)
+        notices.post(reply, owner.copy(profile = "another"))
+        notices.post(reply, owner.copy(gateway = "https://elsewhere.invalid"))
+        notices.post(reply.copy(replyPreview = "Different reply"), owner)
+        assertEquals(6, delivery.added)
+        nanos += 16_000_000_000L
+        notices.post(reply, owner)
+        assertEquals(7, delivery.added)
     }
 
     @Test

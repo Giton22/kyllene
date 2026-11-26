@@ -19,16 +19,17 @@ internal suspend fun desktopPushNotice(
     jobTitle: String? = null,
     foreground: Boolean = false,
     notifyReplies: Boolean = true,
-    botHidden: (String) -> Boolean = { false },
+    hiddenBots: Set<String>? = emptySet(),
 ): PushNotice? {
     if (!current()) return null
     return when (message.type) {
         PushMessage.BOT_MESSAGE -> {
             val bot = message.bot?.takeIf { PROFILE.matches(it) } ?: return null
-            if (foreground || !notifyReplies || botHidden(bot)) return null
+            if (foreground || !notifyReplies || hiddenBots == null || bot in hiddenBots) return null
             val session = message.session?.takeIf { SESSION.matches(it) } ?: return null
             val label = cleanLabel(message.label).ifBlank { bot }
-            PushNotice(DesktopNotice(label, preview(message.text, getString(Res.string.notice_reply_in)), session, label),
+            val reply = desktopReplyPreview(message.text)
+            PushNotice(DesktopNotice(label, reply ?: getString(Res.string.notice_reply_in), session, label, replyPreview = reply),
                 bot.takeUnless { it == "default" }, PushDestination.Bot(bot, label, session))
         }
         PushMessage.CRON_RUN -> {
@@ -44,7 +45,9 @@ internal suspend fun desktopPushNotice(
 }
 
 private fun cleanLabel(value: String?): String = value.orEmpty().filterNot { it.isISOControl() }.trim().take(64)
-private fun preview(value: String?, fallback: String): String = value.orEmpty().lineSequence()
-    .map { line -> line.filterNot { it.isISOControl() }.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: fallback
+private fun preview(value: String?, fallback: String): String = desktopReplyPreview(value) ?: fallback
+
+internal fun desktopReplyPreview(value: String?): String? = value.orEmpty().lineSequence()
+    .map { line -> line.filterNot { it.isISOControl() }.trim() }.firstOrNull { it.isNotEmpty() }?.take(200)
 private val PROFILE = Regex("^[A-Za-z0-9_.-]{1,64}$")
 private val SESSION = Regex("^[A-Za-z0-9_.:-]{1,128}$")

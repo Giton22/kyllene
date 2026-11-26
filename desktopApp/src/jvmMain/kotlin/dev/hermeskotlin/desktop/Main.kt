@@ -274,8 +274,8 @@ fun main(args: Array<String>) {
                         hiddenBots.refresh(watch.gatewayUrl, bots) { current() && connection.isConnectedTo(watch.gatewayUrl) && connection.state.value === socket }
                     }
                     hiddenBots.names(watch.gatewayUrl)
-                } else emptySet()
-                val projected = desktopPushNotice(message, ::current, title, foreground(), botHidden = hidden::contains)
+                } else null
+                val projected = desktopPushNotice(message, ::current, title, foreground(), hiddenBots = hidden)
                     ?: return@DesktopPush
                 val owner = LinuxNoticeOwner(watch.gatewayUrl, projected.profile, ::current, open = {
                     val source = host.session.value
@@ -293,7 +293,7 @@ fun main(args: Array<String>) {
                         })
                     }
                 }, usesReplyPreference = isReply, answer = {})
-                linuxNotices?.post(projected.notice, owner)
+                linuxNotices?.post(projected.notice, owner, fromPush = isReply)
             }, persist = { url, message ->
                 InboxRun.from(message)?.let { run -> koin.get<InboxStore>().receive(url, run).nameOf(run) }
             }, status = { detail ->

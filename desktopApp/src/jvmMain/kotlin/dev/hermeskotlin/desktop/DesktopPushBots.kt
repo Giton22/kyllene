@@ -21,14 +21,14 @@ internal class DesktopPushBots(private val store: KeyValueStore) {
         }
     }
 
-    suspend fun names(url: String): Set<String> = cached[url] ?: try {
-        store.get(key(url)).orEmpty().lineSequence().filter { it.isNotBlank() }.toSet().also {
-            cached.putIfAbsent(url, it)
-        }.let { cached.getValue(url) }
+    suspend fun names(url: String): Set<String>? = cached[url] ?: try {
+        val saved = store.get(key(url))
+        if (saved != null) cached.putIfAbsent(url, saved.lineSequence().filter { it.isNotBlank() }.toSet())
+        cached[url]
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
-        emptySet()
+        cached[url]
     }
 
     private fun key(url: String): String = "desktop.push.hidden." +

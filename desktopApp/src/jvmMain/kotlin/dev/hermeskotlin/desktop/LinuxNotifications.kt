@@ -35,15 +35,20 @@ internal class LinuxNotifications(
     private val delivery: NotificationDelivery,
     private val actionLabels: () -> Pair<String, String>,
     private val fallback: (DesktopNotice, LinuxNoticeOwner) -> Unit = { _, _ -> },
+    private val nowNanos: () -> Long = System::nanoTime,
     private val settings: () -> AppSettings,
 ) : AutoCloseable {
     private data class Entry(val notice: DesktopNotice, val owner: LinuxNoticeOwner, val actions: Map<String, ApprovalChoice?>)
+    private data class Reply(val gateway: String, val profile: String?, val session: String, val preview: String)
+    private data class RecentReply(val reply: Reply, val fromPush: Boolean, val at: Long)
     private val entries = linkedMapOf<String, Entry>()
+    private val recentReplies = mutableListOf<RecentReply>()
     private var closed = false
 
-    fun post(notice: DesktopNotice, owner: LinuxNoticeOwner) {
+    fun post(notice: DesktopNotice, owner: LinuxNoticeOwner, fromPush: Boolean = false) {
         reconcile()
         if (closed || !owner.current() || !enabled(notice, owner)) return
+        if (matchesOtherReplySource(notice, owner, fromPush)) return
         val id = idFor(owner, notice)
         val nonce = UUID.randomUUID().toString()
         val open = "open-$nonce"
@@ -92,9 +97,28 @@ internal class LinuxNotifications(
 
     fun unavailable() = entries.keys.toList().forEach(::fallback)
 
+    // The push payload and live events do not share a reply ID. Pair only matching previews
+    // from opposite sources in a short window. Repeated replies from one source still notify.
+    private fun matchesOtherReplySource(notice: DesktopNotice, owner: LinuxNoticeOwner, fromPush: Boolean): Boolean {
+        val preview = notice.replyPreview ?: return false
+        val session = notice.sessionId ?: return false
+        val reply = Reply(owner.gateway, owner.profile?.takeUnless { it == "default" }, session, preview)
+        val now = nowNanos()
+        recentReplies.removeAll { now - it.at >= 15_000_000_000L }
+        val match = recentReplies.indexOfFirst { it.fromPush != fromPush && it.reply == reply }
+        if (match >= 0) {
+            recentReplies.removeAt(match)
+            return true
+        }
+        recentReplies += RecentReply(reply, fromPush, now)
+        if (recentReplies.size > 32) recentReplies.removeAt(0)
+        return false
+    }
+
     override fun close() {
         if (closed) return
         closed = true
+        recentReplies.clear()
         entries.keys.toList().forEach(::withdraw)
         delivery.close()
     }
