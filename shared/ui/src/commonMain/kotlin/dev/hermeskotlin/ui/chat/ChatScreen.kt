@@ -3042,7 +3042,8 @@ internal fun AssistantReply(
             // fades, so nothing moves as the pointer passes and Tab still reaches it (one with the keyboard in it stays
             // shown); faded out, it isn't read out either. The chosen reaction stays shown on every reply.
             val alpha by animateFloatAsState(if (shown) 1f else 0f, label = "reply actions")
-            val hidden = if (shown) Modifier else Modifier.clearAndSetSemantics {}
+            // Faded out, it takes no taps either: a touchscreen never hovers to show it first.
+            val hidden = if (shown) Modifier else Modifier.clearAndSetSemantics {}.ignoringPresses()
             val moreLabel = stringResource(Res.string.chat_reply_more)
             val usageText = usage?.let { replyUsage(it.input, it.output) }
             val usageStyle = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily)
@@ -3104,6 +3105,15 @@ internal fun AssistantReply(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Swallows presses before the children see them, so a faded-out control can't be tapped unseen. */
+private fun Modifier.ignoringPresses(): Modifier = pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            awaitPointerEvent(PointerEventPass.Initial).changes.forEach { if (it.pressed || it.previousPressed) it.consume() }
         }
     }
 }

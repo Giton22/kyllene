@@ -151,6 +151,9 @@ class ReplyMoreTest {
 
         onNodeWithContentDescription("Got it").assertIsDisplayed()
         onNodeWithContentDescription("More").assertDoesNotExist()
+        // Faded out, it takes no taps: a touchscreen doesn't hover to show it first.
+        onNodeWithContentDescription("More", useUnmergedTree = true).performClick()
+        onNodeWithText("Branch from here").assertDoesNotExist()
         // Tabbing on from the element above reaches the reply's row, which then shows.
         runOnIdle { focus.requestFocus() }
         repeat(6) {

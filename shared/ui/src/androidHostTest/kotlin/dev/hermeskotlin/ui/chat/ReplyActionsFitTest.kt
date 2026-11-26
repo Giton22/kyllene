@@ -13,6 +13,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import dev.hermeskotlin.designsystem.LocalDesignWords
+import dev.hermeskotlin.ui.components.rememberDesignWords
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.TurnUsage
@@ -66,6 +68,8 @@ class ReplyActionsFitTest {
                 val density = LocalDensity.current
                 CompositionLocalProvider(
                     LocalDensity provides Density(density.density, 2.6f),
+                    // The app's words, so "Copied", which the labelled Copy makes room for, is in this language too.
+                    LocalDesignWords provides rememberDesignWords(),
                     // The count is what squeezed the actions, so it's shown whatever the default.
                     LocalAppSettings provides AppSettings(showUsage = true),
                 ) {
