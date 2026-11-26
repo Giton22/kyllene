@@ -24,6 +24,19 @@ class ReplyActivityTest {
     }
 
     @Test
+    fun aVisibleReplyStaysUnreadAfterCompactionAndASilentTurn() {
+        val rows = listOf(
+            SessionMessage(role = "assistant", content = JsonPrimitive("Here's the result."), timestamp = 120.0,
+                active = false, compacted = true),
+            SessionMessage(role = "assistant", content = JsonPrimitive("Internal context"), timestamp = 125.0,
+                active = false, compacted = true, displayKind = "hidden"),
+            SessionMessage(role = "assistant", content = JsonPrimitive("[SILENT]"), timestamp = 130.0),
+        )
+        assertTrue(rows.hasUnreadBotMessage(100.0))
+        assertFalse(rows.hasUnreadBotMessage(120.0))
+    }
+
+    @Test
     fun realRepliesAndIncomingBotMessagesStillCount() {
         val reply = SessionMessage(role = "assistant", displayContent = JsonPrimitive("Done."), timestamp = 120.0)
         val incoming = SessionMessage(role = "user", content = JsonPrimitive("Message from 🤖 Rook (@rook): Check the result"),

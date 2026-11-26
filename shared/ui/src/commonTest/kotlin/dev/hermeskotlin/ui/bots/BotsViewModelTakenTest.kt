@@ -30,6 +30,7 @@ import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -52,8 +53,10 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * A bot just made here, whose Bot Chat another client (Desktop, a second phone) opens in the moment between our
@@ -84,6 +87,7 @@ class BotsViewModelTakenTest {
         private val listed: Boolean = true,
         /** Whether our `session.create` fails outright instead (and no other client takes the chat). */
         private val createFails: Boolean = false,
+        private val fixedRoster: String? = null,
     ) : RpcTransport {
         private val inbound = Channel<String>(Channel.UNLIMITED).apply {
             val payload = if (authority) """{"session_authority":true}""" else "{}"
@@ -115,7 +119,7 @@ class BotsViewModelTakenTest {
 
         private fun answer(method: String, params: JsonObject): Any = when (method) {
             "profiles.create" -> { made = true; "{}" }
-            "profiles.list" -> roster()
+            "profiles.list" -> fixedRoster ?: roster()
             "profiles.configure" -> """{"applied":{"ui_meta":true}}"""
             "setup.runtime_check" -> """{"ok":true}"""
             "session.create" -> if (createFails) Refused(5000, "Session store is busy") else {
@@ -146,12 +150,19 @@ class BotsViewModelTakenTest {
         fun sent(method: String): List<JsonObject> = requests.filter { it.first == method }.map { it.second }
     }
 
-    private suspend fun viewModel(socket: RaceGateway): BotsViewModel {
+    private suspend fun viewModel(
+        socket: RaceGateway,
+        history: suspend () -> String = { error("Unexpected history request") },
+    ): BotsViewModel {
         val config = MockEngineConfig()
         config.dispatcher = dispatcher
         config.addHandler { request ->
-            if (request.url.encodedPath.endsWith("api/cron/jobs")) respond("""{"jobs":[]}""", HttpStatusCode.OK, json)
-            else respond("""{"ticket":"T","ttl_seconds":30}""", HttpStatusCode.OK, json)
+            val body = when {
+                request.url.encodedPath.endsWith("/messages") -> history()
+                request.url.encodedPath.endsWith("api/cron/jobs") -> """{"jobs":[]}"""
+                else -> """{"ticket":"T","ttl_seconds":30}"""
+            }
+            respond(body, HttpStatusCode.OK, json)
         }
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
         val client = createHttpClient(MockEngine(config), cookies)
@@ -247,6 +258,41 @@ class BotsViewModelTakenTest {
         assertNull(opened)
         assertTrue(vm.state.value.notice != null, "no notice")
         assertEquals(1, done)
+    }
+
+    @Test
+    fun rosterLoadsAndWatchesBeforeUnreadHistoryReturns() = runTest(dispatcher, timeout = 10.seconds) {
+        val roster = """{"profiles":[{"name":"work","canonical_session":{"id":"chat","last_active":1100,"message_count":2}}],"bot_mode_protocol":true}"""
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = roster)
+        val reply = CompletableDeferred<String>()
+        val historyStarted = CompletableDeferred<Unit>()
+        var reads = 0
+        val vm = viewModel(socket) {
+            reads++
+            historyStarted.complete(Unit)
+            reply.await()
+        }
+
+        try {
+            vm.bind(gateway.gatewayUrl)
+            runCurrent()
+
+            vm.refresh()
+            historyStarted.await()
+            assertFalse(vm.state.value.loading, "The roster must load while history is suspended")
+            assertEquals(listOf("work"), vm.state.value.all.map { it.name })
+            assertTrue(socket.sent("session.list").isNotEmpty())
+            assertTrue(vm.state.value.unread.isEmpty())
+
+            reply.complete("""{"session_id":"chat","messages":[{"role":"assistant","content":"Done.","timestamp":1100}]}""")
+            vm.state.first { "work" in it.unread }
+
+            vm.refresh()
+            runCurrent()
+            assertEquals(1, reads, "An unchanged unread chat does not need its history again")
+        } finally {
+            reply.complete("""{"session_id":"chat","messages":[]}""")
+        }
     }
 
     @Test

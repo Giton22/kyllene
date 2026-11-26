@@ -6,9 +6,9 @@ import dev.hermeskotlin.core.sessions.SessionMessage
 /** Reply notifications require words the user can read. */
 fun String.replyTextOrNull(): String? = trim().takeIf { it.isNotEmpty() && !TranscriptRows.isSilence(it) }
 
-/** A reply in stored history, excluding model-only rows and intermediate tool calls. */
+/** A reply in display history, including visible rows archived by compaction. */
 fun SessionMessage.readableReplyText(): String? {
-    if (role != "assistant" || isHidden || !active || compacted || displayKind == "failed_turn" ||
+    if (role != "assistant" || isHidden || displayKind == "failed_turn" ||
         storedToolCalls.isNotEmpty() || TranscriptRows.compaction(text) != null
     ) return null
     return text.replyTextOrNull()
@@ -18,7 +18,7 @@ fun SessionMessage.readableReplyText(): String? {
 fun List<SessionMessage>.hasUnreadBotMessage(readUpTo: Double): Boolean = any { row ->
     val at = row.timestamp ?: return@any false
     at > readUpTo + SEEN_SLACK_SECONDS && (row.readableReplyText() != null ||
-        row.role == "user" && row.active && !row.compacted && !row.isHidden && AgentMessage.parse(row.text.trim()) != null)
+        row.role == "user" && !row.isHidden && AgentMessage.parse(row.text.trim()) != null)
 }
 
 /** A silent completion can leave the previous, already finished reply at the end of the chat. */
