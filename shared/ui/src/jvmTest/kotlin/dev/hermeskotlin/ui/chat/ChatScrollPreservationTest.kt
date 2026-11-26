@@ -14,6 +14,8 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipeUp
@@ -22,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatState
+import dev.hermeskotlin.core.chat.ToolActivity
 import dev.hermeskotlin.designsystem.HermesTheme
 import dev.hermeskotlin.ui.preview.PreviewChatActions
 import dev.hermeskotlin.ui.voice.DictationState
@@ -48,6 +51,14 @@ class ChatScrollPreservationTest {
                 "Message $i: reply line.\n\nSecond paragraph of message $i to ensure multi-screen height.",
                 timestamp = i * 10.0,
             )
+        }
+    }
+
+    private val stored = messages.mapIndexed { index, message ->
+        when (message) {
+            is ChatMessage.User -> message.copy(key = "row-${index + 1}")
+            is ChatMessage.Assistant -> message.copy(key = "row-${index + 1}")
+            else -> error("Unexpected fixture row")
         }
     }
 
@@ -84,7 +95,13 @@ class ChatScrollPreservationTest {
     }
 
     @Composable
-    private fun Chat(state: ChatState, readUpTo: Double?, saved: () -> TranscriptViewport?, onSave: (TranscriptViewport) -> Unit) {
+    private fun Chat(
+        state: ChatState,
+        readUpTo: Double?,
+        saved: () -> TranscriptViewport?,
+        onSave: (TranscriptViewport) -> Unit,
+        onReadLatest: (() -> Unit)? = null,
+    ) {
         HermesTheme(ColorScheme.Light) {
             Box(Modifier.size(411.dp, 700.dp)) {
                 ChatView(
@@ -105,6 +122,7 @@ class ChatScrollPreservationTest {
                     notice = null,
                     actions = PreviewChatActions(),
                     readUpTo = readUpTo,
+                    onReadLatest = onReadLatest,
                     onOpenSidebar = {},
                     onNewChat = {},
                     onOpenMenu = {},
@@ -131,6 +149,92 @@ class ChatScrollPreservationTest {
     private fun ComposeUiTest.shown() = (1..60).filter { isDisplayed(it) }
 
     private fun ComposeUiTest.middleOfScreen(): Int? = (10..50).filter { isDisplayed(it) }.let { it.getOrNull(it.size / 2) }
+
+    @Test
+    fun aPinnedShortPageStaysAtTheEndOnTheFirstLayoutAfterAPrepend() = runComposeUiTest {
+        var state by mutableStateOf(ChatState(messages = stored.takeLast(3), historyLoaded = true, loadingOlder = true))
+        setContent { Chat(state, readUpTo = null, saved = { null }, onSave = {}) }
+        val latest = onNode(hasText("Message 60:", substring = true))
+        latest.assertIsDisplayed()
+        val top = latest.fetchSemanticsNode().boundsInRoot.top
+
+        mainClock.autoAdvance = false
+        // Paging joins the first partial assistant bubble to its earlier segment, changing its key.
+        val mergedPage = stored.take(56) + stored.takeLast(2)
+        runOnIdle { state = state.copy(messages = mergedPage, loadingOlder = false) }
+        mainClock.advanceTimeByFrame()
+        runWithoutImplicitWait {
+            onNode(hasText("Message 56:", substring = true)).assertIsDisplayed()
+            latest.assertIsDisplayed()
+            assertEquals(top, latest.fetchSemanticsNode().boundsInRoot.top, absoluteTolerance = 1f)
+        }
+    }
+
+    @Test
+    fun pagingAboveKeepsTheAnchorAndOnlyARealConcurrentReplyIsNew() = runComposeUiTest {
+        var state by mutableStateOf(ChatState(messages = stored.drop(20), historyLoaded = true, olderMessages = true))
+        var reads = 0
+        setContent { Chat(state, readUpTo = null, saved = { null }, onSave = {}, onReadLatest = { reads++ }) }
+        onNode(hasText("Message 60:", substring = true)).assertIsDisplayed()
+        state = state.copy(loadingOlder = true)
+        waitForIdle()
+        onNode(hasScrollToIndexAction()).performTouchInput { repeat(2) { swipeDown() } }
+        val anchor = assertNotNull(middleOfScreen())
+        val message = onNode(hasText("Message $anchor:", substring = true))
+        val top = message.fetchSemanticsNode().boundsInRoot.top
+        val readsBefore = reads
+
+        state = state.copy(messages = stored.drop(10), loadingOlder = true)
+        waitForIdle()
+        assertEquals(top, message.fetchSemanticsNode().boundsInRoot.top, absoluteTolerance = 1f)
+        onNodeWithText("New reply").assertDoesNotExist()
+
+        val silent = ChatMessage.Assistant("row-61", reasoning = "Checking", tools = listOf(ToolActivity("quiet", "search_files")))
+        state = state.copy(messages = stored.drop(5) + silent)
+        waitForIdle()
+        onNodeWithText("New reply").assertDoesNotExist()
+        assertEquals(readsBefore, reads)
+
+        state = state.copy(
+            messages = stored + silent.copy(text = "New answer at the end"),
+            loadingOlder = false,
+            olderMessages = false,
+        )
+        waitForIdle()
+        assertEquals(top, message.fetchSemanticsNode().boundsInRoot.top, absoluteTolerance = 1f)
+        assertEquals(readsBefore, reads)
+        onNodeWithText("New reply").performClick()
+        onNodeWithText("New answer at the end").assertIsDisplayed()
+        onNodeWithText("New reply").assertDoesNotExist()
+        assertTrue(reads > readsBefore)
+    }
+
+    @Test
+    fun unreadPlacementWaitsForTheBoundaryAndDoesNotMarkTheTailRead() = runComposeUiTest {
+        var state by mutableStateOf(ChatState(messages = messages.drop(40), historyLoaded = true, olderMessages = true))
+        var reads = 0
+        setContent { Chat(state, readUpTo = 100.0, saved = { null }, onSave = {}, onReadLatest = { reads++ }) }
+        waitForIdle()
+        onNodeWithText("New messages").assertDoesNotExist()
+        assertEquals(0, reads)
+
+        state = state.copy(messages = messages.drop(20))
+        waitForIdle()
+        onNodeWithText("New messages").assertDoesNotExist()
+        assertEquals(0, reads)
+
+        state = state.copy(messages = messages, olderMessages = false)
+        waitForIdle()
+        val marker = onNodeWithText("New messages")
+        marker.assertIsDisplayed()
+        assertTrue(isDisplayed(11))
+        assertEquals(0, reads)
+
+        onNode(hasScrollToIndexAction()).performScrollToIndex(messages.lastIndex)
+        waitForIdle()
+        assertTrue(isDisplayed(60))
+        assertTrue(reads > 0)
+    }
 
     @Test
     fun aListTakenDownMidChatComesBackThere() = runComposeUiTest {
