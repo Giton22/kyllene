@@ -119,8 +119,8 @@ val coreModule = module {
     }
     single { ToolRiskStore(get()) }
     single { OfflineCache(get<OfflineDatabase>().dao(), get()) { getTimeMillis() } }
-    single { ChatHost(get(), get(), get(), get(), get(), get()) }
     single { ActiveSessions(get(), get()) }
+    single { ChatHost(get(), get(), get(), get(), get(), get(), get()) }
     single(createdAtStart = true) { AttentionTracker(get(), get(), get(), get()) }
     single(createdAtStart = true) { SessionWatcher(get(), get(), get(), get(), get()) }
     single { SeenStore(get()) { getTimeMillis() / 1000.0 } }

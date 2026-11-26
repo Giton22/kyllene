@@ -35,8 +35,9 @@ enum class LiveStatus {
     Idle,
 
     /**
-     * The agent is still being built. Not a turn: every cold `session.resume` builds one straight away (a chat
-     * opened here, on Desktop, a bot chat watched), and the gateway reports this over a turn's own `running`.
+     * The agent is still being built (a cold `session.resume` builds one straight away: a chat opened here, on
+     * Desktop, a bot chat watched) or, on the session authority, a turn is admitted and queued but not yet
+     * claimed. Not a turn in either case, so it counts as none for [running].
      */
     Starting,
 

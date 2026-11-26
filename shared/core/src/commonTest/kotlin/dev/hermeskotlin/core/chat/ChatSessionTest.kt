@@ -15,6 +15,7 @@ import dev.hermeskotlin.core.rpc.event
 import dev.hermeskotlin.core.rpc.isCall
 import dev.hermeskotlin.core.rpc.json
 import dev.hermeskotlin.core.rpc.param
+import dev.hermeskotlin.core.sessions.ActiveSessions
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.slash.SlashCommand
@@ -30,6 +31,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -483,6 +486,126 @@ class ChatSessionTest {
 
         val done = chat.state.first { s -> !s.running && (s.messages.last() as? ChatMessage.Assistant)?.key == "row-4" }
         assertEquals("Streaming", (done.messages.last() as ChatMessage.Assistant).text)
+    }
+
+    @Test
+    fun aChatOpenedWhileItsSessionRunsElsewhereShowsAndStreamsThatTurn() = runTest {
+        val (connection, transport) = setup(
+            backgroundScope,
+            mapOf("session.resume" to """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""),
+        )
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
+        // The turn was started on another client: the reply shows as far as it got.
+        assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
+
+        transport.push(event("message.delta", "rt1", """{"text":" and still going"}"""))
+        val streamed = chat.state.first { it.messages.filterIsInstance<ChatMessage.Assistant>().last().text == "Half done and still going" }
+        assertTrue(streamed.running)
+
+        // The turn ends: the stored rows replace the live copy.
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"hello"},{"id":2,"role":"assistant","content":"Hi! What next?"},
+            {"id":3,"role":"user","content":"go on"},{"id":4,"role":"assistant","content":"Half done and still going"}]}"""
+        transport.push(event("message.complete", "rt1", """{"text":"Half done and still going","status":"complete"}"""))
+
+        val done = chat.state.first { s -> !s.running && (s.messages.last() as? ChatMessage.Assistant)?.key == "row-4" }
+        assertEquals("Half done and still going", (done.messages.last() as ChatMessage.Assistant).text)
+    }
+
+    @Test
+    fun anOpenChatThatFailedToAttachRetriesWhileTheSessionRunsElsewhere() = runTest {
+        var resumeCalls = 0
+        var liveRunning = false
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" -> if (resumeCalls++ == 0) call.error(32000, "busy", "SESSION_NOT_OWNED")
+                    else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
+                    call.method == "session.active_list" ->
+                        if (liveRunning) """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
+                        else """{"sessions":[]}"""
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        // The first attach is turned down: the chat shows it and stays detached.
+        chat.state.first { it.attachment is Attachment.Failed }
+        assertEquals(1, gateway.sent("session.resume").size)
+
+        // The session is now running on another client: the next live list attaches it, and the turn streams.
+        liveRunning = true
+        advanceTimeBy(10_001)
+        runCurrent()
+        val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
+        assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
+        assertEquals(2, gateway.sent("session.resume").size)
+    }
+
+    @Test
+    fun aLiveListArrivingDuringTheFirstAttachDoesNotResumeAgain() = runTest {
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" ->
+                        null.also {
+                            backgroundScope.launch {
+                                delay(200)
+                                call.socket.push(call.reply("""{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""))
+                            }
+                        }
+                    call.method == "session.active_list" ->
+                        """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        // The live list names the running session while the first attach is still waiting on its resume.
+        advanceTimeBy(200)
+        runCurrent()
+        val attached = chat.state.first { it.attachment is Attachment.Attached && it.running }
+        assertEquals(1, gateway.sent("session.resume").size, "the racing attach must keep the connection's, not resume again")
+    }
+
+    @Test
+    fun aLiveRowThatNamesAnotherSessionDoesNotAttach() = runTest {
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" -> """{"session_id":"rt1","running":false}"""
+                    call.method == "session.active_list" ->
+                        """{"sessions":[{"id":"rt9","session_key":"stored-9","status":"working"}]}"""
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        advanceTimeBy(10_001)
+        runCurrent()
+        chat.state.first { it.attachment is Attachment.Attached }
+        // The only resume is the connection's own: another session's running row must not attach this chat.
+        assertEquals(1, gateway.sent("session.resume").size)
+        assertFalse(chat.state.value.running)
     }
 
     @Test

@@ -10,6 +10,7 @@ import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.rpc.RpcTimeoutException
+import dev.hermeskotlin.core.sessions.ActiveSessions
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.sessions.putStartInstruction
@@ -89,6 +90,12 @@ class ChatSession(
     private val startInstruction: () -> String? = { null },
     /** The host's account/profile lifetime when this source was created, even if a collector starts later. */
     val ownerVersion: Long = 0,
+    /**
+     * What the gateway lists as live ([ActiveSessions]); the open chat attaches while its session
+     * runs, so a turn started on another client streams in live. Null where no such list is kept
+     * (the watch's side chats): those attach on their own sends.
+     */
+    private val active: ActiveSessions? = null,
 ) {
     private fun nowSeconds(): Double = clock.now().toEpochMilliseconds() / 1000.0
 
@@ -221,6 +228,7 @@ class ChatSession(
             scope.launch { followReactionSupport() },
             scope.launch { followEvents() },
             scope.launch { followServerRequests() },
+            scope.launch { followLiveSessions() },
         ) + _state.value.messages.mapNotNull { card ->
             (card as? ChatMessage.Command)?.takeIf { it.running && it.isBackground }?.taskId?.let { scope.launch { followBackgroundTask(it) } }
         }
@@ -2549,6 +2557,26 @@ class ChatSession(
             val reconnected = attachedBefore || streamMutex.withLock { seqRuntime != null }
             // A send on this link may have attached first; that runtime is kept, not resumed a second time.
             if (runCatchingAttach(connectionState.client, reconnected = reconnected, reuse = true)) attachedBefore = true
+        }
+    }
+
+    private suspend fun followLiveSessions() {
+        val active = active ?: return
+        // Plain collect, not collectLatest: a cancelled attach would leave the state "Attaching", and the
+        // attach mutex serializes anyway. Each block re-checks, so queued emissions after an attach no-op.
+        active.live.collect { live ->
+            val client = connectedClient() ?: return@collect
+            val stored = _state.value.storedSessionId ?: return@collect
+            val status = live.rows[stored]?.status ?: return@collect
+            // Attached chats already receive the turn's events; the resume would only rebind. Not running:
+            // the gateway streams a session only to attached sockets, but attaching keeps it loaded and
+            // detaching would hand the session back, so idle chats attach on a send or a turn, as they always have.
+            if (!status.running || liveRuntimeId(client) != null) return@collect
+            // reuse: an attach racing this one (the connection's) may have won; it is kept, not resumed again.
+            // reconnected: attached before, so the resume picks up where the stream left off, as the
+            // connection's attach would have.
+            val reconnected = streamMutex.withLock { seqRuntime != null }
+            runCatchingAttach(client, reconnected = reconnected, reuse = true)
         }
     }
 

@@ -122,7 +122,7 @@ fun ChatWindow(
                 if (raiseGuard?.invoke() != false) LinuxWindowActivation.request(window)
             }
         }
-        val host = remember { ChatHost(koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get()) }
+        val host = remember { ChatHost(koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get(), koin.get()) }
         val focused = remember { MutableStateFlow(false) }
         val windowFocused = LocalWindowInfo.current.isWindowFocused
         LaunchedEffect(windowFocused) { focused.value = windowFocused }
