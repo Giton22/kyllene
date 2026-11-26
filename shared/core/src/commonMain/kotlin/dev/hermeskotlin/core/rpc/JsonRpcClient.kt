@@ -9,8 +9,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -35,6 +37,21 @@ data class GatewayEvent(
     val payload: JsonElement?,
     val sessionId: String?,
     val seq: Long?,
+    /**
+     * The session authority's `execution_generation` of the turn the event belongs to, which it puts beside the
+     * payload rather than in it. Null on other gateways and on events outside a turn.
+     */
+    val executionGeneration: Long? = null,
+    /**
+     * The session authority's `admission_id` of the turn the event belongs to, beside the payload like
+     * [executionGeneration]: the id its `prompt.submit` gave the prompt that turn runs. Null on other gateways.
+     */
+    val admissionId: String? = null,
+    /**
+     * The session authority's `replay_epoch` of the session the event belongs to (gateway/session_events.py), which
+     * its [seq] counts in. Null on the legacy gateway, whose seqs count in `gateway.ready`'s epoch.
+     */
+    val replayEpoch: String? = null,
 )
 
 /**
@@ -156,7 +173,22 @@ class JsonRpcClient(
     @kotlin.concurrent.Volatile var sessionAuthority = false
         private set
 
+    /** Older gateways can reject reactions. Remember the verdict for all chats on this socket. */
+    private val _replyReactionsSupported = MutableStateFlow(true)
+    internal val replyReactionsSupported = _replyReactionsSupported.asStateFlow()
+
+    internal fun markReplyReactionsUnsupported() {
+        _replyReactionsSupported.value = false
+    }
+
     private val authorityRequests = AuthorityRequests()
+
+    /**
+     * The `subscription_id` the session authority attached the chat [sessionId] to this socket with, which
+     * `session.detach` names; null off the authority, or for a chat this socket hasn't opened.
+     */
+    suspend fun subscriptionOf(sessionId: String): String? =
+        if (sessionAuthority) authorityRequests.subscription(sessionId) else null
 
     suspend fun run(): Nothing = coroutineScope {
         try {
@@ -281,6 +313,9 @@ class JsonRpcClient(
                 payload = payload,
                 sessionId = params["session_id"]?.jsonPrimitive?.contentOrNull,
                 seq = params["seq"]?.jsonPrimitive?.longOrNull,
+                executionGeneration = (params["execution_generation"] as? JsonPrimitive)?.longOrNull,
+                admissionId = (params["admission_id"] as? JsonPrimitive)?.contentOrNull,
+                replayEpoch = (params["replay_epoch"] as? JsonPrimitive)?.contentOrNull,
             ),
         )
     }

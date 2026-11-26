@@ -26,6 +26,7 @@ import dev.hermeskotlin.core.voice.SpeechPlayer
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import dev.hermeskotlin.ui.bots.BotFaces
 import dev.hermeskotlin.ui.chat.ReplySpeaker
+import dev.hermeskotlin.ui.chat.withoutEmptyListItem
 import dev.hermeskotlin.ui.chat.replySpeaker
 import dev.hermeskotlin.ui.voice.VoiceController
 import kotlinx.coroutines.CancellationException
@@ -395,7 +396,7 @@ class AssistantPanelModel(
     fun send() {
         if (_phase.value != AssistantPhase.Ready || !_targetVerified.value || _targetUnavailable.value) return
         val invocation = callUp
-        val text = composer.text.toString().trim()
+        val text = withoutEmptyListItem(composer.text).trim()
         val session = _session.value ?: return
         val saved = gateway ?: return
         val sendProfile = profile

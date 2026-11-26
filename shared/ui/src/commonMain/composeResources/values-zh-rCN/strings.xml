@@ -28,6 +28,9 @@
     <string name="common_download">下载</string>
     <string name="common_open_release">打开发布页</string>
     <string name="settings_section_appearance">外观</string>
+    <string name="settings_section_accessibility">无障碍</string>
+    <string name="settings_opaque_composer">不透明的输入区</string>
+    <string name="settings_opaque_composer_detail">为聊天输入区添加不透明背景，让内容更易阅读。</string>
     <string name="settings_section_chat">对话</string>
     <string name="settings_section_voice">语音</string>
     <string name="settings_section_notifications">通知</string>
@@ -287,4 +290,6 @@
     <string name="managed_update_restart_title">重启 Kyllene？</string>
     <string name="managed_update_restart_warning">请结束通话并保存工作。重启将关闭所有窗口，未保存的更改和附件可能会丢失。</string>
     <string name="managed_update_restart_now">立即重启</string>
+    <string name="plugin_notifications_what_desktop">它会关注你的机器人的对话，并在 Kyllene 运行时将每条新回复通过 ntfy.sh 端到端加密发送到这台电脑。</string>
+    <string name="settings_notifications_anywhere_desktop_detail">即使不在网关所在的网络中，也能收到机器人的消息，经 ntfy.sh 端到端加密传送。会在网关上安装 herald-push 插件。Kyllene 运行时可以接收消息。</string>
 </resources>

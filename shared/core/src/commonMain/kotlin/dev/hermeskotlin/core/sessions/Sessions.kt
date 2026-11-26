@@ -1,11 +1,15 @@
 package dev.hermeskotlin.core.sessions
 
+import dev.hermeskotlin.core.chat.displayMetadataObject
+import dev.hermeskotlin.core.chat.userReactionEmoji
+import dev.hermeskotlin.core.network.HermesJson
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /**
@@ -139,6 +143,11 @@ data class SessionMessage(
     val timestamp: Double? = null,
     val reasoning: String? = null,
     @SerialName("display_kind") val displayKind: String? = null,
+    /**
+     * What the gateway knows about a machine-written row, e.g. `completion_note` naming its producer. An object,
+     * or a string holding one on older backends; missing where a route leaves it out (the API server's).
+     */
+    @SerialName("display_metadata") val displayMetadata: JsonElement? = null,
     /** The session the row is stored under: an ancestor's id for rows from before a compression. */
     @SerialName("session_id") val sessionId: String? = null,
     /** False for rows a compression archived; the live agent no longer holds them. */
@@ -147,21 +156,48 @@ data class SessionMessage(
     @Serializable(with = LenientBooleanSerializer::class) val compacted: Boolean = false,
     @SerialName("display_reasoning") val displayReasoning: String? = null,
     @SerialName("display_commentary") val displayCommentary: List<String>? = null,
+    @SerialName("message_uid") val messageUid: String? = null,
+    @SerialName("absorbed_message_uids") val absorbedMessageUids: JsonElement? = null,
 ) {
+    /** A merged compaction carrier has its own UID and names the request it absorbed separately. */
+    internal val requestUids: List<String>
+        get() {
+            val absorbed = when (val value = absorbedMessageUids) {
+                is JsonPrimitive -> value.contentOrNull?.let { runCatching { HermesJson.parseToJsonElement(it) }.getOrNull() }
+                else -> value
+            }
+            val sources = (absorbed as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.stringOrNull() }
+            return sources.ifEmpty { listOfNotNull(messageUid) }
+        }
+
+    val userReaction: String? get() = userReactionEmoji(displayMetadataObject(displayMetadata)?.get("reactions"))
+
+    /** The part of a reply a stopped turn had streamed, which hermes-agent marks (v0.23.4 agent/turn_api_call.py). */
+    val stopped: Boolean get() = (displayMetadataObject(displayMetadata)?.get("interrupted") as? JsonPrimitive)?.booleanOrNull == true
+
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
+    internal val storedText: String get() = content.plainText()
 
-    /** Prefer the gateway's display projection; older gateways only send [reasoning]. */
+    /** Public progress supplied by the gateway, in transcript order. */
+    val commentary: List<String>
+        get() = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+            .distinctCommentary()
+
+    /** Prefer the gateway's display projection, including an explicitly empty one. */
     val reasoningText: String
         get() {
-            val base = displayReasoning ?: reasoning.orEmpty()
-            // Some gateways still flatten public commentary into legacy reasoning. Match whole lines,
-            // including multiline commentary, without changing the stored text's line endings.
-            val lines = "\n${base.replace("\r\n", "\n")}\n"
-            val commentary = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.replace("\r\n", "\n") }.filterNot {
-                lines.contains("\n${it.replace("\r\n", "\n")}\n")
+            displayReasoning?.let { return it }
+            val legacy = reasoning.orEmpty()
+            val updates = commentary
+            if (updates.isEmpty()) return legacy
+            // Longer blocks go first so removing a shared line can't leave the rest of an update in Reasoning.
+            var lines = legacy.replace("\r\n", "\n")
+            updates.map { it.replace("\r\n", "\n") }.sortedByDescending { it.length }.forEach { update ->
+                val wholeLines = Regex("^" + Regex.escape(update) + "$", RegexOption.MULTILINE)
+                lines = wholeLines.replace(lines, "")
             }
-            return (listOf(base) + commentary).filter { it.isNotBlank() }.joinToString("\n\n")
+            return lines.trim()
         }
 
     /** Image parts of a multimodal row (`image_url` / `image` / `input_image`). */
@@ -196,6 +232,10 @@ data class SessionMessagesPage(
 )
 
 private val IMAGE_PART_TYPES = setOf("image_url", "image", "input_image")
+
+/** Keep the first display copy when only the line endings differ. */
+internal fun List<String>.distinctCommentary(): List<String> =
+    if (size < 2) this else distinctBy { it.replace("\r\n", "\n") }
 
 private fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 

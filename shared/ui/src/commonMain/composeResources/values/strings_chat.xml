@@ -264,6 +264,9 @@
     <!-- Rows the machinery writes into the chat -->
     <string name="chat_event_compaction">Earlier messages summarized</string>
     <string name="chat_event_routine">Routine “%1$s” ran</string>
+    <string name="chat_event_routine_unnamed">A routine ran</string>
+    <string name="chat_event_routine_problem">Routine “%1$s” reported a problem</string>
+    <string name="chat_event_routine_problem_unnamed">A routine reported a problem</string>
     <string name="chat_event_failed_turn">This turn did not complete.</string>
     <string name="chat_event_system_messages">System messages · %1$d</string>
     <string name="chat_event_other_bot">the other bot</string>
@@ -517,6 +520,11 @@
     <string name="chat_stop_reading">Stop reading</string>
     <string name="chat_pause_reading">Pause reading</string>
     <string name="chat_resume_reading">Resume reading</string>
+    <string name="chat_react_acknowledge">Got it</string>
+    <string name="chat_react_continue">Continue</string>
+    <string name="chat_react_verify">Verify</string>
+    <string name="chat_react_explain">Explain</string>
+    <string name="chat_reply_more">More</string>
     <string name="chat_message_actions">Message actions</string>
     <string name="chat_queued">Queued · sends after this task</string>
     <string name="chat_editing_in_composer">Editing in the composer</string>

@@ -48,12 +48,14 @@ class RequestAnswers(
                 notifications.cancelRequest(requestId)
                 return if (watched == null) Outcome.Gone else Outcome.Refused
             }
+            if (InputRequest.pendingControlRefusal(watched, answer) != null) return Outcome.Refused
             awaitConnection()
             if (!watcher.answer(requestId, answer)) return Outcome.NotConnected
             notifications.cancelRequest(requestId)
             return Outcome.Answered
         }
-        val answer = result(request) ?: return Outcome.Refused
+        val answer = result(request)?.takeIf { InputRequest.pendingControlRefusal(request, it) == null }
+            ?: return Outcome.Refused
         awaitConnection()
         if (!session.answer(request, answer)) return Outcome.NotConnected
         notifications.cancelRequest(requestId)

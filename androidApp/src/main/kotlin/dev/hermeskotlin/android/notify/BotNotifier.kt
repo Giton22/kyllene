@@ -5,7 +5,7 @@ import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.bots.BotsApi
 import dev.hermeskotlin.core.bots.forRoster
 import dev.hermeskotlin.core.chat.ChatHost
-import dev.hermeskotlin.core.chat.TranscriptRows
+import dev.hermeskotlin.core.chat.readableReplyText
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayRepository
@@ -226,8 +226,7 @@ class BotNotifier(
         val url = gateways.current()?.gatewayUrl ?: return null
         val page = sessions.messages(url, storedId, limit = LAST_ROWS, profile = bot.name) as? ApiResult.Success ?: return null
         val last = page.value.messages.lastOrNull { it.role == "user" || it.role == "assistant" } ?: return null
-        if (last.role != "assistant" || last.isHidden || last.displayKind == "failed_turn") return null
-        return last.text.trim().takeUnless { it.isEmpty() || TranscriptRows.isSilence(it) }
+        return last.readableReplyText()
     }
 
     private suspend fun loadPictures(bots: List<Bot>) {

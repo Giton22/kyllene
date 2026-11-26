@@ -311,6 +311,7 @@ fun SettingsScreen(
             viewModel.runConnectionCheck()
         },
         push = push,
+        pushAvailable = viewModel.pushAvailable,
         pushTest = pushTest,
         onPushAnywhere = viewModel::setPushAnywhere,
         onPushTest = viewModel::sendPushTest,
@@ -440,6 +441,7 @@ internal fun SettingsView(
     gatewayName: String = gatewayUrl.substringAfter("://").trimEnd('/'),
     onCheckConnection: () -> Unit = {},
     push: PushStatus = PushStatus(),
+    pushAvailable: Boolean = !isDesktop,
     pushTest: Boolean? = null,
     onPushAnywhere: (Boolean) -> Unit = {},
     onPushTest: () -> Unit = {},
@@ -631,6 +633,15 @@ internal fun SettingsView(
                         detail = sidebarPagesSummary(settings),
                         icon = Lucide.LayoutList,
                         onClick = onOpenSidebarPages,
+                    )
+                }
+
+                Section(stringResource(Res.string.settings_section_accessibility)) {
+                    SwitchRow(
+                        title = stringResource(Res.string.settings_opaque_composer),
+                        detail = stringResource(Res.string.settings_opaque_composer_detail),
+                        checked = settings.opaqueComposer,
+                        onCheckedChange = { on -> onUpdate { it.copy(opaqueComposer = on) } },
                     )
                 }
 
@@ -853,7 +864,7 @@ internal fun SettingsView(
                     PluginInstallDialog(
                         visible = installAsked,
                         feature = stringResource(Res.string.settings_notifications_anywhere),
-                        what = stringResource(Res.string.plugin_notifications_what),
+                        what = stringResource(if (isDesktop) Res.string.plugin_notifications_what_desktop else Res.string.plugin_notifications_what),
                         onDismiss = { installAsked = false },
                     ) {
                         installAsked = false
@@ -915,9 +926,8 @@ internal fun SettingsView(
                             icon = Lucide.Vibrate,
                         )
                     }
-                    // The phone's push through ntfy; the desktop has no way to receive it yet.
-                    if (!isDesktop) Divider()
-                    if (!isDesktop) SwitchRow(
+                    if (pushAvailable) Divider()
+                    if (pushAvailable) SwitchRow(
                         title = stringResource(Res.string.settings_notifications_anywhere),
                         detail = pushDetail(settings.pushAnywhere, push),
                         checked = settings.pushAnywhere,
@@ -926,11 +936,11 @@ internal fun SettingsView(
                         icon = Lucide.Globe,
                     )
                     val pushUpdate = push.update
-                    if (settings.pushAnywhere && pushUpdate != null) {
+                    if (pushAvailable && settings.pushAnywhere && pushUpdate != null) {
                         Divider()
                         PluginUpdateRow(pushUpdate, onPushUpdate)
                     }
-                    if (settings.pushAnywhere && push.state == PushStatus.State.On) {
+                    if (pushAvailable && settings.pushAnywhere && push.state == PushStatus.State.On) {
                         Divider()
                         ActionRow(
                             when (pushTest) {
@@ -1115,7 +1125,7 @@ private fun suggestionsDetail(on: Boolean, plugin: SuggestionsPlugin): String =
 /** What Notifications anywhere does, or where its setup on the gateway stands. */
 @Composable
 private fun pushDetail(on: Boolean, push: PushStatus): String {
-    if (!on) return stringResource(Res.string.settings_notifications_anywhere_detail)
+    if (!on) return stringResource(if (isDesktop) Res.string.settings_notifications_anywhere_desktop_detail else Res.string.settings_notifications_anywhere_detail)
     return when (push.state) {
         PushStatus.State.On -> push.detail ?: stringResource(Res.string.settings_push_on)
         PushStatus.State.Working -> push.detail ?: stringResource(Res.string.settings_push_working)

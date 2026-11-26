@@ -40,6 +40,20 @@ class ReplyMarkTest {
     }
 
     @Test
+    fun savedCommentaryIsNewsOnceAcrossTheLiveToSavedTransition() {
+        val waiting = listOf(prompt).replyMark()
+        val live = listOf(prompt, ChatMessage.Assistant("live-1", text = "Checking.\n\nMore detail.", streaming = true)).replyMark()
+        val saved = listOf(
+            prompt,
+            ChatMessage.Assistant("row-2", commentary = listOf("Checking.\r\n\r\nMore detail.")),
+        ).replyMark()
+        val seen = ReplySeen(prompt.key, waiting)
+
+        assertTrue(seen.next(away = true, prompt.key, saved).new)
+        assertFalse(ReplySeen(prompt.key, live).next(away = true, prompt.key, saved).new)
+    }
+
+    @Test
     fun aReplySplitIntoSeveralStoredRowsIsNotNews() {
         val live = listOf(prompt, ChatMessage.Assistant("live-1", text = "Checking.Done.", streaming = true))
         val stored = listOf(

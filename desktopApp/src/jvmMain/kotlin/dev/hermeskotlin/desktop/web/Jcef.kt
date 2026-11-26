@@ -81,11 +81,10 @@ internal object Jcef {
         }
         CefApp.addAppHandler(object : CefAppHandlerAdapter(args) {
             override fun onBeforeCommandLineProcessing(processType: String?, commandLine: CefCommandLine) {
-                // WebRTC may only go through a proxy, and the proxy leads nowhere: past it, only the gateways. Loopback
-                // isn't let past on its own (`<-loopback>`), only a gateway's own port on it.
+                // WebRTC may only go through a proxy, and the proxy leads nowhere: past it, only the gateways.
                 commandLine.appendSwitchWithValue("force-webrtc-ip-handling-policy", "disable_non_proxied_udp")
                 commandLine.appendSwitchWithValue("proxy-server", NOWHERE)
-                commandLine.appendSwitchWithValue("proxy-bypass-list", (gateways + "<-loopback>").joinToString(";"))
+                commandLine.appendSwitchWithValue("proxy-bypass-list", proxyBypassList(gateways))
                 // No Google sign-in, sync, translation or spelling service: nothing here talks to Google.
                 commandLine.appendSwitch("disable-sync")
                 commandLine.appendSwitch("disable-component-update")
@@ -102,6 +101,13 @@ internal object Jcef {
         return app
     }
 }
+
+/**
+ * What Chromium reaches without its proxy: each of [gateways] (`host:port`) and nothing else. Loopback isn't let past
+ * on its own (`<-loopback>`), only a gateway's own port on it. Chromium lets a later rule win, so that rule comes
+ * first: after the gateways, it would send a gateway on this computer to the proxy too.
+ */
+internal fun proxyBypassList(gateways: Set<String>): String = (listOf("<-loopback>") + gateways).joinToString(";")
 
 /** `host:port` of [url], the port filled in from its scheme; null for anything but http(s). */
 internal fun hostPort(url: String): String? {

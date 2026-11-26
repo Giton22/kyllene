@@ -71,7 +71,6 @@
 
     <!-- Finished turns, bots, rooms, the Inbox -->
     <string name="notification_turn_failed_text">The turn failed.</string>
-    <string name="notification_done">Done.</string>
     <string name="notification_finished">Finished.</string>
     <string name="notification_message_hermes">Message Hermes</string>
     <string name="notification_turn_failed">Turn failed</string>

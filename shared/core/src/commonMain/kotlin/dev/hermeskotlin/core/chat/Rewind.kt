@@ -3,7 +3,8 @@ package dev.hermeskotlin.core.chat
 /*
  * Regenerate and edit both rewind the chat: one `prompt.submit` that cuts the stored transcript before a
  * prompt's row (`truncate_before_row_id`, with `confirm_truncate`) and sends a prompt in its place, as
- * Hermes Desktop does. These say which messages that can start from and what it throws away.
+ * Hermes Desktop does. On the session authority the cut is a `session.mutate` rewind and the prompt follows it.
+ * These say which messages that can start from and what it throws away.
  */
 
 /** The prompt a regenerate of reply [replyKey] sends again: the one it answered, when that can be cut at and resent. */

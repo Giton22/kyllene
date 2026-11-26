@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.assistant
 
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import dev.hermeskotlin.core.auth.AuthApi
 import dev.hermeskotlin.core.auth.PersistentCookiesStorage
 import dev.hermeskotlin.core.connection.GatewayConnection
@@ -368,4 +369,13 @@ class AssistantPanelModelTest {
         model.close()
     }
 
+    @Test
+    fun aSendThatCantGoLeavesTheComposerAsTyped() = runTest {
+        val model = model()
+        // No gateway, so no chat to send to: the empty item Enter left stays until the send goes ahead.
+        model.composer.setTextAndPlaceCursorAtEnd("- milk\n- ")
+        model.send()
+        assertEquals("- milk\n- ", model.composer.text.toString())
+        model.close()
+    }
 }

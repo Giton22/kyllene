@@ -128,9 +128,14 @@ enum class AttentionFilter(val label: StringResource) {
     NeedsAttention(Res.string.sessions_filter_needs_you),
 }
 
-/** What a row says about its chat besides the title, in words. [running]: a turn is going right now. */
+/**
+ * What a row says about its chat besides the title, in words. [running]: a turn is going right now. [unread]:
+ * activity since the chat was last read, which a running turn's own prompt, tool calls and heartbeats are too.
+ */
 data class RowStatus(val waiting: Waiting? = null, val unread: Boolean = false, val running: Boolean = false) {
-    val needsAttention: Boolean get() = waiting != null || unread
+    /** A reply not yet read: a running turn isn't one until it ends, as in Hermes Desktop. */
+    val newReply: Boolean get() = unread && !running
+    val needsAttention: Boolean get() = waiting != null || newReply
 }
 
 /** The gateway and profile a list is of; null [profile] is the gateway's launch profile. */
