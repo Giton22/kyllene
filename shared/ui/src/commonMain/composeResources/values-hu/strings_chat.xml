@@ -463,9 +463,9 @@
 
     <string name="chat_notice_voice_mic">A hanghoz mikrofon kell. Engedélyezd az Android beállításaiban.</string>
     <string name="chat_notice_dictation_mic">A diktáláshoz mikrofon kell. Engedélyezd az Android beállításaiban.</string>
-    <string name="chat_notice_no_desktop_voice">A hangalapú csevegés még nincs meg asztali gépen.</string>
-    <string name="chat_notice_no_desktop_dictation">A diktálás még nincs meg asztali gépen.</string>
-    <string name="chat_notice_voice_needs_ffmpeg">A hangcsevegésnek a /usr/bin/ffmpeg helyen lévő ffmpeg kell a válaszai kimondásához. Telepítsd, majd indítsd újra a hangcsevegést.</string>
+    <string name="chat_notice_no_desktop_voice">A hangalapú csevegés macOS-en még nem érhető el.</string>
+    <string name="chat_notice_no_desktop_dictation">A diktálás macOS-en még nem érhető el.</string>
+    <string name="chat_notice_voice_needs_ffmpeg">A hangcsevegésnek ffmpeg kell a PATH-ban a válaszai kimondásához (Linuxon a PATH-ban vagy a /usr/bin/ffmpeg helyen). Telepítsd, majd indítsd újra a hangcsevegést.</string>
     <string name="chat_notice_nothing_waiting">Semmi sem vár</string>
     <string name="chat_notice_adopted">Örökbe fogadtad: %1$s</string>
     <string name="chat_notice_prompt_not_sent">A prompt nem ment el: a Kyllene nem érte el a Gatewayt. A beviteli mezőben van.</string>

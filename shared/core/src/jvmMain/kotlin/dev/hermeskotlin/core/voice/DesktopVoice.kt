@@ -25,25 +25,33 @@ internal fun desktopAudioLayer(
 }
 
 /**
- * ffmpeg for spoken replies: the first one on the PATH, then the Linux runtime's fixed path (the Flatpak runtime
- * has it, a host install may not). Windows installs ship `ffmpeg.exe` on the PATH.
+ * ffmpeg for spoken replies: on Linux the runtime's fixed path comes first, because the Flatpak runtime ships it and a
+ * host install may not; anything else goes to the first absolute entry on the PATH that holds one. Windows has no
+ * fixed path, so there `ffmpeg.exe` has to be on the PATH.
+ *
+ * Relative and quoted entries are skipped or unquoted first: a `ffmpeg` in the working directory, or a folder that
+ * happens to be called `ffmpeg`, is not something to run.
  */
 fun desktopFfmpeg(
     osName: String = System.getProperty("os.name").orEmpty(),
     searchPath: String? = System.getenv("PATH"),
+    fixedPath: File = File("/usr/bin/ffmpeg"),
 ): File? {
     val name = if (osName.startsWith("Windows")) "ffmpeg.exe" else "ffmpeg"
-    val found = searchPath.orEmpty()
+    val onPath = searchPath.orEmpty()
         .split(File.pathSeparatorChar)
-        .filter { it.isNotBlank() }
         .asSequence()
+        .map { it.trim().removeSurrounding("\"") }
+        .filter { it.isNotEmpty() && File(it).isAbsolute }
         .map { File(it, name) }
-        .firstOrNull { it.canExecute() }
-    return found ?: File("/usr/bin/ffmpeg").takeIf { it.canExecute() }
+        .firstOrNull { it.isFile && it.canExecute() }
+    val fixed = fixedPath.takeIf { it.isFile && it.canExecute() }
+    return if (osName.startsWith("Windows")) onPath else fixed ?: onPath
 }
 
 /** Spoken replies decode with ffmpeg; without one a voice chat can't answer aloud and Read aloud stays silent. */
-fun desktopSpeechDecoder(ffmpeg: File? = desktopFfmpeg()): Boolean = ffmpeg?.canExecute() == true
+fun desktopSpeechDecoder(ffmpeg: File? = desktopFfmpeg()): Boolean =
+    ffmpeg?.let { it.isFile && it.canExecute() } == true
 
 /** The command [FfmpegSpeechDecoder] runs: the resolved ffmpeg, else the bare name for the OS. */
 internal fun desktopFfmpegCommand(

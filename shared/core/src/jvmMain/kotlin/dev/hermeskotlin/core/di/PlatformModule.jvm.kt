@@ -35,7 +35,7 @@ actual val platformModule: Module = module {
     // No app link to send the browser back to: its tab says it's done.
     single<LoopbackReceiver> { LoopbackHttpReceiver(returnUri = null) }
     single { WallpaperStore(FileBlobFile(File(appDataDir, "wallpaper.jpg")), get()) }
-    // Native recording and playback are Linux backends; live calls remain separate.
+    // Native recording and playback are Linux and Windows backends; live calls remain separate.
     single<VoiceRecorder> {
         if (nativeDesktopAudio()) LinuxVoiceRecorder(::WebRtcMicrophone) else NoVoiceRecorder
     }
