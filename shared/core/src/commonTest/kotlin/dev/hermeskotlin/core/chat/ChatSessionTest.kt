@@ -335,6 +335,25 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aReactionAlreadySetElsewhereIsSetAgainRatherThanCleared() = runTest {
+        // The screen shows none, but another client set 👍 meanwhile: the first call clears it on the gateway.
+        val (chat, transport) = resumedChat(backgroundScope, mapOf(
+            "message.react" to SILENT,
+            "prompt.submit" to """{"status":"started"}""",
+        ))
+        val reacting = async { chat.react("row-2", ReplyReaction.Acknowledge) { true } }
+        val first = transport.awaitSent { it.isCall("message.react") }
+        transport.push("""{"jsonrpc":"2.0","id":${first["id"]},"result":{"row_id":2,"reactions":[]}}""")
+        val second = transport.awaitSent { it.isCall("message.react") && it["id"] != first["id"] }
+        transport.push("""{"jsonrpc":"2.0","id":${second["id"]},"result":{"row_id":2,"reactions":[{"author":"user","emoji":"👍"}]}}""")
+        reacting.await()
+        testScheduler.runCurrent()
+
+        assertEquals("👍", chat.state.value.messages.filterIsInstance<ChatMessage.Assistant>().single { it.key == "row-2" }.userReaction)
+        assertEquals(1, transport.sent.value.count { it.isCall("prompt.submit") })
+    }
+
+    @Test
     fun aSecondTapOnTheSameReplyWhileItsReactionSavesIsIgnored() = runTest {
         val (chat, transport) = resumedChat(backgroundScope, mapOf(
             "message.react" to SILENT,
@@ -366,8 +385,8 @@ class ChatSessionTest {
         val second = async { chat.react("row-4", ReplyReaction.Verify) { true } }
         testScheduler.runCurrent()
 
-        gateway.answer = { """{"row_id":4,"reactions":[]}""" }
-        transport.push("""{"jsonrpc":"2.0","id":${firstCall["id"]},"result":{"row_id":2,"reactions":[]}}""")
+        gateway.answer = { """{"row_id":4,"reactions":[{"author":"user","emoji":"🔍"}]}""" }
+        transport.push("""{"jsonrpc":"2.0","id":${firstCall["id"]},"result":{"row_id":2,"reactions":[{"author":"user","emoji":"👍"}]}}""")
         first.await()
         second.await()
 

@@ -107,8 +107,8 @@ class ChatSession(
     private val sendMutex = Mutex()
     private val reactionMutex = Mutex()
 
-    /** Replies whose reaction is being saved now. */
-    private val reacting = MutableStateFlow(emptySet<String>())
+    /** The stored rows of replies whose reaction is being saved now. */
+    private val reacting = MutableStateFlow(emptySet<Long>())
 
     /**
      * The socket [ChatState.runtimeSessionId] was attached on. Runtime ids belong to the
@@ -262,20 +262,21 @@ class ChatSession(
 
     /**
      * Sets or clears the user's reaction on the stored reply [replyKey], by its row: the newest row can change
-     * meanwhile. Reactions go one at a time; another tap on the same reply while its reaction is still being saved
-     * is ignored, as the same emoji again would take it off after its follow-up has gone.
+     * meanwhile. Reactions go one at a time; another tap on the same reply (by its row: a reload can rename a live
+     * reply meanwhile) while its reaction is still being saved is ignored, as the same emoji again would take it
+     * off after its follow-up has gone.
      */
     suspend fun react(replyKey: String, reaction: ReplyReaction, stillOpen: () -> Boolean) {
         val reply = _state.value.messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey }
             ?.takeUnless { it.streaming } ?: return
         val rowId = reply.reactionRowId ?: return
         var claimed = false
-        reacting.update { keys -> (replyKey !in keys).also { claimed = it }.let { if (it) keys + replyKey else keys } }
+        reacting.update { rows -> (rowId !in rows).also { claimed = it }.let { if (it) rows + rowId else rows } }
         if (!claimed) return
         try {
             reactionMutex.withLock { reactToStoredReply(reply, rowId, reaction, stillOpen) }
         } finally {
-            reacting.update { it - replyKey }
+            reacting.update { it - rowId }
         }
     }
 
@@ -290,15 +291,24 @@ class ChatSession(
             val client = connectedClient() ?: throw RpcException(0, "Connect to the gateway to react.")
             if (!client.replyReactionsSupported.value) return
             val runtimeId = ensureAttached(client)
-            if (!stillOpen() || connectedClient() !== client || _state.value.messages.none {
-                    it is ChatMessage.Assistant && !it.streaming && it.key == reply.key && it.reactionRowId == rowId
-                }) return
+            // By its row: a reload meanwhile renames a live reply's key but not its row.
+            val shown = _state.value.messages.firstOrNull {
+                it is ChatMessage.Assistant && !it.streaming && it.reactionRowId == rowId
+            } as? ChatMessage.Assistant
+            if (!stillOpen() || connectedClient() !== client || shown == null) return
+            // The same emoji again clears it on the gateway, so what happens follows the gateway's state, not the
+            // screen's. One set where the screen showed none, as on another client not yet reloaded here, is set again.
+            val setting = shown.userReaction != reaction.emoji
+            suspend fun send() = client.request("message.react", buildJsonObject {
+                put("session_id", runtimeId)
+                put("row_id", rowId)
+                put("emoji", reaction.emoji)
+            }) as? JsonObject
             val result = try {
-                client.request("message.react", buildJsonObject {
-                    put("session_id", runtimeId)
-                    put("row_id", rowId)
-                    put("emoji", reaction.emoji)
-                }) as? JsonObject
+                send().let { first ->
+                    val cleared = userReactionEmoji(first?.get("reactions")) != reaction.emoji
+                    if (setting && cleared && first?.get("reactions") is JsonArray) send() else first
+                }
             } catch (e: RpcException) {
                 if (e.code != METHOD_NOT_FOUND) throw e
                 client.markReplyReactionsUnsupported()
