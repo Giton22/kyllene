@@ -112,6 +112,19 @@ class ReplyMarkTest {
     }
 
     @Test
+    fun aReplyArrivingWithAnOlderPageIsNewsWhenThePartAlreadyLoadedChanged() {
+        val loaded = listOf(ChatMessage.User("row-10", "What changed?"), ChatMessage.Assistant("row-11", text = "Checking."))
+        val away = ReplySeen("row-10", loaded.replyMark()).next(away = true, "row-10", loaded.replyMark())
+        val older = listOf(ChatMessage.User("row-1", "Earlier"), ChatMessage.Assistant("row-2", text = "Earlier answer"))
+        // The page above only: the part already loaded is as it was.
+        val paged = older + loaded
+        assertFalse(away.next(away = true, "row-1", paged.replyMark(), paged.replyArrivedWithPage(loaded, away.mark)).new)
+        // The page above and more of the reply in the same update.
+        val replied = older + loaded.dropLast(1) + ChatMessage.Assistant("row-11", text = "Checking. Two files changed.")
+        assertTrue(away.next(away = true, "row-1", replied.replyMark(), replied.replyArrivedWithPage(loaded, away.mark)).new)
+    }
+
+    @Test
     fun aReplyThatComesAsTheChatsOwnPromptIsStoredIsNews() {
         // A chat begun here keeps its local prompt until the transcript is read again, e.g. on reconnecting.
         val live = listOf(ChatMessage.User("local-0", "What changed?"), ChatMessage.Assistant("live-1", reasoning = "Thinking", streaming = true))
