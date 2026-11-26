@@ -83,6 +83,12 @@ class ChatReducerTest {
             rows("""$user,$tool,{"id":4,"role":"assistant","content":"","display_kind":"hidden","display_metadata":{"interrupted":true}}"""),
         )
         assertEquals(TurnOutcome.Interrupted, assertIs<ChatMessage.Assistant>(hidden.last()).outcome)
+        // A hidden row without the mark changes nothing, and one after a prompt doesn't mark the reply before it.
+        val unmarked = historyToMessages(rows("""$user,$tool,{"id":4,"role":"assistant","content":"","display_kind":"hidden"}"""))
+        assertEquals(null, assertIs<ChatMessage.Assistant>(unmarked.last()).outcome)
+        val afterPrompt = historyToMessages(rows("""{"id":0,"role":"assistant","content":"Hi"},$user,""" +
+            """{"id":2,"role":"assistant","content":"","display_kind":"hidden","display_metadata":{"interrupted":true}}"""))
+        assertEquals(null, afterPrompt.filterIsInstance<ChatMessage.Assistant>().single().outcome)
         // A reply that wasn't stopped has no outcome.
         val done = historyToMessages(rows("""$user,{"id":2,"role":"assistant","content":"Done."}"""))
         assertEquals(null, assertIs<ChatMessage.Assistant>(done.last()).outcome)
