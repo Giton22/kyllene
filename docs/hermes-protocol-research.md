@@ -94,11 +94,12 @@ Key schemas: `PromptSubmitParams`, `MessageCompletePayload` (`text, usage, statu
 `SessionResumeParams` (`lazy, defer_history, omit_messages, inline_images, ...`).
 
 Stored history may include `display_reasoning` and `display_commentary` (Hermes
-`agent/history_commentary.py`). Show these together in the folded Reasoning panel;
-when the projection is absent, retain legacy `reasoning`. Live `message.interim` stays
-reply text: its payload is only `text` and `already_streamed`, and for every provider but
-Codex it is the step's own content, which history shows as reply text. So a Codex chat's
-commentary moves from the reply into Reasoning when the chat loads again.
+`agent/history_commentary.py`). Show projected reasoning in the folded Reasoning panel
+and projected commentary in the transcript. When `display_reasoning` is absent,
+use legacy `reasoning` with whole-line copies of public commentary removed. Live
+`message.interim` stays reply text because the payload has only `text` and
+`already_streamed`. When saved steps fold into a live reply, omit commentary blocks
+that are already in the live text.
 
 **Codegen:** `components.schemas` is JSON Schema → generate `@Serializable` Kotlin classes rather than
 hand-writing ~1 MB of contract. Regenerate when bumping supported Hermes version.

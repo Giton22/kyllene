@@ -164,17 +164,25 @@ data class SessionMessage(
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
 
-    /** Prefer the gateway's display projection; older gateways only send [reasoning]. */
+    /** Public progress supplied by the gateway, in transcript order. */
+    val commentary: List<String>
+        get() = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
+            .distinctCommentary()
+
+    /** Prefer the gateway's display projection, including an explicitly empty one. */
     val reasoningText: String
         get() {
-            val base = displayReasoning ?: reasoning.orEmpty()
-            // Some gateways still flatten public commentary into legacy reasoning. Match whole lines,
-            // including multiline commentary, without changing the stored text's line endings.
-            val lines = "\n${base.replace("\r\n", "\n")}\n"
-            val commentary = displayCommentary.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.replace("\r\n", "\n") }.filterNot {
-                lines.contains("\n${it.replace("\r\n", "\n")}\n")
+            displayReasoning?.let { return it }
+            val legacy = reasoning.orEmpty()
+            val updates = commentary
+            if (updates.isEmpty()) return legacy
+            // Longer blocks go first so removing a shared line can't leave the rest of an update in Reasoning.
+            var lines = legacy.replace("\r\n", "\n")
+            updates.map { it.replace("\r\n", "\n") }.sortedByDescending { it.length }.forEach { update ->
+                val wholeLines = Regex("^" + Regex.escape(update) + "$", RegexOption.MULTILINE)
+                lines = wholeLines.replace(lines, "")
             }
-            return (listOf(base) + commentary).filter { it.isNotBlank() }.joinToString("\n\n")
+            return lines.trim()
         }
 
     /** Image parts of a multimodal row (`image_url` / `image` / `input_image`). */
@@ -209,6 +217,10 @@ data class SessionMessagesPage(
 )
 
 private val IMAGE_PART_TYPES = setOf("image_url", "image", "input_image")
+
+/** Keep the first display copy when only the line endings differ. */
+internal fun List<String>.distinctCommentary(): List<String> =
+    if (size < 2) this else distinctBy { it.replace("\r\n", "\n") }
 
 private fun JsonElement?.stringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 
