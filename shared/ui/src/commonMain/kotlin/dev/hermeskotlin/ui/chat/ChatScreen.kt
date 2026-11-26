@@ -3118,7 +3118,11 @@ internal fun AssistantReply(
             }
             // Not while it streams: the text and its blocks are still changing under the selection.
             CommentableSelection(source.takeUnless { message.streaming }, selection) {
-                MarkdownText(remember(text) { linkFileUris(text) }, streaming = message.streaming)
+                MarkdownText(
+                    remember(text) { linkFileUris(text) },
+                    modifier = if (isDesktop) Modifier.pointerHoverIcon(PointerIcon.Text) else Modifier,
+                    streaming = message.streaming,
+                )
             }
         }
         // Screens the agent drew, under what it said and whatever the tool-activity setting: they're for the user to answer.
