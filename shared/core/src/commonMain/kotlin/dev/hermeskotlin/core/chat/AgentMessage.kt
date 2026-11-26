@@ -18,7 +18,11 @@ data class AgentMessage(val sender: String, val handle: String?, val body: Strin
             val (marker, name, handle, legacyName, body) = match.destructured
             if (requireEnvelope && legacyName.isEmpty() && (marker.isEmpty() || handle.isEmpty())) return null
             val sender = name.ifEmpty { legacyName }.trim().ifEmpty { return null }
-            return AgentMessage(sender = sender, handle = handle.ifEmpty { null }, body = body.trim())
+            return AgentMessage(sender = sender, handle = handle.ifEmpty { null }, body = body.trim().removePrefix(NO_REPLY_MARKER).trim())
         }
+
+        // Put after the signature when the sender wants no answer (tools/bot_mode_dm.py); it tells the
+        // recipient's model to stay quiet (tools/bot_mode_probe.py `NO_REPLY_MARKER`), not something to read.
+        private const val NO_REPLY_MARKER = "[no reply needed]"
     }
 }
