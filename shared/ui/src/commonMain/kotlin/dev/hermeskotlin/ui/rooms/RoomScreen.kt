@@ -300,10 +300,11 @@ internal fun RoomView(
 @Composable
 private fun Transcript(room: OpenRoom, faces: BotFaces, onLoadEarlier: () -> Unit, onOpenFile: (String?, GatewayFile) -> Unit) {
     val lines = room.lines
-    // Opened at the newest line. The room is on screen before its log is read, so the list is made again
-    // when the first lines come in, and its first frame is already at the end.
+    // Opened at the end of the newest line, also when that's a reply taller than the screen. The room is on
+    // screen before its log is read, so the list is made again when the first lines come in, and its first
+    // frame is already at the end.
     val listState = rememberSaveable(lines.isEmpty(), saver = LazyListState.Saver) {
-        LazyListState(lines.lastIndex.coerceAtLeast(0))
+        LazyListState(lines.lastIndex.coerceAtLeast(0), if (lines.isEmpty()) 0 else LIST_END)
     }
     // A newer line brings the end of the conversation into view; older ones read in above don't move the reader.
     val newest = lines.lastOrNull()?.seq
@@ -312,7 +313,7 @@ private fun Transcript(room: OpenRoom, faces: BotFaces, onLoadEarlier: () -> Uni
     var atEndOnce by remember { mutableStateOf(false) }
     LaunchedEffect(newest) {
         if (newest == null) return@LaunchedEffect
-        if (atEndOnce) listState.animateScrollToItem(lines.size - 1) else listState.scrollToItem(lines.size - 1)
+        if (atEndOnce) listState.animateScrollToItem(lines.size - 1) else listState.scrollToItem(lines.size - 1, LIST_END)
         atEndOnce = true
     }
     // The line the reader is on when older lines are asked for, and how far down it sits, to put them back there.
@@ -760,6 +761,9 @@ private fun rememberRoomMentions(room: OpenRoom, viewModel: RoomActions, faces: 
 
 /** How big a member's face is beside its lines. */
 private val FACE = 30.dp
+
+/** A scroll offset past any line: the list stops it at the end of the last one. */
+private const val LIST_END = 1_000_000
 
 /** Opens the gateway file [link] points at as one of [profile]'s; a web link or anything else is left alone. */
 internal fun roomFileLink(link: String, profile: String?, open: (String?, GatewayFile) -> Unit) {

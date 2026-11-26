@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.onNodeWithText
@@ -169,6 +170,26 @@ class RoomOpeningPositionTest {
         println("room -> bot -> room: newest shown after $frames frames, oldest seen on the way: $sawOldest")
         assertTrue(!sawOldest, "the room reopened at its oldest line and scrolled down from there ($frames frames to the newest)")
         assertTrue(frames <= 1, "the newest line took $frames frames to come into view")
+    }
+
+    @Test
+    fun aRoomWhoseNewestReplyIsTallerThanTheScreenOpensAtItsEnd() = runComposeUiTest {
+        val screen = Screen()
+        show(screen)
+        mainClock.autoAdvance = false
+        // A bot's long reply last, taller than the 640 dp screen, with its last words marked.
+        val tall = lines("a", 39) + RoomLine.Message(
+            seq = 40, fromUser = false, speaker = "Bot", eventId = "a-e40", profile = "default",
+            text = (1..120).joinToString(" ") { "word$it" } + "\n\n" + "a long paragraph. ".repeat(80) + "\n\nthe reply's last words",
+        )
+        runOnIdle { screen.open = OpenRoom(room = room("a"), loading = true) }
+        mainClock.advanceTimeByFrame()
+        runOnIdle { screen.open = OpenRoom(room = room("a"), loading = false, lines = tall) }
+        mainClock.advanceTimeBy(5_000)
+
+        // The end of the room, as the chat opens at, not the top of its last reply.
+        val bottom = onNodeWithText("the reply's last words", substring = true).getUnclippedBoundsInRoot().bottom
+        assertTrue(bottom <= 640.dp, "the room opened at the top of its newest reply; its end is at $bottom, below the screen")
     }
 
     @Test
