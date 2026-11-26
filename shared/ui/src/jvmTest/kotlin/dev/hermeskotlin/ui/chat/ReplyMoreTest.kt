@@ -131,6 +131,7 @@ class ReplyMoreTest {
         runOnIdle { assertEquals("Checking.\n\nDone.", copied) }
         onAllNodes(hasContentDescription("Copy") or hasContentDescription("Copied"))[1].performClick()
         runOnIdle { assertEquals("Checking again.", copied) }
+        onNodeWithContentDescription("More").assertDoesNotExist()
     }
 
     @Test

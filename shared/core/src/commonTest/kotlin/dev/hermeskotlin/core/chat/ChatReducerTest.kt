@@ -158,6 +158,15 @@ class ChatReducerTest {
     }
 
     @Test
+    fun aSilentEndingKeepsPublicProgressInHistory() {
+        val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"NO_REPLY",
+            "display_reasoning":"","display_commentary":["Checking the logs."]}""")
+        val reply = assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single())
+        assertEquals("", reply.text)
+        assertEquals(listOf("Checking the logs."), reply.commentary)
+    }
+
+    @Test
     fun intentionalSilenceDoesNotBecomeAReasoningOnlyReply() {
         val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"NO_REPLY",
             "reasoning":"The agent chose silence."}""")
