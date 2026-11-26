@@ -206,7 +206,7 @@ class AssistantPanelModel(
 
     /**
      * Which bot answers on [saved] as [profile] (null: the gateway's launch profile), once the socket is up. Left
-     * to "Hermes" when it can't be had (offline, an older gateway), or drawn as its shape when its picture can't;
+     * to "Hermes" when it can't be had (offline, or the roster failed), or drawn as its shape when its picture can't;
      * the next call-up asks again.
      */
     private fun readSpeaker(saved: SavedGateway, profile: String?) {

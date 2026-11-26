@@ -346,7 +346,8 @@
     <string name="check_fix_wait_a_minute">Várj egy percet, és próbáld újra.</string>
     <string name="check_fix_sign_in_or_update">Jelentkezz be újra; ha továbbra sem megy, frissítsd a Hermest.</string>
     <string name="check_fix_update_hermes_try_again">Frissítsd a Hermest, és próbáld újra.</string>
-    <string name="check_fix_update_hermes">Frissítsd a Hermest a szerveren.</string>
+    <string name="hermes_unsupported_version">A Kyllene-nek Hermes Agent 0.22 vagy újabb kell. Futtasd a `hermes update` parancsot.</string>
+    <string name="check_fix_proxy_forwards_ws">Ellenőrizd, hogy a proxy továbbítja-e a /api/ws útvonalat.</string>
     <string name="check_fix_agent_running">Ellenőrizd, hogy az ügynök Gateway-e fut-e a szerveren. Proxy mögött engedélyezd a WebSocket-frissítéseket a /api/ws útvonalon.</string>
     <string name="check_fix_exact_address">Pontosan azt a címet használd, amelyre a vezérlőpult be van állítva, és ellenőrizd, hogy a beágyazott csevegés be van-e kapcsolva.</string>
     <string name="check_fix_access_token_or_proxy">Cloudflare Access mögött adj hozzá szolgáltatási tokent ehhez a Gateway-hez. Ellenkező esetben ellenőrizd, hogy a proxy továbbítja-e a /api/ws útvonalat.</string>

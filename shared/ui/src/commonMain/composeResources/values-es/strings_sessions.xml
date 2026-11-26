@@ -175,7 +175,6 @@
     <string name="sessions_delete_project_detail">«%1$s» se elimina del gateway. Sus chats se quedan y vuelven a agruparse por carpeta.</string>
     <string name="sessions_not_connected">Sin conexión.</string>
     <string name="sessions_cant_make_folders">Esta versión no puede crear carpetas.</string>
-    <string name="sessions_gateway_cant_change_projects">Este gateway no puede cambiar proyectos.</string>
     <string name="sessions_project_change_failed">No se pudo cambiar el proyecto.</string>
 
     <!-- Account and profiles -->

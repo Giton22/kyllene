@@ -238,8 +238,7 @@ class SessionsViewModelTest {
         val live = live.toMutableMap()
 
         /**
-         * What each `projects.*` method answers; a value starting `error:` turns the call down with that message,
-         * and `missing` answers as a gateway without the method.
+         * What each `projects.*` method answers; a value starting `error:` turns the call down with that message.
          */
         val projects = projects.toMutableMap()
 
@@ -262,10 +261,6 @@ class SessionsViewModelTest {
             method?.let { methods += it }
             projects[method]?.takeIf { it.startsWith("error:") }?.let { reason ->
                 inbound.send("""{"jsonrpc":"2.0","id":$id,"error":{"code":5063,"message":"${reason.removePrefix("error:")}"}}""")
-                return
-            }
-            if (projects[method] == "missing") {
-                inbound.send("""{"jsonrpc":"2.0","id":$id,"error":{"code":-32601,"message":"Method not found"}}""")
                 return
             }
             val result = if (method == "session.active_list") {
@@ -395,7 +390,7 @@ class SessionsViewModelTest {
     }
 
     @Test
-    fun aRunningTurnIsNotANewReplyOnAnOlderGateway() {
+    fun aRunningTurnIsNotANewReplyWithoutAReadWatermark() {
         // No `unread` or `last_read_at`: the phone's own look decides, for a chat from a local source.
         fun row(lastActive: Double) = """{"id":"a","title":"Alpha","source":"local","last_active":$lastActive,"is_active":true}"""
         aTurnRuns(listOf(row(1300.0), row(1305.0), row(1306.0), row(1314.0))) { seen ->
@@ -605,29 +600,6 @@ class SessionsViewModelTest {
         val after = vm.state.first { it.message != null }
         assertEquals("herald", after.projects.single().label)
         assertEquals(Said.Verbatim("name taken"), after.message)
-    }
-
-    @Test
-    fun aGatewayWithoutProjectChangesStopsOfferingThem() = runTest(dispatcher) {
-        val socket = LiveGateway(
-            live = emptyMap(),
-            projects = mapOf(
-                "projects.tree" to """{"projects":[{"id":"/srv/site","label":"site","path":"/srv/site","isAuto":true,"sessionIds":["z"]}]}""",
-                "projects.create" to "missing",
-            ),
-        )
-        val vm = viewModel(socket = socket)
-        vm.bind(gateway)
-        vm.awaitLoaded()
-        vm.state.first { it.canMakeProjects }
-        var done: Said? = null
-        vm.createProject("site", "/srv/site") { done = it }
-        assertFalse(vm.state.first { !it.canMakeProjects }.canMakeProjects)
-        assertEquals(said(Res.string.sessions_gateway_cant_change_projects), done)
-        // A later tree doesn't bring the button back.
-        vm.refresh()
-        vm.awaitLoaded()
-        assertFalse(vm.state.value.canMakeProjects)
     }
 
     @Test

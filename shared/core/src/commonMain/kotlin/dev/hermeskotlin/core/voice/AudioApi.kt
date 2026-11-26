@@ -98,7 +98,7 @@ class AudioApi(private val client: HttpClient) {
         SpokenAudio(Base64.decode(body.dataUrl.substringAfter("base64,")), mime)
     }
 
-    /** The profile's voice chat mode; an older gateway without GPT-Live fails, which means chained. */
+    /** The profile's voice chat mode; a failed read means chained. */
     suspend fun voiceLiveStatus(url: GatewayUrl, profile: String?): ApiResult<VoiceLiveStatus> = apiCall {
         client.get(url.resolve("api/audio/voice-live/status")) {
             profile?.let { parameter("profile", it) }
@@ -142,8 +142,8 @@ class AudioApi(private val client: HttpClient) {
 
     /**
      * Whether talking over a reply cuts in, and how readily: the profile's `voice.barge_in`,
-     * `voice.barge_in_threshold_multiplier` and `voice.barge_in_grace_seconds`. Where they can't be read (an
-     * older gateway, say), Hermes's defaults: on, at the stock levels.
+     * `voice.barge_in_threshold_multiplier` and `voice.barge_in_grace_seconds`. Where they can't be read (offline,
+     * say), Hermes's defaults: on, at the stock levels.
      */
     suspend fun bargeIn(url: GatewayUrl, profile: String?): BargeInSettings {
         val config = apiCall {

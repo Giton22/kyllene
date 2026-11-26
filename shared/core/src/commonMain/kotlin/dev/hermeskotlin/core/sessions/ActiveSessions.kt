@@ -4,12 +4,10 @@ import dev.hermeskotlin.core.chat.string
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.rpc.JsonRpcClient
-import dev.hermeskotlin.core.rpc.RpcException
 import io.ktor.util.date.getTimeMillis
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -120,10 +118,6 @@ class ActiveSessions(
                 parse(client.request("session.active_list"))
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: RpcException) {
-                // A gateway without the method won't grow one on this socket: keep what's shown, stop asking.
-                if (e.code == METHOD_NOT_FOUND) awaitCancellation()
-                null
             } catch (e: Exception) {
                 // A timeout or a dropped reply: the last answer stands until the next ask.
                 null
@@ -151,7 +145,6 @@ class ActiveSessions(
     private companion object {
         /** Events after which a status may have changed. */
         val CHANGES = setOf("sessions.changed", "message.start", "message.complete")
-        const val METHOD_NOT_FOUND = -32601
 
         /** Brief gaps (a screen rotating) keep the poll going. */
         const val STOP_AFTER_MS = 5_000L

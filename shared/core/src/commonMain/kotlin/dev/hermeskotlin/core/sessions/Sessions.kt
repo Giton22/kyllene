@@ -42,7 +42,7 @@ data class SessionSummary(
      * marked the chat unread, or it had activity after a client last marked it read. False from a gateway without it.
      */
     @Serializable(with = LenientBooleanSerializer::class) val unread: Boolean = false,
-    /** Shared read watermark; null on untracked chats/older gateways, zero for explicit mark-unread. */
+    /** Shared read watermark; null on untracked chats, zero for explicit mark-unread. */
     @SerialName("last_read_at") val lastReadAt: Double? = null,
 ) {
     /** What a list shows as the name: the title, else the first prompt, else a placeholder. */
@@ -164,7 +164,7 @@ data class SessionMessage(
     /** Plain text to render: the display projection when present, else the stored content. */
     val text: String get() = (displayContent ?: content).plainText()
 
-    /** Prefer the gateway's display projection; older gateways only send [reasoning]. */
+    /** Prefer the gateway's display projection; a row without one has only [reasoning]. */
     val reasoningText: String
         get() {
             val base = displayReasoning ?: reasoning.orEmpty()

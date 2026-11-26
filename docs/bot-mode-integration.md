@@ -1,7 +1,10 @@
 # Bot Mode: integration design
 
+> Researched on Hermes Agent v0.21.5, before Kyllene's support window (v0.22.0 to v0.23.4). Check a method or route
+> against those tags before relying on what this says.
+
 Built from five research passes (2026-10-05) over `NousResearch/hermes-agent` at tag `v2026.9.24` (v0.21.5, which
-is what the test gateway runs) and `main` @ 6cd2817. They covered Desktop's Bot Mode plugin
+was what the test gateway ran then) and `main` @ 6cd2817. They covered Desktop's Bot Mode plugin
 (`apps/desktop/src/plugins/hermes-bots/`), the gateway contract (`tui_gateway/`), group chats, how bot messages
 appear in a transcript, and upstream issues and PRs. Paths are upstream and line numbers are at the tag unless
 marked. The emulator check of 2026-10-05 is in §11.

@@ -175,7 +175,6 @@
     <string name="sessions_delete_project_detail">A(z) „%1$s” törlődik a gatewayről. A csevegései megmaradnak, és újra mappa szerint csoportosulnak.</string>
     <string name="sessions_not_connected">Nincs kapcsolat.</string>
     <string name="sessions_cant_make_folders">Ez a változat nem tud mappát létrehozni.</string>
-    <string name="sessions_gateway_cant_change_projects">Ez a gateway nem tudja módosítani a projekteket.</string>
     <string name="sessions_project_change_failed">Nem sikerült módosítani a projektet.</string>
 
     <!-- Account and profiles -->

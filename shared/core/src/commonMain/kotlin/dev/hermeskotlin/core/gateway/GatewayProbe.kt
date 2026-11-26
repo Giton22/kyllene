@@ -21,6 +21,9 @@ sealed interface ProbeResult {
     data class Reachable(val url: GatewayUrl, val status: GatewayStatus) : ProbeResult {
         /** A gated dashboard needs a password provider or browser sign-in for the app to get in. */
         val canSignIn: Boolean get() = !status.authRequired || status.supportsPasswordLogin || status.supportsNativeSignIn
+
+        /** Its Hermes is older than Kyllene supports ([HermesVersion.OLDEST_SUPPORTED]): it still connects, with a warning. */
+        val unsupportedVersion: Boolean get() = HermesVersion.isUnsupported(status.version)
     }
 
     /** Something answered, but not like a Hermes dashboard. */

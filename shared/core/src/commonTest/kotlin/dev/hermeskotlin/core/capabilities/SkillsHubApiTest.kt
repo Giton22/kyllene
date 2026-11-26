@@ -186,12 +186,6 @@ class SkillsHubApiTest {
     }
 
     @Test
-    fun legacyBlockMessageIsRecognised() = runTest {
-        val result = finish(HttpStatusCode.OK to status(false, 1, "Installation blocked: Blocked (community source + dangerous verdict, 3 findings)"))
-        assertEquals(3, assertIs<HubActionResult.Blocked>(result).findings)
-    }
-
-    @Test
     fun failedActionKeepsTheLogTail() = runTest {
         assertEquals(HubActionResult.Failed(listOf("b", "c", "d")), finish(HttpStatusCode.OK to status(false, 1, "a", "b", "c", "d")))
     }
