@@ -218,6 +218,10 @@ class StoppedReplyReactionTest {
         // No receipt, or one with no rows, doesn't say the reply was stored: a read could drop the live copy.
         assertFalse(read("""{"text":"Working on it","status":"interrupted"}"""))
         assertFalse(read("""{"status":"interrupted","persisted_turn":{"row_ids":[]}}"""))
+        // Only the prompt's row (a stop before any text, or a save of the reply that failed): no reply to read.
+        assertFalse(read("""{"status":"interrupted","persisted_turn":{"row_ids":[3],"user_row_id":3}}"""))
+        assertFalse(read("""{"status":"interrupted","persisted_turn":{"row_ids":[3,5],"user_row_id":3,"user_row_ids":[3,5]}}"""))
+        assertTrue(read("""{"status":"interrupted","persisted_turn":{"row_ids":[3,4],"user_row_id":3,"user_row_ids":[3]}}"""))
         assertFalse(read("""{"status":"complete","persisted_turn":{"row_ids":[3,4]}}"""))
         assertFalse(read("""{"status":"error","persisted_turn":{"row_ids":[3,4]}}"""))
     }
@@ -249,15 +253,17 @@ class StoppedReplyReactionTest {
             val (chat, transport) = chat(backgroundScope, mode)
             streamTurn(chat, transport, mode, text = "")
             rows += """,{"id":3,"role":"user","content":"next"}"""
-            val reads = historyReads
 
             chat.interrupt()
-            // The waiting-for-model text is blanked before it goes out (tui_gateway/prompt_turn.py).
+            transport.awaitSent { it.isCall("session.interrupt") }
+            // The waiting-for-model text is blanked before it goes out (tui_gateway/prompt_turn.py). Only the prompt
+            // was stored, so nothing is read.
             transport.push(mode.event("message.complete", stopped("", rowIds = "3")))
+            // A notice after it shows once the end of the turn was handled.
+            transport.push(mode.event("notification.show", """{"text":"Done","level":"info","kind":"sticky","key":"after.stop"}"""))
 
-            chat.state.first { !it.running && historyReads > reads }
-            val shown = chat.state.first { s -> s.messages.any { it.key == "row-3" } }
-            assertEquals(listOf(2L), shown.replies().map { it.reactionRowId }, "$mode: ${shown.replies()}")
+            val shown = chat.state.first { s -> !s.running && s.notices.any { it.key == "after.stop" } }
+            assertEquals(listOf(2L), shown.replies().filter { it.reactable() }.map { it.reactionRowId }, "$mode: ${shown.replies()}")
             chat.stop()
         }
     }
