@@ -56,6 +56,9 @@ interface ChatActions {
     /** Starts a `/btw` side question about the selection in the composer. */
     fun askAside(source: CommentSource, anchor: SelectionAnchor)
 
+    /** Quotes [text], a reply or prompt, above the composer: the next message is an answer to it. */
+    fun replyTo(text: String) {}
+
     fun answer(request: InputRequest, result: JsonObject)
 
     fun pickSuggestion(suggestion: SlashSuggestion)

@@ -481,6 +481,7 @@
     <string name="chat_editing_banner">Du bearbeitest eine Nachricht. Senden ersetzt sie und alles danach.</string>
 
     <string name="chat_copy">Kopieren</string>
+    <string name="chat_reply">Antworten</string>
     <string name="chat_edit">Bearbeiten</string>
     <string name="chat_edit_last_prompt">Letzten Prompt bearbeiten</string>
     <string name="chat_branch">Abzweigen</string>

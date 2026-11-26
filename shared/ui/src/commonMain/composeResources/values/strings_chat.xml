@@ -511,6 +511,7 @@
 
     <!-- Messages in the conversation and what can be done with them -->
     <string name="chat_copy">Copy</string>
+    <string name="chat_reply">Reply</string>
     <string name="chat_edit">Edit</string>
     <string name="chat_edit_last_prompt">Edit last prompt</string>
     <string name="chat_branch">Branch</string>

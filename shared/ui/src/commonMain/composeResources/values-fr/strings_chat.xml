@@ -481,6 +481,7 @@
     <string name="chat_editing_banner">Modification d’un message. L’envoi le remplace, ainsi que tout ce qui suit.</string>
 
     <string name="chat_copy">Copier</string>
+    <string name="chat_reply">Répondre</string>
     <string name="chat_edit">Modifier</string>
     <string name="chat_edit_last_prompt">Modifier le dernier prompt</string>
     <string name="chat_branch">Dériver</string>
