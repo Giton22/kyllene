@@ -490,6 +490,10 @@
     <string name="chat_stop_reading">Arrêter la lecture</string>
     <string name="chat_pause_reading">Mettre la lecture en pause</string>
     <string name="chat_resume_reading">Reprendre la lecture</string>
+    <string name="chat_react_acknowledge">Compris</string>
+    <string name="chat_react_continue">Continuer</string>
+    <string name="chat_react_verify">Vérifier</string>
+    <string name="chat_react_explain">Expliquer</string>
     <string name="chat_message_actions">Actions du message</string>
     <string name="chat_queued">En file · part après cette tâche</string>
     <string name="chat_editing_in_composer">En cours de modification dans la zone de saisie</string>

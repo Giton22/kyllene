@@ -239,6 +239,9 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
         usage = finalUsage?.let { end -> turnStartUsage?.let { end - it } }?.takeIf { it.any },
         warning = warning,
         timestamp = now ?: base.timestamp,
+        // The completion receipt names the committed row even after the session rotates.
+        reactionRowId = (payload?.get("persisted_turn") as? JsonObject)
+            .long("final_assistant_row_id")?.takeIf { it > 0 } ?: base.reactionRowId,
     )
     // A turn that ended with nothing to show (e.g. interrupted at once) leaves no bubble, unless it failed or warns.
     val empty = reply.text.isBlank() && reply.reasoning.isBlank() && reply.tools.isEmpty() && reply.error == null && warning == null
@@ -446,10 +449,20 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     val ended = before.timestamp
                     turnStartedAt != null && at != null && ended != null && at >= turnStartedAt && ended < turnStartedAt
                 }
+                // Like the completing receipt: use the final assistant row without calls. A silence marker
+                // can close the reply after visible text, but cannot make a standalone reply reactable.
+                val reactionRow = row.id?.takeIf {
+                    it > 0 && tools.isEmpty() && (text.isNotEmpty() || (silent && previous?.text?.isNotEmpty() == true))
+                }
                 if (previous != null) {
+                    // A later step with no reaction of its own (a goal's continuation, say) leaves the reply on the
+                    // row that holds the user's reaction, so it still shows and a tap changes that one.
+                    val keepTarget = reactionRow == null || (row.userReaction == null && previous.userReaction != null)
                     messages[messages.lastIndex] = previous.copy(
                         text = listOf(previous.text, text).filter { it.isNotEmpty() }.joinToString("\n\n"),
                         reasoning = listOf(previous.reasoning, reasoning).filter { it.isNotEmpty() }.joinToString("\n\n"),
+                        reactionRowId = if (keepTarget) previous.reactionRowId else reactionRow,
+                        userReaction = if (keepTarget) previous.userReaction else row.userReaction,
                         tools = previous.tools + tools,
                         // The reply is dated by its last step, when it finished.
                         timestamp = row.timestamp ?: previous.timestamp,
@@ -459,6 +472,8 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                         key,
                         text = text,
                         reasoning = reasoning,
+                        reactionRowId = reactionRow,
+                        userReaction = row.userReaction.takeIf { reactionRow != null },
                         tools = tools,
                         repliedTo = replyingTo,
                         timestamp = row.timestamp,

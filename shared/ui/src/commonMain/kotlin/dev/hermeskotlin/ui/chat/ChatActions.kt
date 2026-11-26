@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.core.chat.ReplyReaction
 import androidx.compose.foundation.text.input.TextFieldState
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatState
@@ -37,6 +38,8 @@ interface ChatActions {
      * entry). Mid-turn it steers, or queues when Send would stop the reply.
      */
     fun sendPrompt(text: String) {}
+
+    fun reactToReply(key: String, reaction: ReplyReaction) {}
 
     fun interrupt()
 
