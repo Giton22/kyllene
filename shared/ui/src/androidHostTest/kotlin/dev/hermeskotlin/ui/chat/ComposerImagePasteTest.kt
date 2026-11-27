@@ -26,6 +26,7 @@ import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.DraftStore
 import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.connection.GatewayConnection
+import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.journey.JourneyApi
 import dev.hermeskotlin.core.media.MediaApi
@@ -59,6 +60,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -85,6 +87,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
@@ -97,6 +100,7 @@ class ComposerImagePasteTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val gateway = SavedGateway("https://fixture.example")
     private val socket = FixtureSocket()
+    private val gateways = GatewayRepository(InMemoryKeyValueStore())
     private lateinit var viewModel: ChatViewModel
 
     @get:Rule
@@ -150,13 +154,37 @@ class ComposerImagePasteTest {
         assertEquals("copied.jpg", viewModel.attachments.value.single().name)
     }
 
+    @Test
+    fun renamingTheGatewayUpdatesTheOpenChatWithoutLosingItsDraft() {
+        runBlocking { gateways.save(gateway) }
+        val input = showChat()
+        composeRule.runOnIdle { assertTrue(input.commitText("Keep this draft", 1)) }
+        composeRule.onNodeWithText("Hermes · fixture.example").assertExists()
+        composeRule.onNodeWithText("Hermes on fixture.example · default profile").assertExists()
+
+        val owner = composeRule.runOnIdle { assertNotNull(viewModel.transcript.value.owner) }
+
+        runBlocking { gateways.rename(gateway.url, "Homelab") }
+
+        composeRule.onNodeWithText("Hermes · Homelab").assertExists()
+        composeRule.onNodeWithText("Hermes on Homelab · default profile").assertExists()
+        composeRule.onNodeWithText("Paste test").assertExists()
+        composeRule.runOnIdle {
+            assertSame(owner, viewModel.transcript.value.owner)
+            assertEquals("Keep this draft", viewModel.composer.text.toString())
+        }
+        assertEquals(1, socket.methods.count { it == "session.resume" })
+    }
+
     private fun showChat(): InputConnection {
         val store = InMemoryKeyValueStore()
         val cookies = PersistentCookiesStorage(store)
         val client = createHttpClient(MockEngine { request ->
-            val body = if (request.url.encodedPath == "/api/auth/ws-ticket") {
-                """{"ticket":"fixture","ttl_seconds":30}"""
-            } else "{}"
+            val body = when (request.url.encodedPath) {
+                "/api/auth/ws-ticket" -> """{"ticket":"fixture","ttl_seconds":30}"""
+                "/api/sessions/stored/messages" -> """{"session_id":"stored","messages":[]}"""
+                else -> "{}"
+            }
             respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
         }, cookies)
         val connection = GatewayConnection(AuthApi(client, cookies), { _, _ -> socket }, scope)
@@ -166,6 +194,7 @@ class ComposerImagePasteTest {
         startKoin {
             modules(module {
                 single { settings }
+                single { gateways }
                 single { ProjectsApi(connection) }
                 single { WallpaperStore(InMemoryBlobFile(), scope) }
             })

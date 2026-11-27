@@ -4,8 +4,24 @@ import android.content.ComponentName
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.lifecycle.viewModelScope
 import com.composeunstyled.theme.ColorScheme
+import dev.hermeskotlin.core.gateway.GatewayRepository
+import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.insights.InsightsApi
+import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.profiles.Profile
+import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpHeaders
+import io.ktor.http.headersOf
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
+import org.koin.core.context.startKoin
+import org.koin.core.context.stopKoin
+import org.koin.dsl.module
 import dev.hermeskotlin.designsystem.HermesTheme
 import org.junit.Rule
 import org.junit.Test
@@ -60,6 +76,46 @@ class SidebarHeaderTest {
     }
 
     private val three = listOf(Profile("default", isDefault = true), Profile("research", displayName = "Research"), Profile("writing", displayName = "Writing"))
+
+    @Test
+    fun insightsRefreshesTheBoundGatewayLabelWithoutReloadingTheReport() {
+        val gateway = SavedGateway("https://fixture.example")
+        val other = SavedGateway("https://other.example", name = "Other")
+        val gateways = GatewayRepository(InMemoryKeyValueStore())
+        runBlocking {
+            gateways.save(gateway)
+            gateways.save(other)
+        }
+        val requests = AtomicInteger()
+        val client = createHttpClient(MockEngine {
+            requests.incrementAndGet()
+            respond("{}", headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        })
+        val model = InsightsViewModel(InsightsApi(client))
+        startKoin { modules(module { single { gateways } }) }
+        try {
+            composeRule.setContent {
+                HermesTheme(ColorScheme.Light) {
+                    InsightsPage(gateway, null, {}, {}, model)
+                }
+            }
+            composeRule.waitUntil(5_000) { model.state.value.report != null }
+            composeRule.onNodeWithText("fixture.example", substring = true).assertExists()
+            val initialRequests = requests.get()
+
+            runBlocking { gateways.rename(other.url, "Renamed other gateway") }
+            composeRule.onNodeWithText("fixture.example", substring = true).assertExists()
+            runBlocking { gateways.rename(gateway.url, "Homelab") }
+
+            composeRule.onNodeWithText("Homelab", substring = true).assertExists()
+            composeRule.onNodeWithText("fixture.example", substring = true).assertDoesNotExist()
+            assertEquals(initialRequests, requests.get())
+        } finally {
+            model.viewModelScope.cancel()
+            client.close()
+            stopKoin()
+        }
+    }
 
     @Test
     fun withProfilesTheHeaderOpensThemAndAPickSwitches() {
