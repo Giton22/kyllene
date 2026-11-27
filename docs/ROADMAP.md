@@ -62,7 +62,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] `MarkdownText` (themed GFM via multiplatform-markdown-renderer core, no Material) and `CopyButton`
 - [x] `Switch` and `SegmentedControl`; a pure black dark scheme (`PureBlack`)
 - [x] The app mark (`HeraldMark`), also the launcher, themed and notification icons
-- [x] Renamed Herald → Kyllene in everything a user reads, with the summit-at-dawn mark and icon in every colour theme. Package, storage and class names stay, so an update keeps the sign-in; people who update see a one-time "Herald is now Kyllene" card
+- [x] Renamed Herald → Kyllene in everything a user reads, with the summit-at-dawn mark and icon in every colour theme. Package, storage and class names stay, so an update keeps the sign-in
 - [x] `DropdownMenu`, and `Toast` with an action ("Archived · Undo")
 - [ ] Chat bubble, tool card, approval card as design-system components (they live in `shared/ui` for now)
 - [x] Theme picker (system / light / dark) and pure black
@@ -184,6 +184,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Show or hide reasoning and tool activity in the chat
 - [x] Starting instruction (Settings › Chat): text every new chat started in Kyllene (chats, threads, the watch, the assistant) tells the agent first, such as "I'm on my phone: keep replies short". It goes into `session.create` as a hidden seed row (`display_kind: "hidden"`), so no client shows it
 - [x] Account (sign out, change gateway) and about (app and gateway versions, update check)
+- [x] Support Kyllene: star on GitHub, Ko-fi and GitHub Sponsors, and a Contributors and supporters page naming the maintainers, contributors and the supporters who want to be named, with new contributors and public GitHub sponsors added by a weekly pull request. A card at the top of the sidebar asks once for a star or a tip: at once for someone who already had a gateway saved, three weeks after a fresh install
 - [x] Manage several saved gateways: add, rename, remove (signs out of it), choose a primary (listed first, taken over when the gateway in use is removed). Switching keeps each one signed in and reopens where you left off on it; the app opens on the last one used
 
 ---

@@ -1,0 +1,80 @@
+# Every Monday, adds new contributors and new public GitHub sponsors to Settings › Contributors and supporters and to
+# the README (.github/scripts/update-credits.py), and opens a pull request with them. Ko-fi has no list to read, so
+# Ko-fi supporters who asked to be named are still added by hand. Someone who asks to be taken off goes in the
+# script's LEAVE_OFF. It can also be run by hand: Actions → Update credits → Run workflow.
+#
+# Optional repo secret (Settings → Secrets and variables → Actions):
+#   CREDITS_TOKEN  a fine-grained token of the maintainer's with Contents and Pull requests read and write on this
+#                  repo. With it, the public sponsors can be read for sure, and the pull request it opens runs CI.
+# Without it the job uses the workflow's own token. Then GitHub may not show it the sponsors (the run warns and checks
+# only contributors), opening the pull request needs Settings → Actions → General → "Allow GitHub Actions to create
+# and approve pull requests" (otherwise the run summary links the branch), and CI doesn't start on that pull request
+# until it's closed and reopened.
+name: Update credits
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: credits
+
+jobs:
+  credits:
+    if: github.repository == 'Giton22/kyllene' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.CREDITS_TOKEN || github.token }}
+      BRANCH: bot/credits
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ secrets.CREDITS_TOKEN || github.token }}
+
+      - name: Add new people
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/contributors?per_page=100" --paginate \
+            --jq '.[] | select(.type == "User") | .login' > "$RUNNER_TEMP/contributors.txt"
+          # Public sponsors only, past and present; someone who sponsors privately is never named. Every page, and
+          # no line for a sponsor whose account is gone (its sponsorEntity is null).
+          if ! gh api graphql --paginate -f owner="$GITHUB_REPOSITORY_OWNER" -f query='
+              query($owner: String!, $endCursor: String) {
+                user(login: $owner) {
+                  sponsorshipsAsMaintainer(first: 100, after: $endCursor, includePrivate: false, activeOnly: false) {
+                    nodes { sponsorEntity { ... on User { login } ... on Organization { login } } }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }' --jq '.data.user.sponsorshipsAsMaintainer.nodes[] | .sponsorEntity.login // empty' > "$RUNNER_TEMP/sponsors.txt"; then
+            echo "::warning::Couldn't read the public sponsors, so only contributors were checked. A CREDITS_TOKEN secret fixes this."
+            : > "$RUNNER_TEMP/sponsors.txt"
+          fi
+          python3 .github/scripts/update-credits.py "$RUNNER_TEMP/contributors.txt" "$RUNNER_TEMP/sponsors.txt" \
+            > "$RUNNER_TEMP/added.md"
+
+      - name: Open a pull request
+        run: |
+          if git diff --quiet; then echo "No one new."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git commit -qam "Credits: add new contributors and supporters"
+          git push -qf origin "$BRANCH"
+          # Built from master each run, so this lists everyone the branch adds, not only this week's.
+          { echo "New in Settings › Contributors and supporters and in the README:"; echo; cat "$RUNNER_TEMP/added.md"; } \
+            > "$RUNNER_TEMP/body.md"
+          if [ "$(gh pr view "$BRANCH" --json state --jq .state 2>/dev/null)" = OPEN ]; then
+            gh pr edit "$BRANCH" --body-file "$RUNNER_TEMP/body.md"
+            echo "Updated the open pull request."; exit 0
+          fi
+          if ! gh pr create --base master --head "$BRANCH" \
+              --title "Credits: add new contributors and supporters" --body-file "$RUNNER_TEMP/body.md"; then
+            echo "::warning::Couldn't open the pull request. Is \"Allow GitHub Actions to create and approve pull requests\" on?"
+            echo "Open it from https://github.com/$GITHUB_REPOSITORY/compare/$BRANCH?expand=1" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -88,7 +88,8 @@ jobs:
           cp wearApp/build/outputs/apk/release/wearApp-release.apk "kyllene-wear-$v.apk"
           cp pebbleApp/build/pebbleApp.pbw "kyllene-pebble-$v.pbw"
           for file in kyllene-*.apk kyllene-pebble-*.pbw; do sha256sum "$file" > "$file.sha256"; done
-          # Above the generated changelog: which APK to take.
+          # Above the generated changelog: which APK to take, then how to support the app. Its "## " heading ends
+          # the part the Discord post leaves out (announce.yml), so the post keeps the support line.
           cat > which-apk.md <<EOF
           ### Which APK?
 
@@ -117,6 +118,10 @@ jobs:
 
           Once Kyllene is installed, Settings → About offers each new version; on Windows, Install updates it in place.
           The Flatpak updates like any other, with \`flatpak update\` or your software centre, from either install.
+
+          ## Support Kyllene
+
+          Kyllene is free and built by volunteers. If it helps you, [star it on GitHub](https://github.com/Giton22/kyllene), or chip in on [Ko-fi](https://ko-fi.com/giton) or [GitHub Sponsors](https://github.com/sponsors/Giton22). Thank you!
           EOF
           gh release create "$GITHUB_REF_NAME" "kyllene-$v.apk" "kyllene-$v.apk.sha256" --draft --generate-notes --notes-file which-apk.md --title "$GITHUB_REF_NAME"
           for abi in arm64-v8a armeabi-v7a x86_64 x86; do gh release upload "$GITHUB_REF_NAME" "kyllene-${v}_$abi.apk" "kyllene-${v}_$abi.apk.sha256"; done

@@ -205,9 +205,6 @@
     <string name="wallpaper_not_an_image">Diese Datei ist kein Bild, das Kyllene lesen kann.</string>
     <string name="wallpaper_read_failed">Das Bild konnte nicht gelesen werden.</string>
 
-    <string name="update_renamed">Aus Herald wird Kyllene</string>
-    <string name="update_renamed_detail">Dieselbe App mit neuem Namen und Icon. Deine Anmeldung, Chats und Einstellungen bleiben.</string>
-    <string name="update_got_it">Verstanden</string>
 
     <string name="gateways_title">Gateways</string>
     <string name="gateways_detail">Jedes Gateway ist ein eigenes Hermes, mit eigenen Profilen und Chats.</string>

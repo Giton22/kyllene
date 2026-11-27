@@ -205,9 +205,6 @@
     <string name="wallpaper_not_an_image">Ez a fájl nem olyan kép, amelyet a Kyllene be tud olvasni.</string>
     <string name="wallpaper_read_failed">Nem sikerült beolvasni a képet.</string>
 
-    <string name="update_renamed">A Herald mostantól Kyllene</string>
-    <string name="update_renamed_detail">Ugyanaz az alkalmazás új névvel és ikonnal. A bejelentkezésed, a csevegéseid és a beállításaid megmaradnak.</string>
-    <string name="update_got_it">Értem</string>
 
     <string name="gateways_title">Gateway-ek</string>
     <string name="gateways_detail">Minden Gateway egy külön Hermes, saját profilokkal és csevegésekkel.</string>

@@ -283,15 +283,16 @@ fun SettingsScreen(
     // Saveable, and open again after a pick redraws the screens, so a new language shows on the page it was picked on.
     var languageOpen by rememberSaveable { mutableStateOf(LanguagePageReturn.take()) }
     var connectedDevicesOpen by remember { mutableStateOf(false) }
+    var creditsOpen by remember { mutableStateOf(false) }
     // Read again when the App icon page closes, so its row names the icon just applied.
     val appIcons = key(appIconOpen) { rememberAppIcons() }
     val language = rememberLanguageChoice()
     val suggestions by viewModel.suggestions.collectAsStateWithLifecycle()
     LaunchedEffect(gateway, profile) { viewModel.bind(gateway, profile) }
-    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen && !startInstructionOpen && !callTargetOpen && !languageOpen && !connectedDevicesOpen && !sidebarPagesOpen, onBack = onBack)
+    PlatformBackHandler(enabled = !checkOpen && !phoneToolsOpen && !appIconOpen && !startInstructionOpen && !callTargetOpen && !languageOpen && !connectedDevicesOpen && !sidebarPagesOpen && !creditsOpen, onBack = onBack)
     // A page opened over Settings takes the keyboard from the search, so nothing typed there lands in a hidden query.
     val focus = LocalFocusManager.current
-    val pageOver = phoneToolsOpen || appIconOpen || startInstructionOpen || callTargetOpen || languageOpen || connectedDevicesOpen || sidebarPagesOpen
+    val pageOver = phoneToolsOpen || appIconOpen || startInstructionOpen || callTargetOpen || languageOpen || connectedDevicesOpen || sidebarPagesOpen || creditsOpen
     LaunchedEffect(pageOver) { if (pageOver) focus.clearFocus() }
     // The desktop lists the sections beside the page; they say here where they start.
     val anchors = remember { mutableStateMapOf<String, Int>() }
@@ -329,6 +330,7 @@ fun SettingsScreen(
         onOpenStartInstruction = { startInstructionOpen = true },
         onOpenConnectedDevices = { connectedDevicesOpen = true },
         onOpenSidebarPages = { sidebarPagesOpen = true },
+        onOpenCredits = { creditsOpen = true },
         suggestions = suggestions,
         onInstallSuggestions = viewModel::installSuggestions,
         onCheckSuggestions = viewModel::checkSuggestions,
@@ -351,6 +353,7 @@ fun SettingsScreen(
     if (appIconOpen) AppIconScreen(onBack = { appIconOpen = false })
     if (sidebarPagesOpen) SidebarPagesScreen(settings, viewModel::update, onBack = { sidebarPagesOpen = false })
     if (languageOpen) LanguageScreen(onBack = { languageOpen = false })
+    if (creditsOpen) CreditsScreen(onBack = { creditsOpen = false })
     ConnectionCheckSheet(
         visible = checkOpen,
         results = check.results,
@@ -481,6 +484,7 @@ internal fun SettingsView(
     onOpenStartInstruction: () -> Unit = {},
     onOpenConnectedDevices: () -> Unit = {},
     onOpenSidebarPages: () -> Unit = {},
+    onOpenCredits: () -> Unit = {},
     /** Where the Next Prompt plugin behind Suggested replies stands on the gateway. */
     suggestions: SuggestionsPlugin = SuggestionsPlugin.Checking,
     onInstallSuggestions: () -> Unit = {},
@@ -1033,6 +1037,8 @@ internal fun SettingsView(
                         onClick = { uriHandler.openUri(DISCORD_INVITE) },
                     )
                 }
+
+                SupportSection(onOpenCredits)
             } }
         }
         // On the desktop, the sections listed to the left of the page, where the window has room for them. After the

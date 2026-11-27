@@ -19,6 +19,8 @@ on:
       - ".github/workflows/release.yml"
       - ".github/workflows/flatpak-repo.yml"
       - ".github/actions/apt-install/**"
+      # The credits script's test runs in the checks.
+      - ".github/scripts/**"
       - "website/*.flatpakref"
       - "website/*.flatpakrepo"
       - "gradlew*"
