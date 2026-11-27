@@ -255,6 +255,11 @@ data class ChatState(
      * ("queued") is read after its own turn began isn't marked queued.
      */
     val startedAdmissions: List<String> = emptyList(),
+    /**
+     * The session authority's queued admissions it offers `replace` for (`prompt.replace_queued`), from the `pending`
+     * of its latest `session.info` or `session.resume`. An owner older than that verb lists none, so none is editable.
+     */
+    val replaceableAdmissions: Set<String> = emptySet(),
     /** The session's goal, loop and heartbeat, null when it has none (`session.control.update`). */
     val control: SessionControl? = null,
     /** Where the running reply's current response (the text after its last tool) begins; null when unknown. */
