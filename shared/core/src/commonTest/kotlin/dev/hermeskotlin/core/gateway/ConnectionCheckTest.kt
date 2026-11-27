@@ -77,6 +77,20 @@ class ConnectionCheckTest {
     }
 
     @Test
+    fun aCommitBuildPassesWithoutAnUpdateNoteInEitherMode() = runTest {
+        // A commit build reports hermes-agent's placeholder 0.0.0, with or without its stamp, on a legacy gateway
+        // and on one whose socket runs chats on the session authority alike.
+        val authorityReady = """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}"""
+        for (ready in listOf(FakeTransport.READY, authorityReady)) {
+            for (version in listOf("0.0.0", "0.0.0+commit.20261125T001913Z")) {
+                val report = check(version = version, openSocket = { _, _ -> FakeTransport().apply { push(ready) } }).run(url)
+                CheckStage.entries.forEach { assertIs<StageResult.Passed>(report.results[it], "$version $it") }
+                assertNull((report.results[CheckStage.Server] as StageResult.Passed).warning, version)
+            }
+        }
+    }
+
+    @Test
     fun aMissingChatEndpointPointsAtTheProxy() = runTest {
         val report = check(openSocket = { _, _ -> throw HandshakeRejectedException(404, RuntimeException("404")) }).run(url)
 
