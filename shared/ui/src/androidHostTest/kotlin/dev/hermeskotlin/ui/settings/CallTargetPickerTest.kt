@@ -66,13 +66,31 @@ class CallTargetPickerTest {
     }).around(compose)
 
     @Test
-    fun theOnlyDefaultProfileCanBePickedAsABot() {
+    fun theOnlyDefaultProfileCanBePickedAsABot() = withPicker("""[{"name":"default","is_default":true}]""") { selected ->
+        compose.onNodeWithText("Hermes").performClick()
+        compose.runOnIdle { assertEquals(CallTarget(profile = "default", label = "Hermes"), selected()) }
+    }
+
+    @Test
+    fun theDefaultProfileIsListedOnceBesideNamedBots() = withPicker(
+        """[{"name":"work","display_name":"Work Bot"},{"name":"default","is_default":true}]""",
+    ) { selected ->
+        assertEquals(1, compose.onAllNodes(hasText("Hermes")).fetchSemanticsNodes().size)
+        assertEquals(0, compose.onAllNodes(hasText("default")).fetchSemanticsNodes().size)
+        compose.onNodeWithText("Work Bot").performClick()
+        compose.runOnIdle { assertEquals(CallTarget(profile = "work", label = "Work Bot"), selected()) }
+        compose.onNodeWithText("Hermes").performClick()
+        compose.runOnIdle { assertEquals(CallTarget(profile = "default", label = "Hermes"), selected()) }
+    }
+
+    /** Opens Call a bot on a gateway whose `GET /api/profiles` lists [profiles], then runs [check]. */
+    private fun withPicker(profiles: String, check: (selected: () -> CallTarget?) -> Unit) {
         val disk = InMemoryKeyValueStore()
         val scope = compose.activity.lifecycleScope
         val client = createHttpClient(MockEngine { request ->
             val body = when (request.url.encodedPath) {
                 "/api/profiles/active" -> """{"current":"default"}"""
-                "/api/profiles" -> """{"profiles":[{"name":"default","is_default":true}]}"""
+                "/api/profiles" -> """{"profiles":$profiles}"""
                 else -> error("Unexpected request: ${request.url}")
             }
             respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
@@ -95,12 +113,9 @@ class CallTargetPickerTest {
                 }
             }
             compose.onNodeWithText("Call a bot").performClick()
-            compose.waitUntil(5_000) {
-                compose.onAllNodes(hasText("Hermes") or hasText("default") or hasText("No bots available."))
-                    .fetchSemanticsNodes().isNotEmpty()
-            }
-            compose.onNodeWithText("Hermes").performClick()
-            compose.runOnIdle { assertEquals(CallTarget(profile = "default", label = "Hermes"), selected) }
+            // Not "No bots available.": the picker shows it for a frame before the profiles request starts.
+            compose.waitUntil(5_000) { compose.onAllNodes(hasText("Hermes")).fetchSemanticsNodes().isNotEmpty() }
+            check { selected }
         } finally {
             viewModel.viewModelScope.cancel()
             client.close()
