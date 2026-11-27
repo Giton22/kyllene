@@ -195,6 +195,9 @@
     <string name="settings_credits_join_detail">Say in your message if you’d like your name on this page.</string>
     <string name="settings_credits_all">All contributors</string>
     <string name="settings_credits_all_detail">Everyone’s commits, on GitHub.</string>
+    <string name="support_card_title">Enjoying Kyllene?</string>
+    <string name="support_card_detail">It’s free and built by volunteers. A star or a small tip keeps it going.</string>
+    <string name="support_card_star">Star</string>
     <string name="update_available">Version %1$s is out</string>
     <string name="update_install_hint">Install it over this one; your sign-in and settings stay.</string>
     <string name="settings_check_sheet_detail">Each stage is tested on its own.</string>

@@ -122,6 +122,8 @@ import dev.hermeskotlin.ui.settings.SettingsView
 import dev.hermeskotlin.ui.settings.StartInstructionView
 import dev.hermeskotlin.ui.settings.SidebarPagesView
 import dev.hermeskotlin.ui.SidebarPage
+import dev.hermeskotlin.ui.update.LocalSupportOffer
+import dev.hermeskotlin.ui.update.SupportOffer
 import androidx.compose.ui.tooling.preview.Preview
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatState
@@ -160,6 +162,7 @@ enum class PreviewScene(val label: String) {
     NewChat("A new chat"),
     Sidebar("The sessions sidebar"),
     SidebarProfiles("The sidebar's profile menu"),
+    SupportCard("The sidebar asking once for a star or a tip"),
     Bots("The bots and rooms"),
     Room("A room of bots"),
     NewRoom("A new room"),
@@ -275,6 +278,18 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         drafts = ChatSamples.sessionDrafts,
                         projects = ChatSamples.projects,
                     )
+                }
+                PreviewScene.SupportCard -> OpenSidebar {
+                    CompositionLocalProvider(LocalSupportOffer provides SupportOffer(show = true) {}) {
+                        SessionsSidebarSample(
+                            ChatSamples.sessions(),
+                            selectedId = "s1",
+                            userLabel = ChatSamples.USER,
+                            statuses = ChatSamples.sessionStatuses,
+                            drafts = ChatSamples.sessionDrafts,
+                            projects = ChatSamples.projects,
+                        )
+                    }
                 }
                 PreviewScene.SidebarProfiles -> OpenSidebar {
                     SessionsSidebarSample(
@@ -842,6 +857,10 @@ private fun NewChatNarrowLightPreview() = HeraldPreview(PreviewScene.NewChat, da
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
 private fun SidebarPreview() = HeraldPreview(PreviewScene.Sidebar)
+
+@Preview(widthDp = 360, heightDp = 800)
+@Composable
+private fun SupportCardNarrowLightPreview() = HeraldPreview(PreviewScene.SupportCard, dark = false)
 
 @Preview(widthDp = 412, heightDp = 892)
 @Composable

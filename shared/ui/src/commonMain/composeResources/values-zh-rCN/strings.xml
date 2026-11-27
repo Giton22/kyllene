@@ -195,6 +195,9 @@
     <string name="settings_credits_join_detail">如果希望你的名字出现在这里，请在留言中说明。</string>
     <string name="settings_credits_all">所有贡献者</string>
     <string name="settings_credits_all_detail">每个人的提交记录，在 GitHub 上。</string>
+    <string name="support_card_title">喜欢 Kyllene 吗？</string>
+    <string name="support_card_detail">它免费，由志愿者开发。一颗星或一点打赏都能让它继续下去。</string>
+    <string name="support_card_star">加星</string>
     <string name="update_available">%1$s 版已发布</string>
     <string name="update_install_hint">直接覆盖安装；登录状态和设置都会保留。</string>
     <string name="settings_check_sheet_detail">每个阶段单独测试。</string>

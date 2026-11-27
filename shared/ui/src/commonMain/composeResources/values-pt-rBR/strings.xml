@@ -195,6 +195,9 @@
     <string name="settings_credits_join_detail">Diga na sua mensagem se quiser seu nome nesta página.</string>
     <string name="settings_credits_all">Todos os colaboradores</string>
     <string name="settings_credits_all_detail">Os commits de todos, no GitHub.</string>
+    <string name="support_card_title">Gostando do Kyllene?</string>
+    <string name="support_card_detail">Ele é gratuito e feito por voluntários. Uma estrela ou uma pequena gorjeta o mantém vivo.</string>
+    <string name="support_card_star">Estrela</string>
     <string name="update_available">A versão %1$s saiu</string>
     <string name="update_install_hint">Instale por cima desta; seu login e suas configurações ficam.</string>
     <string name="settings_check_sheet_detail">Cada etapa é testada separadamente.</string>

@@ -101,7 +101,9 @@ import dev.hermeskotlin.ui.settings.PhoneQuestionDialog
 import dev.hermeskotlin.ui.settings.SettingsScreen
 import dev.hermeskotlin.ui.plugins.PluginWebView
 import dev.hermeskotlin.ui.signin.SignInScreen
+import dev.hermeskotlin.ui.update.LocalSupportOffer
 import dev.hermeskotlin.ui.update.LocalUpdateOffer
+import dev.hermeskotlin.ui.update.rememberSupportOffer
 import dev.hermeskotlin.ui.update.rememberUpdateOffer
 import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.filter
@@ -204,6 +206,7 @@ fun App(
             LocalAgentScreens provides screenContext,
             LocalAppVersion provides appVersion,
             LocalUpdateOffer provides rememberUpdateOffer(releasesRepo, appVersion, settings.checkForUpdates),
+            LocalSupportOffer provides rememberSupportOffer(),
             LocalDensity provides Density(density.density, density.fontScale * settings.textSize.scale),
             LocalDesktopLayout provides isDesktop,
             LocalDesignWords provides rememberDesignWords(),

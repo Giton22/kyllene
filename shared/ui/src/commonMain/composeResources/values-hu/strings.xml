@@ -195,6 +195,9 @@
     <string name="settings_credits_join_detail">Írd meg az üzenetedben, ha szeretnéd, hogy a neved ezen az oldalon legyen.</string>
     <string name="settings_credits_all">Minden közreműködő</string>
     <string name="settings_credits_all_detail">Mindenki commitjai, a GitHubon.</string>
+    <string name="support_card_title">Tetszik a Kyllene?</string>
+    <string name="support_card_detail">Ingyenes, és önkéntesek készítik. Egy csillag vagy egy kis adomány segít, hogy folytatódjon.</string>
+    <string name="support_card_star">Csillag</string>
     <string name="update_available">Megjelent az új verzió: %1$s</string>
     <string name="update_install_hint">Telepítsd erre rá; a bejelentkezésed és a beállításaid megmaradnak.</string>
     <string name="settings_check_sheet_detail">Minden lépést külön tesztel.</string>

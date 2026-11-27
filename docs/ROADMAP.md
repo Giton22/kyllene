@@ -182,7 +182,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Show or hide reasoning and tool activity in the chat
 - [x] Starting instruction (Settings › Chat): text every new chat started in Kyllene (chats, threads, the watch, the assistant) tells the agent first, such as "I'm on my phone: keep replies short". It goes into `session.create` as a hidden seed row (`display_kind: "hidden"`), so no client shows it
 - [x] Account (sign out, change gateway) and about (app and gateway versions, update check)
-- [x] Support Kyllene: star on GitHub, Ko-fi and GitHub Sponsors, and a Contributors and supporters page naming the maintainers, contributors and the supporters who want to be named
+- [x] Support Kyllene: star on GitHub, Ko-fi and GitHub Sponsors, and a Contributors and supporters page naming the maintainers, contributors and the supporters who want to be named. A card at the top of the sidebar asks once for a star or a tip: at once for someone who already had a gateway saved, three weeks after a fresh install
 - [x] Manage several saved gateways: add, rename, remove (signs out of it), choose a primary (listed first, taken over when the gateway in use is removed). Switching keeps each one signed in and reopens where you left off on it; the app opens on the last one used
 
 ---
