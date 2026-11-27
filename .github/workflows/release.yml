@@ -279,10 +279,12 @@ jobs:
           # The Flatpak build clones this checkout; a shallow one can't be cloned reliably.
           fetch-depth: 0
 
-      - name: Install Flatpak tools and SDK
+      - name: Install Flatpak tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: flatpak flatpak-builder ostree xvfb xauth xdotool python3-pil xdg-desktop-portal gnome-keyring
+      - name: Install Flatpak SDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder ostree xvfb xauth xdotool python3-pil xdg-desktop-portal gnome-keyring
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.freedesktop.Sdk//26.08 org.freedesktop.Platform//26.08
 
