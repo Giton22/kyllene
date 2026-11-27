@@ -141,9 +141,8 @@ fun main(args: Array<String>) {
     // A second launch brings the running Herald forward, with its link, instead of opening another.
     val flatpak = inFlatpak
     val restartWait = if (flatpak && args.contentEquals(arrayOf("--restart"))) 30_000L else 0L
-    val flatpakRuntime = flatpak
-    val startupCapable = flatpakRuntime && java.awt.SystemTray.isSupported()
-    val quietLaunch = backgroundInvocation(args, flatpakRuntime)
+    val startupCapable = flatpak && java.awt.SystemTray.isSupported()
+    val quietLaunch = backgroundInvocation(args, flatpak)
     val instance = SingleInstance.claim(appDataDir, launchLink, restartWait, foreground = !quietLaunch) ?: exitProcess(if (restartWait > 0) 1 else 0)
     // Linux's light or dark preference, which Compose reads only once there: this follows it as it changes. Asked
     // for now, so the answer comes in while the storage and the settings are read.
@@ -185,8 +184,10 @@ fun main(args: Array<String>) {
         var windowShown by remember { mutableStateOf(!startHidden) }
         var startupControl by remember { mutableStateOf(startup) }
         val startupState = startupControl?.state?.collectAsState()?.value
+        // Also after a login launch whose portal didn't answer in time: a later launch only reaches this instance, so
+        // without this the tray would offer no way to turn startup off until Quit.
         LaunchedEffect(Unit) {
-            if (startupCapable && !quietLaunch && portal.available()) {
+            if (startupCapable && startupControl == null && portal.available()) {
                 startupControl = BackgroundStartup.load(koin.get(), portal::request)
             }
         }
