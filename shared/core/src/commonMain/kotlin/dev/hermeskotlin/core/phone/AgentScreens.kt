@@ -9,6 +9,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * The agent's screens in the chat that a `phone_show_ui` call waits on. The tool [await]s the user's answer; the
@@ -24,12 +29,37 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
             surfaceId in surfaceIds && (this.chat == null || chat == null || this.chat == chat)
     }
 
-    private class Waiting(val live: Live) {
+    enum class DesktopStage { Validating, Showing, Ready }
+
+    data class DesktopCall(
+        val chat: String,
+        val id: String,
+        val surfaceIds: Set<String>,
+        val stage: DesktopStage,
+        val takesTaps: Boolean,
+    )
+
+    private class Waiting(
+        val live: Live,
+        val screen: AgentScreen,
+        val accepts: () -> Boolean,
+        val callId: String?,
+    ) {
         val shown = CompletableDeferred<Unit>()
         private val answer = CompletableDeferred<Result<JsonElement>>()
+        var stage = DesktopStage.Validating
+        val confirmed = mutableSetOf<String>()
 
         /** Ends the wait with [result]; an answer, or a failure, needs no more showing. */
         fun complete(result: Result<JsonElement>): Boolean = answer.complete(result).also { shown.complete(Unit) }
+
+        fun matches(chat: String?, surface: String, callId: String?): Boolean =
+            !answer.isCompleted && this.callId == callId && accepts() &&
+                if (callId == null) live.matches(chat, surface) else live.chat == chat && surface in live.surfaceIds
+
+        fun desktopCall(): DesktopCall? = callId?.let {
+            DesktopCall(checkNotNull(live.chat), it, live.surfaceIds, stage, screen.wait && stage == DesktopStage.Ready)
+        }
 
         suspend fun await(): JsonElement = answer.await().getOrThrow()
     }
@@ -79,13 +109,26 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     val live: StateFlow<List<Live>> get() = _live.asStateFlow()
     private val _live = MutableStateFlow<List<Live>>(emptyList())
 
+    // Desktop registration and browser callbacks both run on the UI dispatcher. Keep a short record of
+    // completed displays while the tool's completion event is still making its way back to the transcript.
+    private val shownDesktop = ArrayDeque<DesktopCall>()
+    private val _desktop = MutableStateFlow<List<DesktopCall>>(emptyList())
+    val desktop: StateFlow<List<DesktopCall>> = _desktop.asStateFlow()
+
     /**
      * Waits until the user answers [screen] in [chat], and returns what they did, for the agent. Throws
      * [PhoneToolException] when the chat doesn't show it soon (Kyllene is closed, or on another chat), when it
      * failed to draw, when the call ended, or when a newer call took over its surface.
      */
-    suspend fun await(screen: AgentScreen, chat: String?): JsonElement {
-        val entry = Waiting(Live(chat, screen.surfaceIds))
+    suspend fun await(
+        screen: AgentScreen,
+        chat: String?,
+        notShown: String = NOT_SHOWN,
+        callId: String? = null,
+        accepts: () -> Boolean = { true },
+    ): JsonElement {
+        require(callId == null || chat != null)
+        val entry = Waiting(Live(chat, screen.surfaceIds), screen, accepts, callId)
         var replaced = emptyList<Waiting>()
         waiting.update { list ->
             val (old, kept) = list.partition { it.live.chat == chat && it.live.surfaceIds.any(screen.surfaceIds::contains) }
@@ -95,7 +138,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         replaced.forEach { it.complete(Result.failure(PhoneToolException(REPLACED))) }
         publish()
         try {
-            withTimeoutOrNull(shownWithinMs) { entry.shown.await() } ?: throw PhoneToolException(NOT_SHOWN)
+            withTimeoutOrNull(shownWithinMs) { entry.shown.await() } ?: throw PhoneToolException(notShown)
             return entry.await()
         } finally {
             waiting.update { list -> list - entry }
@@ -103,24 +146,66 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         }
     }
 
-    /** The chat [chat] shows the screen with [surfaceIds] now, and can take its answer. */
-    fun shown(chat: String?, surfaceIds: Set<String>) {
-        waiting.value.filter { w -> surfaceIds.any { w.live.matches(chat, it) } }.forEach { it.shown.complete(Unit) }
+    /** Stages changes for desktop until all cards affected by the call have independently validated them. */
+    fun validated(chat: String?, surfaceIds: Set<String>, callId: String) {
+        val entry = desktopConfirmation(chat, surfaceIds, callId, DesktopStage.Validating) ?: return
+        entry.stage = DesktopStage.Showing
+        publishDesktop()
     }
 
-    /** Hands the user's [result] on [surfaceId] in [chat] to the call waiting on it; false when none waits. */
-    fun answer(chat: String?, surfaceId: String, result: JsonElement): Boolean = complete(chat, surfaceId, Result.success(result))
-
-    /** Tells the call waiting on [surfaceId] in [chat] that its screen failed or ended ([message], for the agent). */
-    fun fail(chat: String?, surfaceId: String, message: String): Boolean =
-        complete(chat, surfaceId, Result.failure(PhoneToolException(message)))
-
-    private fun complete(chat: String?, surfaceId: String, result: Result<JsonElement>): Boolean {
-        val entry = waiting.value.lastOrNull { it.live.matches(chat, surfaceId) } ?: return false
-        return entry.complete(result)
+    /** The chat shows these surfaces. Desktop confirms all affected surfaces before accepting the batch. */
+    fun shown(chat: String?, surfaceIds: Set<String>, callId: String? = null) {
+        if (callId == null) {
+            waiting.value.filter { w -> surfaceIds.any { w.matches(chat, it, null) } }.forEach(::acknowledge)
+            return
+        }
+        val entry = desktopConfirmation(chat, surfaceIds, callId, DesktopStage.Showing) ?: return
+        record(entry.screen, chat)
+        entry.stage = DesktopStage.Ready
+        shownDesktop.addLast(checkNotNull(entry.desktopCall()).copy(takesTaps = false))
+        if (shownDesktop.size > RECENT_DESKTOP_CALLS) shownDesktop.removeFirst()
+        publishDesktop()
+        acknowledge(entry)
     }
 
-    private fun publish() = _live.update { waiting.value.map { it.live } }
+    private fun desktopConfirmation(
+        chat: String?,
+        surfaceIds: Set<String>,
+        callId: String,
+        stage: DesktopStage,
+    ): Waiting? {
+        val entry = waiting.value.lastOrNull { w -> w.stage == stage && surfaceIds.any { w.matches(chat, it, callId) } }
+            ?: return null
+        entry.confirmed += surfaceIds.intersect(entry.live.surfaceIds)
+        if (!entry.confirmed.containsAll(entry.live.surfaceIds)) return null
+        entry.confirmed.clear()
+        return entry
+    }
+
+    private fun acknowledge(entry: Waiting) {
+        if (entry.screen.wait) entry.shown.complete(Unit)
+        else entry.complete(Result.success(buildJsonObject { put("shown", true) }))
+    }
+
+    /** Hands the user's result to the call waiting on the card. Desktop additionally requires its own call ID. */
+    fun answer(chat: String?, surfaceId: String, result: JsonElement, callId: String? = null): Boolean =
+        waiting.value.lastOrNull {
+            it.screen.wait && (callId == null || it.stage == DesktopStage.Ready) && it.matches(chat, surfaceId, callId)
+        }?.complete(Result.success(result)) == true
+
+    fun fail(chat: String?, surfaceId: String, message: String, callId: String? = null): Boolean =
+        waiting.value.lastOrNull { it.matches(chat, surfaceId, callId) }
+            ?.complete(Result.failure(PhoneToolException(message))) == true
+
+    private fun publish() {
+        _live.update { waiting.value.filter { it.callId == null && it.screen.wait }.map { it.live } }
+        publishDesktop()
+    }
+
+    private fun publishDesktop() {
+        _desktop.value = (shownDesktop + waiting.value.mapNotNull { it.desktopCall() })
+            .associateBy { it.chat to it.id }.values.toList()
+    }
 
     companion object {
         /**
@@ -138,9 +223,18 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
 
         /** A screen the chat doesn't show by then isn't waited on: nobody would see it. */
         const val SHOWN_WITHIN_MS = 15_000L
+        private const val RECENT_DESKTOP_CALLS = 128
 
         const val REPLACED = "A newer screen with the same surface id took its place."
         const val NOT_SHOWN = "Kyllene isn't showing this chat on the phone right now, so the user can't see the " +
             "screen. Ask in words instead, or try again when they're in the chat."
     }
 }
+
+/** The desktop binds a request to its gateway and profile as well as its stored chat id. */
+fun desktopAgentScreenChat(gateway: String, profile: String?, chat: String): String =
+    buildJsonArray {
+        add(JsonPrimitive(gateway))
+        add(profile?.let { JsonPrimitive(it) } ?: JsonNull)
+        add(JsonPrimitive(chat))
+    }.toString()

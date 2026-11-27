@@ -129,6 +129,26 @@ class AgentScreenUpdatesTest {
     }
 
     @Test
+    fun aRunningDesktopBatchStaysOutOfTheTranscriptUntilItIsRegistered() {
+        val initial = call("a", create("pick"), components("pick", "One"))
+        val batch = call(
+            "b",
+            components("pick", "Two"),
+            create("next"),
+            components("next", "Next"),
+            running = true,
+        )
+        val hidden = screenViews(listOf(initial, batch), canShowRunning = { false })
+        assertEquals(listOf("a"), hidden.keys.toList())
+        assertEquals(initial.agentScreen, hidden.getValue("a").screen)
+
+        val staged = screenViews(listOf(initial, batch), canShowRunning = { it.id == batch.id })
+        assertEquals(listOf("a", "b"), staged.keys.toList())
+        assertEquals(batch.id, staged.getValue("a").latest.id)
+        assertEquals(setOf("next"), staged.getValue("b").screen.surfaceIds)
+    }
+
+    @Test
     fun aSurfaceMadeAgainIsANewCard() {
         val first = call("a", create("pick"), components("pick", "One"))
         val again = call("b", create("pick"), components("pick", "Two"))

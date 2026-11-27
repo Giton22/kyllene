@@ -19,11 +19,16 @@ data class ScreenView(val owner: ToolActivity, val latest: ToolActivity, val scr
  * with nothing of its own has no card. A running call's updates wait until the phone [took] them: one it turns
  * down mustn't flash on screen and then take the card's typing with it.
  */
-fun screenViews(calls: List<ToolActivity>, took: (AgentScreen) -> Boolean = { true }): Map<String, ScreenView> {
+fun screenViews(
+    calls: List<ToolActivity>,
+    took: (AgentScreen) -> Boolean = { true },
+    canShowRunning: ((ToolActivity) -> Boolean)? = null,
+): Map<String, ScreenView> {
     val views = LinkedHashMap<String, ScreenView>()
     val ownerOf = HashMap<String, String>()
     for (call in calls) {
         val screen = call.agentScreen ?: continue
+        if (call.running && canShowRunning?.invoke(call) == false) continue
         val parsed = screen.messages.zip(screen.envelopes)
         val made = parsed.mapNotNullTo(HashSet()) { (_, e) -> e?.surfaceId?.takeIf { e.creates } }
         val own = parsed.filter { (_, e) -> e == null || e.surfaceId in made || e.surfaceId !in ownerOf }

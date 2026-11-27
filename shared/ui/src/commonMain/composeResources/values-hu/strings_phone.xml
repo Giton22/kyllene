@@ -114,7 +114,7 @@
     <string name="phone_tool_health">Egészség</string>
     <string name="phone_tool_health_detail">Lépések, alvás és pulzus a Health Connectből, amennyit ott engedélyezel. Amíg a Kyllene meg van nyitva, hacsak nem engedélyezed bezárt állapotban is.</string>
     <string name="phone_tool_show_ui">Képernyők a csevegésben (kísérlet)</string>
-    <string name="phone_tool_show_ui_detail">Az ügynök egy kis képernyőt rajzol a válasza alá gombokkal, választási lehetőségekkel vagy űrlappal, és legfeljebb 5 percig várja a koppintásodat. Csak Androidon.</string>
+    <string name="phone_tool_show_ui_detail">Az ügynök egy kis képernyőt rajzol a válasza alá gombokkal, választási lehetőségekkel vagy űrlappal, és legfeljebb 5 percig várja a koppintásodat.</string>
     <string name="phone_tool_call_me">A Hermes felhívhat</string>
     <string name="phone_tool_call_me_detail">Az ügynök felhív, ha valami nem várhat, vagy ha megkéred rá, akár egy ütemezett feladatból is. Fogadd, és a Hermes a hívásban elmondja, miért. Csak téged hív.</string>
 </resources>

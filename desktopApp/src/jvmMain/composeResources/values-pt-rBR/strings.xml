@@ -64,4 +64,7 @@
     <string name="startup_no_answer">O ambiente de trabalho não respondeu à solicitação de inicialização automática.</string>
     <string name="startup_enable_reason">Iniciar o Kyllene na bandeja ao entrar.</string>
     <string name="startup_disable_reason">Parar de iniciar o Kyllene automaticamente ao entrar.</string>
+    <string name="agent_card_answer_too_large">A resposta é grande demais. Encurte o formulário e envie novamente.</string>
+    <string name="agent_card_draft_too_large">O rascunho é grande demais para ser mantido ao sair do cartão.</string>
+    <string name="agent_card_draft_lost">O rascunho era grande demais para ser restaurado. O cartão mostra os valores originais.</string>
 </resources>

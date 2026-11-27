@@ -398,24 +398,24 @@ class PushApi(private val connection: GatewayConnection) {
     }
 
     /** The tool calls waiting for this phone, or null without the plugin. */
-    suspend fun phonePending(deviceId: String, key: String): List<PhoneRequest>? {
+    suspend fun phonePending(deviceId: String, key: String, origin: JsonRpcClient? = null): List<PhoneRequest>? {
         val body = buildJsonObject {
             put("device_id", deviceId)
             put("key", key)
         }
-        val reply = output("phone pending $body")?.let(::phoneReply)?.takeIf { it.ok } ?: return null
+        val reply = output("phone pending $body", origin)?.let(::phoneReply)?.takeIf { it.ok } ?: return null
         return reply.requests.map { it.copy(gatewayNow = reply.now) }
     }
 
     /** Hands the agent the [result] of a tool call, or the [error] it failed with. */
-    suspend fun phoneAnswer(deviceId: String, key: String, requestId: String, result: JsonElement?, error: String?): Boolean {
+    suspend fun phoneAnswer(deviceId: String, key: String, requestId: String, result: JsonElement?, error: String?, origin: JsonRpcClient? = null): Boolean {
         val body = buildJsonObject {
             put("device_id", deviceId)
             put("key", key)
             put("id", requestId)
             if (error != null) put("error", error) else put("result", result ?: JsonNull)
         }
-        return output("phone answer $body")?.let(::phoneReply)?.ok == true
+        return output("phone answer $body", origin)?.let(::phoneReply)?.ok == true
     }
 
     /** What `/herald-push cron <arg>` printed (the Inbox's calls), or null when the plugin isn't loaded. */
@@ -430,8 +430,9 @@ class PushApi(private val connection: GatewayConnection) {
     }
 
     /** What `/herald-push <arg>` printed, or null when the plugin isn't loaded. */
-    private suspend fun output(arg: String): String? {
+    private suspend fun output(arg: String, origin: JsonRpcClient? = null): String? {
         val rpc = client()
+        if (origin != null && origin !== rpc) return null
         // The session authority runs a command only in a chat, and answers a plugin's as `exec`.
         val authority = rpc.sessionAuthority
         val reply = try {
