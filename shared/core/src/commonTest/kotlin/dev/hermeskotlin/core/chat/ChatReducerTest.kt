@@ -135,6 +135,13 @@ class ChatReducerTest {
     }
 
     @Test
+    fun fallbackKeepsBlankLinesAwayFromTakenOutCommentary() {
+        val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"Done.",
+            "reasoning":"Plan\n```\na\n\n\nb\n```\n\nProgress.\n\nNext","display_commentary":["Progress."]}""")
+        assertEquals("Plan\n```\na\n\n\nb\n```\n\nNext", assertIs<ChatMessage.Assistant>(historyToMessages(listOf(row)).single()).reasoning)
+    }
+
+    @Test
     fun olderHistoryKeepsReasoningAndDoesNotReadRawProviderSidecars() {
         val row = HermesJson.decodeFromString<SessionMessage>("""{"role":"assistant","content":"Done.",
             "reasoning":"Legacy summary.","display_reasoning":null,"display_commentary":null,

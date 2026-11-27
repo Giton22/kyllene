@@ -195,10 +195,10 @@ data class SessionMessage(
             var lines = legacy.replace("\r\n", "\n")
             updates.map { it.replace("\r\n", "\n") }.sortedByDescending { it.length }.forEach { update ->
                 val wholeLines = Regex("^" + Regex.escape(update) + "$", RegexOption.MULTILINE)
-                lines = wholeLines.replace(lines, "")
+                lines = wholeLines.replace(lines, TAKEN_OUT)
             }
-            // A removed paragraph leaves its blank lines behind: one blank line parts what's left.
-            return lines.replace(Regex("\n{3,}"), "\n\n").trim()
+            // A removed paragraph leaves its blank lines behind: one blank line parts what's left there, and only there.
+            return lines.replace(TAKEN_OUT_WITH_BLANK_LINES, "\n\n").trim()
         }
 
     /** Image parts of a multimodal row (`image_url` / `image` / `input_image`). */
@@ -233,6 +233,10 @@ data class SessionMessagesPage(
 )
 
 private val IMAGE_PART_TYPES = setOf("image_url", "image", "input_image")
+
+// Marks a commentary line taken out of old saved reasoning, so only the blank lines around it are folded.
+private const val TAKEN_OUT = ""
+private val TAKEN_OUT_WITH_BLANK_LINES = Regex("\n*$TAKEN_OUT(?:\n*$TAKEN_OUT)*\n*")
 
 /** Keep the first display copy when only the line endings differ. */
 internal fun List<String>.distinctCommentary(): List<String> =
