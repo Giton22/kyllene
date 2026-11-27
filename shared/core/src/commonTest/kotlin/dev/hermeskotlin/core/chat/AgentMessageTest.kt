@@ -30,8 +30,13 @@ class AgentMessageTest {
         )
         // Only where the sender puts it: the same words later in the text are the bot's own.
         assertEquals(
-            "Say [no reply needed] if you agree.",
-            AgentMessage.parse("Message from 🤖 Scribe (@scribe): Say [no reply needed] if you agree.")?.body,
+            AgentMessage("Scribe", "scribe", "Say [no reply needed] if you agree."),
+            AgentMessage.parse("Message from 🤖 Scribe (@scribe): Say [no reply needed] if you agree."),
+        )
+        // Hermes only marks a signed message; text that merely starts "Message from X:" keeps what was typed.
+        assertEquals(
+            AgentMessage("scribe", null, "[no reply needed] testing"),
+            AgentMessage.parse("Message from scribe: [no reply needed] testing"),
         )
     }
 
