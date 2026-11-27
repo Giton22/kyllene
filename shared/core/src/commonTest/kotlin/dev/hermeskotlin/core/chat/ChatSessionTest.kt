@@ -2745,6 +2745,27 @@ class ChatSessionTest {
     }
 
     @Test
+    fun branchingStopsBeforeARunningTurnAndItsHiddenPrompt() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one","timestamp":10},{"id":2,"role":"assistant","content":"First","timestamp":11},
+            {"id":3,"role":"user","content":"Keep going toward the goal.","display_kind":"hidden","timestamp":100},
+            {"id":4,"role":"assistant","content":"Working","timestamp":101}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf(
+                "session.resume" to """{"session_id":"rt1","running":true,"turn_started_at":100}""",
+                "session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}""",
+            ),
+        )
+        // The running turn's saved step is a reply of its own, not a step of "First" (then its live reply, empty yet).
+        assertEquals(listOf("one", "First", "Working"), chat.state.value.messages.map { it.textOf() }.filter { it.isNotEmpty() })
+
+        // Up to "First": the hidden prompt after it starts the next turn.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(2))
+        assertEquals("2", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
     fun branchingSkipsARestatedRequestWhoseOriginalIsLoaded() = runTest {
         history = """{"session_id":"stored-1","messages":[
             {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},

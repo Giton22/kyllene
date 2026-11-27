@@ -1999,16 +1999,27 @@ class ChatSession(
         // message may start at a row the gateway doesn't count, such as a reply's first step with only a tool call,
         // and one row can start several (a batch of finished processes). Laid out as on screen, so a running turn's
         // first step starts its own reply.
-        val starts = historyToMessages(rows, rowsSessionId, turnStartedAt).mapNotNull { it.firstStoredRowId() }
+        val starts = historyToMessages(rows, rowsSessionId, rowsLaidOutFor).mapNotNull { it.firstStoredRowId() }
             .groupingBy { it }.eachCount()
         var seen = 0
         var counted = 0
+        // User rows the chat leaves out, kept only once a later row shows they sit inside the messages kept: after
+        // the last one, they belong to the next turn (its hidden prompt, say).
+        var leftOut = 0
         for (row in rows) {
             starts[row.id]?.let { here ->
                 if (seen >= visible) return counted
                 seen += here
+                counted += leftOut
+                leftOut = 0
             }
-            if (row.countsInBranch) counted++
+            if (!row.countsInBranch) continue
+            if (row.role == "user" && row.id !in starts) {
+                leftOut++
+            } else {
+                counted += leftOut + 1
+                leftOut = 0
+            }
         }
         return counted + (visible - seen).coerceAtLeast(0)
     }
