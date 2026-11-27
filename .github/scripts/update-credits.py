@@ -32,7 +32,9 @@ def write(path, text):
 
 
 def read_logins(path):
-    return [line.strip() for line in read(Path(path)).splitlines() if LOGIN.match(line.strip())]
+    # jq prints "null" for a sponsor whose account is gone; it's no one to credit.
+    logins = (line.strip() for line in read(Path(path)).splitlines())
+    return [login for login in logins if LOGIN.match(login) and login != "null"]
 
 
 def kotlin_list_pattern(name):

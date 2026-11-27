@@ -41,15 +41,17 @@ jobs:
         run: |
           gh api "repos/$GITHUB_REPOSITORY/contributors?per_page=100" --paginate \
             --jq '.[] | select(.type == "User") | .login' > "$RUNNER_TEMP/contributors.txt"
-          # Public sponsors only, past and present; someone who sponsors privately is never named.
-          if ! gh api graphql -f owner="$GITHUB_REPOSITORY_OWNER" -f query='
-              query($owner: String!) {
+          # Public sponsors only, past and present; someone who sponsors privately is never named. Every page, and
+          # no line for a sponsor whose account is gone (its sponsorEntity is null).
+          if ! gh api graphql --paginate -f owner="$GITHUB_REPOSITORY_OWNER" -f query='
+              query($owner: String!, $endCursor: String) {
                 user(login: $owner) {
-                  sponsorshipsAsMaintainer(first: 100, includePrivate: false, activeOnly: false) {
+                  sponsorshipsAsMaintainer(first: 100, after: $endCursor, includePrivate: false, activeOnly: false) {
                     nodes { sponsorEntity { ... on User { login } ... on Organization { login } } }
+                    pageInfo { hasNextPage endCursor }
                   }
                 }
-              }' --jq '.data.user.sponsorshipsAsMaintainer.nodes[].sponsorEntity.login' > "$RUNNER_TEMP/sponsors.txt"; then
+              }' --jq '.data.user.sponsorshipsAsMaintainer.nodes[] | .sponsorEntity.login // empty' > "$RUNNER_TEMP/sponsors.txt"; then
             echo "::warning::Couldn't read the public sponsors, so only contributors were checked. A CREDITS_TOKEN secret fixes this."
             : > "$RUNNER_TEMP/sponsors.txt"
           fi
