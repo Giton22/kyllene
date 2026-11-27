@@ -15,7 +15,6 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInputModeManager
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -23,7 +22,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.rememberCursorPositionProvider
 import kotlinx.coroutines.delay
 
 /**
@@ -63,10 +61,8 @@ actual fun Tooltip(text: String, modifier: Modifier, content: @Composable () -> 
     ) {
         content()
         when {
-            // Under the pointer, clear of it.
             text.isEmpty() -> Unit
-            shown -> Popup(popupPositionProvider = rememberCursorPositionProvider(DpOffset(0.dp, 18.dp))) { TooltipLabel(text) }
-            focused -> Popup(popupPositionProvider = remember(below) { UnderAnchor(below) }) { TooltipLabel(text) }
+            shown || focused -> Popup(popupPositionProvider = remember(below) { UnderAnchor(below) }) { TooltipLabel(text) }
         }
     }
 }
