@@ -46,6 +46,7 @@ import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.PlatformBackHandler
 import dev.hermeskotlin.ui.resources.*
 import dev.hermeskotlin.ui.sessions.SubpageHeader
+import dev.hermeskotlin.ui.update.LocalSupportOffer
 import org.jetbrains.compose.resources.stringResource
 
 /** Where Kyllene's code lives; a star there helps other people find it. */
@@ -79,27 +80,27 @@ internal object Credits {
 /** Settings › Support Kyllene: a star, the two ways to give, and the people behind the app. */
 @Composable
 internal fun SupportSection(onOpenCredits: () -> Unit) {
-    val uriHandler = LocalUriHandler.current
+    val open = rememberSupportLink()
     Section(stringResource(Res.string.settings_section_support)) {
         NavRow(
             title = stringResource(Res.string.settings_support_star),
             detail = stringResource(Res.string.settings_support_star_detail),
             icon = Lucide.Star,
-            onClick = { uriHandler.openUri(REPO_URL) },
+            onClick = { open(REPO_URL) },
         )
         Divider()
         NavRow(
             title = stringResource(Res.string.settings_support_kofi),
             detail = stringResource(Res.string.settings_support_kofi_detail),
             icon = Lucide.Coffee,
-            onClick = { uriHandler.openUri(KOFI_URL) },
+            onClick = { open(KOFI_URL) },
         )
         Divider()
         NavRow(
             title = stringResource(Res.string.settings_support_sponsors),
             detail = stringResource(Res.string.settings_support_sponsors_detail),
             icon = Lucide.Heart,
-            onClick = { uriHandler.openUri(SPONSORS_URL) },
+            onClick = { open(SPONSORS_URL) },
         )
         Divider()
         NavRow(
@@ -122,6 +123,7 @@ fun CreditsScreen(onBack: () -> Unit) {
 @Composable
 internal fun CreditsView(onBack: () -> Unit) {
     val uriHandler = LocalUriHandler.current
+    val openSupport = rememberSupportLink()
     Box(
         Modifier
             .fillMaxSize()
@@ -152,7 +154,7 @@ internal fun CreditsView(onBack: () -> Unit) {
                             title = stringResource(Res.string.settings_support_kofi),
                             detail = stringResource(Res.string.settings_credits_join_detail),
                             icon = Lucide.Coffee,
-                            onClick = { uriHandler.openUri(KOFI_URL) },
+                            onClick = { openSupport(KOFI_URL) },
                         )
                         Divider()
                         NavRow(
@@ -165,6 +167,17 @@ internal fun CreditsView(onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** Opens a star or giving link, and stops the sidebar card asking, since this person already answered it. */
+@Composable
+private fun rememberSupportLink(): (String) -> Unit {
+    val uriHandler = LocalUriHandler.current
+    val offer = LocalSupportOffer.current
+    return { url ->
+        uriHandler.openUri(url)
+        offer.onDismiss()
     }
 }
 

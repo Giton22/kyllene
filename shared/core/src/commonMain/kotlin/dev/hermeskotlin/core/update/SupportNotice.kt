@@ -9,7 +9,7 @@ import kotlin.time.Instant
 
 /**
  * Asks once for a star or a tip. Someone who already had a gateway saved when this first ran is asked at once; a
- * fresh install is asked after [wait]. Closing it, or tapping one of its links, ends it for good.
+ * fresh install is asked after [wait]. Closing it, or tapping a star or giving link here or in Settings, ends it for good.
  */
 class SupportNotice(
     private val store: KeyValueStore,
