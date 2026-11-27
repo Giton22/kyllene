@@ -214,12 +214,16 @@ fun App(
             // The screens leave composition rather than sit under the cover, so their sheets and dialogs
             // (windows of their own) can't show over it. View models and drafts outlive this.
             val screens = @Composable {
-                PlatformTextContextMenu {
-                    if (locked) {
-                        AppLockCover(onUnlock)
-                    } else {
-                        Routes()
-                        PhoneQuestionDialog(phoneQuestion)
+                val text = LocalDensity.current
+                val zoom = if (isDesktop) settings.zoom / 100f else 1f
+                CompositionLocalProvider(LocalDensity provides Density(text.density * zoom, text.fontScale)) {
+                    PlatformTextContextMenu {
+                        if (locked) {
+                            AppLockCover(onUnlock)
+                        } else {
+                            Routes()
+                            PhoneQuestionDialog(phoneQuestion)
+                        }
                     }
                 }
             }
@@ -237,10 +241,7 @@ fun App(
                     )
                 }
                 Box(Modifier.fillMaxSize().background(Theme[colors][background]).then(titleBar.frame)) {
-                    CompositionLocalProvider(
-                        LocalWindowControls provides controls,
-                        LocalDensity provides Density(text.density * settings.zoom / 100f, text.fontScale),
-                    ) {
+                    CompositionLocalProvider(LocalWindowControls provides controls) {
                         screens()
                     }
                 }
