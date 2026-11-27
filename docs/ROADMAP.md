@@ -49,7 +49,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Android lint in CI (`lintDebug`); a baseline holds the old issues, so only new ones fail the build
 - [x] Robolectric tests don't download Android at test time: Gradle fetches the `android-all-instrumented` jars for the SDK levels the tests use (cached in CI), and Robolectric is pointed at them
 - [x] Releases: a `v1.2.3` tag builds a signed APK into a draft GitHub release; the app offers newer releases
-- [x] Per-ABI APKs beside the universal one, a "Which APK?" table in the notes, and the update banner downloads the device's own
+- [x] Per-ABI APKs beside the universal one, a "Which APK?" table in the notes, and the update banner downloads the device's own and links to the release history of the repository offering the update
 
 ### Design system (`shared/designsystem`)
 - [x] Tokens: colors (light/dark), radii, typography

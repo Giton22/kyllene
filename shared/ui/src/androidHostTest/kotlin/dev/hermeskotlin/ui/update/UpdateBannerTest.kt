@@ -35,8 +35,9 @@ import kotlin.test.assertTrue
 class UpdateBannerTest {
     private val compose = createAndroidComposeRule<ComponentActivity>()
     private val opened = mutableListOf<String>()
-    private val release = "https://github.com/Giton22/kyllene/releases/tag/v2.0.0"
-    private val asset = "https://github.com/Giton22/kyllene/releases/download/v2.0.0/kyllene.apk"
+    private val history = "https://github.com/fork-owner/kyllene-fork/releases"
+    private val release = "$history/tag/v2.0.0"
+    private val asset = "$history/download/v2.0.0/kyllene.apk"
     private val width = mutableStateOf(336.dp)
 
     // The library has no manifest registering the Compose host activity.
@@ -56,26 +57,26 @@ class UpdateBannerTest {
     val rules: TestRule = RuleChain.outerRule(registerActivity).around(compose)
 
     @Test
-    fun notesWrapAndOpenTheReleaseHistoryWithoutStartingADownload() {
+    fun historyWrapsAndOpensTheOfferingRepositoryWithoutStartingADownload() {
         showBanner(asset)
         val download = compose.onNodeWithText("Download")
-        val notes = compose.onNodeWithText("Release notes")
-        assertEquals(download.fetchSemanticsNode().boundsInRoot.top, notes.fetchSemanticsNode().boundsInRoot.top)
+        val historyAction = compose.onNodeWithText("Release history")
+        assertEquals(download.fetchSemanticsNode().boundsInRoot.top, historyAction.fetchSemanticsNode().boundsInRoot.top)
 
         compose.runOnIdle { width.value = 192.dp }
         val downloadBounds = download.fetchSemanticsNode().boundsInRoot
-        val notesBounds = notes.fetchSemanticsNode().boundsInRoot
-        assertTrue(notesBounds.top >= downloadBounds.bottom)
+        val historyBounds = historyAction.fetchSemanticsNode().boundsInRoot
+        assertTrue(historyBounds.top >= downloadBounds.bottom)
 
-        notes.performClick().assertExists()
+        historyAction.performClick().assertExists()
         download.performClick()
-        compose.runOnIdle { assertEquals(listOf("https://github.com/Giton22/kyllene/releases", asset), opened) }
+        compose.runOnIdle { assertEquals(listOf(history, asset), opened) }
     }
 
     @Test
     fun noAssetOffersOnlyTheTaggedReleasePage() {
         showBanner(null)
-        compose.onNodeWithText("Release notes").assertDoesNotExist()
+        compose.onNodeWithText("Release history").assertDoesNotExist()
         compose.onNodeWithText("Open release").performClick()
         compose.runOnIdle { assertEquals(listOf(release), opened) }
     }

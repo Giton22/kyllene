@@ -162,8 +162,11 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
             )
             if (update.downloadUrl != null) {
                 Button(
-                    stringResource(Res.string.update_release_notes),
-                    onClick = { uriHandler.openUri("https://github.com/Giton22/kyllene/releases") },
+                    stringResource(Res.string.update_release_history),
+                    onClick = {
+                        val history = GITHUB_RELEASE_HISTORY.find(update.pageUrl)?.value ?: update.pageUrl
+                        uriHandler.openUri(history)
+                    },
                     variant = ButtonVariant.Ghost,
                     size = ButtonSize.Small,
                     trailingIcon = Lucide.ExternalLink,
@@ -172,3 +175,5 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
         }
     }
 }
+
+private val GITHUB_RELEASE_HISTORY = Regex("""^https://github\.com/[^/?#]+/[^/?#]+/releases(?=/tag/)""")
