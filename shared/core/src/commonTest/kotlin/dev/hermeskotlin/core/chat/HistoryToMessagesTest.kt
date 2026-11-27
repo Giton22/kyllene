@@ -3,6 +3,7 @@ package dev.hermeskotlin.core.chat
 import dev.hermeskotlin.core.sessions.SessionMessage
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -167,6 +168,71 @@ class HistoryToMessagesTest {
         }
         val carrierWithoutSourceUid = replays.last().copy(absorbedMessageUids = JsonPrimitive("[]"))
         assertEquals(listOf("row-1"), historyToMessages(listOf(original, carrierWithoutSourceUid)).map { it.key })
+    }
+
+    @Test
+    fun aTaskListCompactionAppendsToAPromptIsCutAndAFlaggedRestatementShowsOnlyAsTheSoleCopy() {
+        // As v0.23.4 stores them: the list folded into the last real user row, which can be the restated request.
+        val taskList = "[Your active task list was preserved across context compression]\n" +
+            "- [>] 1. Draft the release notes (in_progress)\n- [ ] 2. Check the backup (pending)"
+        // agent/conversation_compression.py `_pruned_skill_reload_notice`, after the list.
+        val reload = "[Skills pruned during compression — reload before acting on these tasks]\nThe task list above " +
+            "crossed the compression boundary verbatim, but the skill instructions that governed it were pruned."
+        val pasted = "Why does this show?\n[Your active task list was preserved across context compression]\n- x"
+        val restated = SessionMessage(id = 3, role = "user", content = JsonPrimitive(
+            "[STILL IN PROGRESS — this is the active request, restated after the compaction boundary because it was " +
+                "not finished yet. Continue it; do not start over.]\nDraft them\n\n$taskList"),
+            displayMetadata = buildJsonObject { put("compaction_inflight_task_restatement", true) })
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("Hello three\n\n$taskList")),
+            SessionMessage(id = 2, role = "user", content = JsonPrimitive("Crlf too\r\n\r\n${taskList.replace("\n", "\r\n")}\r\n\r\n$reload")),
+            restated,
+            SessionMessage(id = 4, role = "user", content = JsonPrimitive(pasted),
+                displayMetadata = buildJsonObject { put("compaction_inflight_task_restatement", false) }),
+        ))
+
+        val prompts = messages.filterIsInstance<ChatMessage.User>()
+        // The restated request is the only copy loaded, so it shows (without its header and the list).
+        assertEquals(listOf("Hello three", "Crlf too", "Draft them", pasted), prompts.map { it.text })
+        // Sending a prompt again sends what the person wrote, not the list.
+        assertEquals("Hello three", prompts[0].sentText)
+        // With its original loaded, the restatement is left out.
+        val original = SessionMessage(id = 0, role = "user", content = JsonPrimitive("Draft them"))
+        assertEquals(listOf("row-0"), historyToMessages(listOf(original, restated)).map { it.key })
+    }
+
+    @Test
+    fun aTaskListPartBesideAPictureIsCutAndThePictureStays() {
+        // A prompt with a picture gets the list as a text part of its own, with no blank line before it.
+        val taskList = "[Your active task list was preserved across context compression]\n- [>] 1. Draft the release notes (in_progress)"
+        val image = buildJsonObject { put("type", "image_url"); put("image_url", buildJsonObject { put("url", "data:image/png;base64,AAAA") }) }
+        fun text(value: String) = buildJsonObject { put("type", "text"); put("text", value) }
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = buildJsonArray { add(text("Describe this")); add(image); add(text(taskList)) }),
+            SessionMessage(id = 2, role = "user", content = buildJsonArray { add(image); add(text(taskList)) }),
+            SessionMessage(id = 3, role = "user", content = buildJsonArray { add(text("Quoting:")); add(text("[Your active task list was preserved across context compression]")) }),
+        ))
+
+        val prompts = messages.filterIsInstance<ChatMessage.User>()
+        assertEquals(listOf("Describe this", "", "Quoting:\n[Your active task list was preserved across context compression]"), prompts.map { it.text })
+        assertEquals(listOf(1, 1, 0), prompts.map { it.attachments.size })
+    }
+
+    @Test
+    fun aTaskListOnABotsMessageIsCutAndAPromptOpeningWithAHeaderStays() {
+        val taskList = "[Your active task list was preserved across context compression]\n- [ ] 1. Check the backup (pending)"
+        val opensWithHeader = "[Your active task list was preserved across context compression]\nWhat is this?"
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("Message from 🤖 Rook (@rook): Please check the backup.\n\n$taskList")),
+            SessionMessage(id = 2, role = "user", content = JsonPrimitive(opensWithHeader)),
+            SessionMessage(id = 3, role = "user", content = JsonPrimitive(
+                "[Skills pruned during compression — reload before acting on these tasks]\nThe task list above crossed the " +
+                    "compression boundary verbatim, but the skill instructions that governed it were pruned.")),
+        ))
+
+        assertEquals(TranscriptEvent.FromBot("Rook", "rook", "Please check the backup."), assertIs<ChatMessage.Event>(messages[0]).event)
+        assertEquals(listOf(opensWithHeader), messages.filterIsInstance<ChatMessage.User>().map { it.text })
+        assertEquals(2, messages.size)
     }
 
     @Test
@@ -437,6 +503,20 @@ class HistoryToMessagesTest {
 
         val message = assertIs<ChatMessage.Event>(historyToMessages(listOf(row)).single())
         assertEquals(body, assertIs<TranscriptEvent.Routine>(message.event).body)
+    }
+
+    @Test
+    fun aTaskListFoldedIntoAScheduledResultIsCut() {
+        val row = SessionMessage(
+            id = 1,
+            role = "user",
+            content = JsonPrimitive("Backup done.\n\n[Your active task list was preserved across context compression]\n- [ ] 1. Check (pending)"),
+            displayKind = "internal_notification",
+            displayMetadata = Json.parseToJsonElement("""{"completion_note":[["cron","local","job"]]}"""),
+        )
+
+        val message = assertIs<ChatMessage.Event>(historyToMessages(listOf(row)).single())
+        assertEquals("Backup done.", assertIs<TranscriptEvent.Routine>(message.event).body)
     }
 
     @Test

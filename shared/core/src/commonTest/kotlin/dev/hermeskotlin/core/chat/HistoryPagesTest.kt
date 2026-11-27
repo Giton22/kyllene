@@ -1,6 +1,7 @@
 package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.sessions.SessionMessage
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -28,6 +29,15 @@ class HistoryPagesTest {
     @Test
     fun aHiddenPromptIsNoTurnStart() {
         val page = listOf(row(4, "assistant"), SessionMessage(id = 5, role = "user", displayKind = "hidden"), row(6, "assistant"), row(7, "user"))
+
+        assertEquals(listOf(7L), ids(page.fromFirstTurn()))
+    }
+
+    @Test
+    fun aCompactionReminderIsNoTurnStart() {
+        val taskList = SessionMessage(id = 5, role = "user", content = JsonPrimitive(
+            "[Your active task list was preserved across context compression]\n- [>] 1. Draft (in_progress)"))
+        val page = listOf(row(4, "assistant"), taskList, row(6, "assistant"), row(7, "user"))
 
         assertEquals(listOf(7L), ids(page.fromFirstTurn()))
     }

@@ -2676,6 +2676,105 @@ class ChatSessionTest {
     }
 
     @Test
+    fun branchingCountsACompactionReminderTheChatLeavesOut() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
+            {"id":3,"role":"user","content":"[Your active task list was preserved across context compression]\n- [>] 1. Draft (in_progress)"},
+            {"id":4,"role":"assistant","content":"Drafted"},
+            {"id":5,"role":"user","content":"two"},{"id":6,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        assertEquals(listOf("one", "First\n\nDrafted", "two", "Second"), chat.state.value.messages.map { it.textOf() })
+
+        // Up to "First": two shown, four stored with the task list and the step that adds to "First".
+        assertEquals("stored-2" to "Greeting #2", chat.branch(2))
+        assertEquals("4", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
+    fun branchingCountsAReplyThatStartsWithAToolCall() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},
+            {"id":2,"role":"assistant","content":"","tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},
+            {"id":3,"role":"tool","tool_call_id":"c1","content":"ok"},
+            {"id":4,"role":"assistant","content":"First"},
+            {"id":5,"role":"user","content":"two"},{"id":6,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        assertEquals(listOf("one", "First", "two", "Second"), chat.state.value.messages.map { it.textOf() })
+
+        // Up to "First": its call step has no text, so the gateway counts "one" and "First" only.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(2))
+        assertEquals("2", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
+    fun branchingCountsEachMessageOfARowShownAsSeveral() = runTest {
+        val batch = "[IMPORTANT: 2 background processes completed. Review below.]\\n\\n" +
+            "[IMPORTANT: Background process a exited (exit code 2).\\nCommand: scan\\nOutput:\\nx]\\n\\n" +
+            "[IMPORTANT: Background process b exited (exit code 2).\\nCommand: lint\\nOutput:\\ny]"
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
+            {"id":3,"role":"user","content":"$batch","display_kind":"process_complete"},
+            {"id":4,"role":"user","content":"two"},{"id":5,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        assertEquals(6, chat.state.value.messages.size)
+
+        // Up to the second finished process: four shown, three stored, since both come from one row.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(4))
+        assertEquals("3", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
+    fun branchingStopsBeforeARunningTurnAndItsHiddenPrompt() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one","timestamp":10},{"id":2,"role":"assistant","content":"First","timestamp":11},
+            {"id":3,"role":"user","content":"Keep going toward the goal.","display_kind":"hidden","timestamp":100},
+            {"id":4,"role":"assistant","content":"Working","timestamp":101}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf(
+                "session.resume" to """{"session_id":"rt1","running":true,"turn_started_at":100}""",
+                "session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}""",
+            ),
+        )
+        // The running turn's saved step is a reply of its own, not a step of "First" (then its live reply, empty yet).
+        assertEquals(listOf("one", "First", "Working"), chat.state.value.messages.map { it.textOf() }.filter { it.isNotEmpty() })
+
+        // Up to "First": the hidden prompt after it starts the next turn.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(2))
+        assertEquals("2", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
+    fun branchingSkipsARestatedRequestWhoseOriginalIsLoaded() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
+            {"id":3,"role":"user","content":"Draft them"},{"id":4,"role":"assistant","content":"Drafted"},
+            {"id":5,"role":"user","content":"[STILL IN PROGRESS — this is the active request, restated after the compaction boundary because it was not finished yet. Continue it; do not start over.]\nDraft them",
+             "display_metadata":{"compaction_inflight_task_restatement":true}},
+            {"id":6,"role":"assistant","content":"Done"},
+            {"id":7,"role":"user","content":"two"},{"id":8,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        val shown = chat.state.value.messages.map { it.textOf() }
+        assertEquals(listOf("one", "First", "Draft them", "Drafted\n\nDone", "two", "Second"), shown)
+
+        // Up to the reply to "Draft them": four shown, six stored with the restatement and the step after it.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(4))
+        assertEquals("6", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
     fun branchingFromAReplyKeepsEveryStepOfIt() = runTest {
         history = """{"session_id":"stored-1","messages":[
             {"id":1,"role":"user","content":"Keep replies short.","display_kind":"hidden"},

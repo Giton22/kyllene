@@ -1950,15 +1950,34 @@ class ChatSession(
      * counts them (`_visible_branch_history`): with the hidden rows among them.
      */
     private fun withHiddenRows(visible: Int, rows: List<SessionMessage> = this.rows): Int {
+        // The rows the chat starts a message at, as it shows them: a row it leaves out (a compaction reminder, a
+        // restated request whose original is loaded) starts none, and a reply's next step adds to that reply. A
+        // message may start at a row the gateway doesn't count, such as a reply's first step with only a tool call,
+        // and one row can start several (a batch of finished processes). Laid out as on screen, so a running turn's
+        // first step starts its own reply.
+        val starts = historyToMessages(rows, rowsSessionId, rowsLaidOutFor).mapNotNull { it.firstStoredRowId() }
+            .groupingBy { it }.eachCount()
         var seen = 0
         var counted = 0
+        // User rows the chat leaves out, kept only once a later row shows they sit inside the messages kept: after
+        // the last one, they belong to the next turn (its hidden prompt, say).
+        var leftOut = 0
         for (row in rows) {
-            if (seen == visible) break
+            starts[row.id]?.let { here ->
+                if (seen >= visible) return counted
+                seen += here
+                counted += leftOut
+                leftOut = 0
+            }
             if (!row.countsInBranch) continue
-            counted++
-            if (!row.isHidden) seen++
+            if (row.role == "user" && row.id !in starts) {
+                leftOut++
+            } else {
+                counted += leftOut + 1
+                leftOut = 0
+            }
         }
-        return counted + (visible - seen)
+        return counted + (visible - seen).coerceAtLeast(0)
     }
 
     /** A row `session.branch` counts (`_visible_branch_history`): a user or assistant one with text, hidden or not. */
