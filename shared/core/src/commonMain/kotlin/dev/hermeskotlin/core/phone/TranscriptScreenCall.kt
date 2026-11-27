@@ -10,6 +10,7 @@ import dev.hermeskotlin.core.chat.SHOW_UI_TOOL
 import dev.hermeskotlin.core.chat.ToolActivity
 import dev.hermeskotlin.core.connection.GatewayConnection
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -24,7 +25,8 @@ private const val SCREEN_TRANSCRIPT_GRACE_MS = 1_000L
 data class ScreenPlacement(val transcriptCallId: String?, private val outerToolIds: Set<String> = emptySet()) {
     fun canShowStandalone(state: ChatState): Boolean = state.runningScreenTools().any { it.id in outerToolIds }
 
-    fun isDirectRunning(state: ChatState): Boolean = state.runningScreenTools().any { it.id == transcriptCallId }
+    fun anchor(state: ChatState): String? = state.messages.asReversed().filterIsInstance<ChatMessage.Assistant>()
+        .firstOrNull { message -> message.tools.any { it.id in outerToolIds } }?.key
 
     fun conflictsWithDirect(state: ChatState, screen: AgentScreen): Boolean =
         state.runningScreenTools().any { it.conflictsWith(screen) }
@@ -38,14 +40,15 @@ suspend fun awaitScreenPlacement(
     states: Flow<ChatState>,
     screen: AgentScreen,
     accepts: () -> Boolean,
+    notShown: String = AgentScreens.NOT_SHOWN,
     claimed: (String) -> Boolean,
 ): ScreenPlacement {
     val direct = withTimeoutOrNull(SCREEN_TRANSCRIPT_GRACE_MS) {
-        awaitTranscriptScreenCall(states, screen, accepts, claimed)
+        awaitTranscriptScreenCall(states, screen, accepts, notShown, claimed)
     }
     if (direct != null) return ScreenPlacement(direct)
     return withTimeoutOrNull(AgentScreens.SHOWN_WITHIN_MS - SCREEN_TRANSCRIPT_GRACE_MS) {
-        runningTools(states, accepts).mapNotNull { calls ->
+        runningTools(states, accepts, notShown).mapNotNull { calls ->
             val match = matchTranscriptScreenCall(calls.asSequence(), screen, claimed)
             when {
                 match != null -> ScreenPlacement(match)
@@ -54,7 +57,30 @@ suspend fun awaitScreenPlacement(
                 else -> null
             }
         }.first()
-    } ?: throw PhoneToolException(AgentScreens.NOT_SHOWN)
+    } ?: throw PhoneToolException(notShown)
+}
+
+/** Keep the original request alive if the transcript catches up before the standalone card is answered. */
+suspend fun <T> runScreenPlacement(
+    states: StateFlow<ChatState>,
+    screen: AgentScreen,
+    accepts: () -> Boolean,
+    notShown: String = AgentScreens.NOT_SHOWN,
+    claimed: (String) -> Boolean,
+    direct: suspend (String) -> T,
+    standalone: suspend (ScreenPlacement) -> T,
+): T {
+    val placement = awaitScreenPlacement(states, screen, accepts, notShown, claimed)
+    placement.transcriptCallId?.let { return direct(it) }
+    return try {
+        standalone(placement)
+    } catch (failure: PhoneToolException) {
+        if (!accepts() || !placement.conflictsWithDirect(states.value, screen)) throw failure
+        val callId = withTimeoutOrNull(AgentScreens.SHOWN_WITHIN_MS) {
+            awaitTranscriptScreenCall(states, screen, accepts, notShown, claimed)
+        } ?: throw failure
+        direct(callId)
+    }
 }
 
 fun screenRequestChanges(host: ChatHost, chat: ChatSession, connection: GatewayConnection): Flow<Unit> =
@@ -67,14 +93,15 @@ internal suspend fun awaitTranscriptScreenCall(
     states: Flow<ChatState>,
     screen: AgentScreen,
     accepts: () -> Boolean,
+    notShown: String = AgentScreens.NOT_SHOWN,
     claimed: (String) -> Boolean,
-): String = runningTools(states, accepts).mapNotNull { calls ->
+): String = runningTools(states, accepts, notShown).mapNotNull { calls ->
     matchTranscriptScreenCall(calls.asSequence(), screen, claimed)
 }.first()
 
-private fun runningTools(states: Flow<ChatState>, accepts: () -> Boolean): Flow<List<ToolActivity>> =
+private fun runningTools(states: Flow<ChatState>, accepts: () -> Boolean, notShown: String): Flow<List<ToolActivity>> =
     states.map { state ->
-        if (!accepts()) throw PhoneToolException(AgentScreens.NOT_SHOWN)
+        if (!accepts()) throw PhoneToolException(notShown)
         state.runningScreenTools().toList()
     }.distinctUntilChanged()
 

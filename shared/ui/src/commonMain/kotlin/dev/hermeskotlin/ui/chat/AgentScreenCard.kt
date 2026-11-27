@@ -19,6 +19,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -292,7 +294,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
 
 /** A live, request-scoped card whose provenance is displayed by Kyllene outside the remote surface. */
 @Composable
-internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard, isVisible: () -> Boolean) {
+internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
     val registry = LocalAgentScreens.current.registry ?: return
     if (!agentScreenRendererAvailable()) return
     val (call, screen) = card
@@ -301,7 +303,7 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard, isVisible: (
     val minimum = if (isDesktop) Lifecycle.State.STARTED else Lifecycle.State.RESUMED
     val validating = call.stage == DesktopStage.Validating
     var rendered by remember(call.id, validating) { mutableStateOf<Set<String>>(emptySet()) }
-    val visible = isVisible()
+    var visible by remember(call.id) { mutableStateOf(false) }
     LaunchedEffect(call.stage, rendered, state, visible) {
         if (!state.isAtLeast(minimum)) return@LaunchedEffect
         when (call.stage) {
@@ -312,7 +314,13 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard, isVisible: (
     }
 
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(
+        modifier = Modifier.onGloballyPositioned { coordinates ->
+            val bounds = coordinates.boundsInWindow()
+            visible = !bounds.isEmpty
+        },
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         Column(
             Modifier.fillMaxWidth().background(Theme[colors][warningSoft], shape).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -331,7 +339,7 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard, isVisible: (
                 live = true,
                 takesTaps = takesTaps,
                 onAnswer = { surface, result ->
-                    if (isVisible() && lifecycle.currentState.isAtLeast(minimum)) registry.answer(call.chat, surface, result, call.id)
+                    if (visible && lifecycle.currentState.isAtLeast(minimum)) registry.answer(call.chat, surface, result, call.id)
                 },
                 onFail = { surface, message -> registry.fail(call.chat, surface, message, call.id) },
                 onRendered = { rendered = it },

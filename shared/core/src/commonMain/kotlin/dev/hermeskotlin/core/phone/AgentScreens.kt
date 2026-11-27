@@ -47,7 +47,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val takesTaps: Boolean,
     )
 
-    data class GatewayCard(val call: DesktopCall, val screen: AgentScreen, val owner: ChatSession?, val isCurrent: () -> Boolean)
+    data class GatewayCard(val call: DesktopCall, val screen: AgentScreen, val owner: ChatSession?, val anchor: String?, val isCurrent: () -> Boolean)
 
     private class Waiting(
         val live: Live,
@@ -57,6 +57,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val gatewayScreen: AgentScreen?,
         val ownsChat: () -> Boolean,
         val owner: ChatSession?,
+        val anchor: String?,
     ) {
         val shown = CompletableDeferred<Unit>()
         private val answer = CompletableDeferred<Result<JsonElement>>()
@@ -154,10 +155,12 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         chat: String,
         id: String,
         owner: ChatSession? = null,
+        anchor: String? = null,
+        notShown: String = NOT_SHOWN,
         changes: Flow<Unit> = emptyFlow(),
         isWaiting: () -> Boolean = { true },
         ownsChat: () -> Boolean,
-    ): JsonElement = await(update, chat, NOT_SHOWN, id, { ownsChat() && isWaiting() }, screen, ownsChat, owner, changes)
+    ): JsonElement = await(update, chat, notShown, id, { ownsChat() && isWaiting() }, screen, ownsChat, owner, anchor, changes)
 
     /**
      * Waits until the user answers [screen] in [chat], and returns what they did, for the agent. Throws
@@ -172,7 +175,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         transcriptId: String? = null,
         changes: Flow<Unit> = emptyFlow(),
         accepts: () -> Boolean = { true },
-    ): JsonElement = await(screen, chat, notShown, callId, accepts, null, accepts, null, changes, transcriptId)
+    ): JsonElement = await(screen, chat, notShown, callId, accepts, null, accepts, null, null, changes, transcriptId)
 
     private suspend fun await(
         screen: AgentScreen,
@@ -183,12 +186,13 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         gatewayScreen: AgentScreen?,
         ownsChat: () -> Boolean,
         owner: ChatSession?,
+        anchor: String?,
         changes: Flow<Unit>,
         transcriptId: String? = null,
     ): JsonElement = coroutineScope {
         require(callId == null || chat != null)
         if (!accepts()) throw PhoneToolException(notShown)
-        val entry = Waiting(Live(chat, screen.surfaceIds, transcriptId), screen, accepts, callId, gatewayScreen, ownsChat, owner)
+        val entry = Waiting(Live(chat, screen.surfaceIds, transcriptId), screen, accepts, callId, gatewayScreen, ownsChat, owner, anchor)
         var replaced = emptyList<Waiting>()
         waiting.update { list ->
             val (old, kept) = list.partition { it.live.chat == chat && it.live.surfaceIds.any(screen.surfaceIds::contains) }
@@ -237,7 +241,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
             val kept = shownGatewayCards.mapNotNull { it.without(call, entry.owner) }.filter { it.isCurrent() }
             shownGatewayCards.clear()
             shownGatewayCards.addAll(kept)
-            shownGatewayCards.addLast(GatewayCard(call, gatewayScreen, entry.owner, entry.ownsChat))
+            shownGatewayCards.addLast(GatewayCard(call, gatewayScreen, entry.owner, entry.anchor, entry.ownsChat))
             if (shownGatewayCards.size > RECENT_GATEWAY_CARDS) shownGatewayCards.removeFirst()
         }
         publishDesktop()
@@ -283,7 +287,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         _desktop.value = (shownDesktop + entries.filter { it.gatewayScreen == null }.mapNotNull { it.desktopCall() })
             .associateBy { it.chat to it.id }.values.toList()
         val pendingCards = entries.mapNotNull { entry ->
-            entry.gatewayScreen?.let { GatewayCard(checkNotNull(entry.desktopCall()), it, entry.owner, entry.accepts) }
+            entry.gatewayScreen?.let { GatewayCard(checkNotNull(entry.desktopCall()), it, entry.owner, entry.anchor, entry.accepts) }
         }
         shownGatewayCards.removeAll { !it.isCurrent() }
         _gatewayCards.value = shownGatewayCards.mapNotNull { shown ->

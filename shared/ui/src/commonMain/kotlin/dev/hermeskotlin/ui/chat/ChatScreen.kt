@@ -1138,7 +1138,7 @@ internal fun ChatView(
                     val gatewayCards = LocalAgentScreens.current.gatewayCards.filter {
                         gatewayScreenOwner != null && it.owner === gatewayScreenOwner && it.call.chat == gatewayScreenChat && it.isCurrent()
                     }
-                    if (state.historyLoaded && (state.messages.isNotEmpty() || gatewayCards.isNotEmpty())) {
+                    if (state.historyLoaded && state.messages.isNotEmpty()) {
                         CompositionLocalProvider(
                             LocalMediaLoader provides actions::loadMedia,
                             LocalWidgetFiles provides widgetFiles,
@@ -2202,8 +2202,7 @@ private fun Messages(
         positioned = true
     }
     val readLatest by rememberUpdatedState(onReadLatest)
-    val endKey = gatewayCards.lastOrNull()?.let { "gateway-card:${it.call.id}" } ?: newest?.key
-    val renderedEnd by rememberUpdatedState((messages.size + gatewayCards.size) to endKey)
+    val renderedEnd by rememberUpdatedState(messages.size to newest?.key)
     // Asked again whenever the messages change, not just the tail: a page loaded above, or a row redrawn, can turn
     // down an ask made while the rendered list and the chat's differed for a frame.
     LaunchedEffect(listState, positioned, onReadLatest != null, messages) {
@@ -2216,6 +2215,7 @@ private fun Messages(
                 layout.totalItemsCount == count && !listState.canScrollForward
         }.collect { atEnd -> if (atEnd) readLatest?.invoke() }
     }
+    val cardsByMessage = remember(gatewayCards) { gatewayCards.groupBy { it.anchor } }
     val unservable = remember(messages) { unservableEchoes(messages) }
     val unreadLine = remember(messages, unreadFrom, readUpTo) { unreadLineKey(messages, unreadFrom, readUpTo) }
     BoxWithConstraints(Modifier.fillMaxSize().pointerInput(readUpTo) {
@@ -2340,11 +2340,12 @@ private fun Messages(
                         is ChatMessage.Notice -> NoticeLine(message)
                     }
                     }
+                    for (card in cardsByMessage[message.key].orEmpty()) {
+                        key(card.call.id) {
+                            Box(Modifier.padding(top = 12.dp)) { GatewayAgentScreenCard(card) }
+                        }
+                    }
                 }
-            }
-            itemsIndexed(gatewayCards, key = { _, card -> "gateway-card:${card.call.id}" }) { _, card ->
-                val cardKey = "gateway-card:${card.call.id}"
-                GatewayAgentScreenCard(card) { listState.layoutInfo.visibleItemsInfo.any { it.key == cardKey } }
             }
         }
         // Clear of the composer floating over the chat's end. Any press on it moves the list, even a click on its track.

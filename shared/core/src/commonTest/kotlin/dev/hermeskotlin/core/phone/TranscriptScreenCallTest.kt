@@ -9,6 +9,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -60,6 +62,35 @@ class TranscriptScreenCallTest {
         assertNull(placement.transcriptCallId)
         assertFalse(placement.conflictsWithDirect(state(outer, direct), pending))
         assertTrue(placement.conflictsWithDirect(state(outer, direct, call("late-direct", pending)), pending))
+    }
+
+    @Test
+    fun aLateDirectCallTakesOverAnUnansweredStandaloneRequest() = runTest {
+        val pending = screen("pick")
+        val outer = ToolActivity("plugin", "plugin_tool", running = true)
+        val states = MutableStateFlow(state(outer))
+        launch {
+            delay(2_500)
+            states.value = state(outer, call("direct", pending))
+        }
+        val result = runScreenPlacement(states, pending, { true }, claimed = { false },
+            direct = { it },
+            standalone = { placement ->
+                assertEquals("reply", placement.anchor(states.value))
+                states.first { placement.conflictsWithDirect(it, pending) }
+                throw PhoneToolException(AgentScreens.NOT_SHOWN)
+            },
+        )
+        assertEquals("direct", result)
+    }
+
+    @Test
+    fun desktopPlacementUsesTheCallersNotShownMessage() = runTest {
+        val message = "The open desktop chat could not show the screen."
+        val failed = assertFailsWith<PhoneToolException> {
+            awaitScreenPlacement(MutableStateFlow(state()), screen("pick"), { true }, message) { false }
+        }
+        assertEquals(message, failed.message)
     }
 
     @Test

@@ -11,7 +11,7 @@ import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.PhoneTool
 import dev.hermeskotlin.core.phone.PhoneToolException
 import dev.hermeskotlin.core.phone.PhoneToolRunner
-import dev.hermeskotlin.core.phone.awaitScreenPlacement
+import dev.hermeskotlin.core.phone.runScreenPlacement
 import dev.hermeskotlin.core.phone.desktopAgentScreenChat
 import dev.hermeskotlin.core.phone.gatewayAgentScreenChat
 import dev.hermeskotlin.core.phone.screenRequestChanges
@@ -69,26 +69,30 @@ internal class DesktopScreenTool(
         val transcriptKey = desktopAgentScreenChat(chat.gateway.value, chat.profile, stored)
         // The plugin generates its own request UUID. The transcript carries the model's tool-call ID.
         // Match a unique, still-running call by its arguments before letting the browser act on it.
-        val placement = awaitScreenPlacement(chat.state, screen, accepts) { transcriptKey to it in claimed }
-        val callId = placement.transcriptCallId
-        val key = if (callId == null) gatewayAgentScreenChat(chat.gateway.value, chat.profile, stored) else transcriptKey
-        if (callId != null) {
-            claimed += key to callId
-            if (claimed.size > RECENT_CLAIMS) claimed.remove(claimed.first())
-        }
-        val drawing = if (callId == null) screens.gatewayDrawing(screen, key, chat) else {
-            val earlier = screens.earlier(screen, key)
-                ?: throw PhoneToolException(NOT_DRAWN + "The screen to update hasn't been shown in this chat.")
-            screen.copy(messages = earlier + screen.messages)
-        }
-        drawing.layoutProblem?.let { throw PhoneToolException(NOT_DRAWN + it) }
-        if (!accepts()) throw PhoneToolException(NOT_SHOWN)
-        if (callId != null) return screens.await(screen, key, NOT_SHOWN, callId, accepts = accepts)
-        return screens.awaitGatewayCard(
-            screen, drawing, key, Uuid.random().toString(), owner = chat,
-            changes = screenRequestChanges(host, chat, connection),
-            isWaiting = { placement.canShowStandalone(chat.state.value) },
-            ownsChat = { accepts() && !placement.conflictsWithDirect(chat.state.value, screen) },
+        return runScreenPlacement(
+            chat.state, screen, accepts, NOT_SHOWN, claimed = { transcriptKey to it in claimed },
+            direct = { callId ->
+                claimed += transcriptKey to callId
+                if (claimed.size > RECENT_CLAIMS) claimed.remove(claimed.first())
+                val earlier = screens.earlier(screen, transcriptKey)
+                    ?: throw PhoneToolException(NOT_DRAWN + "The screen to update hasn't been shown in this chat.")
+                screen.copy(messages = earlier + screen.messages).layoutProblem?.let {
+                    throw PhoneToolException(NOT_DRAWN + it)
+                }
+                screens.await(screen, transcriptKey, NOT_SHOWN, callId, accepts = accepts)
+            },
+            standalone = { placement ->
+                val key = gatewayAgentScreenChat(chat.gateway.value, chat.profile, stored)
+                val drawing = screens.gatewayDrawing(screen, key, chat)
+                drawing.layoutProblem?.let { throw PhoneToolException(NOT_DRAWN + it) }
+                screens.awaitGatewayCard(
+                    screen, drawing, key, Uuid.random().toString(), owner = chat, notShown = NOT_SHOWN,
+                    anchor = placement.anchor(chat.state.value),
+                    changes = screenRequestChanges(host, chat, connection),
+                    isWaiting = { placement.canShowStandalone(chat.state.value) },
+                    ownsChat = { accepts() && !placement.conflictsWithDirect(chat.state.value, screen) },
+                )
+            },
         )
     }
 }

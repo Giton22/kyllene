@@ -3,13 +3,14 @@ package dev.hermeskotlin.android.phone
 import android.content.Context
 import dev.hermeskotlin.core.chat.AgentScreen
 import dev.hermeskotlin.core.chat.ChatHost
+import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.NOT_DRAWN
 import dev.hermeskotlin.core.chat.SHOW_UI_TOOL
 import dev.hermeskotlin.core.connection.ConnectionState
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.PhoneToolException
-import dev.hermeskotlin.core.phone.awaitScreenPlacement
+import dev.hermeskotlin.core.phone.runScreenPlacement
 import dev.hermeskotlin.core.phone.desktopAgentScreenChat
 import dev.hermeskotlin.core.phone.gatewayAgentScreenChat
 import dev.hermeskotlin.core.phone.screenRequestChanges
@@ -55,24 +56,30 @@ internal class ShowUiTool(
             }
             if (!ownsChat()) throw PhoneToolException(AgentScreens.NOT_SHOWN)
             val transcriptKey = desktopAgentScreenChat(open.gateway.value, open.profile, stored)
-            val placement = awaitScreenPlacement(open.state, screen, ownsChat) { transcriptKey to it in claimed }
             val changes = screenRequestChanges(host, open, connection)
-            val callId = placement.transcriptCallId
-            if (callId == null) {
-                val key = gatewayAgentScreenChat(open.gateway.value, open.profile, stored)
-                val drawing = checkedScreen { screens.gatewayDrawing(screen, key, open) }
-                return screens.awaitGatewayCard(
-                    screen, drawing, key, Uuid.random().toString(), owner = open, changes = changes,
-                    isWaiting = { placement.canShowStandalone(open.state.value) },
-                    ownsChat = { ownsChat() && !placement.conflictsWithDirect(open.state.value, screen) },
-                )
-            }
-            claimed += transcriptKey to callId
-            if (claimed.size > 128) claimed.remove(claimed.first())
-            val accepts = { ownsChat() && placement.isDirectRunning(open.state.value) }
-            prepareTranscript(screen, transcriptKey, accepts)
-            if (!screen.wait) return buildJsonObject { put("shown", true) }
-            return screens.await(screen, transcriptKey, transcriptId = callId, changes = changes, accepts = accepts)
+            return runScreenPlacement(
+                open.state, screen, ownsChat, claimed = { transcriptKey to it in claimed },
+                direct = { callId ->
+                    claimed += transcriptKey to callId
+                    if (claimed.size > 128) claimed.remove(claimed.first())
+                    val accepts = { ownsChat() && open.state.value.messages.any { message ->
+                        message is ChatMessage.Assistant && message.tools.any { it.running && it.id == callId }
+                    } }
+                    prepareTranscript(screen, transcriptKey, accepts)
+                    if (screen.wait) screens.await(screen, transcriptKey, transcriptId = callId, changes = changes, accepts = accepts)
+                    else buildJsonObject { put("shown", true) }
+                },
+                standalone = { placement ->
+                    val key = gatewayAgentScreenChat(open.gateway.value, open.profile, stored)
+                    val drawing = checkedScreen { screens.gatewayDrawing(screen, key, open) }
+                    screens.awaitGatewayCard(
+                        screen, drawing, key, Uuid.random().toString(), owner = open, changes = changes,
+                        anchor = placement.anchor(open.state.value),
+                        isWaiting = { placement.canShowStandalone(open.state.value) },
+                        ownsChat = { ownsChat() && !placement.conflictsWithDirect(open.state.value, screen) },
+                    )
+                },
+            )
         }
         // Preserve compatibility for requests whose session isn't yet known to the currently open chat.
         val chat = chats.of(session)?.let { desktopAgentScreenChat(it.gateway, it.profile, it.storedSessionId) }
