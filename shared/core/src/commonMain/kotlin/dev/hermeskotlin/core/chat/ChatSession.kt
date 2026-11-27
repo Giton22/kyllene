@@ -3193,6 +3193,9 @@ class ChatSession(
                     event.replayEpoch == epoch && watermark != null && (event.seq ?: 0) > watermark
                 }
             }
+            // Picked up from the last seq: the catch-up orders these frames among the replayed ones, and applies them
+            // itself when the ring can't answer, so a newer turn can't be ended by an older completion.
+            running && resumable -> early
             running && pending != null && early.lastOrNull()?.type == "message.complete" &&
                 (legacyReceiptEndsTurn(early.last(), result.double("turn_started_at")) ||
                     legacyTurnEnded(client, result.string("session_key") ?: stored, runtimeId, pending.boundary)) ->

@@ -191,4 +191,39 @@ class ChatResumeBoundaryTest {
     fun earlyAuthorityFramesOfThisChatBeyondTheLimitRecoverFromAFreshSnapshot() = runTest(timeout = 8.seconds) {
         completionAtResponseBoundary(this, beforeReply = true, watermark = 0, ownOverflow = true)
     }
+
+    /** Picked up from the last seq on the legacy gateway: the catch-up places the early completion, with no status polls. */
+    @Test
+    fun aResumableLegacyReconnectKeepsTheEarlyCompletionWithoutPolling() = runTest(timeout = 8.seconds) {
+        val gateway = fixture(backgroundScope)
+        var resumes = 0
+        var statusReads = 0
+        gateway.answer = { call ->
+            when (call.method) {
+                "session.resume" -> if (++resumes == 1) """{"session_id":"rt","running":true,"inflight":{"assistant":"Partial"}}""" else {
+                    val snapshot = """{"session_id":"rt","running":true,"inflight":{"assistant":"Partial more"}}"""
+                    call.socket.push(event("message.complete", "rt", end, 2) + "\n" + call.reply(snapshot))
+                    null
+                }
+                // The ring can't answer, so only the frame taken at the boundary can end the turn.
+                "session.events.since" -> "error:4040"
+                "session.active_list" -> {
+                    statusReads++
+                    """{"sessions":[{"id":"rt","session_key":"stored","status":"idle"}]}"""
+                }
+                else -> "{}"
+            }
+        }
+        gateway.start(awaitConnected = true)
+        val chat = gateway.chat(backgroundScope)
+        chat.state.first { it.runtimeSessionId == "rt" && it.historyRead }
+        gateway.socket.push(event("message.delta", "rt", """{"text":" more"}""", 1))
+        runCurrent()
+        transcript = """{"session_id":"stored","messages":[{"id":1,"role":"user","content":"Prompt"},{"id":2,"role":"assistant","timestamp":110,"content":"Final answer"}]}"""
+        gateway.socket.serverClose(1006)
+        chat.state.first { resumes == 2 && !it.running }
+        runCurrent()
+        assertEquals(0, statusReads)
+        assertEquals(listOf("Final answer"), chat.state.value.messages.filterIsInstance<ChatMessage.Assistant>().map { it.text })
+    }
 }
