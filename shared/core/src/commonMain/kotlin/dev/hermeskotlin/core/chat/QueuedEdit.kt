@@ -59,12 +59,20 @@ internal fun ChatState.withPendingAdmissions(pending: JsonElement?): ChatState =
     replaceableAdmissions(pending)?.let { copy(replaceableAdmissions = it) } ?: this
 
 /**
- * Queued prompt [key] after the gateway admitted its edit as [admission] (sent as [submission]): the new text, and,
- * like the gateway, at the back of the queue. One whose turn already began isn't waiting any more.
+ * Queued prompt [key] after the gateway admitted its edit, which [replaced] the prompt's admission, as [admission]
+ * (sent as [submission]): the new text, and, like the gateway, at the back of the queue. One whose turn already began
+ * isn't waiting any more. A prompt that no longer holds [replaced] (another chat's, after a switch) is left alone.
  */
-internal fun ChatState.withQueuedEdit(key: String, text: String, admission: String, submission: String): ChatState {
+internal fun ChatState.withQueuedEdit(
+    key: String,
+    replaced: String,
+    text: String,
+    admission: String,
+    submission: String,
+): ChatState {
     val index = messages.indexOfFirst { it.key == key }
     val prompt = messages.getOrNull(index) as? ChatMessage.User ?: return this
+    if (prompt.admissionId != replaced) return this
     val started = admission in startedAdmissions
     val edited = prompt.copy(text = text, sentText = text, admissionId = admission, submissionId = submission, queued = !started)
     val rest = messages.toMutableList().apply { removeAt(index) }

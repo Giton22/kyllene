@@ -2200,7 +2200,7 @@ class ChatSession(
             return QueuedEditOutcome.Failed
         }
         val admitted = result.string("admission_id") ?: return QueuedEditOutcome.Failed
-        _state.update { it.withQueuedEdit(key, trimmed, admitted, submission) }
+        _state.update { it.withQueuedEdit(key, admission, trimmed, admitted, submission) }
         return QueuedEditOutcome.Replaced
     }
 

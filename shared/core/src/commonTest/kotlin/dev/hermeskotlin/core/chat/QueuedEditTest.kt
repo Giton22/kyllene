@@ -84,7 +84,7 @@ class QueuedEditTest {
             replaceableAdmissions = setOf("adm-2", "adm-3"),
         )
 
-        val edited = state.withQueuedEdit("local-2", "second, edited", "adm-4", "sub-4")
+        val edited = state.withQueuedEdit("local-2", "adm-2", "second, edited", "adm-4", "sub-4")
 
         assertEquals(listOf("local-1", "reply-1", "local-3", "local-2"), edited.messages.map { it.key })
         val prompt = edited.messages.last() as ChatMessage.User
@@ -100,14 +100,26 @@ class QueuedEditTest {
     fun anEditWhoseTurnAlreadyStartedIsNotShownWaiting() {
         val state = queuedState().copy(startedAdmissions = listOf("adm-4"))
 
-        val edited = state.withQueuedEdit("local-2", "edited", "adm-4", "sub-4")
+        val edited = state.withQueuedEdit("local-2", "adm-2", "edited", "adm-4", "sub-4")
 
         assertFalse((edited.messages.last() as ChatMessage.User).queued)
     }
 
     @Test
+    fun aLateAnswerForAnotherChatsPromptChangesNothing() {
+        // After a chat switch, `local-2` is another chat's prompt, waiting as another admission.
+        val other = queuedState().copy(
+            messages = queuedState().messages.map {
+                if (it is ChatMessage.User && it.key == "local-2") it.copy(text = "other", sentText = "other", admissionId = "adm-9") else it
+            },
+        )
+
+        assertEquals(other, other.withQueuedEdit("local-2", "adm-2", "edited", "adm-4", "sub-4"))
+    }
+
+    @Test
     fun theEditedPromptsTurnStartReleasesIt() {
-        val edited = queuedState().withQueuedEdit("local-2", "edited", "adm-4", "sub-4")
+        val edited = queuedState().withQueuedEdit("local-2", "adm-2", "edited", "adm-4", "sub-4")
 
         val started = edited.reduce(GatewayEvent("message.start", null, "stored-1", null, admissionId = "adm-4"))
 
