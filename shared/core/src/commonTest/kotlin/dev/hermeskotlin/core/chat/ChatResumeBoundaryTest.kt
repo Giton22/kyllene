@@ -195,6 +195,16 @@ class ChatResumeBoundaryTest {
     /** Picked up from the last seq on the legacy gateway: the catch-up places the early completion, with no status polls. */
     @Test
     fun aResumableLegacyReconnectKeepsTheEarlyCompletionWithoutPolling() = runTest(timeout = 8.seconds) {
+        resumableLegacyReconnect(this, ringAnswers = false)
+    }
+
+    /** The ring replays the same completion: applied once, the early copy dropped as already seen. */
+    @Test
+    fun aReplayedEarlyLegacyCompletionIsAppliedOnce() = runTest(timeout = 8.seconds) {
+        resumableLegacyReconnect(this, ringAnswers = true)
+    }
+
+    private suspend fun resumableLegacyReconnect(scope: TestScope, ringAnswers: Boolean) = with(scope) {
         val gateway = fixture(backgroundScope)
         var resumes = 0
         var statusReads = 0
@@ -205,8 +215,9 @@ class ChatResumeBoundaryTest {
                     call.socket.push(event("message.complete", "rt", end, 2) + "\n" + call.reply(snapshot))
                     null
                 }
-                // The ring can't answer, so only the frame taken at the boundary can end the turn.
-                "session.events.since" -> "error:4040"
+                // When the ring can't answer, only the frame taken at the boundary can end the turn.
+                "session.events.since" -> if (!ringAnswers) "error:4040" else
+                    """{"latest_seq":2,"truncated":false,"events":[{"session_id":"rt","seq":2,"type":"message.complete","payload":$end}]}"""
                 "session.active_list" -> {
                     statusReads++
                     """{"sessions":[{"id":"rt","session_key":"stored","status":"idle"}]}"""
@@ -220,10 +231,14 @@ class ChatResumeBoundaryTest {
         gateway.socket.push(event("message.delta", "rt", """{"text":" more"}""", 1))
         runCurrent()
         transcript = """{"session_id":"stored","messages":[{"id":1,"role":"user","content":"Prompt"},{"id":2,"role":"assistant","timestamp":110,"content":"Final answer"}]}"""
+        var reads = 0
+        beforeRead = { reads++ }
         gateway.socket.serverClose(1006)
         chat.state.first { resumes == 2 && !it.running }
         runCurrent()
         assertEquals(0, statusReads)
+        // The reconnect reads once either way; only a ring miss reads the transcript again.
+        assertEquals(if (ringAnswers) 1 else 2, reads)
         assertEquals(listOf("Final answer"), chat.state.value.messages.filterIsInstance<ChatMessage.Assistant>().map { it.text })
     }
 }
