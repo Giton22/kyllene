@@ -141,9 +141,10 @@ fun main(args: Array<String>) {
     // A second launch brings the running Herald forward, with its link, instead of opening another.
     val flatpak = inFlatpak
     val restartWait = if (flatpak && args.contentEquals(arrayOf("--restart"))) 30_000L else 0L
-    val startupCapable = flatpak && java.awt.SystemTray.isSupported()
     val quietLaunch = backgroundInvocation(args, flatpak)
     val instance = SingleInstance.claim(appDataDir, launchLink, restartWait, foreground = !quietLaunch) ?: exitProcess(if (restartWait > 0) 1 else 0)
+    // Asked after the hand-off: a launch that only reaches the running one needn't start AWT.
+    val startupCapable = flatpak && java.awt.SystemTray.isSupported()
     // Linux's light or dark preference, which Compose reads only once there: this follows it as it changes. Asked
     // for now, so the answer comes in while the storage and the settings are read.
     val colorScheme = if (System.getProperty("os.name") == "Linux") LinuxColorScheme({ SystemColorScheme.dark = it }) else null

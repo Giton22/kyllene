@@ -50,7 +50,7 @@ class SingleInstance private constructor(private val lock: FileLock?, private va
         /**
          * This launch's claim, or null when another Herald runs and has been asked to come forward (and to open
          * [link], when given). A holder that doesn't answer may be on its way out, so this one runs then too, only
-         * without the claim. A background claim leaves an instance that answers alone, without bringing it forward.
+         * without the claim. A background claim leaves any holder alone.
          */
         fun claim(dir: File, link: String? = null, waitForExitMillis: Long = 0, foreground: Boolean = true): SingleInstance? {
             dir.mkdirs()
@@ -70,14 +70,13 @@ class SingleInstance private constructor(private val lock: FileLock?, private va
             }
             if (lock == null) {
                 channel.close()
+                // A login launch beside one on its way out would be a second Kyllene that no launch can reach.
+                if (!foreground) return null
                 val port = portFile.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull()
                 val reached = port != null && runCatching {
-                    // One line: a link can't carry a line break into the next message. A background launch only
-                    // checks the holder answers and says nothing, which it ignores.
+                    // One line: a link can't carry a line break into the next message.
                     val message = link?.takeIf { '\n' !in it && '\r' !in it }?.let { "$OPEN $it" } ?: SHOW
-                    Socket(InetAddress.getLoopbackAddress(), port).use {
-                        if (foreground) it.getOutputStream().write("$message\n".toByteArray())
-                    }
+                    Socket(InetAddress.getLoopbackAddress(), port).use { it.getOutputStream().write("$message\n".toByteArray()) }
                 }.isSuccess
                 return if (reached) null else SingleInstance(null, null)
             }

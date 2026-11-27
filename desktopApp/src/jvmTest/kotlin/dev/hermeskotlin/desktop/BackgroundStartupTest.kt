@@ -109,8 +109,8 @@ class BackgroundStartupTest {
                         java.io.File(dir, "instance.port").writeText(server.localPort.toString())
                         assertFalse(backgroundLaunch(arrayOf("--background"), StartupChoice.Background, false))
                         assertNull(SingleInstance.claim(dir, foreground = !backgroundInvocation(arrayOf("--background"), true)))
-                        server.soTimeout = 1_000
-                        server.accept().use { assertNull(it.getInputStream().bufferedReader().readLine()) }
+                        server.soTimeout = 100
+                        kotlin.test.assertFailsWith<java.net.SocketTimeoutException> { server.accept() }
                         assertNull(SingleInstance.claim(dir))
                         server.accept().use { assertEquals("show", it.getInputStream().bufferedReader().readLine()) }
                     }
@@ -119,17 +119,18 @@ class BackgroundStartupTest {
         } finally { dir.deleteRecursively() }
     }
 
-    @Test fun `a background launch still runs when the lock holder doesn't answer`() {
+    @Test fun `a background launch leaves a lock holder that doesn't answer alone`() {
         val dir = java.nio.file.Files.createTempDirectory("startup-instance-").toFile()
         try {
             java.io.RandomAccessFile(java.io.File(dir, "instance.lock"), "rw").use { file ->
                 file.channel.lock().use {
-                    // A port nothing listens on: the holder is on its way out, or hung.
+                    // A port nothing listens on: the holder is on its way out, or hung. A second Kyllene beside it
+                    // would hold no claim, so no later launch could reach it.
                     val port = java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress()).use { it.localPort }
                     java.io.File(dir, "instance.port").writeText(port.toString())
-                    kotlin.test.assertNotNull(SingleInstance.claim(dir, foreground = false)).close()
+                    assertNull(SingleInstance.claim(dir, foreground = false))
                     java.io.File(dir, "instance.port").delete()
-                    kotlin.test.assertNotNull(SingleInstance.claim(dir, foreground = false)).close()
+                    assertNull(SingleInstance.claim(dir, foreground = false))
                 }
             }
         } finally { dir.deleteRecursively() }
