@@ -116,8 +116,6 @@
     <string name="bots_needs_attention">Demande de l’attention</string>
     <string name="bots_unread">Non lu</string>
     <string name="bots_needs_you">%1$s a besoin de vous</string>
-    <string name="bots_review">Voir</string>
-    <string name="bots_open">Ouvrir</string>
     <string name="bots_start_fresh_title">Repartir de zéro avec %1$s ?</string>
     <string name="bots_start_fresh_detail">La conversation de %1$s est archivée et une nouvelle, vide, commence. %1$s garde sa mémoire, ses skills et ses réglages, et l’ancienne conversation reste archivée sur le Gateway.</string>
     <string name="bots_edit_named">Modifier %1$s</string>

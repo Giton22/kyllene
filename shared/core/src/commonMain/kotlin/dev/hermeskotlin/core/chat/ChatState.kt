@@ -250,6 +250,8 @@ data class ChatState(
     val control: SessionControl? = null,
     /** Source of unique keys for messages created on this device. */
     val keySeq: Int = 0,
+    /** Newest timestamp in the gateway's stored transcript, in epoch seconds on the gateway clock. */
+    val storedActivityAt: Double? = null,
 ) {
     val runtimeSessionId: String? get() = (attachment as? Attachment.Attached)?.runtimeSessionId
 

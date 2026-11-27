@@ -928,6 +928,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
                         onSwitchProfile = app::switchProfile,
                         viewModel = chat,
                         // Not while a page or the chat's menu covers it: typing there mustn't land in the composer.
+                        attentionVisible = chatShown && !drawerOver && !menuOpen,
                         keysEnabled = chatShown && !menuOpen,
                         sessionsBadge = if (alerts) sessionsBadge else SessionsBadge(),
                         otherChatBanner = banner.takeIf { alerts && settings.otherChatsBanner && !drawerOver },

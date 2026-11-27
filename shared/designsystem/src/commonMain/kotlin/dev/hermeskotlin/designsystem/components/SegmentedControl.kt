@@ -77,6 +77,10 @@ fun <T> SegmentedControl(
     optionBadge: (T) -> String? = { null },
     /** Off, the options are dimmed and say so to accessibility services, and a tap does nothing. */
     enabled: Boolean = true,
+    /** Whether resting the pointer over an option adds a tint. */
+    highlightOnHover: Boolean = true,
+    /** Optional custom content after the label. Use in place of [optionBadge]. */
+    trailingContent: @Composable (T) -> Unit = {},
 ) {
     val track = Theme[colors][well]
     val ring = Theme[colors][stroke]
@@ -134,7 +138,7 @@ fun <T> SegmentedControl(
                         .clip(CircleShape)
                         .background(fill, CircleShape)
                         .border(1.dp, edge, CircleShape)
-                        .indication(interaction, rememberHoverIndication(Theme[colors][text], CircleShape))
+                        .indication(interaction, rememberHoverIndication(Theme[colors][text], CircleShape, highlightOnHover))
                         .padding(horizontal = 6.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically,
@@ -150,6 +154,7 @@ fun <T> SegmentedControl(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.weight(1f, fill = false),
                     )
+                    trailingContent(option)
                     // A large font leaves the label too little room beside it, and the count is extra.
                     optionBadge(option)?.takeIf { badges }?.let {
                         Text(

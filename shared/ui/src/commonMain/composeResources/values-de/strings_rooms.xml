@@ -116,8 +116,6 @@
     <string name="bots_needs_attention">Braucht Aufmerksamkeit</string>
     <string name="bots_unread">Ungelesen</string>
     <string name="bots_needs_you">%1$s braucht dich</string>
-    <string name="bots_review">Ansehen</string>
-    <string name="bots_open">Öffnen</string>
     <string name="bots_start_fresh_title">Mit %1$s neu anfangen?</string>
     <string name="bots_start_fresh_detail">Der Chat von %1$s wird archiviert und ein neuer, leerer beginnt. %1$s behält sein Gedächtnis, seine Skills und Einstellungen, und der alte Chat bleibt archiviert auf dem Gateway.</string>
     <string name="bots_edit_named">%1$s bearbeiten</string>

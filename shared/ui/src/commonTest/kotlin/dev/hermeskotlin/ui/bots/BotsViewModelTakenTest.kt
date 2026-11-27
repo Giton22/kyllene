@@ -197,6 +197,7 @@ class BotsViewModelTakenTest {
             models = ModelsApi(connection),
             host = host,
             attention = AttentionTracker(connection, host, ActiveSessions(connection, scope), scope),
+            store = InMemoryKeyValueStore(),
         )
     }
 

@@ -49,6 +49,7 @@ import dev.hermeskotlin.core.voice.VoiceActivity
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.core.voice.VoiceRecorder
 import dev.hermeskotlin.designsystem.HermesTheme
+import dev.hermeskotlin.ui.sessions.SidebarChatAcknowledgements
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
@@ -168,6 +169,7 @@ class ComposerImagePasteTest {
                 single { settings }
                 single { ProjectsApi(connection) }
                 single { WallpaperStore(InMemoryBlobFile(), scope) }
+                single { SidebarChatAcknowledgements(store) }
             })
         }
         var root: View? = null

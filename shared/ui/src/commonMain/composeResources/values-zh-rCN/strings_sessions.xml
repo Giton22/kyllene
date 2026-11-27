@@ -37,11 +37,11 @@
     <string name="sessions_load_failed_detail">无法加载会话。%1$s</string>
     <string name="sessions_empty_project">此项目中没有对话。</string>
     <string name="sessions_empty">你的对话会显示在这里。</string>
-    <string name="sessions_none_running">目前没有正在运行的内容。</string>
-    <string name="sessions_none_waiting">目前没有需要你处理的内容。</string>
     <string name="sessions_nothing_archived">没有已归档的内容</string>
     <string name="sessions_nothing_archived_detail">已归档的会话不会出现在最近列表中，但仍可继续。</string>
     <string name="sessions_filter_all">全部</string>
+    <string name="sessions_filter_all_chats">全部对话</string>
+    <string name="sessions_drawer_tools">工具</string>
     <string name="sessions_filter_needs_you">待你处理</string>
     <string name="sessions_section_threads">话题</string>
     <string name="sessions_section_pinned">已置顶</string>

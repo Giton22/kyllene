@@ -64,7 +64,7 @@ the app talks to your gateway directly.
 - A chat's cost, token use and what fills its context window
 
 **Organize**
-- Sessions sidebar with search, pins, projects, archive, export and Running / Needs you filters
+- Sessions sidebar with search, pins, project chips or a dropdown, archive, export, and direct All chats / Running / Needs you filters. Chats and Bots show unseen counts, and bot alerts open the chat or failed routine.
 - Bots and rooms: chat with each bot, follow their exchanges, and @mention them in a room
 - Scheduled jobs: create, edit, pause and run them, and open each run as a chat
 - Capabilities: turn skills, toolsets and MCP servers on or off, and test a server

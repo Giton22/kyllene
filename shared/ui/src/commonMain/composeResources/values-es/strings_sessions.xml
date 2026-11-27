@@ -38,11 +38,11 @@
     <string name="sessions_load_failed_detail">No se pudieron cargar las sesiones. %1$s</string>
     <string name="sessions_empty_project">No hay chats en este proyecto.</string>
     <string name="sessions_empty">Tus conversaciones aparecerán aquí.</string>
-    <string name="sessions_none_running">No hay nada en curso ahora mismo.</string>
-    <string name="sessions_none_waiting">Nada te espera ahora mismo.</string>
     <string name="sessions_nothing_archived">Nada archivado</string>
     <string name="sessions_nothing_archived_detail">Las sesiones archivadas no salen en Recientes, pero se pueden retomar.</string>
     <string name="sessions_filter_all">Todos</string>
+    <string name="sessions_filter_all_chats">Todos los chats</string>
+    <string name="sessions_drawer_tools">Herramientas</string>
     <string name="sessions_filter_needs_you">Te esperan</string>
     <string name="sessions_section_threads">Hilos</string>
     <string name="sessions_section_pinned">Fijados</string>

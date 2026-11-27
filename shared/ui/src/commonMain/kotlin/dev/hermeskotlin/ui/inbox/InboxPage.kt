@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -75,6 +76,7 @@ import dev.hermeskotlin.core.inbox.InboxGroups
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -99,6 +101,7 @@ import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
 import dev.hermeskotlin.designsystem.body
 import dev.hermeskotlin.designsystem.bodySmall
+import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.code
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.Chip
@@ -314,10 +317,10 @@ internal fun InboxView(
             Modifier.fillMaxSize(),
             state = foldersList,
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isDesktop) 8.dp else 0.dp),
         ) {
             items(state.folders, key = { it.filter.key }) { folder ->
-                FolderCard(
+                FolderRow(
                     folder,
                     recent = state.more,
                     newestName = state.nameOf(folder.newest),
@@ -325,16 +328,20 @@ internal fun InboxView(
                     // A group's folder with nothing unread has nothing to offer: it's renamed on the groups page.
                     onLongClick = { folderMenu = folder }.takeIf { folder.unread > 0 || folder.filter is InboxFilter.Job },
                 )
+                if (!isDesktop) InboxRowDivider()
             }
             if (state.failed > 0) {
-                item(key = "failed") { FailedFolder(state.failed, onClick = { viewModel.setFilter(InboxFilter.Failed) }) }
+                item(key = "failed") {
+                    FailedFolder(state.failed, onClick = { viewModel.setFilter(InboxFilter.Failed) })
+                    if (!isDesktop) InboxRowDivider()
+                }
             }
         }
         else -> LazyColumn(
             Modifier.fillMaxSize(),
             state = runsList,
             contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 96.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(if (isDesktop) 8.dp else 0.dp),
         ) {
             var lastDay: String? = null
             shown.forEach { run ->
@@ -352,8 +359,8 @@ internal fun InboxView(
                             SwipeAction(stringResource(Res.string.inbox_mark_unread), Lucide.CircleDot, SwipeKind.Pin) { viewModel.setRead(run, read = false) }
                         else -> null
                     }
-                    SwipeRow(start = swipe, end = swipe, shape = RoundedCornerShape(Theme[radii][radiusLarge])) { swipeActions ->
-                        RunCard(
+                    SwipeRow(start = swipe, end = swipe, shape = RectangleShape) { swipeActions ->
+                        RunRow(
                             run,
                             state.nameOf(run),
                             unread = unread,
@@ -363,6 +370,7 @@ internal fun InboxView(
                             fetching = state.fetching?.key == run.key,
                         )
                     }
+                    if (!isDesktop) InboxRowDivider()
                 }
             }
             if (state.more || state.moreError != null) {
@@ -501,11 +509,10 @@ private fun FilterChips(state: InboxUiState, onSelect: (InboxFilter) -> Unit, on
     }
 }
 
-/** A folder: its name, unread count, when it last reported and that report's opening words. */
+/** A folder's name, unread count, report status and latest report time. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean, onClick: () -> Unit, onLongClick: (() -> Unit)?) {
-    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+private fun FolderRow(folder: InboxFolder, newestName: String, recent: Boolean, onClick: () -> Unit, onLongClick: (() -> Unit)?) {
     val group = folder.filter is InboxFilter.Group
     val label = folderLabel(folder.filter, folder.label)
     val openLabel = stringResource(Res.string.inbox_open_named, label)
@@ -514,9 +521,7 @@ private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean,
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(Theme[colors][surface])
-            .border(1.dp, Theme[colors][stroke], shape)
+            .inboxRowSurface()
             .then(if (isDesktop && onLongClick != null) Modifier.onSecondaryPress(onPress = onLongClick) else Modifier)
             .combinedClickable(
                 onClickLabel = openLabel,
@@ -524,8 +529,9 @@ private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean,
                 onLongClickLabel = onLongClick?.let { moreLabel },
                 onLongClick = onLongClick,
             )
-            .padding(14.dp),
+            .padding(if (isDesktop) 14.dp else 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = if (isDesktop) Alignment.Top else Alignment.CenterVertically,
     ) {
         Box(Modifier.size(40.dp).background(Theme[colors][accentSoft], RoundedCornerShape(Theme[radii][radiusSmall])), contentAlignment = Alignment.Center) {
             UnstyledIcon(if (group) Lucide.FolderOpen else Lucide.Folder, contentDescription = null, tint = Theme[colors][accentText], modifier = Modifier.size(18.dp))
@@ -563,20 +569,23 @@ private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean,
             Text(
                 buildString {
                     append(reports)
+                    if (!isDesktop && folder.failed > 0) append(" · ").append(failedRuns)
                     append(" · ")
                     append(time)
-                    if (folder.failed > 0) append(" · ").append(failedRuns)
+                    if (isDesktop && folder.failed > 0) append(" · ").append(failedRuns)
                 },
-                style = Theme[typography][code].copy(fontSize = 11.5.sp),
+                style = if (isDesktop) Theme[typography][code].copy(fontSize = 11.5.sp) else Theme[typography][caption],
                 color = if (folder.failed > 0) Theme[colors][danger] else Theme[colors][textMuted],
             )
-            Text(
-                (if (group) "$newestName: " else "") + remember(folder.newest.text) { folder.newest.text.toPreview() },
-                style = Theme[typography][bodySmall].copy(fontSize = 13.sp, lineHeight = 19.sp),
-                color = Theme[colors][textSecondary],
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (isDesktop) {
+                Text(
+                    (if (group) "$newestName: " else "") + remember(folder.newest.text) { folder.newest.text.toPreview() },
+                    style = Theme[typography][bodySmall].copy(fontSize = 13.sp, lineHeight = 19.sp),
+                    color = Theme[colors][textSecondary],
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -584,15 +593,12 @@ private fun FolderCard(folder: InboxFolder, newestName: String, recent: Boolean,
 /** Every failed run, as one more folder after the rest. */
 @Composable
 private fun FailedFolder(count: Int, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(Theme[colors][surface])
-            .border(1.dp, Theme[colors][stroke], shape)
+            .inboxRowSurface()
             .clickable(onClickLabel = stringResource(Res.string.inbox_open_failed_runs), onClick = onClick)
-            .padding(14.dp),
+            .padding(if (isDesktop) 14.dp else 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -602,6 +608,18 @@ private fun FailedFolder(count: Int, onClick: () -> Unit) {
         Text(stringResource(Res.string.inbox_failed_runs), style = Theme[typography][body].copy(fontWeight = FontWeight.Medium), color = Theme[colors][text], modifier = Modifier.weight(1f))
         Text(count.toString(), style = Theme[typography][code].copy(fontSize = 12.sp), color = Theme[colors][danger])
     }
+}
+
+@Composable
+private fun Modifier.inboxRowSurface(): Modifier {
+    if (!isDesktop) return this
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    return clip(shape).background(Theme[colors][surface]).border(1.dp, Theme[colors][stroke], shape)
+}
+
+@Composable
+private fun InboxRowDivider() {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
 }
 
 @Composable
@@ -638,12 +656,12 @@ private fun DayLabel(day: String) {
 }
 
 /**
- * A run as a card: the job, when, the start of what it said, and a dot while it's unread. [modifier] goes on its
+ * A run's job, status, time and opening words, with a dot while it's unread. [modifier] goes on its
  * clickable node, as [SwipeRow]'s screen-reader actions must.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun RunCard(
+private fun RunRow(
     run: InboxRun,
     name: String,
     unread: Boolean,
@@ -653,14 +671,15 @@ private fun RunCard(
     /** Its whole report is on its way, for Ask or Copy from its menu. */
     fetching: Boolean = false,
 ) {
-    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
-    val (tile, tint) = if (run.failed) Theme[colors][dangerSoft] to Theme[colors][danger] else Theme[colors][accentSoft] to Theme[colors][accentText]
+    val (tile, tint) = when {
+        run.failed -> Theme[colors][dangerSoft] to Theme[colors][danger]
+        isDesktop -> Theme[colors][accentSoft] to Theme[colors][accentText]
+        else -> Theme[colors][surface2] to Theme[colors][textSecondary]
+    }
     Row(
         modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(Theme[colors][surface])
-            .border(1.dp, Theme[colors][stroke], shape)
+            .inboxRowSurface()
             // A right-click is a desktop's long press, as on the session rows.
             .then(if (isDesktop) Modifier.onSecondaryPress(onPress = onLongClick) else Modifier)
             .combinedClickable(
@@ -669,7 +688,7 @@ private fun RunCard(
                 onLongClickLabel = stringResource(Res.string.inbox_more_for_report),
                 onLongClick = onLongClick,
             )
-            .padding(14.dp),
+            .padding(if (isDesktop) 14.dp else 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(Modifier.size(36.dp).background(tile, RoundedCornerShape(Theme[radii][radiusSmall])), contentAlignment = Alignment.Center) {
@@ -693,7 +712,7 @@ private fun RunCard(
             }
             Text(
                 runWhen(run.failed, timeLabel(run.at)),
-                style = Theme[typography][code].copy(fontSize = 11.5.sp),
+                style = if (isDesktop) Theme[typography][code].copy(fontSize = 11.5.sp) else Theme[typography][caption],
                 color = if (run.failed) Theme[colors][danger] else Theme[colors][textMuted],
             )
             Text(

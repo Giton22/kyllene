@@ -38,11 +38,11 @@
     <string name="sessions_load_failed_detail">Não foi possível carregar as sessões. %1$s</string>
     <string name="sessions_empty_project">Nenhuma conversa neste projeto.</string>
     <string name="sessions_empty">Suas conversas vão aparecer aqui.</string>
-    <string name="sessions_none_running">Nada em andamento agora.</string>
-    <string name="sessions_none_waiting">Nada esperando por você agora.</string>
     <string name="sessions_nothing_archived">Nada arquivado</string>
     <string name="sessions_nothing_archived_detail">Sessões arquivadas ficam ocultas em Recentes, mas podem ser retomadas.</string>
     <string name="sessions_filter_all">Todas</string>
+    <string name="sessions_filter_all_chats">Todas as conversas</string>
+    <string name="sessions_drawer_tools">Ferramentas</string>
     <string name="sessions_filter_needs_you">Esperam você</string>
     <string name="sessions_section_threads">Tópicos</string>
     <string name="sessions_section_pinned">Fixadas</string>
