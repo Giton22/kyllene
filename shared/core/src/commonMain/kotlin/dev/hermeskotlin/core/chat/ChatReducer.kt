@@ -221,8 +221,12 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
     }
     // After a correction, the part above it was already shown and the final text repeats it.
     val shown = (messages.find { it.key == correctedReplyKey } as? ChatMessage.Assistant)?.text?.takeIf { it.isNotBlank() }
+    val openKey = (messages.getOrNull(messages.openReplyIndex()) as? ChatMessage.Assistant)?.key ?: "live-$keySeq"
     val finalText = payload.string("text").orEmpty().let { text ->
         if (shown != null && text.startsWith(shown)) text.removePrefix(shown).trim() else text
+    }.let { text ->
+        // A completed turn's final is its last response, whose start may be in the part above a correction.
+        if (outcome == TurnOutcome.Complete) text.withoutCarried(carriedResponse(openKey)) else text
     }
     val finalReasoning = payload.string("reasoning").orEmpty().takeIf { correctedReplyKey == null }.orEmpty()
     val finalUsage = SessionUsage.parse(payload?.get("usage") as? JsonObject)
@@ -304,6 +308,25 @@ private fun ChatState.endTurn(messages: List<ChatMessage>, finalUsage: SessionUs
 private fun ChatState.markResponseStart(): ChatState {
     val reply = messages.getOrNull(messages.openReplyIndex()) as? ChatMessage.Assistant ?: return this
     return copy(responseStart = ResponseStart(reply.key, reply.text.length))
+}
+
+/**
+ * The start of the current response that a correction sealed into the reply above, when the reply [key] holds the
+ * rest: kept from when that reply opened, or, for one `message.complete` opens, read from the sealed reply now.
+ */
+private fun ChatState.carriedResponse(key: String): String {
+    val start = responseStart ?: return ""
+    if (start.replyKey == key) return start.carried
+    if (start.replyKey != correctedReplyKey) return ""
+    val sealed = messages.find { it.key == start.replyKey } as? ChatMessage.Assistant ?: return ""
+    return sealed.text.substring(start.offset.coerceIn(0, sealed.text.length))
+}
+
+/** This final response without the start of it that [carried] already showed. */
+private fun String.withoutCarried(carried: String): String {
+    val shown = carried.trim()
+    val whole = trim()
+    return if (shown.isNotEmpty() && whole.startsWith(shown)) whole.removePrefix(shown).trim() else this
 }
 
 /**
@@ -414,10 +437,11 @@ private fun ChatState.withOpenReply(change: (ChatMessage.Assistant) -> ChatMessa
     return if (index >= 0) {
         copy(messages = messages.toMutableList().apply { set(index, change(get(index) as ChatMessage.Assistant)) })
     } else {
-        // A reply opened here holds only what arrives from now on: its text is all one response until a tool.
+        // A reply opened here holds only what arrives from now on: its text is all one response until a tool. Below a
+        // correction, that response may have begun in the reply sealed above.
         copy(
             messages = messages + change(ChatMessage.Assistant(key = "live-$keySeq", streaming = true)),
-            responseStart = ResponseStart("live-$keySeq", 0),
+            responseStart = ResponseStart("live-$keySeq", 0, carried = carriedResponse("live-$keySeq")),
             keySeq = keySeq + 1,
         )
     }

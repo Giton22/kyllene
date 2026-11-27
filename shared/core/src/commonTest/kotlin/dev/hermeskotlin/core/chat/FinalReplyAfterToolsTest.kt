@@ -250,4 +250,40 @@ class FinalReplyAfterToolsTest {
         val text = historyToMessages(rows).filterIsInstance<ChatMessage.Assistant>().joinToString("|") { it.text }
         assertTrue("FINAL answer after the last tool." in text, text)
     }
+
+    /** A steer sent while the final response streams: the first [split] chars of it went into the reply sealed above. */
+    private fun steeredMidFinal(split: Int, vararg rest: GatewayEvent): List<ChatMessage.Assistant> =
+        twoSegments(event("message.delta", """{"text":"\n\n${final.take(split)}","segment":2,"offset":0}"""))
+            .let { it.copy(messages = it.messages + ChatMessage.User("s", "and log it")) }
+            .sealReplyBefore("s")
+            .apply(*rest, event("message.complete", """{"text":"$final","status":"complete"}"""))
+            .messages.filterIsInstance<ChatMessage.Assistant>()
+
+    @Test
+    fun aSteerMidFinalShowsTheFinalOnceAcrossBothParts() {
+        val parts = steeredMidFinal(12, event("message.delta", """{"text":"${final.drop(12)}","segment":2,"offset":12}"""))
+        assertEquals("$before\n\n$middle\n\n${final.take(12)}", parts.first().text)
+        assertEquals(final.drop(12), parts.last().text)
+    }
+
+    @Test
+    fun aSteerMidFinalWhoseRestDidntStreamShowsOnlyTheRestBelow() {
+        val parts = steeredMidFinal(12)
+        assertEquals("$before\n\n$middle\n\n${final.take(12)}", parts.first().text)
+        assertEquals(final.drop(12).trim(), parts.last().text)
+    }
+
+    @Test
+    fun aSteerAfterTheFinalStreamedOpensNoSecondCopy() {
+        val parts = steeredMidFinal(final.length)
+        assertEquals(1, parts.size, "parts: ${parts.map { it.text }}")
+        assertEquals("$before\n\n$middle\n\n$final", parts.single().text)
+    }
+
+    @Test
+    fun aSteerBeforeTheFinalShowsTheWholeFinalBelow() {
+        val parts = steeredMidFinal(0)
+        assertEquals(2, parts.size)
+        assertEquals(final, parts.last().text)
+    }
 }
