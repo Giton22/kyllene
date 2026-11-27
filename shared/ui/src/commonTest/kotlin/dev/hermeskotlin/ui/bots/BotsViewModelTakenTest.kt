@@ -425,12 +425,16 @@ class BotsViewModelTakenTest {
     @Test
     fun aHistoryThatCantBeReadBeforeAnyBadgeGoesByTheActivity() = runTest(dispatcher, timeout = 10.seconds) {
         val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
-        val vm = viewModel(socket) { profile, _ ->
-            if (profile == "after") historyPage(readableReply) else HttpStatusCode.ServiceUnavailable to "{}"
-        }
+        var history = HttpStatusCode.ServiceUnavailable to "{}"
+        val vm = viewModel(socket) { profile, _ -> if (profile == "after") historyPage(readableReply) else history }
         vm.bind(gateway.gatewayUrl)
         // `work` was active after the last look (1100 > 1000) and its history couldn't say otherwise.
         assertEquals(setOf("work", "after"), vm.state.first { "after" in it.unread }.unread)
+
+        // That was a guess: once the history can be read and shows only tool steps, the badge goes.
+        history = historyPage("""{"role":"tool","timestamp":1100}""")
+        vm.refresh()
+        assertEquals(setOf("after"), vm.state.first { "work" !in it.unread }.unread)
     }
 
     @Test

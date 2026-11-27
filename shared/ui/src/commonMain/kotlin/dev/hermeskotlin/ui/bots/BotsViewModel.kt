@@ -626,10 +626,14 @@ class BotsViewModel(
             val seen = seenStore.seen(url, bot.name).first()
             val looked = maxOf(seen.lastLook(chat.id), seen.lastLook(tip))
             val mayBeUnread = session.messageCount != 0 && seen.isUnread(chat, resolvedId = tip)
+            // A history that can't be read keeps the badge; before one was read here, the activity answers. That
+            // guess isn't kept as read, so the next refresh asks the history again.
+            var guessed = false
             val unread = if (mayBeUnread) {
                 checked[bot.name]?.takeIf { it.session == session && it.readUpTo == looked }?.unread
-                    // A history that can't be read keeps the badge; before one was read here, the activity answers.
-                    ?: hasUnreadBotHistory(url, bot.name, tip, looked, whenUnreadable = true.takeUnless { bot.name in checked })
+                    ?: hasUnreadBotHistory(url, bot.name, tip, looked) {
+                        true.takeUnless { bot.name in checked }?.also { guessed = true }
+                    }
                     ?: return
             } else false
 
@@ -639,7 +643,7 @@ class BotsViewModel(
                 if (state.all.none { it.name == bot.name && it.canonicalSession == session }) return@update state
                 state.copy(unread = if (unread) state.unread + bot.name else state.unread - bot.name)
             }
-            if (mayBeUnread) checked[bot.name] = CheckedHistory(session, looked, unread)
+            if (mayBeUnread && !guessed) checked[bot.name] = CheckedHistory(session, looked, unread)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -655,7 +659,7 @@ class BotsViewModel(
         tip: String,
         looked: Double,
         /** The answer when a page can't be read. */
-        whenUnreadable: Boolean?,
+        whenUnreadable: () -> Boolean?,
     ): Boolean? {
         val pageSize = 100
         var offset = 0
@@ -663,7 +667,7 @@ class BotsViewModel(
         repeat(UNREAD_HISTORY_PAGE_LIMIT) {
             if (gateway.value != url) return null
             val result = sessions.messages(url, tip, limit = pageSize, profile = profile, offset = offset, inlineImages = false)
-            val rows = (result as? ApiResult.Success)?.value?.messages ?: return whenUnreadable
+            val rows = (result as? ApiResult.Success)?.value?.messages ?: return whenUnreadable()
             val firstId = rows.firstOrNull()?.id
             if ((firstId != null && firstId == previous?.firstOrNull()?.id) || rows == previous) return null
             if (rows.hasUnreadBotMessage(looked)) return true
