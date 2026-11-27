@@ -153,11 +153,8 @@ class ChatSession(
     private var ownTurnsPending = 0
     private var foreignTurn = false
 
-    /** The gateway answered the last attach with an error (an [RpcException], not a lost link): a retry into the same turn would be refused the same way. */
-    private var lastAttachRefused = false
-
-    /** The live status at which the gateway last refused an attach; the live list retries once the status changes. */
-    private var refusedWhileRunning: LiveStatus? = null
+    /** The live status at which the live list's attach was last refused; retried once the row's status moves. */
+    private var refusedAtStatus: LiveStatus? = null
 
     /** A [rewind] cut the transcript; the stored rows replace the live copy once its turn ends. */
     private var rewound = false
@@ -2563,7 +2560,7 @@ class ChatSession(
             // A chat created on this link was live too, though it never resumed: it catches up the same way.
             val reconnected = attachedBefore || streamMutex.withLock { seqRuntime != null }
             // A send on this link may have attached first; that runtime is kept, not resumed a second time.
-            if (runCatchingAttach(connectionState.client, reconnected = reconnected, reuse = true)) attachedBefore = true
+            if (runCatchingAttach(connectionState.client, reconnected = reconnected, reuse = true) == AttachOutcome.Attached) attachedBefore = true
         }
     }
 
@@ -2577,30 +2574,37 @@ class ChatSession(
             // Compressing a chat goes on in a new stored session on the same runtime (as the watcher notes):
             // match that row too, or a compressed chat's turns would never stream in. The runtime the chat
             // last attached to outlives the drop (the state's own goes with the attachment).
-            val row = live.rows[stored]
-                ?: live.rows.values.firstOrNull { it.runtimeId == streamMutex.withLock { seqRuntime } }
-            val status = row?.status ?: return@collect
+            val lastRuntime = streamMutex.withLock { seqRuntime }
+            val row = live.rows[stored] ?: live.rows.values.firstOrNull { it.runtimeId == lastRuntime }
+            if (row == null) {
+                // The session unloaded: whatever turned an attach down is gone.
+                refusedAtStatus = null
+                return@collect
+            }
+            val status = row.status
             // Attached chats already receive the turn's events; the resume would only rebind. Not running:
             // the gateway streams a session only to attached sockets, but attaching keeps it loaded and
             // detaching would hand the session back, so idle chats attach on a send or a turn, as they always have.
             if (liveRuntimeId(client) != null) return@collect
-            if (!status.running) {
-                // The turn ended: whatever turned an attach down may be gone.
-                refusedWhileRunning = null
-                return@collect
-            }
-            // The gateway turned an attach down (another client owns the session, the session is gone): it
-            // keeps doing so while this turn runs. Retry once the status changes, not on every poll — each
-            // attempt would flip the banner Attaching → Failed.
-            if (refusedWhileRunning == status) return@collect
+            // The gateway turned an attach down outright (an RpcException: the legacy backend's SESSION_NOT_OWNED
+            // ledger refusal, the authority's not_found or permission_denied): it keeps doing so for the rest of
+            // the turn's scope. The live list carries no turn identity, so the row's status transitions are the
+            // only observable scope boundaries: retry once per transition — including the session settling to
+            // idle, when the refusal's scope ends — instead of every poll, or each attempt would flip the
+            // banner Attaching → Failed.
+            if (refusedAtStatus == status) return@collect
+            if (!status.running && refusedAtStatus == null) return@collect
             // What was never read still isn't there; the resume replays only the turn itself.
             if (!_state.value.historyRead && !historyMutex.isLocked) loadHistory()
             // reuse: an attach racing this one (the connection's) may have won; it is kept, not resumed again.
             // reconnected: attached before, so the resume picks up where the stream left off, as the
             // connection's attach would have.
             val reconnected = streamMutex.withLock { seqRuntime != null }
-            runCatchingAttach(client, reconnected = reconnected, reuse = true)
-            if (lastAttachRefused) refusedWhileRunning = status
+            when (runCatchingAttach(client, reconnected = reconnected, reuse = true)) {
+                AttachOutcome.Refused -> refusedAtStatus = status
+                AttachOutcome.StaleGap -> Unit // nothing is known about it
+                AttachOutcome.Attached, AttachOutcome.Lost -> refusedAtStatus = null
+            }
         }
     }
 
@@ -2662,7 +2666,7 @@ class ChatSession(
             gapRuntime = runtimeId
             gapHeld = waiting
         }
-        val attached = runCatchingAttach(client, reconnected = true, afterGap = true)
+        val attached = runCatchingAttach(client, reconnected = true, afterGap = true) == AttachOutcome.Attached
         val again = streamMutex.withLock {
             // A later gap took over the holding; its resume lets them through.
             if (gapHeld !== waiting) return
@@ -3101,35 +3105,48 @@ class ChatSession(
         )
     }
 
+    /** What a [runCatchingAttach] run ended as. */
+    private sealed interface AttachOutcome {
+        data object Attached : AttachOutcome
+
+        /** The gateway answered with an error ([RpcException]): a retry into the same turn would be refused the same way. */
+        data object Refused : AttachOutcome
+
+        /** A transient failure (a lost link, a timeout): the attach may well succeed again. */
+        data object Lost : AttachOutcome
+
+        /** A [StaleGapResume]: the attach raced and was stale; nothing is known about it. */
+        data object StaleGap : AttachOutcome
+    }
+
     private suspend fun runCatchingAttach(
         client: JsonRpcClient,
         reconnected: Boolean = false,
         reuse: Boolean = false,
         afterGap: Boolean = false,
-    ): Boolean = try {
+    ): AttachOutcome = try {
         val runtimeId = attach(client, reconnected, reuse, afterGap)
-        lastAttachRefused = false
         scope.launch { refreshSubagents(client, runtimeId) }
-        true
+        AttachOutcome.Attached
     } catch (e: CancellationException) {
         throw e
     } catch (e: StaleGapResume) {
-        false
+        AttachOutcome.StaleGap
     } catch (e: Exception) {
-        lastAttachRefused = e is RpcException
         // The link dropped mid-attach: the connection's own path shows Detached and re-attaches. Writing
-        // Failed over it would say the session is broken while it is just reconnecting.
-        if (connectedClient() === client) {
-            _state.update {
+        // Failed over it would say the session is broken while it is just reconnecting — checked inside the
+        // update, so the write applies only while the client this attach used is still the connected one.
+        _state.update {
+            if (connectedClient() === client) {
                 it.copy(
                     attachment = Attachment.Failed(e.message ?: "Couldn't open the session."),
                     // The gateway itself turned the chat down (gone with its deleted bot, say): no turn of it can be
                     // followed, so none shows as running, nor keeps "Working…" in the shade. A lost link isn't that.
                     running = it.running && e !is RpcException,
                 )
-            }
+            } else it
         }
-        false
+        if (e is RpcException) AttachOutcome.Refused else AttachOutcome.Lost
     }
 
     private suspend fun ensureAttached(client: JsonRpcClient): String {

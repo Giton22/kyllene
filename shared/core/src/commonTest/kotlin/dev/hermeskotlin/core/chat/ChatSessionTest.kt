@@ -28,7 +28,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -523,7 +525,7 @@ class ChatSessionTest {
         gateway(backgroundScope, emptyMap(), reconnects = false).apply {
             answer = { call ->
                 when {
-                    call.method == "session.resume" -> if (resumeCalls++ == 0) call.error(32000, "busy", "SESSION_NOT_OWNED")
+                    call.method == "session.resume" -> if (resumeCalls++ == 0) call.error(4090, "busy", "SESSION_NOT_OWNED")
                     else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
                     call.method == "session.active_list" ->
                         if (liveRunning) """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
@@ -648,6 +650,80 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aRefusedLiveAttachRetriesOnceTheTurnEnds() = runTest {
+        var resumes = 0
+        var liveStatus = "working"
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" ->
+                        if (resumes++ < 2) call.error(4090, "taken", "SESSION_NOT_OWNED")
+                        else """{"session_id":"rt1","running":false}"""
+                    call.method == "session.active_list" ->
+                        """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"$liveStatus"}]}"""
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        chat.state.first { it.attachment is Attachment.Failed }
+        runCurrent()
+        assertEquals(2, gateway.sent("session.resume").size)
+
+        // The turn ends: the refusal's scope is over, so the live list attaches once more.
+        liveStatus = "idle"
+        advanceTimeBy(10_001)
+        runCurrent()
+        chat.state.first { it.attachment is Attachment.Attached }
+        assertEquals(3, gateway.sent("session.resume").size)
+    }
+
+    @Test
+    fun aRefusedLiveAttachRetriesAfterTheRowGoesAndComesBack() = runTest {
+        var resumes = 0
+        var liveSessions = """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" ->
+                        if (resumes++ < 2) call.error(4090, "taken", "SESSION_NOT_OWNED")
+                        else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
+                    call.method == "session.active_list" -> liveSessions
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        chat.state.first { it.attachment is Attachment.Failed }
+        runCurrent()
+        assertEquals(2, gateway.sent("session.resume").size)
+
+        // The row goes (the session unloads): the refusal's scope is gone, and nothing is retried while absent.
+        liveSessions = """{"sessions":[]}"""
+        advanceTimeBy(10_001)
+        runCurrent()
+        assertEquals(2, gateway.sent("session.resume").size)
+
+        // The row returns under the same status: the live list attaches, and the turn streams.
+        liveSessions = """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
+        advanceTimeBy(10_001)
+        runCurrent()
+        val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
+        assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
+        assertEquals(3, gateway.sent("session.resume").size)
+    }
+
+    @Test
     fun aLiveAttachThatFailsAfterADropDoesNotWriteFailedOverDetached() = runTest {
         var resumes = 0
         gateway(backgroundScope, emptyMap(), reconnects = true).apply {
@@ -674,15 +750,19 @@ class ChatSessionTest {
         val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
+        val attachments = mutableListOf<Attachment>()
+        backgroundScope.launch { chat.state.map { it.attachment }.distinctUntilChanged().collect { attachments += it } }
 
         // The connection's resume goes unanswered and times out; the live attach is waiting on its own reply.
         advanceTimeBy(30_001)
         runCurrent()
         // The link drops mid-attach: the stale attach fails on the closed socket, but the connection's own
-        // path owns the state now (Detached, reconnecting), so it must not read "Couldn't open the session".
+        // path owns the state now (Detached, reconnecting). Failed must not be written over it: the timeout's
+        // is the last Failed the chat shows.
         gateway.sockets.last().serverClose(1006, "abnormal")
         advanceTimeBy(2_000)
         runCurrent()
+        assertFalse(attachments.dropWhile { it !is Attachment.Failed }.drop(1).any { it is Attachment.Failed })
         assertTrue(chat.state.value.attachment !is Attachment.Failed)
     }
 

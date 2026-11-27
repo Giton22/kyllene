@@ -37,7 +37,7 @@ enum class LiveStatus {
     /**
      * The agent is still being built (a cold `session.resume` builds one straight away: a chat opened here, on
      * Desktop, a bot chat watched) or, on the session authority, a turn is admitted and queued but not yet
-     * claimed. Not a turn in either case, so it counts as none for [running].
+     * claimed. Neither has started producing a reply yet, so it counts as none for [running].
      */
     Starting,
 
