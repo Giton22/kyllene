@@ -515,8 +515,9 @@ fun SessionsSidebar(
     }
     val pageOpen = scheduledOpen || inboxOpen || routinesOf != null || capabilitiesOpen || configOpen || pluginsOpen || insightsOpen
 
-    // Back steps out of search or the Scheduled / Archived pages before it closes the drawer. On the desktop the
-    // sidebar stays put and a filter is picked like a tab, so Escape leaves it for the chat (stopping a reply).
+    // Back steps out of search or the Scheduled / Archived pages before it leaves the list (on a phone, the app).
+    // On the desktop the sidebar stays put and a filter is picked like a tab, so Escape leaves it for the chat
+    // (stopping a reply).
     // A page beside a docked sidebar is put away by Escape even with the sidebar folded away.
     val filterBacks = !isDesktop && state.filter != SessionListFilter.Recent
     PlatformBackHandler(enabled = visible && (searchOpen || pageOpen || filterBacks) || pageInMain && pageOpen) {
