@@ -53,6 +53,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -152,10 +154,11 @@ internal fun InputRequestPanel(
     onStop: (() -> Unit)? = null,
 ) {
     val request = requests.firstOrNull() ?: return
-    // The requests open when the card was minimized; null while it shows.
-    var minimizedWith by remember { mutableStateOf<Set<String>?>(null) }
-    // A request that came since opens the card for good: it doesn't fold back when that one goes.
-    minimizedWith?.let { with -> if (requests.any { it.id !in with }) SideEffect { minimizedWith = null } }
+    // The requests open when the card was minimized; null while it shows. Saved, so a rotation keeps the pill.
+    var minimizedWith by rememberSaveable(stateSaver = MinimizedWithSaver) { mutableStateOf<Set<String>?>(null) }
+    // A card shown again, by a request that came since or by a password or login in front, is shown for good:
+    // it doesn't fold back when that one goes.
+    if (minimizedWith != null && !isMinimized(minimizedWith, requests)) SideEffect { minimizedWith = null }
     // Out here, so what was started on a question outlives the card while it's a pill.
     val draft = remember(request.id) { (request as? InputRequest.Clarify)?.let { ClarifyDraft(it.questions) } }
     val more = (requests.size - 1).takeIf { it > 0 }?.let { stringResource(Res.string.chat_requests_more, it) }
@@ -199,6 +202,12 @@ internal fun InputRequestPanel(
     }
     }
 }
+
+/** Saves [InputRequestPanel]'s minimized requests as a list of ids, which a saved state can hold. */
+private val MinimizedWithSaver = Saver<Set<String>?, ArrayList<String>>(
+    save = { with -> with?.let(::ArrayList) },
+    restore = { it.toSet() },
+)
 
 /** Whether this request's card can be minimized to a pill: an approval or a question, not a password or a login to save. */
 internal val InputRequest.minimizable: Boolean
@@ -395,7 +404,7 @@ private fun AnswerPill(text: String, strong: Boolean, enabled: Boolean, onClick:
 /** A command that wraps past this many lines shows its start until "Show full command". */
 private const val COMMAND_PREVIEW_LINES = 4
 
-/** How long a new approval ignores taps, so one aimed at the composer it replaced doesn't answer it. */
+/** How long a new approval or question ignores taps, so one aimed at the composer or pill it replaced doesn't answer it. */
 private const val APPROVAL_ARM_DELAY_MS = 700L
 
 /**
@@ -567,6 +576,12 @@ private fun ClarifyContent(
     answer: (JsonObject) -> Unit,
 ) {
     val questions = request.questions
+    // The card lands where the composer or the pill was; a tap meant for either mustn't skip or send it.
+    var armed by remember(request.id) { mutableStateOf(false) }
+    LaunchedEffect(request.id) {
+        delay(APPROVAL_ARM_DELAY_MS)
+        armed = true
+    }
     var index by draft::index
     val picked = draft.picked
     val drafts = draft.typed
@@ -621,13 +636,13 @@ private fun ClarifyContent(
             stringResource(if (index > 0) Res.string.common_back else Res.string.chat_skip),
             onClick = { if (index > 0) index-- else answer(InputAnswers.clarifyCancel.takeIf { request.batch } ?: InputAnswers.clarify(request, listOf(emptyList()))) },
             variant = ButtonVariant.Outline,
-            enabled = connected || index > 0,
+            enabled = armed && (connected || index > 0),
             modifier = Modifier.weight(1f),
         )
         Button(
             stringResource(if (last) Res.string.chat_send else Res.string.chat_next),
             onClick = goOn,
-            enabled = canGoOn,
+            enabled = armed && canGoOn,
             modifier = Modifier.weight(1f),
         )
     }

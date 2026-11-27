@@ -13,8 +13,11 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ApprovalChoice
@@ -75,6 +78,12 @@ class MinimizeRequestCardTest {
         SemanticsMatcher("taps to \"Expand\"") { it.config.getOrNull(SemanticsActions.OnClick)?.label == "Expand" },
     )
 
+    /** Past the moment a card that just showed ignores taps. */
+    private fun pastArming() {
+        composeRule.waitForIdle()
+        composeRule.mainClock.advanceTimeBy(1_000)
+    }
+
     private fun button(text: String) = composeRule.onNode(hasText(text) and hasClickAction())
 
     private fun gone(text: String) = assertTrue(composeRule.onAllNodes(hasText(text)).fetchSemanticsNodes().isEmpty(), "\"$text\" still shows")
@@ -101,6 +110,7 @@ class MinimizeRequestCardTest {
     fun aQuestionKeepsWhatWasPickedAndTypedWhileMinimized() {
         val answered = mutableListOf<JsonObject>()
         show(listOf(questions), answered)
+        pastArming()
 
         button("dev").performClick()
         button("Next").performClick()
@@ -110,6 +120,7 @@ class MinimizeRequestCardTest {
         gone("Spring cleanup")
 
         pill().performClick()
+        pastArming()
 
         // Back on the question it was on, with the text typed.
         composeRule.onNode(hasText("What should the release be called?")).assertIsDisplayed()
@@ -163,6 +174,63 @@ class MinimizeRequestCardTest {
 
         composeRule.onNode(hasText("Question waiting")).assertIsDisplayed()
         gone("Which branch?")
+    }
+
+    @Test
+    fun aPasswordCardShownWhileMinimizedDoesNotFoldBackWhenAnswered() {
+        val sudo = InputRequest.Secret("r3", InputRequest.Secret.Kind.Sudo, "Password", envVar = null, command = "apt update")
+        val requests = mutableStateListOf<InputRequest>(approval, sudo, questions)
+        show(requests)
+        minimize()
+        pill().assertIsDisplayed()
+
+        // The approval answered on another client: the password card shows, as it can't be a pill.
+        composeRule.runOnIdle { requests.remove(approval) }
+        gone("Approval needed")
+        gone("Question waiting")
+
+        // Once the password is sent, the question the user was shown a card for shows as a card too.
+        composeRule.runOnIdle { requests.remove(sudo) }
+        composeRule.onNode(hasText("Which branch?")).assertIsDisplayed()
+        gone("Question waiting")
+    }
+
+    @Test
+    fun aMinimizedCardStaysAPillAcrossARotation() {
+        val restoration = StateRestorationTester(composeRule)
+        restoration.setContent {
+            HermesTheme(ColorScheme.Light) { InputRequestPanel(listOf(approval), connected = true, onAnswer = { _, _ -> }) }
+        }
+        minimize()
+        pill().assertIsDisplayed()
+
+        restoration.emulateSavedInstanceStateRestore()
+
+        pill().assertIsDisplayed()
+        gone("Allow once")
+    }
+
+    @Test
+    fun aQuestionBroughtBackFromThePillIgnoresATapForAMoment() {
+        val answered = mutableListOf<JsonObject>()
+        show(listOf(questions), answered)
+        pastArming()
+        minimize()
+        pill().assertIsDisplayed()
+
+        // A double tap: the first opens the card where the pill was, the second lands on Skip.
+        composeRule.mainClock.autoAdvance = false
+        pill().performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+        composeRule.mainClock.advanceTimeBy(200)
+        button("Skip").assertIsNotEnabled().performClick()
+        composeRule.mainClock.advanceTimeBy(100)
+        assertTrue(answered.isEmpty(), "the second tap answered the question: $answered")
+
+        composeRule.mainClock.advanceTimeBy(1_000)
+        button("Skip").assertIsEnabled().performClick()
+        composeRule.mainClock.advanceTimeBy(100)
+        assertEquals(1, answered.size)
     }
 
     @Test
