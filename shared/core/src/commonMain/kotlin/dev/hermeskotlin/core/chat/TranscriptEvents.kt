@@ -1,6 +1,7 @@
 package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.network.HermesJson
+import dev.hermeskotlin.core.sessions.SessionMessage
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -69,8 +70,41 @@ object TranscriptRows {
             AgentMessage.parse(row, requireEnvelope = true) == null &&
             routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
             row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row) ||
-            (row.substringBefore('\n').trimEnd('\r') in COMPACTION_REMINDER_HEADERS &&
-                (displayKind != "internal_notification" || scheduledResult(row, displayMetadata) == null))
+            (isCompactionReminder(row) && (displayKind != "internal_notification" || scheduledResult(row, displayMetadata) == null))
+
+    /**
+     * The restated request (by its header line), the task list (its header and the list's first item, so a prompt
+     * that opens with the header line and goes on in its own words stays) or the skill reload notice alone.
+     */
+    private fun isCompactionReminder(row: String): Boolean =
+        row.substringBefore('\n').trimEnd('\r') == INFLIGHT_REQUEST_HEADER ||
+            TODO_SNAPSHOT_PART.containsMatchIn(row) || SKILL_RELOAD_NOTICE.containsMatchIn(row)
+
+    /**
+     * A user row the chat leaves out whatever came before it: [isNoise] on its [promptText]. A restated request
+     * isn't one, since it shows while its original isn't loaded (see historyToMessages).
+     */
+    internal fun leavesOut(row: SessionMessage): Boolean {
+        val text = promptText(row).trim()
+        return isNoise(text, row.displayKind, row.displayMetadata) && restatedRequest(text) == null
+    }
+
+    /**
+     * A user [row]'s text without the task list compaction folds into the last real user row when it doesn't
+     * stand alone (agent/conversation_compression.py): after a blank line in a text row (a prompt, a bot's
+     * message, a scheduled result), or as a text part of its own beside a picture or file. A row left with no
+     * text still shows its pictures.
+     */
+    fun promptText(row: SessionMessage): String {
+        val parts = (row.displayContent ?: row.content) as? JsonArray
+        if (parts == null || parts.none { it.isTodoSnapshotPart() }) {
+            return TODO_SNAPSHOT.find(row.text)?.let { row.text.substring(0, it.range.first).trimEnd() } ?: row.text
+        }
+        return SessionMessage(role = row.role, content = JsonArray(parts.filterNot { it.isTodoSnapshotPart() })).text
+    }
+
+    private fun JsonElement.isTodoSnapshotPart(): Boolean =
+        ((this as? JsonObject)?.get("text") as? JsonPrimitive)?.contentOrNull?.let { TODO_SNAPSHOT_PART.find(it.trimStart()) } != null
 
     fun restatedRequest(row: String): String? {
         if (row.substringBefore('\n').trimEnd('\r') != INFLIGHT_REQUEST_HEADER) return null
@@ -254,9 +288,13 @@ object TranscriptRows {
     private const val INFLIGHT_REQUEST_HEADER =
         "[STILL IN PROGRESS — this is the active request, restated after the " +
             "compaction boundary because it was not finished yet. Continue it; do not start over.]"
-    private val COMPACTION_REMINDER_HEADERS = setOf(
-        INFLIGHT_REQUEST_HEADER,
-        "[Your active task list was preserved across context compression]",
+    /** tools/todo_tool.py `TODO_INJECTION_HEADER`; `format_for_injection` always puts an item under it. */
+    private const val TODO_SNAPSHOT_HEADER = "[Your active task list was preserved across context compression]"
+    private val TODO_SNAPSHOT = Regex("""\r?\n\r?\n""" + Regex.escape(TODO_SNAPSHOT_HEADER) + """\r?\n- """)
+    private val TODO_SNAPSHOT_PART = Regex("""^""" + Regex.escape(TODO_SNAPSHOT_HEADER) + """\r?\n- """)
+    /** agent/conversation_compression.py `_pruned_skill_reload_notice`, written after the task list. */
+    private val SKILL_RELOAD_NOTICE = Regex(
+        """^\[Skills pruned during compression — reload before acting on these tasks]\r?\nThe task list above crossed """,
     )
     private val HEARTBEAT = Regex("""^\[Background process \S+ heartbeat #\d+ """)
     private val PROCESS = Regex("""^\[IMPORTANT: (?:Background process|\d+ background processes) [\s\S]*]$""")

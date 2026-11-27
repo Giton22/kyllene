@@ -399,7 +399,8 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
         }
         when (row.role) {
             "user" -> {
-                val displayText = row.text.trim()
+                // Without the task list compaction may fold into the last prompt (or a bot's message), which is for the agent.
+                val displayText = TranscriptRows.promptText(row).trim()
                 val noise = TranscriptRows.isNoise(displayText, row.displayKind, row.displayMetadata)
                 val restated = if (noise) TranscriptRows.restatedRequest(displayText) else null
                 val shownText = restated ?: displayText
