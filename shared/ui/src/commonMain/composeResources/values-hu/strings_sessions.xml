@@ -302,6 +302,11 @@
     <string name="sessions_preset_mondays">Hétfőnként 9:00</string>
     <string name="sessions_preset_once">Egyszer, 1 óra múlva</string>
     <string name="sessions_routine_name_example">Reggeli összefoglaló</string>
+    <string name="sessions_job_model">Modell</string>
+    <string name="sessions_job_model_default">A profil alapértelmezése</string>
+    <string name="sessions_job_model_clear">A profil alapértelmezésének használata</string>
+    <string name="sessions_job_model_hint">A futások a profil alapértelmezett modelljét használják, hacsak nem választasz egyet ehhez a feladathoz.</string>
+    <string name="sessions_job_model_note">Csak ennek a feladatnak a futásai használják. A profil alapértelmezése nem változik.</string>
     <string name="sessions_deliver_to">Kézbesítés ide</string>
     <string name="sessions_deliver_no_home">%1$s nem rendelkezik alapcsatornával a gatewayen, így a futások eredménye nem jutna sehová.</string>
     <string name="sessions_deliver_bot_chat_detail">Minden futás eredménye üzenetként érkezik ide: %1$s; a bot elolvassa és válaszol rá, így egy futás egy körrel többe kerül neki.</string>

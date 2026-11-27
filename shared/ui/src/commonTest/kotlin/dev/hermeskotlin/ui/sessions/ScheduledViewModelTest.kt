@@ -6,6 +6,8 @@ import dev.hermeskotlin.core.auth.PersistentCookiesStorage
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.cron.CronApi
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.models.ModelOption
+import dev.hermeskotlin.core.models.ModelsApi
 import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import io.ktor.client.engine.mock.MockEngine
@@ -29,6 +31,8 @@ import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -51,6 +55,7 @@ class ScheduledViewModelTest {
     private var createStatus = HttpStatusCode.OK
     private var createdQuery: String? = null
     private var createdBody: String? = null
+    private var updatedBody: String? = null
 
     private fun viewModel(): ScheduledViewModel {
         // On the test dispatcher, so no request is still finishing on another thread when a test ends.
@@ -69,6 +74,10 @@ class ScheduledViewModelTest {
                         respond("""{"detail":"Gateway is busy"}""", createStatus, json)
                     }
                 }
+                request.method == HttpMethod.Put -> {
+                    updatedBody = request.body.toByteArray().decodeToString()
+                    respond("""{"id":"a1","name":"Briefing","prompt":"Brief me","schedule":{"kind":"cron","expr":"0 9 * * *"}}""", HttpStatusCode.OK, json)
+                }
                 request.url.encodedPath == "/api/cron/jobs" -> respond(jobsBody, HttpStatusCode.OK, json)
                 request.url.encodedPath.endsWith("/runs") -> respond("""{"runs":[]}""", HttpStatusCode.OK, json)
                 else -> respond("""{"targets":[]}""", HttpStatusCode.OK, json)
@@ -77,7 +86,7 @@ class ScheduledViewModelTest {
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
         val client = createHttpClient(MockEngine(config), cookies)
         val connection = GatewayConnection(AuthApi(client, cookies), { _, _ -> error("not connecting in tests") }, CoroutineScope(dispatcher))
-        return ScheduledViewModel(CronApi(client), connection)
+        return ScheduledViewModel(CronApi(client), connection, ModelsApi(connection))
     }
 
     private suspend fun ScheduledViewModel.awaitLoaded() = state.first { !it.loading }
@@ -208,5 +217,128 @@ class ScheduledViewModelTest {
         val message = assertIs<Said.Line>(vm.state.first { it.message != null }.message)
         assertEquals(Res.string.sessions_job_save_failed, message.res)
         assertTrue("Gateway is busy" in message.detail.orEmpty(), message.toString())
+    }
+
+    private val pinnedBody = """[
+        {"id":"a1","name":"Briefing","prompt":"Brief me","model":"claude-sonnet-4.5","provider":"anthropic","schedule":{"kind":"cron","expr":"0 9 * * *"}},
+        {"id":"a2","name":"Digest","prompt":"Digest","model":"","provider":null,"schedule":{"kind":"cron","expr":"0 9 * * *"}}
+    ]"""
+
+    @Test
+    fun aNewJobLeftOnTheDefaultSendsNoModel() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.fillNewJob()
+        assertNull(vm.state.value.editor?.model)
+
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        assertFalse("model" in createdBody!!, createdBody)
+        assertFalse("provider" in createdBody!!, createdBody)
+    }
+
+    @Test
+    fun aNewJobSendsThePickedModelAndItsProvider() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.fillNewJob()
+
+        vm.setModel(ModelOption(id = "gpt-5.1", provider = "openrouter"))
+        assertEquals("gpt-5.1", vm.state.value.editor?.model)
+        assertEquals("openrouter", vm.state.value.editor?.provider)
+        assertTrue(vm.editorChanged())
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        assertTrue(createdBody!!.contains(""""model":"gpt-5.1","provider":"openrouter""""), createdBody)
+    }
+
+    @Test
+    fun editingAJobShowsItsSavedModelAndLeavesItAloneWhenUntouched() = runTest(dispatcher) {
+        jobsBody = pinnedBody
+        val vm = viewModel()
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.openJob("a1")
+
+        vm.editJob()
+        assertEquals("claude-sonnet-4.5", vm.state.value.editor?.model)
+        assertEquals("anthropic", vm.state.value.editor?.provider)
+        assertFalse(vm.editorChanged())
+        vm.name.setTextAndPlaceCursorAtEnd("Morning")
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        assertEquals("""{"updates":{"name":"Morning"}}""", updatedBody)
+    }
+
+    @Test
+    fun clearingAJobsModelSendsBothFieldsEmpty() = runTest(dispatcher) {
+        jobsBody = pinnedBody
+        val vm = viewModel()
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.openJob("a1")
+        vm.editJob()
+
+        vm.clearModel()
+        assertNull(vm.state.value.editor?.model)
+        assertNull(vm.state.value.editor?.provider)
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        // The gateway stores an empty model or provider as none, so the job runs on its profile's default.
+        assertEquals("""{"updates":{"model":"","provider":""}}""", updatedBody)
+    }
+
+    @Test
+    fun aNewModelForAJobSendsItWithItsProvider() = runTest(dispatcher) {
+        jobsBody = pinnedBody
+        val vm = viewModel()
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.openJob("a1")
+        vm.editJob()
+
+        // The same model id from another provider is a change too.
+        vm.setModel(ModelOption(id = "claude-sonnet-4.5", provider = "openrouter"))
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        assertEquals("""{"updates":{"model":"claude-sonnet-4.5","provider":"openrouter"}}""", updatedBody)
+    }
+
+    @Test
+    fun aJobWithABlankModelShowsTheDefault() = runTest(dispatcher) {
+        jobsBody = pinnedBody
+        val vm = viewModel()
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.openJob("a2")
+
+        vm.editJob()
+
+        assertNull(vm.state.value.editor?.model)
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+        // Nothing changed, so nothing is sent.
+        assertNull(updatedBody)
+    }
+
+    @Test
+    fun theModelsThatCannotLoadSayWhy() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.bind(gateway)
+        vm.awaitLoaded()
+        vm.fillNewJob()
+
+        vm.loadModels()
+
+        val picker = vm.modelPicker.first { !it.loading }
+        assertNotNull(picker.error)
+        assertNull(picker.catalog)
     }
 }

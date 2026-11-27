@@ -569,6 +569,8 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                             name = remember { TextFieldState(PageSamples.JOB_NAME) },
                             deliveryTargets = PageSamples.deliveryTargets,
                             onSetDeliver = {},
+                            onPickModel = {},
+                            onClearModel = {},
                             onSave = {},
                             onClose = {},
                         )

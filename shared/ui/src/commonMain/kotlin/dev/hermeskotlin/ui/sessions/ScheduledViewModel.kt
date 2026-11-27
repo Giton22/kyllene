@@ -13,10 +13,14 @@ import dev.hermeskotlin.core.cron.Routines
 import dev.hermeskotlin.core.cron.isRoutineOf
 import dev.hermeskotlin.core.cron.routineTitle
 import dev.hermeskotlin.core.gateway.GatewayUrl
+import dev.hermeskotlin.core.models.ModelOption
+import dev.hermeskotlin.core.models.ModelsApi
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.sessions.SessionSummary
+import dev.hermeskotlin.ui.chat.ModelPickerState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +35,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.StringResource
+import org.jetbrains.compose.resources.getString
 
 data class ScheduledUiState(
     val jobs: List<CronJob> = emptyList(),
@@ -59,6 +64,9 @@ data class JobEditor(
     /** Null for a new job. */
     val jobId: String? = null,
     val deliver: String = LOCAL_DELIVERY.id,
+    /** The model its runs use, and its provider; null runs them on the profile's default. */
+    val model: String? = null,
+    val provider: String? = null,
     val saving: Boolean = false,
     val error: Said? = null,
 ) {
@@ -80,6 +88,7 @@ internal val LOCAL_DELIVERY = DeliveryTarget(id = "local", name = "Local (save o
 class ScheduledViewModel(
     private val api: CronApi,
     private val connection: GatewayConnection,
+    private val models: ModelsApi,
 ) : ViewModel(), ScheduledActions {
 
     val name = TextFieldState()
@@ -111,6 +120,8 @@ class ScheduledViewModel(
         this.owner = owner
         editorGeneration++
         _state.value = ScheduledUiState()
+        _modelPicker.value = ModelPickerState()
+        modelsOf = null
         refresh()
     }
 
@@ -185,7 +196,14 @@ class ScheduledViewModel(
         prompt.setTextAndPlaceCursorAtEnd(job.prompt)
         schedule.setTextAndPlaceCursorAtEnd(job.editableSchedule)
         editorGeneration++
-        _state.update { it.copy(editor = JobEditor(jobId = job.id, deliver = job.deliver ?: LOCAL_DELIVERY.id)) }
+        val model = job.model?.takeIf { it.isNotBlank() }
+        val editor = JobEditor(
+            jobId = job.id,
+            deliver = job.deliver ?: LOCAL_DELIVERY.id,
+            model = model,
+            provider = job.provider?.takeIf { it.isNotBlank() && model != null },
+        )
+        _state.update { it.copy(editor = editor) }
         opened = formNow()
         loadDeliveryTargets()
     }
@@ -199,12 +217,60 @@ class ScheduledViewModel(
     /** What the form opened with; kept here, as the form outlives the page put away for a chat. */
     private var opened: List<String?>? = null
 
-    private fun formNow() = listOf(prompt.text.toString(), schedule.text.toString(), name.text.toString(), _state.value.editor?.deliver)
+    private fun formNow() = listOf(
+        prompt.text.toString(), schedule.text.toString(), name.text.toString(),
+        _state.value.editor?.deliver, _state.value.editor?.model, _state.value.editor?.provider,
+    )
 
     /** Whether the open form holds changes that leaving it would drop. */
     fun editorChanged(): Boolean = opened?.let { it != formNow() } ?: false
 
     fun setDeliver(target: String) = _state.update { state -> state.copy(editor = state.editor?.copy(deliver = target, error = null)) }
+
+    /** Runs the job on [model]; it's sent when the job is saved. */
+    fun setModel(model: ModelOption) =
+        _state.update { state -> state.copy(editor = state.editor?.copy(model = model.id, provider = model.provider, error = null)) }
+
+    /** Runs the job on its profile's default model again. */
+    fun clearModel() = _state.update { state -> state.copy(editor = state.editor?.copy(model = null, provider = null, error = null)) }
+
+    private val _modelPicker = MutableStateFlow(ModelPickerState())
+
+    /** The models the open form's job can run on, from the profile its job is in. */
+    val modelPicker: StateFlow<ModelPickerState> = _modelPicker.asStateFlow()
+
+    /** Reads the models of the profile the open form's job runs as (its own, or this page's bot for a new one). */
+    fun loadModels() {
+        val editor = _state.value.editor ?: return
+        val profile = editor.jobId?.let { id -> _state.value.jobs.firstOrNull { it.id == id }?.profile } ?: owner?.profile
+        val generation = editorGeneration
+        // Another profile's list mustn't show while this one's loads.
+        if (modelsOf != profile) _modelPicker.value = ModelPickerState()
+        modelsOf = profile
+        _modelPicker.update { it.copy(loading = true, error = null) }
+        viewModelScope.launch {
+            val current = { generation == editorGeneration && modelsOf == profile }
+            try {
+                val catalog = models.options(profile = profile)
+                if (current()) _modelPicker.update { it.copy(catalog = catalog, loading = false) }
+                val prices = try {
+                    models.missingPrices(catalog, profile = profile)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                if (prices != null && current()) _modelPicker.update { it.copy(catalog = it.catalog?.withPrices(prices)) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (current()) _modelPicker.update { it.copy(loading = false, error = e.message ?: getString(Res.string.bots_models_load_failed)) }
+            }
+        }
+    }
+
+    /** The profile [modelPicker] is for; null for the launch profile. */
+    private var modelsOf: String? = null
 
     /** Creates the job, or sends an existing job only the fields that changed. */
     fun saveJob() {
@@ -220,6 +286,8 @@ class ScheduledViewModel(
             prompt = prompt.text.toString().trim(),
             schedule = schedule.text.toString().trim(),
             deliver = editor.deliver,
+            model = editor.model,
+            provider = editor.provider?.takeIf { editor.model != null },
         )
         val problem = when {
             // Removed elsewhere while the form was open; saving would quietly create it again.
@@ -247,6 +315,11 @@ class ScheduledViewModel(
                     if (draft.prompt != existing.prompt.trim()) put("prompt", draft.prompt)
                     if (draft.schedule.isNotEmpty() && draft.schedule != existing.editableSchedule) put("schedule", draft.schedule)
                     if (draft.deliver != (existing.deliver ?: LOCAL_DELIVERY.id)) put("deliver", draft.deliver)
+                    // Both go together: a model kept with another provider's name would be looked up there. Empty clears.
+                    if (draft.model != existing.model?.takeIf { it.isNotBlank() } || (draft.model != null && draft.provider != existing.provider?.takeIf { it.isNotBlank() })) {
+                        put("model", draft.model.orEmpty())
+                        put("provider", draft.provider.orEmpty())
+                    }
                 }
                 if (changes.isEmpty()) ApiResult.Success(existing) else api.update(url, existing.id, changes, existing.profile).withProfile(existing.profile)
             }

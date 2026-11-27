@@ -310,6 +310,11 @@
     <string name="sessions_preset_mondays">Mondays 9:00</string>
     <string name="sessions_preset_once">Once, in 1h</string>
     <string name="sessions_routine_name_example">Morning brief</string>
+    <string name="sessions_job_model">Model</string>
+    <string name="sessions_job_model_default">Profile default</string>
+    <string name="sessions_job_model_clear">Use the profile default</string>
+    <string name="sessions_job_model_hint">Runs use the profile’s default model unless you pick one for this job.</string>
+    <string name="sessions_job_model_note">Only this job’s runs use it. The profile’s default stays as it is.</string>
     <string name="sessions_deliver_to">Deliver to</string>
     <string name="sessions_deliver_no_home">%1$s has no home channel set on the gateway, so runs would have nowhere to go.</string>
     <string name="sessions_deliver_bot_chat_detail">Each run’s result arrives in %1$s as a message it reads and answers, so a run costs it one more turn.</string>
