@@ -229,6 +229,11 @@
 
     <!-- The model sheet -->
     <string name="chat_model_title">Model</string>
+    <string name="chat_quick_model_title">Select model</string>
+    <string name="chat_quick_model_effort">Reasoning effort</string>
+    <string name="chat_quick_model_favorites">Favorites</string>
+    <string name="chat_quick_model_providers">Providers</string>
+    <string name="chat_quick_model_unsupported">This model has no adjustable reasoning effort.</string>
     <string name="chat_model_for_this_chat">For this chat</string>
     <string name="chat_model_saving">Saving…</string>
     <string name="chat_model_thinking">Thinking</string>

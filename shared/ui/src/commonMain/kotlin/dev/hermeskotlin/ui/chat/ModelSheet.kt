@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -173,6 +174,7 @@ internal fun ModelSheet(
     /** What the search box and the scope start with, for previews. */
     initialQuery: String = "",
     initialScope: PickerScope? = null,
+    quickPicker: Boolean = false,
     /** On the desktop, the button it opens from, in window coordinates: it opens over it as a popover. */
     anchor: () -> Rect? = { null },
 ) {
@@ -206,6 +208,38 @@ internal fun ModelSheet(
         }
     }
 
+    val quick = quickPicker && !modelOnly
+    var choosingModel by remember { mutableStateOf(false) }
+    LaunchedEffect(visible) { if (visible) choosingModel = false }
+    if (quick) {
+        BottomSheet(
+            visible = visible, onDismiss = onDismiss, anchor = anchorRect,
+            onEscape = if (choosingModel) ({ choosingModel = false }) else null,
+            popoverWidth = if (choosingModel) 390.dp else 334.dp,
+            popoverPage = choosingModel,
+        ) {
+            if (choosingModel) {
+                val models: @Composable ColumnScope.() -> Unit = {
+                    QuickModelList(
+                        picker, selection, query, note, onBack = { choosingModel = false }, onRefresh = onRefresh,
+                        onPick = { picked = it; onSelectModel(it) }, onSettings = onSettings,
+                        currentEffort = state.effort(selection.option),
+                    )
+                }
+                if (isDesktop || picker.catalog == null) models()
+                else Column(Modifier.fillMaxWidth().fillMaxHeight(.82f), content = models)
+            } else {
+                val providerLabel = selection.provider?.let { name ->
+                    displayProviderName(name, picker.catalog?.providers?.firstOrNull { it.slug == name }?.name)
+                }
+                QuickEffortPanel(
+                    state, selection, providerLabel, onSelectEffort, onFast,
+                    onOpenModels = { choosingModel = true },
+                )
+            }
+        }
+        return
+    }
     BottomSheet(visible = visible, onDismiss = onDismiss, anchor = anchorRect) {
         Row(
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = if (note != null) 4.dp else 12.dp),
@@ -388,7 +422,7 @@ private fun ColumnScope.ModelList(
     ScrollbarBox(list, Modifier.fillMaxWidth().then(if (isDesktop) Modifier.weight(1f, fill = false) else Modifier).padding(top = 4.dp)) {
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 440.dp).arrowFocus(), state = list) {
             sections.forEachIndexed { index, section ->
-                section.title?.let { title -> item(key = "h$index") { SectionLabel(sectionTitle(title)) } }
+                section.title?.let { title -> item(key = "h$index") { ModelPickerSectionLabel(sectionTitle(title)) } }
                 items(section.models, key = { "$index-${it.variants.first().starKey}" }) { row ->
                     val pick = row.preferred(selection.provider, selection.model, starred, recent)
                     ModelRow(
@@ -465,7 +499,7 @@ private fun settingsUpdater(): ((AppSettings) -> AppSettings) -> Unit {
 
 /** A list's section, in small caps; read as its own words, not spelled out. */
 @Composable
-private fun SectionLabel(text: String) {
+internal fun ModelPickerSectionLabel(text: String) {
     Text(
         text.uppercase(),
         style = Theme[typography][eyebrow],
@@ -481,7 +515,7 @@ private fun SectionLabel(text: String) {
 
 /** Fast mode on a raised card: a bolt on a warm tile, what it does, and its switch. The whole card toggles it. */
 @Composable
-private fun FastModeCard(on: Boolean, onFast: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+internal fun FastModeCard(on: Boolean, onFast: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
     Row(
         modifier
@@ -513,7 +547,7 @@ private fun FastModeCard(on: Boolean, onFast: (Boolean) -> Unit, modifier: Modif
  * provider (with its price) picks that one. The star, or a long press, stars it.
  */
 @Composable
-private fun ModelRow(
+internal fun ModelRow(
     row: PickerModel,
     selection: ModelSelection,
     starred: Boolean,
@@ -522,6 +556,7 @@ private fun ModelRow(
     onClick: () -> Unit,
     onPickVariant: (ModelOption) -> Unit,
     onToggleStar: () -> Unit,
+    compact: Boolean = false,
 ) {
     val haptics = LocalHapticFeedback.current
     val selected = row.variants.any(selection::isCurrent)
@@ -542,12 +577,12 @@ private fun ModelRow(
                 onLongClickLabel = stringResource(if (starred) Res.string.chat_model_unstar else Res.string.chat_model_star),
             )
             .semantics { this.selected = selected }
-            .padding(start = 12.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = 12.dp, top = if (compact) 2.dp else 6.dp, bottom = if (compact) 2.dp else 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         // The model's initial on a tile, so the list scans by shape before it's read.
-        Box(
+        if (!compact) Box(
             Modifier.size(34.dp).background(Theme[colors][surface3], RoundedCornerShape(Theme[radii][radiusSmall])),
             contentAlignment = Alignment.Center,
         ) {

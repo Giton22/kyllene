@@ -208,6 +208,11 @@
     <string name="chat_process_pid">PID %1$d</string>
 
     <string name="chat_model_title">Modell</string>
+    <string name="chat_quick_model_title">Modell auswählen</string>
+    <string name="chat_quick_model_effort">Denktiefe</string>
+    <string name="chat_quick_model_favorites">Favoriten</string>
+    <string name="chat_quick_model_providers">Anbieter</string>
+    <string name="chat_quick_model_unsupported">Bei diesem Modell lässt sich die Denktiefe nicht einstellen.</string>
     <string name="chat_model_for_this_chat">Für diesen Chat</string>
     <string name="chat_model_saving">Wird gespeichert…</string>
     <string name="chat_model_thinking">Denken</string>

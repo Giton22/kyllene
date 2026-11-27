@@ -768,6 +768,7 @@ fun ChatScreen(
         onFast = viewModel::setFast,
         // On the desktop it opens over the pill that opened it, as a desktop app's picker drops from its button.
         // Read in the sheet, so the pill moving doesn't recompose the whole chat.
+        quickPicker = true,
         anchor = { modelPillBounds.value.takeIf { isDesktop } },
         // A Bot Chat's model is its bot's (selectModel sets it there), so say what a pick changes.
         note = target.bot?.let { stringResource(Res.string.chat_model_bot_note, it.label) },

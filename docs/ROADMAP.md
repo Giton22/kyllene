@@ -174,6 +174,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] One row per model: the same model from several providers shows once, with a pill per provider (and its price) to pick which
 - [x] Ranked model search: name starts first, then words, then anywhere; "op55" finds Opus 5.5; the start of a provider's name lists its models after the name matches
 - [x] Thinking level and fast mode per chat (`config.set reasoning` / `fast`), offered when the model supports them
+- [x] The composer’s model picker opens on thinking effort and fast mode, then opens a searchable list of favorites and providers. On Android, the active model and thinking effort stay in view while the list scrolls. On desktop, both views open above the same composer control when there is room.
 - [x] Profile picker (account sheet → Profile; `GET /api/profiles`, chats and sessions scoped with `profile`)
 - [x] Switch profile in two taps from the sidebar: its header names the active profile and opens a menu of them (and Switch gateway); the sidebar stays open on the new profile's chats, stand-in rows while they load
 - [x] Settings screen, opened from the account sheet

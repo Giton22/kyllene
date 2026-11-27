@@ -143,10 +143,10 @@ class ComposerImagePasteTest {
         val input = showChat()
         readSlowImage(input) {
             composeRule.onNodeWithContentDescription("Change model", substring = true).performClick()
-            composeRule.onNodeWithText("Model").assertExists()
+            composeRule.onNodeWithText("Reasoning effort").assertExists()
         }
 
-        composeRule.onNodeWithText("Model").assertExists()
+        composeRule.onNodeWithText("Reasoning effort").assertExists()
         composeRule.waitUntil(5_000) {
             composeRule.runOnIdle { viewModel.attachments.value.isNotEmpty() || viewModel.attachmentError.value != null }
         }
