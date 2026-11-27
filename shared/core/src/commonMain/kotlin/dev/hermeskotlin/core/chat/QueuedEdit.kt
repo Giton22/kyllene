@@ -54,27 +54,47 @@ internal fun replaceableAdmissions(pending: JsonElement?): Set<String>? {
     }
 }
 
-/** [this] with what [pending] (a `session.info` or snapshot `pending`) says can be replaced, when it says. */
-internal fun ChatState.withPendingAdmissions(pending: JsonElement?): ChatState =
-    replaceableAdmissions(pending)?.let { copy(replaceableAdmissions = it) } ?: this
+/** A `prompt.replace_queued` of prompt [key]'s admission [replaced] to [text], not answered yet. */
+data class UnansweredQueuedEdit(val key: String, val replaced: String, val text: String)
+
+/**
+ * [this] with what [pending] (a `session.info` or snapshot `pending`) says can be replaced, when it says. A row whose
+ * `input_id` is an [unanswered edit][ChatState.unansweredQueuedEdits]'s submission is that edit, taken by the gateway
+ * as that admission, so it shows as made: `input_id` is the request id an admission was taken under
+ * (gateway/session_authority.py `_pending_receipt`), which a cancel of the old admission never lists.
+ */
+internal fun ChatState.withPendingAdmissions(pending: JsonElement?): ChatState {
+    val offered = replaceableAdmissions(pending) ?: return this
+    return (pending as JsonArray).fold(copy(replaceableAdmissions = offered)) { state, row ->
+        val admission = row as? JsonObject
+        val submission = admission.string("input_id")
+        val edit = submission?.let { state.unansweredQueuedEdits[it] }
+        val admitted = admission.string("admission_id")
+        if (submission == null || edit == null || admitted == null) {
+            state
+        } else {
+            state.withQueuedEdit(edit.key, edit.replaced, edit.text, admitted, submission)
+                .copy(unansweredQueuedEdits = state.unansweredQueuedEdits - submission)
+        }
+    }
+}
 
 /**
  * Queued prompt [key] after the gateway admitted its edit, which [replaced] the prompt's admission, as [admission]
  * (sent as [submission]): the new text, and, like the gateway, at the back of the queue. One whose turn already began
  * isn't waiting any more. A prompt that no longer holds [replaced] (another chat's, after a switch) is left alone.
- * A null [admission] is an edit whose answer was lost: its new id is unknown, so its turn's start releases it in order.
  */
 internal fun ChatState.withQueuedEdit(
     key: String,
     replaced: String,
     text: String,
-    admission: String?,
+    admission: String,
     submission: String,
 ): ChatState {
     val index = messages.indexOfFirst { it.key == key }
     val prompt = messages.getOrNull(index) as? ChatMessage.User ?: return this
     if (prompt.admissionId != replaced) return this
-    val started = admission != null && admission in startedAdmissions
+    val started = admission in startedAdmissions
     val edited = prompt.copy(text = text, sentText = text, admissionId = admission, submissionId = submission, queued = !started)
     val rest = messages.toMutableList().apply { removeAt(index) }
     // The back of the queue: after the last prompt still waiting, or where it was if it's the only one.

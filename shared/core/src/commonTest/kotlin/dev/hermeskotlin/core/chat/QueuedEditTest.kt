@@ -274,6 +274,18 @@ class QueuedEditTest {
         """{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"stored-1",""" +
             """"authority_epoch":1,"admission_id":"$admission","payload":{"text":"","content":"","admission_id":"$admission","outcome":"cancelled"}}}"""
 
+    /** The `session.info` the gateway publishes once it took the edit: the replacement queued under [submission]. */
+    private fun replaced(submission: String?, vararg before: String) =
+        event(
+            "session.info",
+            "stored-1",
+            """{"stored_session_id":"stored-1","pending":[${(before.toList() + pending("adm-3", """["steer","replace"]""", inputId = submission!!, text = "edited")).joinToString(",")}]}""",
+        )
+
+    private fun start(admission: String) =
+        """{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"stored-1",""" +
+            """"execution_generation":3,"admission_id":"$admission","payload":{}}}"""
+
     @Test
     fun anEditTheGatewayTookWithoutAnsweringStillShowsAndStarts() = runTest(timeout = 5.seconds) {
         // The edit landed (adm-2 cancelled, adm-3 admitted at the tail) but its answer was lost on the way back.
@@ -283,23 +295,59 @@ class QueuedEditTest {
 
         assertEquals(QueuedEditOutcome.Failed, chat.replaceQueued(key, "edited"))
         gateway.socket.push(settlement("adm-2"))
+        gateway.socket.push(replaced(params("prompt.replace_queued").single().text("submission_id")))
         chat.state.first { (it.messages.first { m -> m.key == key } as ChatMessage.User).text == "edited" }
+        val prompt = chat.state.value.messages.first { it.key == key } as ChatMessage.User
+        assertEquals("adm-3", prompt.admissionId)
+        assertTrue(prompt.queued)
+        // Known by its admission again, it can be edited again.
+        assertTrue(chat.state.value.canEditQueued(key))
 
-        // The running turn ends and the gateway starts the edit, an admission this phone never heard named.
         gateway.socket.push(event("message.complete", "stored-1", """{"status":"complete"}"""))
-        gateway.socket.push(
-            """{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"stored-1",""" +
-                """"execution_generation":3,"admission_id":"adm-3","payload":{}}}""",
-        )
+        gateway.socket.push(start("adm-3"))
         chat.state.first { s -> s.messages.none { it is ChatMessage.User && it.queued } }
         assertEquals("edited", (chat.state.value.messages.first { it.key == key } as ChatMessage.User).text)
     }
 
     @Test
-    fun anEditSettledBeforeItsLostAnswerCountsAsMade() = runTest(timeout = 5.seconds) {
+    fun anotherClientsTurnDoesNotStartALostAnswersEdit() = runTest(timeout = 5.seconds) {
+        // Another client's prompt waits ahead of the edit, which went to the back of the queue.
+        val chat = queuedChat(backgroundScope, authority = true, replace = { null })
+        publishPending(chat, """["steer","replace"]""")
+        val key = queuedPrompt(chat).key
+        assertEquals(QueuedEditOutcome.Failed, chat.replaceQueued(key, "edited"))
+        val ahead = pending("adm-x", """["steer","replace"]""", inputId = "theirs", text = "theirs")
+        gateway.socket.push(replaced(params("prompt.replace_queued").single().text("submission_id"), ahead))
+        chat.state.first { (it.messages.first { m -> m.key == key } as ChatMessage.User).text == "edited" }
+
+        gateway.socket.push(event("message.complete", "stored-1", """{"status":"complete"}"""))
+        gateway.socket.push(start("adm-x"))
+        chat.state.first { "adm-x" in it.startedAdmissions }
+
+        assertTrue((chat.state.value.messages.first { it.key == key } as ChatMessage.User).queued)
+    }
+
+    @Test
+    fun aCancelOfTheOldAdmissionAloneDoesNotShowTheEditAsMade() = runTest(timeout = 5.seconds) {
+        // The edit got no answer and another client cancelled the prompt it was for: no replacement is queued.
+        val chat = queuedChat(backgroundScope, authority = true, replace = { null })
+        publishPending(chat, """["steer","replace"]""")
+        val key = queuedPrompt(chat).key
+        assertEquals(QueuedEditOutcome.Failed, chat.replaceQueued(key, "edited"))
+
+        gateway.socket.push(settlement("adm-2"))
+        gateway.socket.push(event("session.info", "stored-1", """{"stored_session_id":"stored-1","pending":[]}"""))
+        chat.state.first { it.replaceableAdmissions.isEmpty() }
+
+        assertEquals("second", (chat.state.value.messages.first { it.key == key } as ChatMessage.User).text)
+    }
+
+    @Test
+    fun anEditTakenBeforeItsLostAnswerCountsAsMade() = runTest(timeout = 5.seconds) {
         val chat = queuedChat(backgroundScope, authority = true, replace = { call ->
-            // The old admission's completion goes out before the answer, which is then lost.
+            // The gateway lists the replacement before it answers, and the answer is then lost.
             gateway.socket.push(settlement("adm-2"))
+            gateway.socket.push(replaced(call.params["submission_id"]?.jsonPrimitive?.contentOrNull))
             null
         })
         publishPending(chat, """["steer","replace"]""")
@@ -309,8 +357,38 @@ class QueuedEditTest {
 
         val prompt = chat.state.value.messages.first { it.key == key } as ChatMessage.User
         assertEquals("edited", prompt.text)
+        assertEquals("adm-3", prompt.admissionId)
         assertTrue(prompt.queued)
-        assertEquals(null, chat.state.value.error)
+        assertTrue(chat.state.value.unansweredQueuedEdits.isEmpty())
+    }
+
+    @Test
+    fun twoEditsWithoutAnswersBothShowWhenTheQueueListsThem() {
+        val state = ChatState(
+            running = true,
+            messages = listOf(
+                ChatMessage.User("local-1", "first", rowId = 1, sentText = "first"),
+                ChatMessage.Assistant("reply-1", "working", streaming = true),
+                ChatMessage.User("local-2", "second", queued = true, sentText = "second", admissionId = "adm-2"),
+                ChatMessage.User("local-3", "third", queued = true, sentText = "third", admissionId = "adm-4"),
+            ),
+            unansweredQueuedEdits = mapOf(
+                "sub-a" to UnansweredQueuedEdit("local-2", "adm-2", "second, edited"),
+                "sub-b" to UnansweredQueuedEdit("local-3", "adm-4", "third, edited"),
+            ),
+        )
+
+        val after = state.reduce(
+            info(
+                pending("adm-5", """["replace"]""", inputId = "sub-a", text = "second, edited"),
+                pending("adm-6", """["replace"]""", inputId = "sub-b", text = "third, edited"),
+            ),
+        )
+
+        val prompts = after.messages.filterIsInstance<ChatMessage.User>().associateBy { it.key }
+        assertEquals("second, edited" to "adm-5", prompts.getValue("local-2").let { it.text to it.admissionId })
+        assertEquals("third, edited" to "adm-6", prompts.getValue("local-3").let { it.text to it.admissionId })
+        assertTrue(after.unansweredQueuedEdits.isEmpty())
     }
 
     @Test
@@ -406,10 +484,10 @@ class QueuedEditTest {
         )
 
         /** One `CanonicalPendingAdmission` row as gateway/session_authority.py `_pending_receipt` sends it. */
-        fun pending(admission: String, controls: String?, status: String = "queued") =
+        fun pending(admission: String, controls: String?, status: String = "queued", inputId: String = "sub-2", text: String = "second") =
             """{"admission_id":"$admission","ref":{"profile_id":"default","session_id":"stored-1"},"sequence":2,""" +
                 """"status":"$status","outcome":null,"authority_epoch":1,"execution_generation":null,""" +
-                """"input_id":"sub-2","text":"second"${controls?.let { ""","controls":$it""" }.orEmpty()}}"""
+                """"input_id":"$inputId","text":"$text"${controls?.let { ""","controls":$it""" }.orEmpty()}}"""
 
         fun info(vararg rows: String) =
             GatewayEvent("session.info", Json.parseToJsonElement("""{"pending":[${rows.joinToString(",")}]}""").jsonObject, "stored-1", null)

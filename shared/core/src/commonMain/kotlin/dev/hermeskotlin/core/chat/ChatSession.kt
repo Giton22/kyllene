@@ -2153,7 +2153,7 @@ class ChatSession(
      * back of the queue. A turn that took it first, or a gateway that can't, leaves it as it was, and says so in
      * [ChatState.error]. A call that got no answer is sent again, on retry, with the same `submission_id`, so the
      * gateway answers with the edit it may already have admitted instead of taking it twice. One the gateway took
-     * all the same shows once the replaced admission's settlement says so ([landQueuedEdit]).
+     * all the same shows once its `pending` lists the submission ([withPendingAdmissions]).
      */
     suspend fun replaceQueued(key: String, text: String): QueuedEditOutcome {
         val trimmed = text.trim()
@@ -2176,13 +2176,15 @@ class ChatSession(
         if (!client.sessionAuthority || admission == null || !state.canEditQueued(key)) {
             return queuedEditRefused(QueuedEditOutcome.Unsupported)
         }
-        val attempt = unansweredQueuedEdit?.takeIf { it.admission == admission && it.text == trimmed }
-            ?: UnansweredQueuedEdit(key, admission, trimmed, newRequestId())
-        val submission = attempt.submission
-        attempt.answering = true
-        unansweredQueuedEdit = attempt
+        val submission = state.unansweredQueuedEdits.entries
+            .firstOrNull { (_, edit) -> edit.replaced == admission && edit.text == trimmed }?.key ?: newRequestId()
         // On its way, the prompt isn't offered for another edit, which would name the admission this one retires.
-        _state.update { it.copy(replacingAdmissions = it.replacingAdmissions + admission) }
+        _state.update {
+            it.copy(
+                replacingAdmissions = it.replacingAdmissions + admission,
+                unansweredQueuedEdits = it.unansweredQueuedEdits + (submission to UnansweredQueuedEdit(key, admission, trimmed)),
+            )
+        }
         val result = try {
             client.request(
                 "prompt.replace_queued",
@@ -2196,7 +2198,7 @@ class ChatSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
-            unansweredQueuedEdit = null
+            _state.update { it.copy(unansweredQueuedEdits = it.unansweredQueuedEdits - submission) }
             return when {
                 e.code == METHOD_NOT_FOUND || e.reason == "unsupported_control" -> {
                     _state.update { it.copy(replaceableAdmissions = it.replaceableAdmissions - admission) }
@@ -2209,51 +2211,21 @@ class ChatSession(
                 }
             }
         } catch (e: Exception) {
-            // Out without a reply: the gateway may have taken it. Its settlement of the old admission says it did.
-            attempt.answering = false
-            if (attempt.settled) {
-                landQueuedEdit(attempt)
-                return QueuedEditOutcome.Replaced
-            }
-            _state.update { it.copy(error = QUEUED_EDIT_UNANSWERED) }
+            // Out without a reply: the gateway may have taken it. Its `pending` naming the submission says it did.
+            val landed = _state.value.messages.any { it is ChatMessage.User && it.submissionId == submission && it.admissionId != admission }
+            if (landed) return QueuedEditOutcome.Replaced
+            _state.update { it.copy(error = "The gateway didn't answer, so the queued message may not have changed.") }
             return QueuedEditOutcome.Failed
         } finally {
             _state.update { it.copy(replacingAdmissions = it.replacingAdmissions - admission) }
         }
-        unansweredQueuedEdit = null
-        val admitted = result.string("admission_id") ?: return QueuedEditOutcome.Failed
-        _state.update { it.withQueuedEdit(key, admission, trimmed, admitted, submission) }
-        return QueuedEditOutcome.Replaced
-    }
-
-    /**
-     * A `prompt.replace_queued` of prompt [key]'s [admission] to [text] that got no answer (yet, while [answering]), so a
-     * retry reuses its [submission]. [settled]: the gateway settled [admission] as cancelled, so the edit was taken.
-     */
-    private class UnansweredQueuedEdit(val key: String, val admission: String, val text: String, val submission: String) {
-        var answering = true
-        var settled = false
-    }
-
-    private var unansweredQueuedEdit: UnansweredQueuedEdit? = null
-
-    /**
-     * The gateway settled [admission], cancelled before it ran. When that's the admission an edit with no answer
-     * retires, the edit was taken: it shows, at the back of the queue, once no answer is coming.
-     */
-    private fun queuedSettled(admission: String?) {
-        val attempt = unansweredQueuedEdit?.takeIf { it.admission == admission } ?: return
-        attempt.settled = true
-        if (!attempt.answering) landQueuedEdit(attempt)
-    }
-
-    /** Shows [attempt], taken without an answer: its new admission is unknown, so its turn's start releases it in order. */
-    private fun landQueuedEdit(attempt: UnansweredQueuedEdit) {
-        unansweredQueuedEdit = null
+        val admitted = result.string("admission_id")
         _state.update { state ->
-            state.withQueuedEdit(attempt.key, attempt.admission, attempt.text, admission = null, attempt.submission)
-                .let { if (it.error == QUEUED_EDIT_UNANSWERED) it.copy(error = null) else it }
+            // Already shown if its `pending` came first: the prompt no longer holds [admission], so this changes nothing.
+            (if (admitted == null) state else state.withQueuedEdit(key, admission, trimmed, admitted, submission))
+                .copy(unansweredQueuedEdits = state.unansweredQueuedEdits - submission)
         }
+        return if (admitted == null) QueuedEditOutcome.Failed else QueuedEditOutcome.Replaced
     }
 
     /** Says why an edit of a queued prompt didn't go, and returns [outcome]. */
@@ -2849,10 +2821,7 @@ class ChatSession(
             executionGeneration = maxOf(executionGeneration ?: seen, seen)
         }
         // A queued prompt cancelled before it ran (an edit replaced it) ends no turn: the one running keeps its reply.
-        if (event.type == "message.complete" && event.isQueuedSettlement(_state.value.startedAdmissions)) {
-            queuedSettled(event.admissionId)
-            return
-        }
+        if (event.type == "message.complete" && event.isQueuedSettlement(_state.value.startedAdmissions)) return
         if (event.type == "session.info" || event.type == "session.updated") {
             val payload = event.payload as? JsonObject
             // A receipt names its session; only ever forward, as a replayed older one must not rewind it.
@@ -3432,9 +3401,6 @@ class ChatSession(
 
         /** `prompt.replace_queued` refusals that mean the prompt left the queue first: its turn took it, or it's gone. */
         val QUEUED_EDIT_TOO_LATE = setOf("admission_started", "not_found")
-
-        /** [ChatState.error] for an edit of a queued prompt that got no answer. */
-        const val QUEUED_EDIT_UNANSWERED = "The gateway didn't answer, so the queued message may not have changed."
 
         /** How long Stop & send waits for the stopped turn's `message.complete` before queueing behind it. */
         const val STOP_SETTLE_TIMEOUT_MS = 10_000L
