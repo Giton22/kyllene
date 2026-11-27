@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import android.content.Context
 import android.os.Build
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -27,17 +28,7 @@ internal actual fun rememberGifPicture(bytes: ByteArray, maxEdge: Int): Attachme
 
     return key(bytes, maxEdge) {
         val context = LocalContext.current
-        val request = remember(context, bytes, maxEdge) {
-            ImageRequest.Builder(context)
-                .data(bytes)
-                .size(maxEdge)
-                .precision(Precision.INEXACT)
-                .decoderFactory(if (Build.VERSION.SDK_INT >= 28) AnimatedImageDecoder.Factory() else GifDecoder.Factory())
-                // Coil loops forever by default; a GIF made to play once (no loop block) stops on its last frame.
-                // Android 8's decoder (Movie) can't read the loop count, so there every GIF loops.
-                .repeatCount(AnimatedImageDecoder.ENCODED_LOOP_COUNT)
-                .build()
-        }
+        val request = remember(context, bytes, maxEdge) { gifRequest(context, bytes, maxEdge) }
         // Coil treats animated drawables as non-shareable. Each composed view owns playback,
         // so returning to a disposed preview starts it from the beginning.
         val painter = rememberAsyncImagePainter(request)
@@ -49,3 +40,21 @@ internal actual fun rememberGifPicture(bytes: ByteArray, maxEdge: Int): Attachme
         }
     }
 }
+
+internal fun gifRequest(context: Context, bytes: ByteArray, maxEdge: Int): ImageRequest =
+    ImageRequest.Builder(context)
+        .data(bytes)
+        .size(maxEdge)
+        .precision(Precision.INEXACT)
+        .apply {
+            if (Build.VERSION.SDK_INT >= 28) {
+                decoderFactory(AnimatedImageDecoder.Factory())
+                // Coil loops forever by default; a GIF made to play once (no loop block) stops on its last frame.
+                repeatCount(AnimatedImageDecoder.ENCODED_LOOP_COUNT)
+            } else {
+                // Android 8's decoder (Movie) can't read the loop count, and Coil turns the request down there,
+                // so every GIF loops.
+                decoderFactory(GifDecoder.Factory())
+            }
+        }
+        .build()

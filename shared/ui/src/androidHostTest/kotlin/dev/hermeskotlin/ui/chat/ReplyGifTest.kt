@@ -2,6 +2,7 @@ package dev.hermeskotlin.ui.chat
 
 import android.content.ComponentName
 import android.graphics.Bitmap
+import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -18,6 +19,7 @@ import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.annotation.DelicateCoilApi
 import coil3.asImage
+import coil3.gif.GifDecoder
 import coil3.intercept.Interceptor
 import coil3.request.SuccessResult
 import com.composeunstyled.theme.ColorScheme
@@ -36,6 +38,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.util.ReflectionHelpers
 import kotlin.io.encoding.Base64
 
 @RunWith(RobolectricTestRunner::class)
@@ -64,6 +67,21 @@ class ReplyGifTest {
         awaitSecondFrame("GIF preview")
         compose.onNodeWithContentDescription("GIF preview").performClick()
         awaitSecondFrame("GIF viewer")
+    }
+
+    @Test
+    fun aGifRequestBuildsOnAndroid8() {
+        // Coil turns down "the file's own loop count" below Android 9, and that threw while composing a GIF.
+        // Coil's builder reads SDK_INT itself, so it's set here rather than running on an API 27 framework jar.
+        val sdk = Build.VERSION.SDK_INT
+        ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", 27)
+        try {
+            val request = gifRequest(RuntimeEnvironment.getApplication(), "GIF89a".encodeToByteArray(), maxEdge = 100)
+            // Android 8's decoder, so the faked level took effect.
+            assertTrue(request.decoderFactory is GifDecoder.Factory)
+        } finally {
+            ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", sdk)
+        }
     }
 
     @OptIn(DelicateCoilApi::class)
@@ -109,11 +127,17 @@ class ReplyGifTest {
         // The same two frames (0.6 s each) without the NETSCAPE loop block: played once, as a browser does.
         val gif = Base64.decode("R0lGODlhUAAwAIEAAOAgIAAAAAAAAAAAACH5BAA8AAAALAAAAABQADAAAAhmAAEIHEiwoMGDCBMqXMiwocOHECNKnEixosWLGDNq3Mixo8ePIEOKHEmypMmTKFOqXMmypcuXMGPKnEmzps2bOHPq3Mmzp8+fQIMKHUq0qNGjSJMqXcq0qdOnUKNKnUq1qtWrDAMCACH5BAE8AAEALAAAAABQADAAgSDAIAAAAAAAAAAAAAhmAAEIHEiwoMGDCBMqXMiwocOHECNKnEixosWLGDNq3Mixo8ePIEOKHEmypMmTKFOqXMmypcuXMGPKnEmzps2bOHPq3Mmzp8+fQIMKHUq0qNGjSJMqXcq0qdOnUKNKnUq1qtWrDAMCADs=")
         showReply(gif)
-        awaitSecondFrame("GIF preview")
+        assertStaysOnLastFrame("GIF preview")
+        compose.onNodeWithContentDescription("GIF preview").performClick()
+        assertStaysOnLastFrame("GIF viewer")
+    }
+
+    private fun assertStaysOnLastFrame(description: String) {
+        awaitSecondFrame(description)
         // A looping copy would be back on its red first frame within 0.6 s.
         val stop = System.currentTimeMillis() + 2_000
         while (System.currentTimeMillis() < stop) {
-            assertTrue("went back to the first frame", isGreen("GIF preview"))
+            assertTrue("$description went back to the first frame", isGreen(description))
             Thread.sleep(100)
         }
     }
