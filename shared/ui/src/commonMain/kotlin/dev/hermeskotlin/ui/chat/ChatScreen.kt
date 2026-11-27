@@ -2520,7 +2520,8 @@ internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val
     /**
      * An earlier stored row becoming the oldest is an older page loading above, which isn't news by itself. Then
      * [arrivedWithPage] tells whether reply text came in the same update, from the part that was already loaded
-     * (see [replyArrivedWithPage]); [mark] is not compared, as the page above changes it.
+     * (see [replyArrivedWithPage]). [mark] is kept but not compared: the page can bring the prompt of a turn that was
+     * only partly loaded, which changes the mark without any new reply.
      */
     fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>, arrivedWithPage: Boolean = false): ReplySeen {
         val arrived = if (oldest.isOlderThan(this.oldest)) arrivedWithPage else mark != this.mark
