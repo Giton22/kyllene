@@ -69,30 +69,34 @@ internal class ResumeBoundary {
     var hasLaterTurn = false
         private set
 
-    private val early = ArrayDeque<GatewayEvent>()
-    private var overflow = false
+    // Per session: the runtime is unknown until the reply, and another chat's traffic must not push this one's out.
+    private val early = mutableMapOf<String, ArrayDeque<GatewayEvent>>()
+    private val overflowed = mutableSetOf<String>()
     private val after = mutableListOf<GatewayEvent>()
 
     fun record(event: GatewayEvent, authority: Boolean) {
+        val sessionId = event.sessionId ?: return
         val reply = receipt
         if (reply != null) {
-            if (reply.runtimeId == event.sessionId) {
+            if (reply.runtimeId == sessionId) {
                 after += event
                 if (event.type == "message.start" || event.type == "message.complete") hasLaterTurn = true
             }
         } else if (authority || event.type == "message.start" || event.type == "message.complete") {
-            if (early.size == EARLY_EVENT_LIMIT) {
-                early.removeFirst()
-                overflow = true
+            val frames = early.getOrPut(sessionId) { ArrayDeque() }
+            if (frames.size == EARLY_EVENT_LIMIT) {
+                frames.removeFirst()
+                overflowed += sessionId
             }
-            early.addLast(event)
+            frames.addLast(event)
         }
     }
 
     fun answered(result: JsonElement, receiveOrder: Long) {
         val runtimeId = ((result as? JsonObject)?.get("session_id") as? JsonPrimitive)?.contentOrNull
-        receipt = Receipt(runtimeId, receiveOrder, early.filter { it.sessionId == runtimeId }, overflow)
+        receipt = Receipt(runtimeId, receiveOrder, early[runtimeId]?.toList().orEmpty(), runtimeId in overflowed)
         early.clear()
+        overflowed.clear()
     }
 
     fun handoff(): Handoff {

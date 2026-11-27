@@ -69,6 +69,7 @@ class ChatResumeBoundaryTest {
         watermark: Long? = null,
         committedReply: Boolean = false,
         overflow: Boolean = false,
+        ownOverflow: Boolean = false,
         epochChanged: Boolean = false,
     ) = with(scope) {
         val gateway = fixture(backgroundScope, authority = watermark != null)
@@ -95,6 +96,7 @@ class ChatResumeBoundaryTest {
                             if (!beforeReply) add(call.reply(snapshot))
                             add(completion)
                             if (overflow) repeat(64) { add(event("message.delta", "other", """{"text":"Other chat"}""")) }
+                            if (ownOverflow) repeat(64) { add(event("message.delta", "new", """{"text":"More"}""")) }
                             if (beforeReply) add(call.reply(snapshot))
                         }
                         call.socket.push(frames.joinToString("\n"))
@@ -129,7 +131,8 @@ class ChatResumeBoundaryTest {
         val state = chat.state.value
         if (settleDelayed) assertEquals(2, statusReads)
         if (watermark != null || committedReply) assertEquals(0, statusReads)
-        if (overflow || epochChanged) assertEquals(3, resumes)
+        if (epochChanged || ownOverflow) assertEquals(3, resumes)
+        if (overflow) assertEquals(2, resumes, "Another chat's frames forced a second resume")
         val replies = state.messages.filterIsInstance<ChatMessage.Assistant>().map { it.text }
         if (newerTurn || watermark == 1L) {
             assertTrue(state.running)
@@ -182,5 +185,10 @@ class ChatResumeBoundaryTest {
     @Test
     fun anEarlyAuthorityEpochChangeRecoversFromAFreshSnapshot() = runTest(timeout = 8.seconds) {
         completionAtResponseBoundary(this, beforeReply = true, watermark = 0, epochChanged = true)
+    }
+
+    @Test
+    fun earlyAuthorityFramesOfThisChatBeyondTheLimitRecoverFromAFreshSnapshot() = runTest(timeout = 8.seconds) {
+        completionAtResponseBoundary(this, beforeReply = true, watermark = 0, ownOverflow = true)
     }
 }
