@@ -112,6 +112,32 @@ class ReplyMarkTest {
     }
 
     @Test
+    fun aReplyArrivingWithAnOlderPageIsNewsWhenThePartAlreadyLoadedChanged() {
+        // The part loaded holds no prompt, so the page above, which brings it, changes the mark.
+        val loaded = listOf(ChatMessage.Assistant("row-11", text = "Checking."))
+        val away = ReplySeen("row-11", loaded.replyMark()).next(away = true, "row-11", loaded.replyMark())
+        val older = listOf(ChatMessage.User("row-10", "What changed?"))
+        // The page above only: the part already loaded is as it was.
+        val paged = older + loaded
+        assertNotEquals(away.mark, paged.replyMark())
+        assertFalse(away.next(away = true, "row-10", paged.replyMark(), paged.replyArrivedWithPage(loaded, away.mark)).new)
+        // The page above and more of the reply in the same update.
+        val replied = paged + ChatMessage.Assistant("live-1", text = "Two files changed.", streaming = true)
+        assertTrue(away.next(away = true, "row-10", replied.replyMark(), replied.replyArrivedWithPage(loaded, away.mark)).new)
+    }
+
+    @Test
+    fun aReplyArrivingWithAnOlderPageThatFoldsTheOldestBubbleIsNews() {
+        // History can fold the first loaded bubble into an older row, so its key is gone once the page is in.
+        val loaded = listOf(ChatMessage.Assistant("row-60", text = "Done."))
+        val away = ReplySeen("row-60", loaded.replyMark()).next(away = true, "row-60", loaded.replyMark())
+        val whole = listOf(ChatMessage.User("row-1", "What changed?"), ChatMessage.Assistant("row-2", text = "Checking.\n\nDone."))
+        assertFalse(away.next(away = true, "row-1", whole.replyMark(), whole.replyArrivedWithPage(loaded, away.mark)).new)
+        val replied = whole + ChatMessage.Assistant("live-1", text = "And", streaming = true)
+        assertTrue(away.next(away = true, "row-1", replied.replyMark(), replied.replyArrivedWithPage(loaded, away.mark)).new)
+    }
+
+    @Test
     fun aReplyThatComesAsTheChatsOwnPromptIsStoredIsNews() {
         // A chat begun here keeps its local prompt until the transcript is read again, e.g. on reconnecting.
         val live = listOf(ChatMessage.User("local-0", "What changed?"), ChatMessage.Assistant("live-1", reasoning = "Thinking", streaming = true))

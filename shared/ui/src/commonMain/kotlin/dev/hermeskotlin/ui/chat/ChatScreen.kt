@@ -2500,7 +2500,7 @@ private fun ChatMessage.replyLength(): Int = when (this) {
     is ChatMessage.Notice -> 0
 }
 
-private fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, mark: Pair<Int, Int>): Boolean {
+internal fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, mark: Pair<Int, Int>): Boolean {
     val oldest = previous.firstOrNull()?.key ?: return false
     val start = indexOfFirst { it.key == oldest }
     // The page can bring the prompt for a partly loaded turn. Compare only the portion we already had.
@@ -2517,6 +2517,12 @@ private fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, 
  * left the end. It stays new until they are back there, even if a later turn brings the mark back to what it was.
  */
 internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val new: Boolean = false) {
+    /**
+     * An earlier stored row becoming the oldest is an older page loading above, which isn't news by itself. Then
+     * [arrivedWithPage] tells whether reply text came in the same update, from the part that was already loaded
+     * (see [replyArrivedWithPage]). [mark] is kept but not compared: the page can bring the prompt of a turn that was
+     * only partly loaded, which changes the mark without any new reply.
+     */
     fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>, arrivedWithPage: Boolean = false): ReplySeen {
         val arrived = if (oldest.isOlderThan(this.oldest)) arrivedWithPage else mark != this.mark
         return ReplySeen(oldest, mark, new = away && (new || arrived))
