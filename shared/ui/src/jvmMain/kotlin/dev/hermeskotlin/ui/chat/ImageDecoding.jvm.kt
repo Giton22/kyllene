@@ -39,6 +39,9 @@ actual fun rememberDecodedImage(bytes: ByteArray, maxEdge: Int): DecodedImage {
     }.value
 }
 
+@Composable
+internal actual fun rememberGifPicture(bytes: ByteArray, maxEdge: Int): AttachmentPicture? = null
+
 /** Decoded pictures by their bytes and size, least recently used first out, up to [LIMIT] of pixels. */
 private object DecodedCache {
     private const val LIMIT = 64L shl 20

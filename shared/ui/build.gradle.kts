@@ -55,6 +55,7 @@ kotlin {
             implementation(libs.a2ui.material3)
             implementation(libs.androidx.material3)
             implementation(libs.coil.compose)
+            implementation(libs.coil.gif)
             implementation(libs.coil.network.okhttp)
             implementation(libs.media3.exoplayer)
             implementation(libs.media3.ui)
