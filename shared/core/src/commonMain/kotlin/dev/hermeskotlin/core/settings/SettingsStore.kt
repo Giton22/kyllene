@@ -97,6 +97,7 @@ data class AppSettings(
     val showPet: Boolean = true,
     /** Automatically fetch linked webpages and thumbnails; off until the user opts in. */
     val showLinkPreviews: Boolean = false,
+    /** Android: web links open in the browser app instead of a Custom Tab over the app. Mail and APK links are unaffected. */
     val openWebLinksInBrowser: Boolean = false,
     /** The gateway's Next Prompt plugin's suggested next message, over the composer once a turn ends. */
     val suggestedReplies: Boolean = true,
