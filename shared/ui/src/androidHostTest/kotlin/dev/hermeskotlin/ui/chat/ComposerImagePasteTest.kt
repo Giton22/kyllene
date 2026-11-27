@@ -172,9 +172,11 @@ class ComposerImagePasteTest {
         val store = InMemoryKeyValueStore()
         val cookies = PersistentCookiesStorage(store)
         val client = createHttpClient(MockEngine { request ->
-            val body = if (request.url.encodedPath == "/api/auth/ws-ticket") {
-                """{"ticket":"fixture","ttl_seconds":30}"""
-            } else "{}"
+            val body = when (request.url.encodedPath) {
+                "/api/auth/ws-ticket" -> """{"ticket":"fixture","ttl_seconds":30}"""
+                "/api/sessions/stored/messages" -> """{"session_id":"stored","messages":[]}"""
+                else -> "{}"
+            }
             respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
         }, cookies)
         val connection = GatewayConnection(AuthApi(client, cookies), { _, _ -> socket }, scope)
