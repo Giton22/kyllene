@@ -14,6 +14,8 @@ Chat with your own agent, approve what it wants to do, and follow its work from 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Giton22/kyllene?style=flat&logo=github)](https://github.com/Giton22/kyllene/stargazers)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/wCtyvQ3KcM)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-tip-FF5E5B?style=flat&logo=kofi&logoColor=white)](https://ko-fi.com/giton)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-EA4AAA?style=flat&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Giton22)
 
 <img src="docs/screenshots/reply.jpg" width="250" alt="A finished reply with reasoning, tools and a code block">&nbsp;
 <img src="docs/screenshots/sidebar.jpg" width="250" alt="The sessions sidebar with projects, filters and chat states">&nbsp;
@@ -37,10 +39,10 @@ the app talks to your gateway directly.
 - [Features](#features)
 - [Screenshots](#screenshots)
 - [Install](#install)
+- [Support Kyllene](#support-kyllene)
 - [Requirements](#requirements)
 - [Privacy](#privacy)
 - [Community](#community)
-- [Support Herald](#support-herald)
 - [Development](#development)
 - [Releasing](#releasing)
 - [License](#license)
@@ -110,6 +112,34 @@ app installs it on the watch. It works on every Pebble with a microphone (Pebble
 Pebble 2 Duo, Time 2 and Round 2) and talks through Kyllene on the phone, which needs no setup beyond being signed in.
 What it does, and how, is in [docs/pebble.md](docs/pebble.md).
 
+## Support Kyllene
+
+Kyllene is free, open source and has no ads. Volunteers build it, and donations pay for the tools and the
+developer fees it needs. If it's useful to you:
+
+- [Star it on GitHub](https://github.com/Giton22/kyllene). A star helps other people find it.
+- Give once on [Ko-fi](https://ko-fi.com/giton), or every month on [GitHub Sponsors](https://github.com/sponsors/Giton22).
+
+In the app, it's all under **Settings → Support Kyllene**, with the people who build Kyllene and help pay for it
+under **Contributors and supporters**. If you'd like your name there after giving, say so in your message.
+
+**Maintainer:** [Giton22](https://github.com/Giton22)
+
+**Contributors:** [StavenCross](https://github.com/StavenCross), [AlexGreenUK](https://github.com/AlexGreenUK),
+[StefanoHernandez](https://github.com/StefanoHernandez), [Rockey011](https://github.com/Rockey011),
+[faultoverload](https://github.com/faultoverload), [jcrabapple](https://github.com/jcrabapple),
+[asmodaydoescoding](https://github.com/asmodaydoescoding), [goetterbote2342](https://github.com/goetterbote2342),
+[oriolj](https://github.com/oriolj), [0rcasec](https://github.com/0rcasec), [guberm](https://github.com/guberm),
+[matanrom](https://github.com/matanrom), [jaffer1979](https://github.com/jaffer1979),
+[vdexter221](https://github.com/vdexter221), [smhc](https://github.com/smhc), [maxdewald](https://github.com/maxdewald),
+[kiwipaulrob](https://github.com/kiwipaulrob), [humbledude](https://github.com/humbledude),
+[crabiosa](https://github.com/crabiosa), [ZeroOttantotto](https://github.com/ZeroOttantotto),
+[subhashhhhhh](https://github.com/subhashhhhhh), [rusty4444](https://github.com/rusty4444),
+[lamahuissn-web](https://github.com/lamahuissn-web), [danno131313](https://github.com/danno131313),
+[Aquillum](https://github.com/Aquillum) and [palominoz](https://github.com/palominoz)
+
+**Supporters:** [dimitar-gif](https://github.com/dimitar-gif). Thank you!
+
 ## Requirements
 
 | | |
@@ -146,11 +176,6 @@ and hear about new releases first. In the app, it's under **Settings → About �
 
 Found a bug? [Open an issue](https://github.com/Giton22/kyllene/issues/new/choose) here or post it in
 the server's #bug-reports.
-
-## Support Herald
-
-Herald is free and open source. If it's useful to you, you can support its development through
-[GitHub Sponsors](https://github.com/sponsors/Giton22) or [Ko-fi](https://ko-fi.com/giton).
 
 ## Development
 
