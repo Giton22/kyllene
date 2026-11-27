@@ -2151,7 +2151,8 @@ class ChatSession(
      * Replaces the text of prompt [key], still queued behind the running turn, with [text]: `prompt.replace_queued` on
      * a session authority that offers it for this prompt ([canEditQueued]). Like Hermes, the edited prompt goes to the
      * back of the queue. A turn that took it first, or a gateway that can't, leaves it as it was, and says so in
-     * [ChatState.error]; nothing is ever sent twice, since the gateway binds the new admission to the one it replaces.
+     * [ChatState.error]. A call that got no answer is sent again, on retry, with the same `submission_id`, so the
+     * gateway answers with the edit it may already have admitted instead of taking it twice.
      */
     suspend fun replaceQueued(key: String, text: String): QueuedEditOutcome {
         val trimmed = text.trim()
@@ -2169,7 +2170,10 @@ class ChatSession(
         if (!client.sessionAuthority || admission == null || !state.canEditQueued(key)) {
             return queuedEditRefused(QueuedEditOutcome.Unsupported)
         }
-        val submission = newRequestId()
+        val attempt = unansweredQueuedEdit?.takeIf { it.admission == admission && it.text == trimmed }
+            ?: UnansweredQueuedEdit(admission, trimmed, newRequestId())
+        val submission = attempt.submission
+        unansweredQueuedEdit = attempt
         val result = try {
             client.request(
                 "prompt.replace_queued",
@@ -2183,6 +2187,7 @@ class ChatSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
+            unansweredQueuedEdit = null
             return when {
                 e.code == METHOD_NOT_FOUND || e.reason == "unsupported_control" -> {
                     _state.update { it.copy(replaceableAdmissions = it.replaceableAdmissions - admission) }
@@ -2199,10 +2204,16 @@ class ChatSession(
             _state.update { it.copy(error = "The gateway didn't answer, so the queued message may not have changed.") }
             return QueuedEditOutcome.Failed
         }
+        unansweredQueuedEdit = null
         val admitted = result.string("admission_id") ?: return QueuedEditOutcome.Failed
         _state.update { it.withQueuedEdit(key, admission, trimmed, admitted, submission) }
         return QueuedEditOutcome.Replaced
     }
+
+    /** A `prompt.replace_queued` of [admission] to [text] that got no answer, so a retry reuses its [submission]. */
+    private class UnansweredQueuedEdit(val admission: String, val text: String, val submission: String)
+
+    private var unansweredQueuedEdit: UnansweredQueuedEdit? = null
 
     /** Says why an edit of a queued prompt didn't go, and returns [outcome]. */
     private fun queuedEditRefused(outcome: QueuedEditOutcome): QueuedEditOutcome {

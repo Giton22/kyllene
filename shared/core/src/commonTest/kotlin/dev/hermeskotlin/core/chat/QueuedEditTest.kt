@@ -169,12 +169,14 @@ class QueuedEditTest {
 
     /**
      * A chat with a turn running on a gateway on the session [authority] or not, and one prompt queued behind it as
-     * `adm-2` (on the authority; the legacy dashboard names no admission). [replace] answers `prompt.replace_queued`.
+     * `adm-2` (on the authority; the legacy dashboard names no admission). [replace] answers `prompt.replace_queued`,
+     * or stays silent with null. By default it answers as upstream does a method it lacks: the legacy dispatcher, or
+     * an authority before v0.22.3.
      */
     private suspend fun queuedChat(
         scope: CoroutineScope,
         authority: Boolean,
-        replace: (FakeGateway.Call) -> String? = { null },
+        replace: (FakeGateway.Call) -> String? = { it.error(-32601, "unknown method: prompt.replace_queued", if (authority) "unknown_method" else null) },
     ): ChatSession {
         gateway = FakeGateway(scope, reconnects = false).apply {
             ready = { if (authority) AUTHORITY_READY else FakeGateway.QUIET_READY }
@@ -183,8 +185,7 @@ class QueuedEditTest {
                     "session.resume" -> """{"session_id":"stored-1","running":true,"revision":4,"execution_generation":2}"""
                     "prompt.submit" ->
                         if (authority) """{"status":"queued","admission_id":"adm-2","execution_generation":2}""" else """{"status":"queued"}"""
-                    // As upstream answers a method it lacks: the legacy dispatcher, or an authority before v0.22.3.
-                    "prompt.replace_queued" -> replace(call) ?: call.error(-32601, "unknown method: prompt.replace_queued", if (authority) "unknown_method" else null)
+                    "prompt.replace_queued" -> replace(call)
                     else -> "{}"
                 }
             }
@@ -249,7 +250,26 @@ class QueuedEditTest {
     }
 
     @Test
-    fun onTheSessionAuthorityAnUnsupportedControlHidesTheEdit() = runTest(timeout = 5.seconds) {
+    fun aRetryAfterNoAnswerSendsTheSameSubmission() = runTest(timeout = 5.seconds) {
+        var calls = 0
+        // The first call is lost on the way back; the gateway answers the exact retry with the admission it made.
+        val chat = queuedChat(backgroundScope, authority = true, replace = { call ->
+            if (++calls == 1) null else call.reply("""{"admission_id":"adm-3","status":"queued"}""")
+        })
+        publishPending(chat, """["steer","replace"]""")
+        val key = queuedPrompt(chat).key
+
+        assertEquals(QueuedEditOutcome.Failed, chat.replaceQueued(key, "edited"))
+        assertEquals(QueuedEditOutcome.Replaced, chat.replaceQueued(key, "edited"))
+
+        val (first, retry) = params("prompt.replace_queued")
+        assertEquals(first.text("submission_id"), retry.text("submission_id"))
+        assertEquals("adm-3", queuedPrompt(chat).admissionId)
+        assertEquals("edited", queuedPrompt(chat).text)
+    }
+
+    @Test
+    fun onTheSessionAuthorityAnUnsupportedControlHidesTheEdit()= runTest(timeout = 5.seconds) {
         val chat = queuedChat(backgroundScope, authority = true, replace = { call -> call.error(4001, "unsupported_control", "unsupported_control") })
         publishPending(chat, """["steer","replace"]""")
         val key = queuedPrompt(chat).key
