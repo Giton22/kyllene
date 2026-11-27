@@ -35,7 +35,7 @@ actual fun Tooltip(text: String, modifier: Modifier, content: @Composable () -> 
     // A click puts the label away until the mouse leaves and comes back.
     var pressed by remember { mutableStateOf(false) }
     var shown by remember { mutableStateOf(false) }
-    // Reached with Tab, a button names itself too, under it, since there's no pointer to follow.
+    // Reached with Tab, a button names itself too, in the same place as on hover.
     var focused by remember { mutableStateOf(false) }
     val inputMode = LocalInputModeManager.current
     LaunchedEffect(hovered, pressed) {
@@ -62,6 +62,7 @@ actual fun Tooltip(text: String, modifier: Modifier, content: @Composable () -> 
         content()
         when {
             text.isEmpty() -> Unit
+            // By the element, not the pointer: a label that lands on the pointer takes the hover and flickers.
             shown || focused -> Popup(popupPositionProvider = remember(below) { UnderAnchor(below) }) { TooltipLabel(text) }
         }
     }
