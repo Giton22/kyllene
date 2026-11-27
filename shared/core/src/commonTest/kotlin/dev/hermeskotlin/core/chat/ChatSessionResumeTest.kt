@@ -355,6 +355,8 @@ class ChatSessionResumeTest {
             "Earlier.Checking.Done." to emptyList(),
             "Earlier. Checking. Done." to emptyList(),
             "Earlier.\nChecking.\n\nDone." to emptyList(),
+            "Earlier. Checking. CI is green." to emptyList(),
+            "Earlier. Checking. 3 suites ran." to emptyList(),
             "e.g. checking. Done." to listOf("Checking."),
             "Checking.com" to listOf("Checking."),
             "Checking.COM" to listOf("Checking."),

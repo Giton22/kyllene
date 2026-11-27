@@ -3555,7 +3555,7 @@ private fun String.containsJoinedCommentary(update: String): Boolean {
         val end = start + update.length
         val startsAtBoundary = startsWith("\n\n", start - 2) ||
             (start > 0 && this[start - 1] in ".!?" && startsJoinedSentence(start)) ||
-            (startsJoinedSentence(start) && followsSentenceEnd(start))
+            (startsSpacedSentence(start) && followsSentenceEnd(start))
         val endsAtBoundary = startsWith("\n\n", end) ||
             (update.last() in ".!?" && (startsJoinedSentence(end) || startsSentenceAfterSpaces(end)))
         if (startsAtBoundary && endsAtBoundary) return true
@@ -3577,8 +3577,11 @@ private fun String.startsSentenceAfterSpaces(at: Int): Boolean {
     var i = at
     var breaks = 0
     while (i < length && this[i].isWhitespace() && (this[i] != '\n' || ++breaks == 1)) i++
-    return i > at && startsJoinedSentence(i)
+    return i > at && startsSpacedSentence(i)
 }
+
+// Past a space a dotted suffix can't be meant, so an acronym ("CI is green.") or a number starts a sentence too.
+private fun String.startsSpacedSentence(at: Int): Boolean = getOrNull(at)?.let { it.isUpperCase() || it.isDigit() } == true
 
 // Leave uppercase suffixes such as a dotted ".COM" alone.
 private fun String.startsJoinedSentence(at: Int): Boolean =
