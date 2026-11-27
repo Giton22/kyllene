@@ -10,7 +10,7 @@ import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.readUTF8Line
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.Serializable
 
 /** One event of an ntfy subscription stream (`/<topic>/json`). Only `message` events carry a body. */
@@ -30,7 +30,7 @@ class NtfyClient(private val client: HttpClient) {
      */
     fun subscribe(
         server: String, topic: String, sinceSeconds: Long?, onConnected: suspend () -> Unit = {},
-    ): Flow<NtfyEvent> = flow {
+    ): Flow<NtfyEvent> = channelFlow {
         client.prepareGet(topicUrl(server, topic) + "/json") {
             // A time, not the last message's id: ntfy doesn't say what an id that has left its cache means,
             // and that is exactly the case after a long stretch offline. The message at that very second
@@ -50,7 +50,8 @@ class NtfyClient(private val client: HttpClient) {
                 val line = channel.readUTF8Line(MAX_LINE) ?: break
                 if (line.isBlank()) continue
                 val event = runCatching { HermesJson.decodeFromString(NtfyEvent.serializer(), line) }.getOrNull() ?: continue
-                if (event.event == "message" && event.topic == topic) emit(event)
+                // Sent, not emitted: Ktor may run this block on its own dispatcher (it does on iOS).
+                if (event.event == "message" && event.topic == topic) send(event)
             }
         }
     }
