@@ -53,4 +53,15 @@
     <string name="push_replay_unavailable">Kyllene konnte seinen Push-Wiederholungsstatus nicht öffnen. Vorhandene Daten wurden beibehalten; stelle vor einem erneuten Versuch eine funktionierende Sicherung wieder her.</string>
     <string name="push_notice_failed">Kyllene konnte eine Push-Benachrichtigung nicht anzeigen.</string>
     <string name="push_inbox_write_failed">Kyllene konnte einen geplanten Lauf nicht im Posteingang speichern und versucht es erneut.</string>
+
+    <!-- Desktop startup. -->
+    <string name="startup_at_login">Bei Anmeldung starten</string>
+    <string name="startup_not_approved">Die Autostart-Anfrage wurde nicht genehmigt.</string>
+    <string name="startup_not_applied">Der Desktop hat die Autostart-Änderung nicht übernommen.</string>
+    <string name="startup_shows_window">Beim Autostart wird ein Fenster angezeigt.</string>
+    <string name="startup_not_saved">Der Desktop hat den Autostart aktualisiert; die App-Einstellung wurde nicht gespeichert.</string>
+    <string name="startup_incomplete">Die Autostart-Anfrage wurde nicht abgeschlossen.</string>
+    <string name="startup_no_answer">Der Desktop hat auf die Autostart-Anfrage nicht geantwortet.</string>
+    <string name="startup_enable_reason">Kyllene bei der Anmeldung im Infobereich starten.</string>
+    <string name="startup_disable_reason">Kyllene bei der Anmeldung nicht mehr automatisch starten.</string>
 </resources>

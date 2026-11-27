@@ -141,7 +141,10 @@ fun main(args: Array<String>) {
     // A second launch brings the running Herald forward, with its link, instead of opening another.
     val flatpak = inFlatpak
     val restartWait = if (flatpak && args.contentEquals(arrayOf("--restart"))) 30_000L else 0L
-    val instance = SingleInstance.claim(appDataDir, launchLink, restartWait) ?: exitProcess(if (restartWait > 0) 1 else 0)
+    val quietLaunch = backgroundInvocation(args, flatpak)
+    val instance = SingleInstance.claim(appDataDir, launchLink, restartWait, foreground = !quietLaunch) ?: exitProcess(if (restartWait > 0) 1 else 0)
+    // Asked after the hand-off: a launch that only reaches the running one needn't start AWT.
+    val startupCapable = flatpak && java.awt.SystemTray.isSupported()
     // Linux's light or dark preference, which Compose reads only once there: this follows it as it changes. Asked
     // for now, so the answer comes in while the storage and the settings are read.
     val colorScheme = if (System.getProperty("os.name") == "Linux") LinuxColorScheme({ SystemColorScheme.dark = it }) else null
@@ -162,6 +165,11 @@ fun main(args: Array<String>) {
     colorScheme?.awaitFirst(1_000)
     val links = koin.get<ChatLinks>()
     koin.get<PushSetup>().start()
+    val portal = BackgroundPortal()
+    // The choice the desktop last confirmed, from the app's own store: a portal still starting at login doesn't hold
+    // up the window or decide whether it shows.
+    val startup = if (startupCapable) runBlocking { BackgroundStartup.load(koin.get(), portal::request) } else null
+    val startHidden = startup != null && backgroundLaunch(args, startup.state.value.choice, startupCapable)
     val saved = WindowMemory.read(koin.get())
     // The same mark as docs/logo.svg, for the title bar, the taskbar and the tray.
     val icon = Thread.currentThread().contextClassLoader.getResourceAsStream("herald.svg")!!.use { loadSvgPainter(it, Density(1f)) }
@@ -174,7 +182,14 @@ fun main(args: Array<String>) {
         val shortcuts = remember { ShortcutBus() }
         val back = remember { DesktopBack() }
         val settings = settingsStore.settings.collectAsState().value ?: AppSettings()
-        var windowShown by remember { mutableStateOf(true) }
+        var windowShown by remember { mutableStateOf(!startHidden) }
+        // Offered once the portal answers. At login it may still be starting, and a later launch only reaches this
+        // instance, so it's asked again for a while rather than leaving no way to turn startup off until Quit.
+        var startupControl by remember { mutableStateOf<BackgroundStartup?>(null) }
+        val startupState = startupControl?.state?.collectAsState()?.value
+        LaunchedEffect(Unit) {
+            if (startup != null && awaitPortal(portal::available)) startupControl = startup
+        }
         var frame by remember { mutableStateOf<Frame?>(null) }
         val focused = remember { MutableStateFlow(false) }
         var quickOpen by remember { mutableStateOf(false) }
@@ -443,6 +458,13 @@ fun main(args: Array<String>) {
                 }
                 Item(stringResource(Res.string.tray_quick_entry), onClick = { quickOpen = true; quickRaise++ })
                 Separator()
+                val control = startupControl
+                if (control != null && startupState != null) {
+                    CheckboxItem(stringResource(Res.string.startup_at_login), checked = startupState.choice != StartupChoice.Off,
+                        enabled = !startupState.busy, onCheckedChange = { on -> scope.launch { control.set(on) } })
+                    startupState.message?.let { Item(stringResource(it.text), enabled = false, onClick = {}) }
+                    Separator()
+                }
                 Item(stringResource(Res.string.tray_quit), onClick = ::exitApplication)
             },
         )

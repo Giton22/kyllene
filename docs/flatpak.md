@@ -462,3 +462,22 @@ Portal failures fall back to the existing tray notification where a tray is avai
 The desktop controls presentation and dismissal; the portal does not report whether
 a notice was shown or dismissed. Bringing its window forward remains subject to
 the compositor's focus policy.
+
+### Start at login
+
+On Linux Flatpak, a supported Background portal and working tray enable **Start at
+login** in the tray menu. It is off by default. Changing it asks the desktop to
+create or remove this app's login entry; a declined request retains the last
+confirmed choice. The desktop's own settings can subsequently override that choice.
+The entry runs `kyllene --background`. Kyllene hides its initial window only after
+both startup and background work were granted, with a tray available to reopen it.
+Partial consent starts visibly; unsupported environments keep ordinary window startup.
+A background second launch leaves the running instance alone. Normal launches and
+launcher actions still open it. Explicit **Quit Kyllene** stops the process and its
+receiver; startup does not create a daemon or restart it before the next login.
+Disabling startup does not change the existing close-to-tray preference.
+
+The portal wire tests require Linux and `dbus-daemon`; their private bus cannot
+activate desktop services. Other hosts explicitly skip those integration cases;
+portable consent and launch-routing contracts still run. Login-cycle acceptance
+requires a separate authorized session test; unit tests do not establish it.

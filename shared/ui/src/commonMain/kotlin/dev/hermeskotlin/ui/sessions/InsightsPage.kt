@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.sessions
 
+import dev.hermeskotlin.ui.gateways.savedLabel
 import dev.hermeskotlin.ui.PageFoot
 
 import dev.hermeskotlin.designsystem.components.handCursor
@@ -127,7 +128,7 @@ internal fun InsightsPage(
             onSessionExpired()
         }
     }
-    InsightsView(state, place = gateway.label, onBack = onBack, onSelectPeriod = viewModel::selectPeriod, onRetry = viewModel::refresh)
+    InsightsView(state, place = gateway.savedLabel(), onBack = onBack, onSelectPeriod = viewModel::selectPeriod, onRetry = viewModel::refresh)
 }
 
 /** The Insights page's layout, apart from its view model, so previews can draw it from sample data. */

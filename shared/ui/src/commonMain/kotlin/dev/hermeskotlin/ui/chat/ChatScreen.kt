@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.ui.gateways.savedLabel
 import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
@@ -665,7 +666,7 @@ fun ChatScreen(
         onOpenFile = { previewing = it; railShown = true },
         onNotice = { notice = it },
         wallpaper = rememberChatWallpaper(),
-        place = target.gateway.label,
+        place = target.gateway.savedLabel(),
         profile = target.profile,
         // Only while nothing has been sent: a stored chat stays where it began.
         places = greetingPlaces?.takeIf { target.storedSessionId == null && state.storedSessionId == null && target.bot == null },

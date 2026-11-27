@@ -53,4 +53,15 @@
     <string name="push_replay_unavailable">Kyllene n’a pas pu ouvrir son état de relecture push. Les données existantes ont été conservées ; restaurez une sauvegarde fiable avant de réessayer.</string>
     <string name="push_notice_failed">Kyllene n’a pas pu afficher une notification push.</string>
     <string name="push_inbox_write_failed">Kyllene n’a pas pu enregistrer une exécution planifiée dans la boîte de réception. Un nouvel essai sera effectué.</string>
+
+    <!-- Desktop startup. -->
+    <string name="startup_at_login">Lancer à la connexion</string>
+    <string name="startup_not_approved">La demande de démarrage automatique n’a pas été approuvée.</string>
+    <string name="startup_not_applied">Le bureau n’a pas appliqué le changement de démarrage automatique.</string>
+    <string name="startup_shows_window">Le démarrage automatique affichera une fenêtre.</string>
+    <string name="startup_not_saved">Le bureau a mis à jour le démarrage automatique ; la préférence de l’application n’a pas été enregistrée.</string>
+    <string name="startup_incomplete">La demande de démarrage automatique n’a pas abouti.</string>
+    <string name="startup_no_answer">Le bureau n’a pas répondu à la demande de démarrage automatique.</string>
+    <string name="startup_enable_reason">Lancer Kyllene dans la zone de notification à la connexion.</string>
+    <string name="startup_disable_reason">Ne plus lancer Kyllene automatiquement à la connexion.</string>
 </resources>

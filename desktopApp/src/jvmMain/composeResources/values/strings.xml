@@ -62,4 +62,15 @@
     <string name="push_replay_unavailable">Kyllene couldn't open its push replay state. Existing data has been preserved; restore a known-good backup before retrying.</string>
     <string name="push_notice_failed">Kyllene couldn't show a push notification.</string>
     <string name="push_inbox_write_failed">Kyllene couldn't save a scheduled run to the Inbox. It will retry.</string>
+
+    <!-- Desktop startup. -->
+    <string name="startup_at_login">Start at login</string>
+    <string name="startup_not_approved">Startup request not approved.</string>
+    <string name="startup_not_applied">Desktop did not apply the startup change.</string>
+    <string name="startup_shows_window">Startup will show a window.</string>
+    <string name="startup_not_saved">Desktop updated startup; app preference was not saved.</string>
+    <string name="startup_incomplete">Startup request did not complete.</string>
+    <string name="startup_no_answer">Desktop did not answer the startup request.</string>
+    <string name="startup_enable_reason">Start Kyllene in the tray when you sign in.</string>
+    <string name="startup_disable_reason">Stop starting Kyllene automatically when you sign in.</string>
 </resources>

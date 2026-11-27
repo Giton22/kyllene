@@ -53,4 +53,15 @@
     <string name="push_replay_unavailable">Kyllene no pudo abrir el estado de repetición de las notificaciones push. Se han conservado los datos; restaura una copia de seguridad válida antes de reintentarlo.</string>
     <string name="push_notice_failed">Kyllene no pudo mostrar una notificación push.</string>
     <string name="push_inbox_write_failed">Kyllene no pudo guardar una ejecución programada en la bandeja de entrada. Lo reintentará.</string>
+
+    <!-- Desktop startup. -->
+    <string name="startup_at_login">Iniciar al iniciar sesión</string>
+    <string name="startup_not_approved">No se aprobó la solicitud de inicio automático.</string>
+    <string name="startup_not_applied">El escritorio no aplicó el cambio de inicio automático.</string>
+    <string name="startup_shows_window">El inicio automático mostrará una ventana.</string>
+    <string name="startup_not_saved">El escritorio actualizó el inicio automático; no se guardó la preferencia de la aplicación.</string>
+    <string name="startup_incomplete">La solicitud de inicio automático no se completó.</string>
+    <string name="startup_no_answer">El escritorio no respondió a la solicitud de inicio automático.</string>
+    <string name="startup_enable_reason">Iniciar Kyllene en la bandeja al iniciar sesión.</string>
+    <string name="startup_disable_reason">Dejar de iniciar Kyllene automáticamente al iniciar sesión.</string>
 </resources>
