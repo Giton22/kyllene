@@ -3276,7 +3276,7 @@ internal fun MessageTimeLabel(epochSeconds: Double?, modifier: Modifier = Modifi
     val label = remember(epochSeconds, use24Hour) { messageTime(epochSeconds, use24Hour) }
     if (label.isEmpty()) return
     if (isDesktop) {
-        // The short label ("Mon 14:05") in full under the pointer, as desktop chat apps show it.
+        // The short label ("Mon 14:05") in full while the pointer rests on it, as desktop chat apps show it.
         val full = remember(epochSeconds, use24Hour) { fullMessageTime(epochSeconds, use24Hour) }
         Tooltip(full, modifier) { Text(label, style = Theme[typography][caption], color = Theme[colors][textTertiary]) }
     } else {
