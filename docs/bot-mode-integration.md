@@ -158,8 +158,9 @@ those entries in order. Replies, other bots' messages, delivery outcomes and fai
 group. Gateway-hidden rows remain hidden; `display_content` takes precedence over raw stored content.
 User rows typed `internal_notification` are shown when they carry a bot-message envelope or a known cron
 envelope above, or when their `completion_note` names only `cron`. Wakes, watch notes and heartbeats share
-the kind and remain hidden. A bot message's leading `[no reply needed]` marker is for the recipient's
-model and isn't shown.
+the kind and remain hidden. A signed bot message's leading `[no reply needed]` marker is for the
+recipient's model and isn't shown. Hermes sends nothing back after it, so the reply that follows isn't
+folded as an answer to the sender.
 
 **Delivery outcome** (parse the process `Output:`):
 - plain text, `{"reply",…,"status":"settled"}` or `Reply from X:` → "💬 Reply from @x", collapsed. Strip

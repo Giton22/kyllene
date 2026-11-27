@@ -145,6 +145,28 @@ Output:
         assertEquals(3, messages.count { (it as? ChatMessage.Event)?.event is TranscriptEvent.FromBot })
     }
 
+    @Test
+    fun aReplyAfterANoReplyMessageIsntFoldedAsAnAnswerToTheSender() {
+        // Hermes sends nothing back after "[no reply needed]", so what follows is this bot's own text.
+        val messages = historyToMessages(
+            listOf(
+                SessionMessage(id = 1, role = "user", content = JsonPrimitive("Message from 🤖 Scribe (@scribe): [no reply needed] deploy finished")),
+                SessionMessage(id = 2, role = "assistant", content = JsonPrimitive("Noted: the deploy is out.")),
+            ),
+        )
+        assertEquals(TranscriptEvent.FromBot("Scribe", "scribe", "deploy finished", noReplyNeeded = true), messages.filterIsInstance<ChatMessage.Event>().single().event)
+        assertNull(messages.filterIsInstance<ChatMessage.Assistant>().single().repliedTo)
+
+        // A reply still owed to a bot that asked first stays owed to it.
+        val owed = historyToMessages(
+            listOf(
+                SessionMessage(id = 1, role = "user", content = JsonPrimitive("Message from 🤖 Scribe (@scribe): is the deploy out?")),
+                SessionMessage(id = 2, role = "user", content = JsonPrimitive("Message from 🤖 Pager (@pager): [no reply needed] deploy finished")),
+                SessionMessage(id = 3, role = "assistant", content = JsonPrimitive("Yes, it's out.")),
+            ),
+        )
+        assertEquals("Scribe", owed.filterIsInstance<ChatMessage.Assistant>().single().repliedTo)
+    }
 
     /**
      * A cron job delivering to `origin` in a local (Webapp) chat, as hermes-agent 0.22.6+ writes it

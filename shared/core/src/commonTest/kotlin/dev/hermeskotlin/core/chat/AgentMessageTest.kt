@@ -25,7 +25,7 @@ class AgentMessageTest {
     @Test
     fun dropsTheNoReplyMarkerMeantForTheModel() {
         assertEquals(
-            AgentMessage("Scribe", "scribe", "Draft is merged, thanks."),
+            AgentMessage("Scribe", "scribe", "Draft is merged, thanks.", noReplyNeeded = true),
             AgentMessage.parse("Message from 🤖 Scribe (@scribe): [no reply needed] Draft is merged, thanks."),
         )
         // Only where the sender puts it: the same words later in the text are the bot's own.

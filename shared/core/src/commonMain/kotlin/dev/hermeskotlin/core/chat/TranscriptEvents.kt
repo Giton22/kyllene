@@ -14,7 +14,7 @@ import kotlinx.serialization.json.contentOrNull
  */
 sealed interface TranscriptEvent {
     /** Another bot's message (Bot Mode's `message_agent`, a relay or `hermes peer`). */
-    data class FromBot(val sender: String, val handle: String?, val body: String) : TranscriptEvent
+    data class FromBot(val sender: String, val handle: String?, val body: String, val noReplyNeeded: Boolean = false) : TranscriptEvent
 
     /** How a message this bot sent another one ended: the reply, or why there isn't one (yet). */
     data class Delivery(val target: String?, val outcome: DeliveryOutcome) : TranscriptEvent
@@ -112,7 +112,7 @@ object TranscriptRows {
     ): List<TranscriptEvent>? {
         val row = text.trim()
         AgentMessage.parse(row, requireEnvelope = displayKind == "internal_notification")
-            ?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body)) }
+            ?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body, it.noReplyNeeded)) }
         routine(row)?.let { return listOf(it) }
         if (displayKind == "internal_notification") scheduledResult(row, displayMetadata)?.let { return listOf(it) }
         if (displayKind == "process_complete" || displayKind == "async_delegation_complete" || PROCESS.matches(row)) {
