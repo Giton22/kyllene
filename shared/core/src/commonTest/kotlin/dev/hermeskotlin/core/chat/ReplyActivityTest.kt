@@ -108,8 +108,9 @@ class ReplyActivityTest {
             messages = listOf(last.copy(key = "row-11", timestamp = 1_001.0), last.copy(key = "row-12", timestamp = 4_600.0)),
         )
         assertEquals("row-12", readBack.copy(running = false).newFinishedReply(started, readBack)?.key)
-        // The old reply re-keyed by that read, with only a clock's difference in its time, is still the old one.
-        val reread = started.copy(messages = listOf(last.copy(key = "row-11", timestamp = 1_020.0)))
+        // A heartbeat that ends in silence after a read that re-keyed the old reply and dated it by the turn's
+        // later tool step: still the old reply.
+        val reread = started.copy(messages = listOf(last.copy(key = "row-11", timestamp = 4_600.0)))
         assertNull(reread.copy(running = false).newFinishedReply(started, reread))
     }
 

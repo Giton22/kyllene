@@ -32,8 +32,9 @@ fun List<SessionMessage>.hasUnreadBotMessage(readUpTo: Double): Boolean = any { 
  * is over.
  *
  * A history read during the turn (a reconnect, a turn that isn't ours) gives the old reply its stored row's key. A
- * reply this turn didn't stream, under a key the start doesn't have, is the old one when its words are the same and
- * it didn't finish later than the old one did (a routine's "Nothing new." read back on a reconnect is a new reply).
+ * reply this turn didn't stream, under a key the start doesn't have, is the old one when its words are the same,
+ * unless the chat now has more such replies than it had at the start: a routine's "Nothing new." read back on a
+ * reconnect is a new one. (Times can't tell them apart: the read dates the old reply by the turn's later steps.)
  */
 fun ChatState.newFinishedReply(atStart: ChatState?, previous: ChatState? = atStart): ChatMessage.Assistant? {
     val reply = messages.lastOrNull() as? ChatMessage.Assistant ?: return null
@@ -41,21 +42,11 @@ fun ChatState.newFinishedReply(atStart: ChatState?, previous: ChatState? = atSta
     val streamed = previous?.messages?.any { it.key == reply.key && it is ChatMessage.Assistant && it.streaming } == true
     val old = before.lastOrNull { it.key == reply.key } as? ChatMessage.Assistant
         ?: (before.lastOrNull { it is ChatMessage.Assistant && !it.streaming } as? ChatMessage.Assistant)
-            ?.takeUnless { streamed || reply.finishedAfter(it) }
+            ?.takeUnless { old -> streamed || messages.count { it.sameReplyAs(old) } > before.count { it.sameReplyAs(old) } }
         ?: return reply
-    return reply.takeUnless {
-        !old.streaming && old.text == it.text && old.outcome == it.outcome && old.error == it.error
-    }
+    return reply.takeUnless { it.sameReplyAs(old) }
 }
 
-/**
- * Whether this reply finished well after [other]. A live reply's time is this device's clock and a stored row's the
- * gateway's, so the two may be a little apart for the same reply.
- */
-private fun ChatMessage.Assistant.finishedAfter(other: ChatMessage.Assistant): Boolean {
-    val at = timestamp ?: return false
-    val then = other.timestamp ?: return false
-    return at > then + SAME_REPLY_CLOCK_SLACK_SECONDS
-}
-
-private const val SAME_REPLY_CLOCK_SLACK_SECONDS = 60.0
+/** A finished reply with [old]'s words and outcome. */
+private fun ChatMessage.sameReplyAs(old: ChatMessage.Assistant): Boolean =
+    this is ChatMessage.Assistant && !streaming && !old.streaming && text == old.text && outcome == old.outcome && error == old.error
