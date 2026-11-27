@@ -33,8 +33,9 @@ enum class LiveStatus {
     Idle,
 
     /**
-     * The agent is still being built. Not a turn: every cold `session.resume` builds one straight away (a chat
-     * opened here, on Desktop, a bot chat watched), and the gateway reports this over a turn's own `running`.
+     * The agent is still being built (a cold `session.resume` builds one straight away: a chat opened here, on
+     * Desktop, a bot chat watched) or, on the session authority, a turn is admitted and queued but not yet
+     * claimed. Neither has started producing a reply yet, so it counts as none for [running].
      */
     Starting,
 
@@ -50,7 +51,7 @@ enum class LiveStatus {
     val running: Boolean get() = this == Working || this == Waiting
 
     companion object {
-        /** `streaming` and `resuming` are in the contract but no handler sets them yet; both are a turn going. */
+        /** `streaming` and `resuming` appear only in `session.resume`'s own status, never in `session.active_list`; both are a turn going. */
         fun parse(value: String?): LiveStatus = when (value) {
             "starting" -> Starting
             "waiting" -> Waiting

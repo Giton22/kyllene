@@ -3,6 +3,7 @@ package dev.hermeskotlin.core.chat
 import dev.hermeskotlin.core.cache.OfflineCache
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.gateway.GatewayUrl
+import dev.hermeskotlin.core.sessions.ActiveSessions
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.startInstruction
@@ -31,6 +32,8 @@ class ChatHost(
     private val cache: OfflineCache? = null,
     /** Where the instruction a new chat starts with comes from (see [startInstruction]). */
     private val settings: SettingsStore? = null,
+    /** What the gateway lists as live, so the open chat attaches while its session runs elsewhere. */
+    private val active: ActiveSessions? = null,
 ) {
     /** What a new chat started on this device tells the agent first: the setting, read when the chat is created. */
     val startInstruction: () -> String? = { settings?.startInstruction() }
@@ -94,7 +97,7 @@ class ChatHost(
         this.profile = profile
         sessionScope = childScope
         val cards = storedSessionId?.let { sideTasks.remove(Triple(gateway, profile, it)) }.orEmpty()
-        return ChatSession(gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache, sideTasks = cards, startInstruction = startInstruction, ownerVersion = _ownerVersion.value)
+        return ChatSession(gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache, sideTasks = cards, startInstruction = startInstruction, ownerVersion = _ownerVersion.value, active = active)
             .also { it.start() }
             .also { _session.value = it }
     }
