@@ -2706,6 +2706,27 @@ class ChatSessionTest {
     }
 
     @Test
+    fun branchingSkipsARestatedRequestWhoseOriginalIsLoaded() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
+            {"id":3,"role":"user","content":"Draft them"},{"id":4,"role":"assistant","content":"Drafted"},
+            {"id":5,"role":"user","content":"[STILL IN PROGRESS — this is the active request, restated after the compaction boundary because it was not finished yet. Continue it; do not start over.]\nDraft them",
+             "display_metadata":{"compaction_inflight_task_restatement":true}},
+            {"id":6,"role":"assistant","content":"Done"},
+            {"id":7,"role":"user","content":"two"},{"id":8,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        val shown = chat.state.value.messages.map { it.textOf() }
+        assertEquals(listOf("one", "First", "Draft them", "Drafted\n\nDone", "two", "Second"), shown)
+
+        // Up to the reply to "Draft them": four shown, six stored with the restatement and the step after it.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(4))
+        assertEquals("6", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
     fun branchingFromAReplyKeepsEveryStepOfIt() = runTest {
         history = """{"session_id":"stored-1","messages":[
             {"id":1,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
