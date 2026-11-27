@@ -85,7 +85,7 @@ internal fun CallTargetPicker(
         error = null
         if (mode == 2) {
             val result = viewModel.callProfiles(gateway)
-            if (result is ApiResult.Success) profiles = result.value.profiles.filterNot { it.isDefault }
+            if (result is ApiResult.Success) profiles = result.value.profiles
             else error = result.errorMessage
         } else {
             val result = viewModel.callSessions(gateway, offset)
@@ -122,7 +122,10 @@ internal fun CallTargetPicker(
                 mode == 2 -> {
                     if (profiles.isEmpty()) Text(stringResource(Res.string.call_target_no_bots), color = Theme[colors][text])
                     profiles.forEach { profile ->
-                        val bot = faces.bots.firstOrNull { it.name == profile.name } ?: Bot(name = profile.name, displayName = profile.label)
+                        val bot = faces.bots.firstOrNull { it.name == profile.name } ?: Bot(
+                            name = profile.name,
+                            displayName = if (profile.isDefault) profile.displayName else profile.label,
+                        )
                         CallTargetCard(bot.label, null, selected?.profile == bot.name, {
                             onSelect(CallTarget(profile = bot.name, label = bot.label))
                         }) { BotAvatar(bot, faces.picture(bot), size = 40.dp) }
