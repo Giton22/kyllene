@@ -96,7 +96,7 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
     }
 
     @Composable
-    override fun Widget(document: String, name: String, modifier: Modifier, keepsWheel: (title: String?, down: Boolean) -> Boolean, onFailure: (String) -> Unit) {
+    override fun Widget(document: String, name: String, modifier: Modifier, keepsWheel: (title: String?, down: Boolean) -> Boolean, onTitle: (String?) -> Unit, onFailure: (String) -> Unit) {
         val failure by rememberUpdatedState(onFailure)
         val noBrowser by rememberUpdatedState(stringResource(Res.string.web_widget_no_browser))
         val widgetFailed by rememberUpdatedState(stringResource(Res.string.web_widget_failed))
@@ -130,6 +130,9 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
                 page.browser.loadURL(WIDGET_URL)
             }
         }
+        val deliverTitle by rememberUpdatedState(onTitle)
+        val title = page.title
+        LaunchedEffect(title) { deliverTitle(title) }
         BrowserSurface(page, modifier) { down -> keepsWheel(page.title, down) }
     }
 

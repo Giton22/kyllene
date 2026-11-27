@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -52,6 +53,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.composables.icons.lucide.Download
@@ -69,6 +71,7 @@ import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.IconButton
+import dev.hermeskotlin.designsystem.components.MinTouchTarget
 import dev.hermeskotlin.designsystem.components.Spinner
 import dev.hermeskotlin.designsystem.components.handCursor
 import dev.hermeskotlin.designsystem.label
@@ -103,14 +106,14 @@ internal class ViewerImage(
 
 /** The pictures and files a reply delivered, under its text. */
 @Composable
-internal fun ReplyMediaList(media: List<ReplyMedia>) {
+internal fun ReplyMediaList(media: List<ReplyMedia>, messageKey: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // Keyed, so a picture's loaded bytes never show under another one when the list changes.
         media.forEach { item -> key(item.source) {
             val file = widgetFile(item)
             val files = LocalWidgetFiles.current
             when {
-                file != null && files != null -> InlineWidget(item, file, files)
+                file != null && files != null -> InlineWidget(item, file, files, messageKey)
                 item.isImage -> ReplyImage(item)
                 else -> ReplyFile(item)
             }
@@ -165,38 +168,40 @@ private fun ReplyImage(item: ReplyMedia) {
     }
     val decoded = bytes?.let { rememberDecodedImage(it, maxEdge = INLINE_EDGE) }
     val bitmap = decoded?.bitmap
-    Box(
-        Modifier
-            .widthIn(max = 420.dp)
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, Theme[colors][stroke], shape)
-            .background(Theme[colors][surface])
-            .handCursor(bitmap != null || failed)
-            .clickable(enabled = bitmap != null || failed) {
-                if (bitmap != null) open(ViewerImage(item.name, source = item.source)) else attempt++
-            },
-        contentAlignment = Alignment.Center,
+    InlineFilePreviewFrame(
+        item,
+        maxWidth = 420.dp,
+        download = bytes?.let { loaded -> suspend { FileDownload.Ready(loaded) } },
     ) {
-        when {
-            bitmap != null -> Image(
-                bitmap = bitmap,
-                contentDescription = item.name,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)).heightIn(max = 480.dp),
-            )
-            failed || decoded?.decoding == false -> Row(
-                Modifier.padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                UnstyledIcon(Lucide.ImageOff, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(18.dp))
-                Column {
-                    Text(stringResource(Res.string.chat_load_failed_named, item.name), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
-                    if (failed) Text(stringResource(if (isDesktop) Res.string.chat_retry_click else Res.string.chat_retry_tap), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .handCursor(bitmap != null || failed)
+                .clickable(enabled = bitmap != null || failed) {
+                    if (bitmap != null) open(ViewerImage(item.name, source = item.source)) else attempt++
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                bitmap != null -> Image(
+                    bitmap = bitmap,
+                    contentDescription = item.name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)).heightIn(max = 480.dp),
+                )
+                failed || decoded?.decoding == false -> Row(
+                    Modifier.padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    UnstyledIcon(Lucide.ImageOff, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(18.dp))
+                    Column {
+                        Text(stringResource(Res.string.chat_load_failed_named, item.name), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary])
+                        if (failed) Text(stringResource(if (isDesktop) Res.string.chat_retry_click else Res.string.chat_retry_tap), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+                    }
                 }
+                else -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { Spinner() }
             }
-            else -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { Spinner() }
         }
     }
 }
@@ -210,9 +215,32 @@ internal fun webHost(source: String): String? {
     return source.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#').substringAfterLast('@')
 }
 
+/** The shared frame and file actions for a preview rendered in the chat. */
+@Composable
+internal fun InlineFilePreviewFrame(
+    item: ReplyMedia,
+    maxWidth: Dp,
+    download: (suspend () -> FileDownload)?,
+    content: @Composable () -> Unit,
+) {
+    val shape = RoundedCornerShape(Theme[radii][radiusMedium])
+    Column(
+        Modifier.widthIn(max = maxWidth).fillMaxWidth()
+            .clip(shape).border(1.dp, Theme[colors][stroke], shape).background(Theme[colors][surface]),
+    ) {
+        ReplyFile(item, download = download, insidePreview = true)
+        Spacer(Modifier.fillMaxWidth().height(1.dp).background(Theme[colors][stroke]))
+        content()
+    }
+}
+
 /** A delivered file: its name, with Save and Share. */
 @Composable
-internal fun ReplyFile(item: ReplyMedia, download: (suspend () -> FileDownload)? = null) {
+internal fun ReplyFile(
+    item: ReplyMedia,
+    download: (suspend () -> FileDownload)? = null,
+    insidePreview: Boolean = false,
+) {
     val load = LocalMediaLoader.current
     val actions = rememberMediaActions()
     val notify = LocalNotice.current
@@ -240,24 +268,30 @@ internal fun ReplyFile(item: ReplyMedia, download: (suspend () -> FileDownload)?
         }
     }
 
+    val container = if (insidePreview) Modifier.fillMaxWidth() else Modifier
+        .widthIn(max = 420.dp)
+        .fillMaxWidth()
+        .clip(shape)
+        .border(1.dp, Theme[colors][stroke], shape)
+        .background(Theme[colors][surface])
+    val verticalPadding = if (insidePreview) 0.dp else 6.dp
     Row(
-        Modifier
-            .widthIn(max = 420.dp)
-            .fillMaxWidth()
-            .clip(shape)
-            .border(1.dp, Theme[colors][stroke], shape)
-            .background(Theme[colors][surface])
-            .padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        container.padding(start = 14.dp, end = 4.dp, top = verticalPadding, bottom = verticalPadding),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (insidePreview) 0.dp else 10.dp),
     ) {
-        UnstyledIcon(Lucide.File, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(22.dp))
+        if (!insidePreview) {
+            UnstyledIcon(Lucide.File, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(22.dp))
+        }
         Column(Modifier.weight(1f)) {
             Text(item.name, style = Theme[typography][label], color = Theme[colors][textColor], maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(item.name.substringAfterLast('.', stringResource(Res.string.chat_kind_file)).uppercase(), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+            if (!insidePreview) {
+                Text(item.name.substringAfterLast('.', stringResource(Res.string.chat_kind_file)).uppercase(), style = Theme[typography][caption], color = Theme[colors][textTertiary])
+            }
         }
         if (busy) {
-            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { Spinner(Modifier.size(18.dp)) }
+            val slot = if (insidePreview) Modifier.size(MinTouchTarget * 2, MinTouchTarget) else Modifier.size(40.dp)
+            Box(slot, contentAlignment = Alignment.Center) { Spinner(Modifier.size(18.dp)) }
         } else {
             IconButton(Lucide.Download, contentDescription = stringResource(Res.string.chat_save_named, item.name), onClick = { withBytes { notify(actions.save(it, item.name)) } })
             IconButton(shareIcon, contentDescription = shareNamed(item.name), onClick = { withBytes { actions.share(it, item.name) } })

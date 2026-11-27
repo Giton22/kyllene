@@ -18,7 +18,7 @@ interface DesktopWeb {
      * direction, whether a turn of the wheel scrolls the widget; when it doesn't, the chat around it scrolls.
      */
     @Composable
-    fun Widget(document: String, name: String, modifier: Modifier, keepsWheel: (title: String?, down: Boolean) -> Boolean, onFailure: (String) -> Unit)
+    fun Widget(document: String, name: String, modifier: Modifier, keepsWheel: (title: String?, down: Boolean) -> Boolean, onTitle: (String?) -> Unit, onFailure: (String) -> Unit)
 
     /** A plugin's page at [url] on [gateway], signed in as the app is, with a bar that names it and closes it. */
     @Composable

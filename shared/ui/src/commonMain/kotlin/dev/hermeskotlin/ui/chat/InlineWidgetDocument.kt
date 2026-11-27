@@ -41,7 +41,7 @@ internal fun cssColor(argb: Int): String {
  * The wrapper's title while a widget is shown: [WIDGET_REPORT], then `t` and/or `b` for the ends its page has
  * scrolled to (both when it doesn't scroll), `|`, and `x,y,w,h` areas (CSS px, `;` between) that keep every drag:
  * inner scrollers, sliders and `touch-action` controls (a drawing canvas needs one; a chart's lets the transcript
- * scroll). Kept current as the page changes, so it's already
+ * scroll), then the document token and content and viewport heights. Kept current as the page changes, so it's already
  * there when a finger comes down: a report sent from the touch itself arrives after the drag is decided.
  */
 internal const val WIDGET_REPORT = "widget:"
@@ -60,11 +60,13 @@ private const val REPORT_SCRIPT = "<script>(function(){var last=null,queued=fals
     "return t!=='auto'&&t!=='manipulation'&&t.indexOf('pan-y')<0||/auto|scroll/.test(s.overflowY)&&over(n)}" +
     "function scan(){picks=[];var m=main(),all=document.querySelectorAll('body *');" +
     "for(var i=0;i<all.length&&picks.length<20;i++)if(all[i]!==m&&keeps(all[i]))picks.push(all[i])}" +
+    "function height(){var b=document.body,d=document.documentElement;if(!b)return innerHeight;" +
+    "return Math.min(99999,Math.max(1,b.offsetHeight,b.scrollHeight,d.scrollHeight>innerHeight?d.scrollHeight:0))}" +
     "function report(){var m=main(),r=[];for(var i=0;i<picks.length;i++){var b=picks[i].getBoundingClientRect();" +
     "if(b.width>0&&b.height>0&&b.bottom>0&&b.top<innerHeight&&b.right>0&&b.left<innerWidth)" +
     "r.push([b.left,b.top,b.width,b.height].map(Math.round).join(','))}" +
     "while(r.join(';').length>500)r.pop();" +
-    "var v=(m?(m.scrollTop<=0?'t':'')+(m.scrollTop+m.clientHeight>=m.scrollHeight-1?'b':''):'tb')+'|'+r.join(';')+'|'+id;" +
+    "var v=(m?(m.scrollTop<=0?'t':'')+(m.scrollTop+m.clientHeight>=m.scrollHeight-1?'b':''):'tb')+'|'+r.join(';')+'|'+id+'|'+height()+','+innerHeight;" +
     "if(v!==last){last=v;parent.postMessage({heraldReport:v},'*')}}" +
     // Scrolling only moves the areas; a full scan (styles of every element) runs at most every 250 ms.
     "function run(){queued=false;if(dirty){var wait=scanned+250-Date.now();" +
@@ -83,17 +85,42 @@ internal data class WidgetArea(val x: Float, val y: Float, val width: Float, val
 }
 
 /** What a widget last reported; before its first report, the transcript takes vertical drags. */
-internal data class WidgetReport(val atTop: Boolean = true, val atBottom: Boolean = true, val keeps: List<WidgetArea> = emptyList())
+internal data class WidgetReport(
+    val atTop: Boolean = true,
+    val atBottom: Boolean = true,
+    val keeps: List<WidgetArea> = emptyList(),
+    val contentHeight: Int? = null,
+    val viewportHeight: Int? = null,
+)
 
 /** The report in a wrapper [title], or null when it isn't one; malformed areas are left out. */
 internal fun widgetReport(title: String?): WidgetReport? {
     val value = title?.takeIf { it.startsWith(WIDGET_REPORT) }?.removePrefix(WIDGET_REPORT) ?: return null
-    val ends = value.substringBefore('|')
-    // Then `|` and the document's token, only there to change the title.
-    val keeps = value.substringAfter('|', "").substringBefore('|').split(';').mapNotNull { area ->
+    val fields = value.split('|', limit = 4)
+    val ends = fields.first()
+    val heights = fields.getOrNull(3)?.split(',')?.mapNotNull { it.toIntOrNull()?.takeIf { px -> px in 1..99_999 } }
+    if (heights != null && heights.size != 2) return null
+    val keeps = fields.getOrNull(1).orEmpty().split(';').mapNotNull { area ->
         area.split(',').mapNotNull { it.toFloatOrNull() }.takeIf { it.size == 4 }?.let { WidgetArea(it[0], it[1], it[2], it[3]) }
     }
-    return WidgetReport('t' in ends, 'b' in ends, keeps)
+    return WidgetReport('t' in ends, 'b' in ends, keeps, heights?.get(0), heights?.get(1))
+}
+
+/** Height-only viewport changes must not keep inflating a widget whose page follows that viewport. */
+internal class WidgetHeightTracker {
+    private var lastContent = 0
+    private var lastViewport = 0
+
+    fun measuredHeight(report: WidgetReport): Int? {
+        val content = report.contentHeight ?: return null
+        val viewport = report.viewportHeight ?: return null
+        val followsViewport = lastViewport != 0 && viewport != lastViewport &&
+            abs((content - lastContent) - (viewport - lastViewport)) <= 1
+        val unchanged = content == lastContent && viewport == lastViewport
+        lastContent = content
+        lastViewport = viewport
+        return content.takeUnless { unchanged || followsViewport || it == viewport }
+    }
 }
 
 /** A touch at ([x], [y]) on an area that keeps drags, whichever way it then moves: held from the start, so a flick can't escape. */
@@ -120,14 +147,15 @@ internal fun widgetDocument(html: String, theme: WidgetTheme, font: String): Str
         ":root{color-scheme:${if (theme.dark) "dark" else "light"};--foreground:${theme.foreground};" +
         "--muted-foreground:${theme.muted};--accent:${theme.accent};--border:${theme.border};--card:${theme.card}}" +
         "html,body{margin:0;padding:0;background:transparent;color:var(--foreground);" +
-        "font-family:Herald,sans-serif;font-size:${theme.fontSize}px}</style>"
+        "font-family:Herald,sans-serif;font-size:${theme.fontSize}px}" +
+        "canvas{max-width:100%;height:auto}</style>"
     val content = ("<!doctype html>" + prelude + html).replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;")
-    return "<!doctype html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
+    return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
         "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; " +
         "script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; " +
         "frame-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'\">" +
-        "<style>html,body{margin:0;height:100%;background:transparent}iframe{width:100%;height:100%;border:0}</style>" +
+        "<style>html,body{margin:0;height:100%;background:transparent}iframe{display:block;width:100%;height:100%;border:0}</style>" +
         "<script>addEventListener('message',function(e){var f=document.querySelector('iframe'),v=e.data&&e.data.heraldReport;" +
-        "if(f&&e.source===f.contentWindow&&typeof v==='string'&&/^t?b?\\|[0-9,;-]{0,500}\\|[0-9a-z]{1,8}$/.test(v))document.title='$WIDGET_REPORT'+v})</script>" +
+        "if(f&&e.source===f.contentWindow&&typeof v==='string'&&/^t?b?\\|[0-9,;-]{0,500}\\|[0-9a-z]{1,8}\\|[0-9]{1,5},[0-9]{1,5}$/.test(v))document.title='$WIDGET_REPORT'+v})</script>" +
         "</head><body><iframe title=\"HTML widget\" sandbox=\"allow-scripts\" srcdoc=\"$content\"></iframe></body></html>"
 }

@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import androidx.compose.ui.unit.dp
 import dev.hermeskotlin.core.chat.ReplyMedia
 import dev.hermeskotlin.core.media.FileText
 import dev.hermeskotlin.core.media.GatewayFile
@@ -47,6 +48,13 @@ class InlineWidgetTest {
     }
 
     @Test
+    fun wrapperDeclaresUtf8BeforeTheWidgetContent() {
+        val result = widgetDocument("<p>70°F – →</p>", theme, "")
+        assertTrue(result.startsWith("<!doctype html><html><head><meta charset=\"utf-8\">"))
+        assertTrue(result.contains("70°F – →"))
+    }
+
+    @Test
     fun wrapperKeepsHostileMarkupInsideTheSandboxedDocument() {
         val html = "\" onload=\"alert(1)\"><script>parent.document.body.remove()</script></iframe><p>&quoted</p>"
         val result = widgetDocument(html, theme, "Zm9udA==")
@@ -88,7 +96,8 @@ class InlineWidgetTest {
         assertTrue(result.indexOf("parent.postMessage({heraldReport:v},'*')") in 0 until result.indexOf("&lt;p&gt;tall"))
         // The wrapper takes only a well-formed report from its own frame, and only as its title.
         assertTrue(result.contains("e.source===f.contentWindow"))
-        assertTrue(result.contains("/^t?b?\\|[0-9,;-]{0,500}\\|[0-9a-z]{1,8}$/.test(v))document.title='$WIDGET_REPORT'+v"))
+        assertTrue(result.contains("iframe{display:block;width:100%;height:100%;border:0}"))
+        assertTrue(result.contains("/^t?b?\\|[0-9,;-]{0,500}\\|[0-9a-z]{1,8}\\|[0-9]{1,5},[0-9]{1,5}$/.test(v))document.title='$WIDGET_REPORT'+v"))
     }
 
     @Test
@@ -100,6 +109,23 @@ class InlineWidgetTest {
         assertEquals(WidgetReport(), widgetReport("${WIDGET_REPORT}tb||k3x9a"))
         assertNull(widgetReport("HTML widget"))
         assertNull(widgetReport(null))
+    }
+
+    @Test
+    fun responsiveReportsCarryMeasuredContentAndViewportHeights() {
+        val widget = widgetReport("${WIDGET_REPORT}tb||k3x9a|520,280")
+        assertEquals(520, widget?.contentHeight)
+        assertEquals(280, widget?.viewportHeight)
+        assertEquals(null, widgetReport("${WIDGET_REPORT}tb||k3x9a|999999,280"))
+    }
+
+    @Test
+    fun aViewportHeightCanvasCannotKeepGrowingItsOwnViewport() {
+        val sizing = WidgetHeightTracker()
+        assertEquals(310, sizing.measuredHeight(WidgetReport(contentHeight = 310, viewportHeight = 280)))
+        assertNull(sizing.measuredHeight(WidgetReport(contentHeight = 340, viewportHeight = 310)))
+        assertNull(sizing.measuredHeight(WidgetReport(contentHeight = 340, viewportHeight = 310)))
+        assertEquals(490, sizing.measuredHeight(WidgetReport(contentHeight = 490, viewportHeight = 310)))
     }
 
     @Test
@@ -121,6 +147,45 @@ class InlineWidgetTest {
         // Held from the touch itself, before any movement.
         assertTrue(widgetKeepsTouch(canvas, 20f, 120f))
         assertFalse(widgetKeepsTouch(canvas, 20f, 160f))
+    }
+
+    @Test
+    fun widgetCacheEvictsTheLeastRecentlyViewedMessage() {
+        val cache = WidgetPreviewCache(capacity = 2)
+        val file = GatewayFile("/tmp/chart.html")
+        val first = WidgetPreviewKey("first", file)
+        val second = WidgetPreviewKey("second", file)
+        val third = WidgetPreviewKey("third", file)
+        val document = FileText("<p>hello</p>", 12, false, false)
+        val view = cache.store(first, document)
+        cache.store(second, document.copy(text = "<p>two</p>"))
+
+        assertEquals(view, cache[first])
+        cache.store(third, document)
+        assertNull(cache[second])
+        assertEquals(view, cache[first])
+        cache.remove(first)
+        assertNull(cache[first])
+    }
+
+    @Test
+    fun widgetHeightSurvivesHtmlEvictionAndOnlyAppliesAtItsMeasuredLayout() {
+        val cache = WidgetPreviewCache(capacity = 1)
+        val file = GatewayFile("/tmp/chart.html")
+        val first = WidgetPreviewKey("first", file)
+        val second = WidgetPreviewKey("second", file)
+        val document = FileText("<p>one</p>", 10, false, false)
+        cache.store(first, document)
+        cache.rememberHeight(first, 420.dp, theme, 176.dp)
+        cache.store(second, document.copy(text = "<p>two</p>"))
+
+        assertNull(cache[first])
+        assertEquals(176.dp, cache.height(first, 420.dp, theme))
+        assertNull(cache.height(first, 320.dp, theme))
+        assertNull(cache.height(first, 420.dp, theme.copy(fontSize = 20f)))
+        assertNull(cache.height(second, 420.dp, theme))
+        cache.remove(first)
+        assertNull(cache.height(first, 420.dp, theme))
     }
 
     @Test
