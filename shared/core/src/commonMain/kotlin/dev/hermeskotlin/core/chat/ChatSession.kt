@@ -1995,16 +1995,17 @@ class ChatSession(
      */
     private fun withHiddenRows(visible: Int, rows: List<SessionMessage> = this.rows): Int {
         // The rows the chat starts a message at, as it shows them: a row it leaves out (a compaction reminder, a
-        // restated request whose original is loaded) starts none, and a reply's next step adds to that reply.
+        // restated request whose original is loaded) starts none, and a reply's next step adds to that reply. A
+        // message may start at a row the gateway doesn't count, such as a reply's first step with only a tool call.
         val starts = historyToMessages(rows).mapNotNullTo(HashSet()) { it.firstStoredRowId() }
         var seen = 0
         var counted = 0
         for (row in rows) {
-            if (!row.countsInBranch) continue
-            val startsMessage = row.id in starts
-            if (startsMessage && seen == visible) break
-            counted++
-            if (startsMessage) seen++
+            if (row.id in starts) {
+                if (seen == visible) break
+                seen++
+            }
+            if (row.countsInBranch) counted++
         }
         return counted + (visible - seen)
     }

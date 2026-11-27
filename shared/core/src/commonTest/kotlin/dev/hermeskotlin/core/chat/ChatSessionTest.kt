@@ -2706,6 +2706,25 @@ class ChatSessionTest {
     }
 
     @Test
+    fun branchingCountsAReplyThatStartsWithAToolCall() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},
+            {"id":2,"role":"assistant","content":"","tool_calls":[{"id":"c1","function":{"name":"terminal","arguments":"{}"}}]},
+            {"id":3,"role":"tool","tool_call_id":"c1","content":"ok"},
+            {"id":4,"role":"assistant","content":"First"},
+            {"id":5,"role":"user","content":"two"},{"id":6,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        assertEquals(listOf("one", "First", "two", "Second"), chat.state.value.messages.map { it.textOf() })
+
+        // Up to "First": its call step has no text, so the gateway counts "one" and "First" only.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(2))
+        assertEquals("2", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
     fun branchingSkipsARestatedRequestWhoseOriginalIsLoaded() = runTest {
         history = """{"session_id":"stored-1","messages":[
             {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
