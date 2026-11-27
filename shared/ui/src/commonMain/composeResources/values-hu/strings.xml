@@ -112,6 +112,8 @@
     <string name="settings_show_pet_detail">A profil kis kedvence a beviteli mezőn ül, és eljátssza, mit csinál az ügynök. Fogadj örökbe egyet a /pet paranccsal.</string>
     <string name="settings_link_previews">Hivatkozás-előnézetek</string>
     <string name="settings_link_previews_detail">Egy kártya minden webes hivatkozáshoz egy befejezett válaszban. A Kyllene maga nyitja meg a hivatkozott oldalakat és képeiket, a Gateway sütijei nélkül.</string>
+    <string name="settings_open_web_links_in_browser">Webes hivatkozások megnyitása az alapértelmezett böngészőben</string>
+    <string name="settings_open_web_links_in_browser_detail">A hivatkozások a böngésződben nyílnak meg a Kyllene fölötti lap helyett.</string>
     <string name="settings_suggested_replies">Javasolt válaszok</string>
     <string name="settings_suggestions_what">Egy válasz után a beviteli mező fölött az az üzenet, amelyet valószínűleg következőnek küldenél: koppints rá, szerkeszd és küldd el. A Gateway Next Prompt bővítményétől jön, amely körönként egyszer megkérdez egy modellt.</string>
     <string name="settings_suggestions_what_desktop">Egy válasz után a beviteli mező fölött az az üzenet, amelyet valószínűleg következőnek küldenél: kattints rá, szerkeszd és küldd el. A Gateway Next Prompt bővítményétől jön, amely körönként egyszer megkérdez egy modellt.</string>

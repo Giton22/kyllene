@@ -112,6 +112,8 @@
     <string name="settings_show_pet_detail">配置的宠物待在输入框上，表演代理正在做的事。用 /pet 领养一只。</string>
     <string name="settings_link_previews">显示链接预览</string>
     <string name="settings_link_previews_detail">为已完成回复中的每个网页链接显示一张卡片。Kyllene 会自己打开链接的页面及其图片，不带你网关的 Cookie。</string>
+    <string name="settings_open_web_links_in_browser">在默认浏览器中打开网页链接</string>
+    <string name="settings_open_web_links_in_browser_detail">在浏览器应用中打开链接，而不是在 Kyllene 上方的标签页中打开。</string>
     <string name="settings_suggested_replies">建议回复</string>
     <string name="settings_suggestions_what">回复之后，在输入框上方显示你接下来可能发送的消息：轻点即可编辑并发送。它来自网关的 Next Prompt 插件，该插件每轮询问一次模型。</string>
     <string name="settings_suggestions_what_desktop">回复之后，在输入框上方显示你接下来可能发送的消息：点击即可编辑并发送。它来自网关的 Next Prompt 插件，该插件每轮询问一次模型。</string>

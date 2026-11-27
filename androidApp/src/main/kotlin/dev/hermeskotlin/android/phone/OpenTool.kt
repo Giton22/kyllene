@@ -3,10 +3,10 @@ package dev.hermeskotlin.android.phone
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.core.net.toUri
 import dev.hermeskotlin.android.R
+import dev.hermeskotlin.android.browserPackage
 import dev.hermeskotlin.core.phone.PhoneToolException
 import dev.hermeskotlin.core.phone.checkLink
 import dev.hermeskotlin.core.phone.forQuestion
@@ -43,25 +43,11 @@ internal class OpenTool(private val context: Context, private val confirmations:
     private suspend fun url(value: String): JsonObject {
         val link = checkLink(value)
         // The browser only: an app that claims the link (a bank, a shop) would open it signed in, which isn't what was asked.
-        val browser = browser() ?: throw PhoneToolException("The phone has no browser.")
+        val browser = context.browserPackage() ?: throw PhoneToolException("The phone has no browser.")
         val intent = Intent(Intent.ACTION_VIEW, link.url.toUri()).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(browser)
         val secure = if (link.secure) "" else confirmations.text(R.string.phone_open_not_secure)
         start(intent, confirmations.text(R.string.phone_open_link, link.site, secure, shorten(link.url)), "The phone has no browser.")
         return done("url", "The user allowed it and the link went to the browser.") { put("site", link.host) }
-    }
-
-    /** The user's browser: what opens a link no app claims, else the first browser there is. */
-    private fun browser(): String? {
-        val manager = context.packageManager
-        val probe = Intent(Intent.ACTION_VIEW, PROBE.toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
-        val browsers = manager.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo.packageName }
-        // With no default, this is Android's own "Open with" list, which isn't a browser.
-        val chosen = manager.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
-        if (chosen != null && chosen in browsers) return chosen
-        // Else one that calls itself a browser: any app may take every link, and it shouldn't get them unasked.
-        val real = manager.queryIntentActivities(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_BROWSER), 0)
-            .map { it.activityInfo.packageName }
-        return browsers.firstOrNull { it in real }
     }
 
     private suspend fun map(place: String, navigate: Boolean): JsonObject {
@@ -132,8 +118,6 @@ internal class OpenTool(private val context: Context, private val confirmations:
     private companion object {
         const val MAX_VALUE = 2000
 
-        /** A link no app claims (example.com is kept for examples), to find the browser by. */
-        const val PROBE = "https://example.com/"
         const val QUESTION = 300
     }
 }

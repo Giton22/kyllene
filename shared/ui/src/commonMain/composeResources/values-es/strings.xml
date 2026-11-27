@@ -112,6 +112,8 @@
     <string name="settings_show_pet_detail">La mascota del perfil se sienta en el cuadro de texto e imita lo que hace el agente. Adopta una con /pet.</string>
     <string name="settings_link_previews">Vista previa de enlaces</string>
     <string name="settings_link_previews_detail">Una tarjeta para cada enlace web de una respuesta terminada. Kyllene abre por sí mismo las páginas enlazadas y sus imágenes, sin las cookies de tu Gateway.</string>
+    <string name="settings_open_web_links_in_browser">Abrir enlaces web en el navegador predeterminado</string>
+    <string name="settings_open_web_links_in_browser_detail">Abre los enlaces en tu navegador en lugar de en una pestaña sobre Kyllene.</string>
     <string name="settings_suggested_replies">Respuestas sugeridas</string>
     <string name="settings_suggestions_what">Tras una respuesta, el mensaje que probablemente enviarías después, sobre el cuadro de texto: tócalo para editarlo y enviarlo. Viene del plugin Next Prompt del Gateway, que consulta a un modelo una vez por turno.</string>
     <string name="settings_suggestions_what_desktop">Tras una respuesta, el mensaje que probablemente enviarías después, sobre el cuadro de texto: haz clic para editarlo y enviarlo. Viene del plugin Next Prompt del Gateway, que consulta a un modelo una vez por turno.</string>

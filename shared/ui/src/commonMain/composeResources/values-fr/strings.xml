@@ -112,6 +112,8 @@
     <string name="settings_show_pet_detail">Le compagnon du profil se pose sur la zone de saisie et mime ce que fait l’agent. Adoptez-en un avec /pet.</string>
     <string name="settings_link_previews">Aperçus des liens</string>
     <string name="settings_link_previews_detail">Une carte pour chaque lien web d’une réponse terminée. Kyllene ouvre lui-même les pages liées et leurs images, sans les cookies de votre Gateway.</string>
+    <string name="settings_open_web_links_in_browser">Ouvrir les liens web dans le navigateur par défaut</string>
+    <string name="settings_open_web_links_in_browser_detail">Ouvrez les liens dans votre navigateur plutôt que dans un onglet par-dessus Kyllene.</string>
     <string name="settings_suggested_replies">Réponses suggérées</string>
     <string name="settings_suggestions_what">Après une réponse, le message que vous enverriez probablement ensuite, au-dessus de la zone de saisie : touchez-le pour le modifier et l’envoyer. Il vient du plugin Next Prompt du Gateway, qui interroge un modèle une fois par tour.</string>
     <string name="settings_suggestions_what_desktop">Après une réponse, le message que vous enverriez probablement ensuite, au-dessus de la zone de saisie : cliquez dessus pour le modifier et l’envoyer. Il vient du plugin Next Prompt du Gateway, qui interroge un modèle une fois par tour.</string>

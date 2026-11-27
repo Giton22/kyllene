@@ -112,6 +112,8 @@
     <string name="settings_show_pet_detail">The profile’s pet sits on the composer and acts out what the agent is doing. Adopt one with /pet.</string>
     <string name="settings_link_previews">Show link previews</string>
     <string name="settings_link_previews_detail">A card for each web link in a finished reply. Kyllene opens the linked pages and their pictures itself, without your gateway’s cookies.</string>
+    <string name="settings_open_web_links_in_browser">Open web links in default browser</string>
+    <string name="settings_open_web_links_in_browser_detail">Open links in your browser app instead of a tab over Kyllene.</string>
     <string name="settings_suggested_replies">Suggested replies</string>
     <string name="settings_suggestions_what">After a reply, the message you’d likely send next, over the composer: tap it to edit and send. It comes from the gateway’s Next Prompt plugin, which asks a model once per turn.</string>
     <string name="settings_suggestions_what_desktop">After a reply, the message you’d likely send next, over the composer: click it to edit and send. It comes from the gateway’s Next Prompt plugin, which asks a model once per turn.</string>

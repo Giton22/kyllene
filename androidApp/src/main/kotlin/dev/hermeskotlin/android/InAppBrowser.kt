@@ -2,24 +2,32 @@ package dev.hermeskotlin.android
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
 import androidx.browser.customtabs.CustomTabColorSchemeParams
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.ui.platform.UriHandler
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 
 /**
- * Opens links from the app's screens. Web pages open in a Custom Tab over Herald, in its colors, so
- * reading a link doesn't leave the chat; anything else (mail, an APK download, no browser with Custom
- * Tabs) goes to whichever app handles it. [dark] is the theme the app shows now.
+ * Opens web pages in a Custom Tab unless the user prefers their browser app. Other links
+ * (mail, an APK download) go to whichever app handles them.
  */
-class InAppBrowser(private val activity: Activity, private val dark: () -> Boolean) : UriHandler {
+class InAppBrowser(
+    private val activity: Activity,
+    private val dark: () -> Boolean,
+    private val openWebLinksInBrowser: () -> Boolean,
+) : UriHandler {
 
     override fun openUri(uri: String) {
         val parsed = Uri.parse(uri)
-        if (opensInTab(parsed)) {
+        val webPage = opensInTab(parsed)
+        val browserOnly = webPage && openWebLinksInBrowser()
+        if (webPage && !browserOnly) {
             try {
                 customTab().launchUrl(activity, parsed)
                 return
@@ -28,7 +36,12 @@ class InAppBrowser(private val activity: Activity, private val dark: () -> Boole
             }
         }
         try {
-            activity.startActivity(Intent(Intent.ACTION_VIEW, parsed))
+            val intent = Intent(Intent.ACTION_VIEW, parsed)
+            if (browserOnly) {
+                // No browser to name (none is the default, and none says it's one): let Android pick, as without the switch.
+                intent.addCategory(Intent.CATEGORY_BROWSABLE).setPackage(activity.browserPackage())
+            }
+            activity.startActivity(intent)
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(activity, R.string.link_no_app, Toast.LENGTH_SHORT).show()
         }
@@ -54,4 +67,18 @@ class InAppBrowser(private val activity: Activity, private val dark: () -> Boole
             return (scheme == "http" || scheme == "https") && uri.path?.endsWith(".apk", ignoreCase = true) != true
         }
     }
+}
+
+/** The user's browser: what opens a link no app claims, else the first browser there is. */
+internal fun Context.browserPackage(): String? {
+    val manager = packageManager
+    val probe = Intent(Intent.ACTION_VIEW, "https://example.com/".toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
+    val browsers = manager.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY).map { it.activityInfo.packageName }
+    // With no default, this is Android's own "Open with" list, which isn't a browser.
+    val chosen = manager.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+    if (chosen != null && chosen in browsers) return chosen
+    // Else one that calls itself a browser: any app may take every link, and it shouldn't get them unasked.
+    val real = manager.queryIntentActivities(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_BROWSER), 0)
+        .map { it.activityInfo.packageName }
+    return browsers.firstOrNull { it in real }
 }
