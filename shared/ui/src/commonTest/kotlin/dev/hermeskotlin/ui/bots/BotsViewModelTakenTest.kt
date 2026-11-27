@@ -533,6 +533,30 @@ class BotsViewModelTakenTest {
     }
 
     @Test
+    fun aChatReadBeforeKeepsItsBadgeWhenItsHistoryCantBeReadAgain() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        var history = historyPage("""{"role":"tool","timestamp":1100}""")
+        var reads = 0
+        val vm = viewModel(socket) { profile, _ ->
+            if (profile == "after") historyPage(readableReply) else {
+                reads++
+                history
+            }
+        }
+        vm.bind(gateway.gatewayUrl)
+        assertEquals(setOf("after"), vm.state.first { "after" in it.unread }.unread)
+
+        // Another tool step in the same chat, and this time its history can't be read: it was read here before,
+        // so the badge stays as it was rather than going by the activity.
+        socket.fixedRoster = historyRoster(activity = 1200, nextActivity = 1050)
+        history = HttpStatusCode.ServiceUnavailable to "{}"
+        vm.refresh()
+        while (reads < 2) delay(100)
+        runCurrent()
+        assertEquals(setOf("after"), vm.state.value.unread)
+    }
+
+    @Test
     fun onTheSessionAuthorityANewBotsChatTakenElsewhereOpensIt() = aNewBotsChatTakenElsewhereOpensIt(authority = true)
 
     @Test

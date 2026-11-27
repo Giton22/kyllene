@@ -548,6 +548,8 @@ class BotsViewModel(
         viewModelScope.launch {
             try {
                 api.updateMeta(bot.name, mapOf(key to value))
+                // A read asked while the write was on its way has the roster from before it.
+                dropRosterReadsInFlight()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -570,6 +572,7 @@ class BotsViewModel(
             rosterShown = read
             chats.note(roster.bots)
             if (gateway.value != url) return
+            if (read < rosterShown) return
             val ordered = roster.bots.forRoster()
             val chatIds = ordered.associate { it.name to it.canonicalSession?.id }
             // Desktop's rooms ride the roster's default row, so they refresh without a call of their own.
@@ -588,12 +591,12 @@ class BotsViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
-            // An older read that fails says nothing about the newer roster on screen.
-            if (read < rosterShown) return
+            // An older read that fails, or one from the gateway before a switch, says nothing about the roster on screen.
+            if (read < rosterShown || gateway.value != url) return
             val unsupported = UNKNOWN_METHOD.containsMatchIn(e.message)
             _state.update { it.copy(loading = false, unsupported = unsupported, error = e.message.takeUnless { unsupported }) }
         } catch (e: Exception) {
-            if (read < rosterShown) return
+            if (read < rosterShown || gateway.value != url) return
             _state.update { it.copy(loading = false, error = e.message.orEmpty()) }
         }
     }
@@ -643,7 +646,7 @@ class BotsViewModel(
             val unread = if (mayBeUnread) {
                 checked[bot.name]?.takeIf { it.session == session && it.readUpTo == looked }?.unread
                     ?: hasUnreadBotHistory(url, bot.name, tip, looked) {
-                        true.takeUnless { checked[bot.name]?.session == session }?.also { guessed = true }
+                        true.takeUnless { checked[bot.name]?.session?.id == session.id }?.also { guessed = true }
                     }
                     ?: return
             } else false
