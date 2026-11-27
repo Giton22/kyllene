@@ -530,6 +530,7 @@ class BotsViewModel(
                 is ApiResult.Success -> {
                     chats.forget(bot.name)
                     cache?.forgetProfile(url, bot.name)
+                    dropRosterReadsInFlight()
                     _state.update { it.regroup(it.all.filterNot { b -> b.name == bot.name }).copy(notice = words(Res.string.bots_deleted, bot.label)) }
                     onDeleted()
                 }
@@ -542,6 +543,7 @@ class BotsViewModel(
 
     private fun changeMeta(bot: Bot, key: String, value: JsonElement) {
         // Shown at once; the next roster read brings the gateway's version.
+        dropRosterReadsInFlight()
         _state.update { state -> state.regroup(state.all.map { if (it.name == bot.name) it.withMeta(key, value) else it }) }
         viewModelScope.launch {
             try {
@@ -561,14 +563,15 @@ class BotsViewModel(
         try {
             val roster = api.roster()
             if (gateway.value != url) return
+            // Reads overlap (the poll, an event, an action's own read) and can finish out of order: one asked
+            // before the roster now shown is older than it, e.g. from before a bot was removed. It's dropped
+            // whole, so it can't mark a forgotten chat as known again either.
+            if (read < rosterShown) return
+            rosterShown = read
             chats.note(roster.bots)
             if (gateway.value != url) return
             val ordered = roster.bots.forRoster()
             val chatIds = ordered.associate { it.name to it.canonicalSession?.id }
-            // Reads overlap (the poll, an event, an action's own read) and can finish out of order: one asked
-            // before the roster now shown is older than it, e.g. from before a bot was removed.
-            if (read < rosterShown) return
-            rosterShown = read
             // Desktop's rooms ride the roster's default row, so they refresh without a call of their own.
             val desktopRooms = parseDesktopRooms(roster.bots.firstOrNull { it.isDefault || it.name == Bot.DEFAULT }?.uiMeta)
             _state.update { state ->
@@ -585,11 +588,19 @@ class BotsViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
+            // An older read that fails says nothing about the newer roster on screen.
+            if (read < rosterShown) return
             val unsupported = UNKNOWN_METHOD.containsMatchIn(e.message)
             _state.update { it.copy(loading = false, unsupported = unsupported, error = e.message.takeUnless { unsupported }) }
         } catch (e: Exception) {
+            if (read < rosterShown) return
             _state.update { it.copy(loading = false, error = e.message.orEmpty()) }
         }
+    }
+
+    /** The roster just changed here (a delete, an edit): a read asked before it would undo it on screen. */
+    private fun dropRosterReadsInFlight() {
+        rosterShown = rosterReads + 1
     }
 
     /** Finds each bot's failing routine, at most once a minute; a failed read keeps what was known. */
@@ -632,7 +643,7 @@ class BotsViewModel(
             val unread = if (mayBeUnread) {
                 checked[bot.name]?.takeIf { it.session == session && it.readUpTo == looked }?.unread
                     ?: hasUnreadBotHistory(url, bot.name, tip, looked) {
-                        true.takeUnless { bot.name in checked }?.also { guessed = true }
+                        true.takeUnless { checked[bot.name]?.session == session }?.also { guessed = true }
                     }
                     ?: return
             } else false
