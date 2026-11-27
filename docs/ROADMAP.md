@@ -62,7 +62,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] `MarkdownText` (themed GFM via multiplatform-markdown-renderer core, no Material) and `CopyButton`
 - [x] `Switch` and `SegmentedControl`; a pure black dark scheme (`PureBlack`)
 - [x] The app mark (`HeraldMark`), also the launcher, themed and notification icons
-- [x] Renamed Herald → Kyllene in everything a user reads, with the summit-at-dawn mark and icon in every colour theme. Package, storage and class names stay, so an update keeps the sign-in; people who update see a one-time "Herald is now Kyllene" card
+- [x] Renamed Herald → Kyllene in everything a user reads, with the summit-at-dawn mark and icon in every colour theme. Package, storage and class names stay, so an update keeps the sign-in
 - [x] `DropdownMenu`, and `Toast` with an action ("Archived · Undo")
 - [ ] Chat bubble, tool card, approval card as design-system components (they live in `shared/ui` for now)
 - [x] Theme picker (system / light / dark) and pure black

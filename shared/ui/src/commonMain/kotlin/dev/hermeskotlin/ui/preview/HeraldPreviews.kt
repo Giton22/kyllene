@@ -122,8 +122,6 @@ import dev.hermeskotlin.ui.settings.SettingsView
 import dev.hermeskotlin.ui.settings.StartInstructionView
 import dev.hermeskotlin.ui.settings.SidebarPagesView
 import dev.hermeskotlin.ui.SidebarPage
-import dev.hermeskotlin.ui.update.LocalRenameOffer
-import dev.hermeskotlin.ui.update.RenameOffer
 import androidx.compose.ui.tooling.preview.Preview
 import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ChatState
@@ -162,7 +160,6 @@ enum class PreviewScene(val label: String) {
     NewChat("A new chat"),
     Sidebar("The sessions sidebar"),
     SidebarProfiles("The sidebar's profile menu"),
-    Renamed("The sidebar after updating from Herald, with the rename card"),
     Bots("The bots and rooms"),
     Room("A room of bots"),
     NewRoom("A new room"),
@@ -289,18 +286,6 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                         profiles = ChatSamples.profiles,
                         profileMenuOpen = true,
                     )
-                }
-                PreviewScene.Renamed -> OpenSidebar {
-                    CompositionLocalProvider(LocalRenameOffer provides RenameOffer(show = true) {}) {
-                        SessionsSidebarSample(
-                            ChatSamples.sessions(),
-                            selectedId = "s1",
-                            userLabel = ChatSamples.USER,
-                            statuses = ChatSamples.sessionStatuses,
-                            drafts = ChatSamples.sessionDrafts,
-                            projects = ChatSamples.projects,
-                        )
-                    }
                 }
                 PreviewScene.AppIcons -> AppIconScreen(onBack = {})
                 PreviewScene.Credits -> CreditsView(onBack = {})

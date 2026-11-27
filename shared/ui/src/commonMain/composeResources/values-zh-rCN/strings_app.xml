@@ -202,9 +202,6 @@
     <string name="wallpaper_not_an_image">该文件不是 Kyllene 能读取的图片。</string>
     <string name="wallpaper_read_failed">无法读取该图片。</string>
 
-    <string name="update_renamed">Herald 现已更名为 Kyllene</string>
-    <string name="update_renamed_detail">同一个应用，换了新名字和新图标。你的登录、对话和设置都会保留。</string>
-    <string name="update_got_it">知道了</string>
 
     <string name="gateways_title">网关</string>
     <string name="gateways_detail">每个网关都是一个独立的 Hermes，有自己的配置和对话。</string>

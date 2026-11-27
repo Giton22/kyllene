@@ -282,7 +282,6 @@ import androidx.compose.runtime.SideEffect
 import dev.hermeskotlin.ui.components.ConnectionLine
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.ListSkeleton
-import dev.hermeskotlin.ui.update.RenameBanner
 import dev.hermeskotlin.ui.update.UpdateBanner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -826,7 +825,6 @@ fun SessionsSidebar(
                         modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
                     )
                 }
-                RenameBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
                 UpdateBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
                 // A desktop starts a chat from the top of its sidebar, as desktop chat apps do; the footer
                 // keeps the account. A phone keeps the pill under the thumb.
@@ -1237,7 +1235,6 @@ internal fun SessionsSidebarSample(
                 activeProfile = profiles.firstOrNull()?.name,
                 menuInitiallyOpen = profileMenuOpen,
             )
-            RenameBanner(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val index = remember(projects) { ProjectIndex(projects) }
                 val sections = threadSections(threads, sessions, sessions, selectedProject, index)

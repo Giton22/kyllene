@@ -30,10 +30,6 @@ the app talks to your gateway directly.
 > [!NOTE]
 > Kyllene is an independent project. It isn't made or endorsed by Nous Research.
 
-> [!TIP]
-> Kyllene was called **Herald** until this release. It's the same app: an update installs over Herald
-> and keeps your sign-in, chats and settings.
-
 ## Contents
 
 - [Features](#features)
