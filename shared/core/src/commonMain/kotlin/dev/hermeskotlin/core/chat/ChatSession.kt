@@ -2154,6 +2154,98 @@ class ChatSession(
     }
 
     /**
+     * Replaces the text of prompt [key], still queued behind the running turn, with [text]: `prompt.replace_queued` on
+     * a session authority that offers it for this prompt ([canEditQueued]). Like Hermes, the edited prompt goes to the
+     * back of the queue. A turn that took it first, or a gateway that can't, leaves it as it was, and says so in
+     * [ChatState.error]. A call that got no answer is sent again, on retry, with the same `submission_id`, so the
+     * gateway answers with the edit it may already have admitted instead of taking it twice. One the gateway took
+     * all the same shows once its `pending` lists the submission ([withPendingAdmissions]).
+     */
+    suspend fun replaceQueued(key: String, text: String): QueuedEditOutcome {
+        val trimmed = text.trim()
+        val state = _state.value
+        val prompt = state.messages.firstOrNull { it.key == key } as? ChatMessage.User
+        // Gone (a stop dropped the queue) is not started: it never ran, and its text came back with the stop.
+        if (prompt == null) {
+            _state.update { it.copy(error = "The queued message is no longer waiting, so it wasn't changed.") }
+            return QueuedEditOutcome.Failed
+        }
+        if (!prompt.queued) return queuedEditRefused(QueuedEditOutcome.Started)
+        if (trimmed.isEmpty() || trimmed == prompt.text) return QueuedEditOutcome.Failed
+        val admission = prompt.admissionId
+        val client = connectedClient()
+        val runtimeId = client?.let(::liveRuntimeId)
+        if (client == null || runtimeId == null) {
+            _state.update { it.copy(error = "Not connected to the gateway, so the queued message wasn't changed.") }
+            return QueuedEditOutcome.Failed
+        }
+        if (!client.sessionAuthority || admission == null || !state.canEditQueued(key)) {
+            return queuedEditRefused(QueuedEditOutcome.Unsupported)
+        }
+        val submission = state.unansweredQueuedEdits.entries
+            .firstOrNull { (_, edit) -> edit.replaced == admission && edit.text == trimmed }?.key ?: newRequestId()
+        // On its way, the prompt isn't offered for another edit, which would name the admission this one retires.
+        _state.update {
+            it.copy(
+                replacingAdmissions = it.replacingAdmissions + admission,
+                unansweredQueuedEdits = it.unansweredQueuedEdits + (submission to UnansweredQueuedEdit(key, admission, trimmed)),
+            )
+        }
+        val result = try {
+            client.request(
+                "prompt.replace_queued",
+                buildJsonObject {
+                    put("session_id", runtimeId)
+                    put("admission_id", admission)
+                    put("submission_id", submission)
+                    put("text", trimmed)
+                },
+            ) as? JsonObject
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: RpcException) {
+            _state.update { it.copy(unansweredQueuedEdits = it.unansweredQueuedEdits - submission) }
+            return when {
+                e.code == METHOD_NOT_FOUND || e.reason == "unsupported_control" -> {
+                    _state.update { it.copy(replaceableAdmissions = it.replaceableAdmissions - admission) }
+                    queuedEditRefused(QueuedEditOutcome.Unsupported)
+                }
+                e.reason in QUEUED_EDIT_TOO_LATE -> queuedEditRefused(QueuedEditOutcome.Started)
+                else -> {
+                    _state.update { it.copy(error = e.message.ifBlank { "Couldn't change the queued message." }) }
+                    QueuedEditOutcome.Failed
+                }
+            }
+        } catch (e: Exception) {
+            // Out without a reply: the gateway may have taken it. Its `pending` naming the submission says it did.
+            val landed = _state.value.messages.any { it is ChatMessage.User && it.submissionId == submission && it.admissionId != admission }
+            if (landed) return QueuedEditOutcome.Replaced
+            _state.update { it.copy(error = "The gateway didn't answer, so the queued message may not have changed.") }
+            return QueuedEditOutcome.Failed
+        } finally {
+            _state.update { it.copy(replacingAdmissions = it.replacingAdmissions - admission) }
+        }
+        val admitted = result.string("admission_id")
+        _state.update { state ->
+            // Already shown if its `pending` came first: the prompt no longer holds [admission], so this changes nothing.
+            (if (admitted == null) state else state.withQueuedEdit(key, admission, trimmed, admitted, submission))
+                .copy(unansweredQueuedEdits = state.unansweredQueuedEdits - submission)
+        }
+        return if (admitted == null) QueuedEditOutcome.Failed else QueuedEditOutcome.Replaced
+    }
+
+    /** Says why an edit of a queued prompt didn't go, and returns [outcome]. */
+    private fun queuedEditRefused(outcome: QueuedEditOutcome): QueuedEditOutcome {
+        val message = when (outcome) {
+            QueuedEditOutcome.Started -> "Its turn had already started, so the message went as it was."
+            QueuedEditOutcome.Unsupported -> "This gateway can't change a queued message. Update Hermes to edit one."
+            else -> return outcome
+        }
+        _state.update { it.copy(error = message) }
+        return outcome
+    }
+
+    /**
      * Sends `session.steer` for [text]. The session authority takes the running turn's `execution_generation`
      * with it, and refuses the steer without one (gateway/session_busy_controls.py `correct`); other gateways
      * take only the id and the text, and refuse any other key. A generation that isn't known yet is read with
@@ -2760,6 +2852,8 @@ class ChatSession(
         (event.executionGeneration ?: (event.payload as? JsonObject).long("execution_generation"))?.let { seen ->
             executionGeneration = maxOf(executionGeneration ?: seen, seen)
         }
+        // A queued prompt cancelled before it ran (an edit replaced it) ends no turn: the one running keeps its reply.
+        if (event.type == "message.complete" && event.isQueuedSettlement(_state.value.startedAdmissions)) return
         if (event.type == "session.info" || event.type == "session.updated") {
             val payload = event.payload as? JsonObject
             // A receipt names its session; only ever forward, as a replayed older one must not rewind it.
@@ -3225,6 +3319,7 @@ class ChatSession(
                 inputRequests = open.plusNew(claimUnclaimed(runtimeId)),
                 keySeq = state.keySeq + 1,
             ).withInfo(result["info"] as? JsonObject).withTodos(TodoList.parse(result["todo_state"] as? JsonObject))
+                .withPendingAdmissions(result["pending"])
                 // Opened without one (a branch on the session authority, whose `session.mutate` names no title).
                 .let { if (it.title.isNullOrBlank()) it.copy(title = (result["info"] as? JsonObject).string("title")?.takeIf(String::isNotBlank)) else it }
                 // Nothing runs, so the agent is built; its clear may have gone while this phone was away.
@@ -3437,6 +3532,9 @@ class ChatSession(
 
         /** `session.steer`'s error for an agent without `steer()` (tui_gateway/methods_session_interrupt.py). */
         const val STEER_UNSUPPORTED = 4010
+
+        /** `prompt.replace_queued` refusals that mean the prompt left the queue first: its turn took it, or it's gone. */
+        val QUEUED_EDIT_TOO_LATE = setOf("admission_started", "not_found")
 
         /** How long Stop & send waits for the stopped turn's `message.complete` before queueing behind it. */
         const val STOP_SETTLE_TIMEOUT_MS = 10_000L

@@ -257,6 +257,18 @@ data class ChatState(
      * ("queued") is read after its own turn began isn't marked queued.
      */
     val startedAdmissions: List<String> = emptyList(),
+    /**
+     * The session authority's queued admissions it offers `replace` for (`prompt.replace_queued`), from the `pending`
+     * of its latest `session.info` or `session.resume`. An owner older than that verb lists none, so none is editable.
+     */
+    val replaceableAdmissions: Set<String> = emptySet(),
+    /** The queued admissions whose `prompt.replace_queued` is on its way: not offered for another edit meanwhile. */
+    val replacingAdmissions: Set<String> = emptySet(),
+    /**
+     * Edits of queued prompts sent with no answer yet (or none coming), by their `submission_id`. The gateway's
+     * `pending` lists a replacement it took under that id as its `input_id`, which shows the edit as made.
+     */
+    val unansweredQueuedEdits: Map<String, UnansweredQueuedEdit> = emptyMap(),
     /** The session's goal, loop and heartbeat, null when it has none (`session.control.update`). */
     val control: SessionControl? = null,
     /** Where the running reply's current response (the text after its last tool) begins; null when unknown. */
