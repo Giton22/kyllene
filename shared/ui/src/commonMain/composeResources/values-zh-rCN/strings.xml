@@ -180,6 +180,7 @@
     <string name="settings_join_discord_detail">获取帮助、报告问题、建议功能，并了解新版本。</string>
     <string name="update_available">%1$s 版已发布</string>
     <string name="update_install_hint">直接覆盖安装；登录状态和设置都会保留。</string>
+    <string name="update_release_history">版本历史</string>
     <string name="settings_check_sheet_detail">每个阶段单独测试。</string>
     <string name="start_instruction_what">你在 Kyllene 中开始的每个新对话都会先把这段话告诉代理。它不会出现在对话中，无论在这里还是在你的其他 Hermes 应用里。已在进行的对话保留开始时的内容。留空则不使用。</string>
     <string name="start_instruction_placeholder">每个新对话都应该知道什么？</string>

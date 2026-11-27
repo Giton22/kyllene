@@ -180,6 +180,7 @@
     <string name="settings_join_discord_detail">Kérj segítséget, jelents hibát, javasolj funkciót, és értesülj az új kiadásokról.</string>
     <string name="update_available">Megjelent az új verzió: %1$s</string>
     <string name="update_install_hint">Telepítsd erre rá; a bejelentkezésed és a beállításaid megmaradnak.</string>
+    <string name="update_release_history">Kiadási előzmények</string>
     <string name="settings_check_sheet_detail">Minden lépést külön tesztel.</string>
     <string name="start_instruction_what">Minden új csevegés, amelyet a Kyllene-ben kezdesz, ezt mondja el először az ügynöknek. A csevegésben nem jelenik meg, sem itt, sem a többi Hermes-alkalmazásodban. A már folyó csevegések megtartják, amivel indultak. Hagyd üresen, ha nem kell.</string>
     <string name="start_instruction_placeholder">Mit tudjon minden új csevegés?</string>

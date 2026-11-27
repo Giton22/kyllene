@@ -180,6 +180,7 @@
     <string name="settings_join_discord_detail">Obtenez de l’aide, signalez des bugs, proposez des fonctions et suivez les nouvelles versions.</string>
     <string name="update_available">La version %1$s est sortie</string>
     <string name="update_install_hint">Installez-la par-dessus celle-ci ; votre connexion et vos paramètres sont conservés.</string>
+    <string name="update_release_history">Historique des versions</string>
     <string name="settings_check_sheet_detail">Chaque étape est testée séparément.</string>
     <string name="start_instruction_what">Chaque nouvelle conversation que vous lancez dans Kyllene dit d’abord ceci à l’agent. Ce texte reste hors de la conversation, ici et dans vos autres apps Hermes. Les conversations déjà en cours gardent ce qu’elles avaient au départ. Laissez vide pour aucune.</string>
     <string name="start_instruction_placeholder">Que doit savoir chaque nouvelle conversation ?</string>

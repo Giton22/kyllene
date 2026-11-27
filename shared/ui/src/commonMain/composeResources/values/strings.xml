@@ -180,6 +180,7 @@
     <string name="settings_join_discord_detail">Get help, report bugs, suggest features and hear about new releases.</string>
     <string name="update_available">Version %1$s is out</string>
     <string name="update_install_hint">Install it over this one; your sign-in and settings stay.</string>
+    <string name="update_release_history">Release history</string>
     <string name="settings_check_sheet_detail">Each stage is tested on its own.</string>
     <string name="start_instruction_what">Each new chat you start in Kyllene tells the agent this first. It stays out of the chat, here and on your other Hermes apps. Chats already going keep what they started with. Leave it empty for none.</string>
     <string name="start_instruction_placeholder">What should every new chat know?</string>

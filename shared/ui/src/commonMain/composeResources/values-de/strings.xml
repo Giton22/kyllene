@@ -180,6 +180,7 @@
     <string name="settings_join_discord_detail">Hilfe holen, Fehler melden, Funktionen vorschlagen und von neuen Versionen hören.</string>
     <string name="update_available">Version %1$s ist da</string>
     <string name="update_install_hint">Installiere sie über diese – Anmeldung und Einstellungen bleiben.</string>
+    <string name="update_release_history">Versionsverlauf</string>
     <string name="settings_check_sheet_detail">Jede Stufe wird einzeln geprüft.</string>
     <string name="start_instruction_what">Jeder neue Chat in Kyllene sagt dem Agenten das zuerst. Es bleibt aus dem Chat heraus, hier und in deinen anderen Hermes-Apps. Laufende Chats behalten, womit sie gestartet sind. Leer lassen für keine.</string>
     <string name="start_instruction_placeholder">Was soll jeder neue Chat wissen?</string>

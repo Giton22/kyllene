@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.Download
+import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.X
 import com.composeunstyled.Text
@@ -38,6 +41,7 @@ import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.designsystem.components.ButtonSize
+import dev.hermeskotlin.designsystem.components.ButtonVariant
 import dev.hermeskotlin.designsystem.radii
 import dev.hermeskotlin.designsystem.radiusMedium
 import dev.hermeskotlin.designsystem.radiusSmall
@@ -93,6 +97,7 @@ fun rememberUpdateOffer(repo: String?, version: String?, enabled: Boolean): Upda
 /**
  * A card offering the new release: download the APK, install it (a desktop), or open the release page; or not now.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun UpdateBanner(modifier: Modifier = Modifier) {
     val offer = LocalUpdateOffer.current
@@ -129,27 +134,46 @@ fun UpdateBanner(modifier: Modifier = Modifier) {
                 UnstyledIcon(Lucide.X, contentDescription = stringResource(Res.string.common_not_now), tint = Theme[colors][textTertiary], modifier = Modifier.size(14.dp))
             }
         }
-        Button(
-            when {
-                installing -> stringResource(Res.string.update_downloading)
-                installer != null -> stringResource(Res.string.common_install)
-                update.downloadUrl != null -> stringResource(Res.string.common_download)
-                else -> stringResource(Res.string.common_open_release)
-            },
-            onClick = {
-                if (installer == null) {
-                    uriHandler.openUri(update.downloadUrl ?: update.pageUrl)
-                } else if (!installing) {
-                    installing = true
-                    scope.launch {
-                        if (!installer.install(update)) uriHandler.openUri(update.downloadUrl ?: update.pageUrl)
-                        installing = false
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                when {
+                    installing -> stringResource(Res.string.update_downloading)
+                    installer != null -> stringResource(Res.string.common_install)
+                    update.downloadUrl != null -> stringResource(Res.string.common_download)
+                    else -> stringResource(Res.string.common_open_release)
+                },
+                onClick = {
+                    if (installer == null) {
+                        uriHandler.openUri(update.downloadUrl ?: update.pageUrl)
+                    } else if (!installing) {
+                        installing = true
+                        scope.launch {
+                            if (!installer.install(update)) uriHandler.openUri(update.downloadUrl ?: update.pageUrl)
+                            installing = false
+                        }
                     }
-                }
-            },
-            loading = installing,
-            size = ButtonSize.Small,
-            leadingIcon = Lucide.Download,
-        )
+                },
+                loading = installing,
+                size = ButtonSize.Small,
+                leadingIcon = Lucide.Download,
+            )
+            if (update.downloadUrl != null) {
+                Button(
+                    stringResource(Res.string.update_release_history),
+                    onClick = {
+                        val history = GITHUB_RELEASE_HISTORY.find(update.pageUrl)?.value ?: update.pageUrl
+                        uriHandler.openUri(history)
+                    },
+                    variant = ButtonVariant.Ghost,
+                    size = ButtonSize.Small,
+                    trailingIcon = Lucide.ExternalLink,
+                )
+            }
+        }
     }
 }
+
+private val GITHUB_RELEASE_HISTORY = Regex("""^https://github\.com/[^/?#]+/[^/?#]+/releases(?=/tag/)""")
