@@ -11,7 +11,6 @@ import org.jetbrains.skia.FilterMode
 import org.jetbrains.skia.MipmapMode
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
-import androidx.compose.ui.graphics.painter.Painter
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.Canvas
 import org.jetbrains.skia.EncodedImageFormat
@@ -41,7 +40,7 @@ actual fun rememberDecodedImage(bytes: ByteArray, maxEdge: Int): DecodedImage {
 }
 
 @Composable
-internal actual fun rememberGifPainter(bytes: ByteArray, maxEdge: Int): Painter? = null
+internal actual fun rememberGifPicture(bytes: ByteArray, maxEdge: Int): AttachmentPicture? = null
 
 /** Decoded pictures by their bytes and size, least recently used first out, up to [LIMIT] of pixels. */
 private object DecodedCache {
