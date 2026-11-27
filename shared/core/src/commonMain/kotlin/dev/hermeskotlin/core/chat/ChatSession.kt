@@ -477,7 +477,7 @@ class ChatSession(
                     },
                 )
                 // What streamed before the correction stays above it; the rest of the turn continues below.
-                if (status in CORRECTION_STATUSES) sent.sealReplyBefore(key) else sent
+                if (status in CORRECTION_STATUSES) sent.sealReplyBefore(key, sameResponse = status != "redirected") else sent
             }
             SendOutcome.Sent
         } catch (e: CancellationException) {
@@ -3143,6 +3143,8 @@ class ChatSession(
                     reconnected -> state.withoutStaleReply().messages
                     else -> state.messages
                 },
+                // Rebuilt from the gateway's copy, the reply's current response begins somewhere unknown.
+                responseStart = state.responseStart.takeIf { resumable || (!running && !reconnected) },
                 inputRequests = open.plusNew(claimUnclaimed(runtimeId)),
                 keySeq = state.keySeq + 1,
             ).withInfo(result["info"] as? JsonObject).withTodos(TodoList.parse(result["todo_state"] as? JsonObject))
@@ -3434,12 +3436,17 @@ private fun List<InputRequest>.plusNew(more: List<InputRequest>): List<InputRequ
  */
 internal fun ChatState.withInflight(streamed: String): ChatState {
     val open = messages.indexOfLast { it is ChatMessage.Assistant && it.streaming }
+    // What came while away may hold tools, so where the current response begins isn't known any more.
     if (open < 0) {
-        return copy(messages = messages + ChatMessage.Assistant(key = "live-$keySeq", text = streamed, streaming = true), keySeq = keySeq + 1)
+        return copy(
+            messages = messages + ChatMessage.Assistant(key = "live-$keySeq", text = streamed, streaming = true),
+            keySeq = keySeq + 1,
+            responseStart = null,
+        )
     }
     val reply = messages[open] as ChatMessage.Assistant
     if (streamed.length <= reply.text.length || !streamed.startsWith(reply.text)) return this
-    return copy(messages = messages.toMutableList().apply { set(open, reply.copy(text = streamed)) })
+    return copy(messages = messages.toMutableList().apply { set(open, reply.copy(text = streamed)) }, responseStart = null)
 }
 
 /**
@@ -3610,6 +3617,7 @@ internal fun ChatState.withoutStaleReply(): ChatState {
             messages.map { if (it is ChatMessage.Assistant && it.streaming) it.copy(streaming = false) else it }
         },
         correctedReplyKey = null,
+        responseStart = null,
     )
 }
 
@@ -3618,9 +3626,10 @@ private fun List<ChatMessage>.updateUser(key: String, change: (ChatMessage.User)
 
 /**
  * Closes the reply streaming above the prompt [key] so the turn's later output opens a new one below
- * it; a reply that had shown nothing yet goes away.
+ * it; a reply that had shown nothing yet goes away. [sameResponse]: the model goes on with the response it was writing
+ * (a steer), whose start stays with the reply above; a redirect has it answer again, from scratch.
  */
-internal fun ChatState.sealReplyBefore(key: String): ChatState {
+internal fun ChatState.sealReplyBefore(key: String, sameResponse: Boolean = true): ChatState {
     val prompt = messages.indexOfFirst { it.key == key }
     val open = messages.indexOfLast { it is ChatMessage.Assistant && it.streaming }
     if (prompt < 0 || open !in 0 until prompt) return this
@@ -3631,6 +3640,7 @@ internal fun ChatState.sealReplyBefore(key: String): ChatState {
     return copy(
         messages = messages.toMutableList().apply { set(open, reply.copy(streaming = false)) },
         correctedReplyKey = reply.key,
+        responseStart = responseStart.takeIf { sameResponse },
     )
 }
 
