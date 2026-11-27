@@ -55,7 +55,12 @@ data class CronJob(
     @SerialName("paused_reason") val pausedReason: String? = null,
     /** The profile whose cron store holds the job, as the cross-profile list tags it. */
     val profile: String? = null,
+    /** The model the job runs on, when it doesn't use its profile's default; null or blank means the default. */
     val model: String? = null,
+    /** The provider [model] is from; with no provider, the job uses its profile's. A provider alone still pins its runs. */
+    val provider: String? = null,
+    /** The endpoint the job's runs call instead of its provider's own, set from the CLI; null or blank means none. */
+    @SerialName("base_url") val baseUrl: String? = null,
     /** Where a run's reply goes: `local` (kept on the gateway) or a messaging platform such as `telegram`. */
     val deliver: String? = null,
     /**
@@ -106,13 +111,19 @@ data class CronJob(
     }
 }
 
-/** What a new job needs; the gateway parses [schedule] ("every 30m", "0 9 * * *", "every monday 9am", "in 2h", an ISO time). */
+/**
+ * What a new job needs; the gateway parses [schedule] ("every 30m", "0 9 * * *", "every monday 9am", "in 2h", an ISO time).
+ * [model] and [provider] pin the job to a model. Null fields are left out of the request, and the job then runs on its
+ * profile's default. `CronJobCreate` takes both on every gateway from v0.22.0 to v0.23.4, in either mode.
+ */
 @Serializable
 data class CronJobDraft(
     val name: String = "",
     val prompt: String,
     val schedule: String,
     val deliver: String = "local",
+    val model: String? = null,
+    val provider: String? = null,
 )
 
 /** A place a job's replies can go, from `GET /api/cron/delivery-targets`. */
@@ -169,8 +180,9 @@ class CronApi(private val client: HttpClient) {
     }.map { it.body<CronJob>() }
 
     /**
-     * Changes only the fields in [changes] (`name`, `prompt`, `schedule`, `deliver`); the gateway
-     * re-parses a new schedule and works out the next run. A bad schedule is a 400 with the reason.
+     * Changes only the fields in [changes] (`name`, `prompt`, `schedule`, `deliver`, `model`, `provider`); the gateway
+     * re-parses a new schedule and works out the next run. A bad schedule is a 400 with the reason. An empty `model`
+     * or `provider` is stored as none, so the job runs on its profile's default again.
      */
     suspend fun update(url: GatewayUrl, jobId: String, changes: Map<String, String>, profile: String? = null): ApiResult<CronJob> = apiCall {
         client.put(url.resolve("api/cron/jobs/${jobId.encodeURLPathPart()}")) {

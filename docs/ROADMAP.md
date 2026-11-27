@@ -49,7 +49,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Android lint in CI (`lintDebug`); a baseline holds the old issues, so only new ones fail the build
 - [x] Robolectric tests don't download Android at test time: Gradle fetches the `android-all-instrumented` jars for the SDK levels the tests use (cached in CI), and Robolectric is pointed at them
 - [x] Releases: a `v1.2.3` tag builds a signed APK into a draft GitHub release; the app offers newer releases
-- [x] Per-ABI APKs beside the universal one, a "Which APK?" table in the notes, and the update banner downloads the device's own
+- [x] Per-ABI APKs beside the universal one, a "Which APK?" table in the notes, and the update banner downloads the device's own and links to the release history of the repository offering the update
 
 ### Design system (`shared/designsystem`)
 - [x] Tokens: colors (light/dark), radii, typography
@@ -111,7 +111,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Long chats load a page at a time: the newest 60 rows on opening, older pages as you scroll to the top (`order=latest` + `offset`), each starting at a prompt so no turn is cut in two; the list keeps its place. Branching loads the rest first so it counts from the first row
 - [x] Resume a session live and reply in it (`session.resume {omit_messages}` + REST history, like Desktop)
 - [x] The app opens on a chat: the one you had open last on this gateway, or a fresh one if you left on a new chat (remembered per gateway)
-- [x] Sessions live in a left sidebar: a swipe-in drawer on phones (swipe right or the panel button; swipe left off the chat rows, tap outside or Back to close), docked and collapsible on wide screens; the open chat is highlighted
+- [x] Sessions live in a left sidebar: a swipe-in drawer on phones (swipe right, the panel button or system Back in the chat; swipe left off the chat rows or tap outside to close; Back on the list leaves the app, with the system's predictive animation, once its search, pages and filters are closed) (#560), docked and collapsible on wide screens; the open chat is highlighted
 - [x] Sidebar layout: title with a round search button, Scheduled / Archived rows, title-only chat rows with a live dot for running sessions, floating "New chat" pill and an initials avatar (with a connection warning dot) that opens the account sheet
 - [x] Refetch the list whenever the sidebar opens
 - [x] Rename, pin, archive and delete (`PATCH`/`DELETE /api/sessions/{id}`), with optimistic updates that roll back on error. Deleting the open chat opens the one listed after it in the view it was deleted from (the one before when it was last), and a new chat only when none is left
@@ -142,6 +142,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] Stop a running turn (`session.interrupt`): the Send button turns into Stop while a turn runs
 - [x] Prompts sent from another client (Desktop, CLI, messaging) show up live: a turn this client didn't start refetches the transcript at its start and end, since the gateway streams only the reply
 - [x] Send while a reply runs, three ways: Steer (`session.steer`, the agent reads it after its current step; rejected → queued as the next prompt, an agent that can't steer → plain `prompt.submit`), Queue (`prompt.submit {queued}`) and Stop & send (`session.interrupt`, wait for the turn to end, then `prompt.submit`). A Send button appears beside Stop; long-press it for a dropdown to pick the way for one message. `/steer <note>` uses `session.steer` too. On the session authority a steer names the running turn's `execution_generation` (read with `session.resume` when it isn't known yet; a stale one, a turn that has ended, sends it as the next prompt), and a plain `rejected` there isn't sent again, since the agent may have read it (#480). A steer the turn ended before reading is requeued by the gateway and shows up as the next turn
+- [x] Edit a queued prompt before its turn starts: Edit (long-press on a phone, the pencil or right-click on a desktop) puts it in the composer, and Send changes it where it waits with `prompt.replace_queued`, which, like Hermes, moves it to the back of the queue. Offered only where the session authority lists `replace` in the `controls` of the prompt's `pending` admission (Hermes v0.22.3 on; Kyllene reaches a remote session authority from v0.22.6); the legacy gateway and older owners can't edit a queued prompt, so none offers Edit. A turn that takes the prompt before the edit is sent runs it as it was, and the edit stays in the composer with a notice (#557)
 - [x] Setting "While a reply is running, Send…": Steer (default), Queue or Stop & send
 - [x] Voice chat has its own composer button instead of sharing the send button
 - [x] Token usage per turn (live turns) and per session with cost, context window and account limits (`session.usage`, `MessageCompletePayload.usage`, `GET /api/sessions/{id}`)
@@ -161,6 +162,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] **Approval** panel for dangerous commands, with choices `once`, `session`, `always` (confirmed first), `deny` filtered by the gateway's `choices` / `allow_session`, `allow_permanent` and `smart_denied`. The command wraps, with "Show full command" and "Copy command"; each permission says where and how long it applies, the broader ones in their own section; taps are ignored for a moment after it appears; and the panel keeps a Stop for the running task
 - [x] Requests withdrawn or answered elsewhere (`request.cancel`, turn end) and restored after reconnect (`open_requests`)
 - [x] **Clarify**: single or batch questions, choices, multi-select and free text
+- [x] Approval and question cards minimize to a pill (the down arrow in the corner) to read the chat behind them; the pill says what waits and brings the card back with what was picked and typed; a new request opens the card again (#559)
 - [x] **Sudo** password prompt (masked)
 - [x] **Secret** env-var prompt (masked)
 - [x] Desktop-only requests (`preview.*`, `terminal.read`, `window.read`, `tour`) are left unanswered for another client: an error reply would settle them for every client
@@ -282,6 +284,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 ### Automation & configuration
 - [x] Scheduled jobs in the sidebar (`GET /api/cron/jobs`): schedule in plain words, next run, state; a job page with its prompt, last error, Run now, Pause / Resume, and its runs (`/api/cron/jobs/{id}/runs`), each opening as a chat
 - [x] Create, edit and delete cron jobs (`POST`/`PUT`/`DELETE /api/cron/jobs`): prompt, free-text schedule with presets, name, and delivery target (`/api/cron/delivery-targets`); refetch on `cron.changed`
+- [x] A model per scheduled job: the job editor's Model field opens the chat's model picker, shows the job's model or "Profile default", and clears back to the default (`model` and `provider` on `POST`/`PUT /api/cron/jobs`, which every gateway from v0.22.0 to v0.23.4 takes)
 - [x] Skills: a Capabilities page in the sidebar, after Desktop's, lists the profile's skills by category with search and an on/off switch (`GET /api/skills`, `PUT /api/skills/toggle`). Skills hub (Capabilities → Skills → Browse hub): featured and official catalog, search, preview with `SKILL.md`, a security scan before installing anything not official, install, uninstall hub skills, Update all (`/api/skills/hub/*`, actions polled through `/api/actions/{name}/status`)
 - [x] Toolsets on the Capabilities page with their switches and a "needs setup" tag (`GET /api/tools/toolsets`, `PUT /api/tools/toolsets/{name}`)
 - [x] MCP servers on the Capabilities page: switch, and a connection test listing its tools (`/api/mcp/servers`, `…/{name}/enabled`, `…/{name}/test`). Adding servers and OAuth not yet

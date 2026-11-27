@@ -293,6 +293,10 @@
     <string name="chat_usage_account">Conta</string>
 
     <string name="chat_requests_more">+%1$d a mais</string>
+    <string name="chat_request_minimize">Minimizar</string>
+    <string name="chat_request_restore">Expandir</string>
+    <string name="chat_request_pill_approval">Permissão necessária</string>
+    <string name="chat_request_pill_question">Pergunta pendente</string>
     <string name="chat_stop_task_button">Parar tarefa</string>
     <string name="chat_approval_title">Permitir este comando?</string>
     <string name="chat_approval_tool">O Hermes quer executá-lo com %1$s.</string>
@@ -470,6 +474,7 @@
     <string name="chat_notice_adopted">Você adotou %1$s</string>
     <string name="chat_notice_prompt_not_sent">O prompt não foi enviado: o Kyllene não conseguiu acessar o Gateway. Ele está na caixa de texto.</string>
     <string name="chat_notice_call_not_started">A chamada não começou: o Kyllene não conseguiu acessar o Gateway.</string>
+    <string name="chat_notice_queued_edit_overtaken">A vez dela começou antes da sua edição, então a mensagem foi enviada como estava. Sua edição está na caixa de texto.</string>
     <string name="chat_notice_too_many_files">Até %1$d anexos por mensagem.</string>
     <string name="chat_notice_file_too_large">%1$s tem mais de %2$d MB.</string>
     <string name="chat_uploading">Enviando %1$s · %2$d%</string>
@@ -479,6 +484,7 @@
     <string name="chat_drop_limits">Até %1$d arquivos, %2$d MB cada.</string>
     <string name="chat_send_again">Enviar de novo</string>
     <string name="chat_editing_banner">Editando uma mensagem. Enviar substitui ela e tudo o que vem depois.</string>
+    <string name="chat_editing_queued_banner">Editando uma mensagem na fila. Enviar altera ela e a coloca no fim da fila.</string>
 
     <string name="chat_copy">Copiar</string>
     <string name="chat_edit">Editar</string>

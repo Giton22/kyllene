@@ -293,6 +293,10 @@
     <string name="chat_usage_account">Cuenta</string>
 
     <string name="chat_requests_more">+%1$d más</string>
+    <string name="chat_request_minimize">Minimizar</string>
+    <string name="chat_request_restore">Expandir</string>
+    <string name="chat_request_pill_approval">Se necesita permiso</string>
+    <string name="chat_request_pill_question">Pregunta pendiente</string>
     <string name="chat_stop_task_button">Detener tarea</string>
     <string name="chat_approval_title">¿Permitir este comando?</string>
     <string name="chat_approval_tool">Hermes quiere ejecutarlo con %1$s.</string>
@@ -470,6 +474,7 @@
     <string name="chat_notice_adopted">Adoptaste a %1$s</string>
     <string name="chat_notice_prompt_not_sent">El prompt no se envió: Kyllene no pudo contactar con el Gateway. Está en el cuadro de texto.</string>
     <string name="chat_notice_call_not_started">La llamada no empezó: Kyllene no pudo contactar con el Gateway.</string>
+    <string name="chat_notice_queued_edit_overtaken">Su turno empezó antes de tu edición, así que el mensaje se envió tal cual. Tu edición está en el cuadro de texto.</string>
     <string name="chat_notice_too_many_files">Hasta %1$d adjuntos por mensaje.</string>
     <string name="chat_notice_file_too_large">%1$s ocupa más de %2$d MB.</string>
     <string name="chat_uploading">Subiendo %1$s · %2$d %</string>
@@ -479,6 +484,7 @@
     <string name="chat_drop_limits">Hasta %1$d archivos, %2$d MB cada uno.</string>
     <string name="chat_send_again">Enviar de nuevo</string>
     <string name="chat_editing_banner">Editando un mensaje. Al enviarlo se reemplaza junto con todo lo posterior.</string>
+    <string name="chat_editing_queued_banner">Editando un mensaje en cola. Al enviarlo se cambia y pasa al final de la cola.</string>
 
     <string name="chat_copy">Copiar</string>
     <string name="chat_edit">Editar</string>

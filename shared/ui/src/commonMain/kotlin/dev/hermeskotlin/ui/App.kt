@@ -549,7 +549,8 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
         closeDrawer()
     }
 
-    PlatformBackHandler(enabled = sidebar.isOpen && !sidebar.docked) { closeDrawer() }
+    // A phone's open drawer is the chat list, whose Back leaves the app (ChatListBackHandler); a desktop's closes.
+    PlatformBackHandler(enabled = isDesktop && sidebar.isOpen && !sidebar.docked) { closeDrawer() }
     // A hosted room closes back to the chat before anything else.
     PlatformBackHandler(enabled = openRoom != null) { rooms.close() }
     // A Desktop room's read-only copy closes back to the chat too.
@@ -684,6 +685,7 @@ private fun Home(route: Route.Chat, app: AppViewModel, onOpenGateways: () -> Uni
     val chatShown = lifecycleState.isAtLeast(Lifecycle.State.STARTED) && openRoom == null && desktopRoom == null &&
         !settingsOpen && pluginUrl == null && editing == null && !pageShown
     LaunchedEffect(chatShown) { others.setChatShown(chatShown) }
+    ChatListBackHandler(sidebar, chatShown)
     // The phone's drawer over the chat: the sidebar says it all there, so the banner waits until it closes.
     val drawerOver by remember { derivedStateOf { sidebar.fraction > 0f && !sidebar.docked } }
     DisposableEffect(others) { onDispose { others.setChatShown(false) } }

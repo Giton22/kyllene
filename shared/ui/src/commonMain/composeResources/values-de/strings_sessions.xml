@@ -302,6 +302,11 @@
     <string name="sessions_preset_mondays">Montags 9:00</string>
     <string name="sessions_preset_once">Einmal, in 1 Std.</string>
     <string name="sessions_routine_name_example">Morgenbriefing</string>
+    <string name="sessions_job_model">Modell</string>
+    <string name="sessions_job_model_default">Standard des Profils</string>
+    <string name="sessions_job_model_clear">Standard des Profils nutzen</string>
+    <string name="sessions_job_model_hint">Läufe nutzen das Standardmodell des Profils, außer du wählst eins für diesen Job.</string>
+    <string name="sessions_job_model_note">Nur die Läufe dieses Jobs nutzen es. Der Standard des Profils bleibt, wie er ist.</string>
     <string name="sessions_deliver_to">Liefern an</string>
     <string name="sessions_deliver_no_home">%1$s hat auf dem Gateway keinen Heimkanal, also wüssten Läufe nicht wohin.</string>
     <string name="sessions_deliver_bot_chat_detail">Ziel: %1$s. Das Ergebnis jedes Laufs kommt dort als Nachricht an, die der Bot liest und beantwortet; ein Lauf kostet ihn also einen Zug mehr.</string>

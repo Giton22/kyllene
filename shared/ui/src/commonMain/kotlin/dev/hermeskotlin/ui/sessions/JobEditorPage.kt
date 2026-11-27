@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.wrapContentWidth
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -56,6 +57,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.composables.icons.lucide.Check
+import com.composables.icons.lucide.ChevronRight
+import com.composables.icons.lucide.Cpu
 import com.composables.icons.lucide.CornerUpLeft
 import com.composables.icons.lucide.HardDrive
 import com.composables.icons.lucide.Hash
@@ -64,11 +67,18 @@ import com.composables.icons.lucide.Mail
 import com.composables.icons.lucide.MessageCircle
 import com.composables.icons.lucide.MessageSquare
 import com.composables.icons.lucide.Send
+import com.composables.icons.lucide.X
 import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.cron.DeliveryTarget
 import dev.hermeskotlin.core.cron.Routines
+import dev.hermeskotlin.core.models.displayModelName
+import dev.hermeskotlin.core.models.displayProviderName
+import dev.hermeskotlin.designsystem.body
+import dev.hermeskotlin.designsystem.text
+import dev.hermeskotlin.designsystem.textTertiary
+import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
 import dev.hermeskotlin.designsystem.bodySmall
@@ -83,6 +93,8 @@ import dev.hermeskotlin.designsystem.label
 import dev.hermeskotlin.designsystem.radii
 import dev.hermeskotlin.designsystem.radiusMedium
 import dev.hermeskotlin.designsystem.stroke
+import dev.hermeskotlin.designsystem.strokeStrong
+import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import dev.hermeskotlin.designsystem.surface
 import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.typography
@@ -102,6 +114,8 @@ internal fun JobEditorPage(
     name: TextFieldState,
     deliveryTargets: List<DeliveryTarget>,
     onSetDeliver: (String) -> Unit,
+    onPickModel: () -> Unit,
+    onClearModel: () -> Unit,
     onSave: () -> Unit,
     onClose: () -> Unit,
     routineOf: String? = null,
@@ -176,6 +190,7 @@ internal fun JobEditorPage(
                 enabled = !editor.saving,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             )
+            ModelField(editor, onPick = onPickModel, onClear = onClearModel)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(Res.string.sessions_deliver_to), style = Theme[typography][label], color = Theme[colors][textSecondary], modifier = Modifier.padding(start = 4.dp))
                 DeliverTiles(targets, selected = editor.deliver, onSelect = onSetDeliver, botLabel = routineOf)
@@ -331,3 +346,58 @@ private val SCHEDULE_PRESETS = listOf(
     Res.string.sessions_preset_mondays to "0 9 * * 1",
     Res.string.sessions_preset_once to "in 1h",
 )
+
+/**
+ * The model the job runs on, drawn as the form's text fields are: it opens the model picker, and with a model set
+ * a clear button puts the job back on its profile's default.
+ */
+@Composable
+private fun ModelField(editor: JobEditor, onPick: () -> Unit, onClear: () -> Unit) {
+    val desktop = LocalDesktopLayout.current
+    val shape = RoundedCornerShape(Theme[radii][radiusMedium])
+    val model = editor.model
+    // A job pinned from the CLI may have a provider or endpoint but no model; it isn't on the default either.
+    val pinned = model != null || editor.provider != null || editor.baseUrl != null
+    val title = stringResource(Res.string.sessions_job_model)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, style = Theme[typography][label], color = Theme[colors][textSecondary], modifier = Modifier.padding(start = 4.dp))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = if (desktop) 40.dp else 52.dp)
+                .clip(shape)
+                .background(Theme[colors][surface])
+                .border(1.dp, Theme[colors][strokeStrong], shape)
+                .handCursor()
+                .clickable(enabled = !editor.saving, onClickLabel = title, role = Role.Button, onClick = onPick)
+                // The clear button brings its own touch target, so the field keeps to its height round it.
+                .padding(start = if (desktop) 12.dp else 16.dp, end = if (pinned) 4.dp else if (desktop) 12.dp else 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            UnstyledIcon(Lucide.Cpu, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))
+            Text(
+                listOfNotNull(model?.let { displayModelName(it) }, editor.provider?.let { displayProviderName(it) })
+                    .ifEmpty { listOfNotNull(editor.baseUrl) }
+                    .joinToString(" · ")
+                    .ifEmpty { stringResource(Res.string.sessions_job_model_default) },
+                style = Theme[typography][body],
+                color = if (pinned) Theme[colors][text] else Theme[colors][textSecondary],
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(vertical = 6.dp),
+            )
+            if (pinned) {
+                IconButton(Lucide.X, contentDescription = stringResource(Res.string.sessions_job_model_clear), onClick = onClear, enabled = !editor.saving, iconSize = 16.dp)
+            } else {
+                UnstyledIcon(Lucide.ChevronRight, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))
+            }
+        }
+        Text(
+            stringResource(Res.string.sessions_job_model_hint),
+            style = Theme[typography][caption],
+            color = Theme[colors][textTertiary],
+            modifier = Modifier.padding(start = 4.dp),
+        )
+    }
+}

@@ -293,6 +293,10 @@
     <string name="chat_usage_account">Konto</string>
 
     <string name="chat_requests_more">+%1$d weitere</string>
+    <string name="chat_request_minimize">Minimieren</string>
+    <string name="chat_request_restore">Aufklappen</string>
+    <string name="chat_request_pill_approval">Erlaubnis nötig</string>
+    <string name="chat_request_pill_question">Frage wartet</string>
     <string name="chat_stop_task_button">Aufgabe stoppen</string>
     <string name="chat_approval_title">Diesen Befehl erlauben?</string>
     <string name="chat_approval_tool">Hermes möchte das mit %1$s ausführen.</string>
@@ -470,6 +474,7 @@
     <string name="chat_notice_adopted">%1$s adoptiert</string>
     <string name="chat_notice_prompt_not_sent">Der Prompt wurde nicht gesendet: Kyllene hat das Gateway nicht erreicht. Er steht im Eingabefeld.</string>
     <string name="chat_notice_call_not_started">Der Anruf hat nicht begonnen: Kyllene hat das Gateway nicht erreicht.</string>
+    <string name="chat_notice_queued_edit_overtaken">Ihr Durchlauf hat vor deiner Änderung begonnen, daher ging die Nachricht unverändert raus. Deine Änderung steht im Eingabefeld.</string>
     <string name="chat_notice_too_many_files">Bis zu %1$d Anhänge pro Nachricht.</string>
     <string name="chat_notice_file_too_large">%1$s ist größer als %2$d MB.</string>
     <string name="chat_uploading">%1$s wird hochgeladen · %2$d %</string>
@@ -479,6 +484,7 @@
     <string name="chat_drop_limits">Bis zu %1$d Dateien, je %2$d MB.</string>
     <string name="chat_send_again">Erneut senden</string>
     <string name="chat_editing_banner">Du bearbeitest eine Nachricht. Senden ersetzt sie und alles danach.</string>
+    <string name="chat_editing_queued_banner">Du bearbeitest eine eingereihte Nachricht. Senden ändert sie, und sie rückt ans Ende der Warteschlange.</string>
 
     <string name="chat_copy">Kopieren</string>
     <string name="chat_edit">Bearbeiten</string>

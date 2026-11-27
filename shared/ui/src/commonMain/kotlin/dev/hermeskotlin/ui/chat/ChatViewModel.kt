@@ -40,7 +40,9 @@ import dev.hermeskotlin.core.models.ModelsApi
 import dev.hermeskotlin.core.chat.ModelSwitch
 import dev.hermeskotlin.core.chat.OutgoingAttachment
 import dev.hermeskotlin.core.chat.SendOutcome
+import dev.hermeskotlin.core.chat.QueuedEditOutcome
 import dev.hermeskotlin.core.chat.canEdit
+import dev.hermeskotlin.core.chat.canEditQueued
 import dev.hermeskotlin.core.chat.promptNow
 import dev.hermeskotlin.core.chat.regenerateTarget
 import dev.hermeskotlin.core.network.errorMessage
@@ -471,6 +473,14 @@ class ChatViewModel(
     /** The prompt being edited in the composer; the next send replaces it and everything after it. */
     val editing: StateFlow<String?> = _editing.asStateFlow()
 
+    private val _editingQueued = MutableStateFlow(false)
+
+    /**
+     * The prompt [editing] is one still queued behind the running turn: the next send changes its text where it
+     * waits (`prompt.replace_queued`), and cuts nothing, so it can go while the turn runs.
+     */
+    val editingQueued: StateFlow<Boolean> = _editingQueued.asStateFlow()
+
     /** What the composer held when the edit started, given back when it ends. */
     private var typedBeforeEdit = ""
 
@@ -527,11 +537,38 @@ class ChatViewModel(
                 }
         }
         viewModelScope.launch {
-            combine(state, _editing) { chat, key -> key?.takeIf { chat.historyLoaded }?.let { it to chat.promptNow(it, editingRowId) } }
+            // A queued edit's prompt has no row yet: it's watched below, by whether it still waits.
+            combine(state, _editing) { chat, key ->
+                key?.takeIf { chat.historyLoaded && !_editingQueued.value }?.let { it to chat.promptNow(it, editingRowId) }
+            }
                 .filterNotNull()
                 .collect { (key, now) ->
                     // A reload gives a prompt sent from here its stored key; it's still the same row.
                     if (now == null) editGone() else if (now != key) _editing.value = now
+                }
+        }
+        viewModelScope.launch {
+            // Its turn took the queued prompt before the edit went: it went as it was. What was typed for it stays in
+            // the composer, to send as a message of its own or drop, and the screen says so. One a stop dropped never
+            // ran: the edit just ends, and the stop gives its text back.
+            combine(state, _editing, _editingQueued) { chat, key, queued ->
+                key?.takeIf { queued }?.let { k ->
+                    val prompt = chat.messages.firstOrNull { it.key == k } as? ChatMessage.User
+                    when {
+                        prompt == null -> QueuedEditWatch.Gone
+                        !prompt.queued -> QueuedEditWatch.Started
+                        else -> QueuedEditWatch.Waiting
+                    }
+                }
+            }
+                .filterNotNull()
+                .distinctUntilChanged()
+                .collect { watch ->
+                    when (watch) {
+                        QueuedEditWatch.Started -> queuedEditOvertaken()
+                        QueuedEditWatch.Gone -> editGone()
+                        QueuedEditWatch.Waiting -> Unit
+                    }
                 }
         }
         viewModelScope.launch {
@@ -1291,7 +1328,9 @@ class ChatViewModel(
         val attachments = _attachments.value
         val comments = _comments.value
         if (text.isBlank() && attachments.isEmpty() && comments.isEmpty()) return
-        _editing.value?.let { key -> return sendEdit(chat, key, text, comments) }
+        _editing.value?.let { key ->
+            return if (_editingQueued.value) sendQueuedEdit(chat, key, text, comments) else sendEdit(chat, key, text, comments)
+        }
         val command = SlashCommand.parse(text.trim()).takeIf { attachments.isEmpty() }
         if (command?.name == "") return
         discardImagePastes()
@@ -1395,6 +1434,19 @@ class ChatViewModel(
         val prompt = state.messages.firstOrNull { it.key == key } as? ChatMessage.User ?: return
         if (_editing.value == null) typedBeforeEdit = composer.text.toString()
         editingRowId = prompt.rowId
+        _editingQueued.value = false
+        _editing.value = key
+        composer.setTextAndPlaceCursorAtEnd(prompt.text)
+    }
+
+    override fun startQueuedEdit(key: String) {
+        val state = state.value
+        if (connectionState.value !is ConnectionState.Connected || !state.canEditQueued(key)) return
+        val prompt = state.messages.firstOrNull { it.key == key } as? ChatMessage.User ?: return
+        if (_editing.value == null) typedBeforeEdit = composer.text.toString()
+        editingRowId = null
+        // Set first: the rewind edit's watch skips a queued edit.
+        _editingQueued.value = true
         _editing.value = key
         composer.setTextAndPlaceCursorAtEnd(prompt.text)
     }
@@ -1402,8 +1454,54 @@ class ChatViewModel(
     override fun cancelEdit() {
         if (_editing.value == null) return
         _editing.value = null
+        _editingQueued.value = false
         composer.setTextAndPlaceCursorAtEnd(typedBeforeEdit)
         typedBeforeEdit = ""
+    }
+
+    /** Where the queued prompt being edited is now. */
+    private enum class QueuedEditWatch { Waiting, Started, Gone }
+
+    /**
+     * The queued prompt being edited left the queue first: its turn started with the text it had. The edit stays in
+     * the composer, ahead of what it put aside, to send as a message of its own or drop; it isn't sent by itself.
+     */
+    private fun queuedEditOvertaken() {
+        val original = (state.value.messages.firstOrNull { it.key == _editing.value } as? ChatMessage.User)?.text
+        val edited = composer.text.toString().takeUnless { it.trim() == original?.trim() }.orEmpty()
+        _editing.value = null
+        _editingQueued.value = false
+        composer.setTextAndPlaceCursorAtEnd(listOf(edited, typedBeforeEdit).filter { it.isNotBlank() }.joinToString("\n\n"))
+        typedBeforeEdit = ""
+        showNotice(ComposerNotice.QueuedEditOvertaken)
+    }
+
+    /**
+     * Sends the edit of queued prompt [key]: its text becomes [text] (with any [comments]) where it waits, and it
+     * moves to the back of the queue. Unchanged, the edit just ends. Turned down, the edit is back in the composer
+     * while the prompt still waits; once its turn took it, what was typed stays there to send or drop.
+     */
+    private fun sendQueuedEdit(chat: ChatSession, key: String, text: String, comments: List<PendingComment>) {
+        if (text.isBlank() && comments.isEmpty()) return
+        val outgoing = if (comments.isEmpty()) text else formatReview(comments, text)
+        val before = (state.value.messages.firstOrNull { it.key == key } as? ChatMessage.User)?.text
+        if (outgoing.trim() == before?.trim()) return cancelEdit()
+        _comments.value = emptyList()
+        cancelEdit()
+        viewModelScope.launch {
+            val outcome = chat.replaceQueued(key, outgoing)
+            // Answered once another chat is open: its composer, comments and edit aren't this one's to change.
+            if (outcome == QueuedEditOutcome.Replaced || session.value !== chat) return@launch
+            _comments.update { comments + it }
+            if (outcome == QueuedEditOutcome.Failed && state.value.canEditQueued(key)) {
+                typedBeforeEdit = composer.text.toString()
+                _editingQueued.value = true
+                _editing.value = key
+                composer.setTextAndPlaceCursorAtEnd(text)
+            } else {
+                giveBack(text)
+            }
+        }
     }
 
     /**
@@ -1413,6 +1511,7 @@ class ChatViewModel(
     private fun editGone() {
         val edited = composer.text.toString()
         _editing.value = null
+        _editingQueued.value = false
         composer.setTextAndPlaceCursorAtEnd(listOf(edited, typedBeforeEdit).filter { it.isNotBlank() }.joinToString("\n\n"))
         typedBeforeEdit = ""
     }
@@ -1597,6 +1696,9 @@ sealed interface ComposerNotice {
 
     /** The Call Hermes shortcut's call couldn't start. */
     data object CallNotStarted : ComposerNotice
+
+    /** A queued message's turn started before its edit was sent; the edit waits in the composer. */
+    data object QueuedEditOvertaken : ComposerNotice
 
     /** An Android clipboard provider didn't finish in time. */
     data object ImagePasteTimedOut : ComposerNotice

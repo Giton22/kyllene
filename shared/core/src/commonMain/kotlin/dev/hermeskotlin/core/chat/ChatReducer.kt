@@ -131,8 +131,14 @@ private fun ChatState.fold(event: GatewayEvent, payload: JsonObject?, now: Doubl
         "notice" -> payload.string("message")?.trim()?.takeIf { it.isNotEmpty() }?.let { text ->
             copy(messages = messages + ChatMessage.Notice("notice-$keySeq", text), keySeq = keySeq + 1)
         } ?: this
-        // The turn has ended, so a notice about the agent being built is stale even if its clear never came.
-        "message.complete" -> complete(payload, now).withPromptRow(payload?.get("persisted_turn") as? JsonObject).withoutAgentNotices()
+        // A queued admission cancelled before it ran (`prompt.replace_queued`, `prompt.cancel`) settles with a completion
+        // of its own (gateway/session_authority.py `_settle_cancelled`): no turn ended, the one running goes on.
+        // Otherwise the turn has ended, so a notice about the agent being built is stale even if its clear never came.
+        "message.complete" -> if (event.isQueuedSettlement(startedAdmissions)) {
+            this
+        } else {
+            complete(payload, now).withPromptRow(payload?.get("persisted_turn") as? JsonObject).withoutAgentNotices()
+        }
         "notification.show" -> showNotice(payload)
         "notification.clear" -> withoutNotice(payload.string("key"))
         "status.update" -> {
@@ -148,7 +154,8 @@ private fun ChatState.fold(event: GatewayEvent, payload: JsonObject?, now: Doubl
         // A turn cancelled while the agent was still being built ends with only an error, and no clear.
         "error" -> copy(error = payload.string("message")).withoutAgentNotices()
         "session.title" -> copy(title = payload.string("title") ?: title)
-        "session.info" -> withInfo(payload).copy(title = payload.string("title")?.takeIf { it.isNotBlank() } ?: title)
+        "session.info" -> withInfo(payload).withPendingAdmissions(payload?.get("pending"))
+            .let { it.copy(title = payload.string("title")?.takeIf { t -> t.isNotBlank() } ?: it.title) }
         "btw.complete" -> answerSideTask(payload, "/btw")
         "background.complete" -> answerSideTask(payload, "/bg")
         "todo.updated" -> withTodos(TodoList.parse(payload))

@@ -293,6 +293,10 @@
     <string name="chat_usage_account">Fiók</string>
 
     <string name="chat_requests_more">+%1$d további</string>
+    <string name="chat_request_minimize">Összecsukás</string>
+    <string name="chat_request_restore">Kibontás</string>
+    <string name="chat_request_pill_approval">Engedély szükséges</string>
+    <string name="chat_request_pill_question">Kérdés vár</string>
     <string name="chat_stop_task_button">Feladat leállítása</string>
     <string name="chat_approval_title">Engedélyezed ezt a parancsot?</string>
     <string name="chat_approval_tool">A Hermes ezzel futtatná: %1$s.</string>
@@ -470,6 +474,7 @@
     <string name="chat_notice_adopted">Örökbe fogadtad: %1$s</string>
     <string name="chat_notice_prompt_not_sent">A prompt nem ment el: a Kyllene nem érte el a Gatewayt. A beviteli mezőben van.</string>
     <string name="chat_notice_call_not_started">A hívás nem indult el: a Kyllene nem érte el a Gatewayt.</string>
+    <string name="chat_notice_queued_edit_overtaken">A köre a szerkesztésed előtt elindult, így az üzenet változatlanul ment el. A szerkesztésed a beviteli mezőben van.</string>
     <string name="chat_notice_too_many_files">Üzenetenként legfeljebb %1$d melléklet.</string>
     <string name="chat_notice_file_too_large">%1$s nagyobb, mint %2$d MB.</string>
     <string name="chat_uploading">%1$s feltöltése · %2$d%</string>
@@ -479,6 +484,7 @@
     <string name="chat_drop_limits">Legfeljebb %1$d fájl, egyenként %2$d MB.</string>
     <string name="chat_send_again">Küldés újra</string>
     <string name="chat_editing_banner">Üzenet szerkesztése. A küldés lecseréli azt és mindent, ami utána jött.</string>
+    <string name="chat_editing_queued_banner">Sorban álló üzenet szerkesztése. A küldés módosítja, és a sor végére kerül.</string>
 
     <string name="chat_copy">Másolás</string>
     <string name="chat_edit">Szerkesztés</string>

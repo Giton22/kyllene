@@ -317,6 +317,10 @@
 
     <!-- Approvals, questions and secrets the agent asks for -->
     <string name="chat_requests_more">+%1$d more</string>
+    <string name="chat_request_minimize">Minimize</string>
+    <string name="chat_request_restore">Expand</string>
+    <string name="chat_request_pill_approval">Approval needed</string>
+    <string name="chat_request_pill_question">Question waiting</string>
     <string name="chat_stop_task_button">Stop task</string>
     <string name="chat_approval_title">Allow this command?</string>
     <string name="chat_approval_tool">Hermes wants to run this with %1$s.</string>
@@ -499,6 +503,7 @@
     <string name="chat_notice_adopted">Adopted %1$s</string>
     <string name="chat_notice_prompt_not_sent">The prompt wasn’t sent: Kyllene couldn’t reach the gateway. It’s in the composer.</string>
     <string name="chat_notice_call_not_started">The call didn’t start: Kyllene couldn’t reach the gateway.</string>
+    <string name="chat_notice_queued_edit_overtaken">Its turn started before your edit went, so the message went as it was. Your edit is in the composer.</string>
     <string name="chat_notice_too_many_files">Up to %1$d attachments per message.</string>
     <string name="chat_notice_file_too_large">%1$s is larger than %2$d MB.</string>
     <string name="chat_uploading">Uploading %1$s · %2$d%</string>
@@ -508,6 +513,7 @@
     <string name="chat_drop_limits">Up to %1$d files, %2$d MB each.</string>
     <string name="chat_send_again">Send again</string>
     <string name="chat_editing_banner">Editing a message. Sending replaces it and everything after it.</string>
+    <string name="chat_editing_queued_banner">Editing a queued message. Sending changes it, and it moves to the back of the queue.</string>
 
     <!-- Messages in the conversation and what can be done with them -->
     <string name="chat_copy">Copy</string>

@@ -127,6 +127,42 @@ class CronApiTest {
     }
 
     @Test
+    fun aJobsModelGoesOutWithItsProviderAndComesBack() = runTest {
+        val bodies = mutableListOf<String>()
+        val api = CronApi(createHttpClient(MockEngine { request ->
+            bodies += request.body.toByteArray().decodeToString()
+            respond(
+                """{"id":"b2","prompt":"Brief me","model":"gpt-5.1","provider":"openrouter","schedule":{"kind":"cron","expr":"0 9 * * *"}}""",
+                HttpStatusCode.OK, json,
+            )
+        }))
+
+        val job = assertIs<ApiResult.Success<CronJob>>(
+            api.create(url, CronJobDraft(prompt = "Brief me", schedule = "0 9 * * *", model = "gpt-5.1", provider = "openrouter")),
+        ).value
+        api.update(url, "b2", mapOf("model" to "", "provider" to ""))
+
+        // CronJobCreate's model and provider (v0.22.0 to v0.23.4); the update's empty strings clear both.
+        assertEquals(
+            listOf(
+                """{"name":"","prompt":"Brief me","schedule":"0 9 * * *","deliver":"local","model":"gpt-5.1","provider":"openrouter"}""",
+                """{"updates":{"model":"","provider":""}}""",
+            ),
+            bodies,
+        )
+        assertEquals("gpt-5.1", job.model)
+        assertEquals("openrouter", job.provider)
+    }
+
+    @Test
+    fun aJobsEndpointIsRead() {
+        val job = HermesJson.decodeFromString<CronJob>(
+            """{"id":"b3","prompt":"Brief me","model":"m1","provider":"custom:lab","base_url":"http://lab:8000/v1","schedule":{"kind":"cron","expr":"0 9 * * *"}}""",
+        )
+        assertEquals("http://lab:8000/v1", job.baseUrl)
+    }
+
+    @Test
     fun updateSendsOnlyTheChangesAndSurfacesABadSchedule() = runTest {
         var body: String? = null
         val api = CronApi(createHttpClient(MockEngine { request ->

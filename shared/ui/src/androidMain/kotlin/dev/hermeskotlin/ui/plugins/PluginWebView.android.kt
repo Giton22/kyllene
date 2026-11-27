@@ -1,7 +1,5 @@
 package dev.hermeskotlin.ui.plugins
 
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -31,10 +29,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -80,6 +80,8 @@ import org.koin.compose.koinInject
 actual fun PluginWebView(url: String, gateway: String, title: String, onClose: () -> Unit) {
     val cookies = koinInject<WebCookieJar>()
     val context = LocalContext.current
+    // Links off the gateway open like every other web link in the app: in its browser (a Custom Tab).
+    val links by rememberUpdatedState(LocalUriHandler.current)
     val scope = rememberCoroutineScope()
     var loading by remember { mutableStateOf(true) }
     var failed by remember { mutableStateOf(false) }
@@ -127,8 +129,8 @@ actual fun PluginWebView(url: String, gateway: String, title: String, onClose: (
             settings.domStorageEnabled = true
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    // The gateway's own pages stay here; anywhere else is the browser's to show, not a
-                    // page passed off under this plugin's title. Embeds (iframes) load where they are.
+                    // The gateway's own pages stay here; anywhere else is the app's browser's to show, not
+                    // a page passed off under this plugin's title. Embeds (iframes) load where they are.
                     if (!request.isForMainFrame) return false
                     if (sameOrigin(request.url, Uri.parse(url))) {
                         if (request.url.path != loginPath) return false
@@ -141,10 +143,7 @@ actual fun PluginWebView(url: String, gateway: String, title: String, onClose: (
                         failed = true
                         return true
                     }
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, request.url))
-                    } catch (_: ActivityNotFoundException) {
-                    }
+                    runCatching { links.openUri(request.url.toString()) }
                     return true
                 }
 

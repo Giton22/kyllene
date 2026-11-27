@@ -290,6 +290,11 @@
     <string name="sessions_preset_mondays">每周一 9:00</string>
     <string name="sessions_preset_once">一次，1 小时后</string>
     <string name="sessions_routine_name_example">早间简报</string>
+    <string name="sessions_job_model">模型</string>
+    <string name="sessions_job_model_default">配置的默认模型</string>
+    <string name="sessions_job_model_clear">使用配置的默认模型</string>
+    <string name="sessions_job_model_hint">除非你为此任务选择模型，否则运行时使用配置的默认模型。</string>
+    <string name="sessions_job_model_note">只有此任务的运行会使用它，配置的默认模型保持不变。</string>
     <string name="sessions_deliver_to">发送到</string>
     <string name="sessions_deliver_no_home">%1$s 在网关上没有设置主频道，运行结果将无处可发。</string>
     <string name="sessions_deliver_bot_chat_detail">每次运行的结果会作为一条消息发到%1$s，由它阅读并回复，因此每次运行会多花它一个回合。</string>

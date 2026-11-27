@@ -47,11 +47,14 @@ import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -117,6 +120,7 @@ import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.designsystem.components.ButtonSize
 import dev.hermeskotlin.designsystem.components.ButtonVariant
 import dev.hermeskotlin.designsystem.components.Dialog
+import dev.hermeskotlin.designsystem.components.IconButton
 import dev.hermeskotlin.designsystem.components.TextField
 import dev.hermeskotlin.designsystem.heading
 import dev.hermeskotlin.designsystem.input
@@ -138,6 +142,9 @@ import org.jetbrains.compose.resources.stringResource
  * rest queued behind it. Answering sends one response; another client answering first makes the
  * gateway withdraw the request, and the panel moves on. [onStop] keeps the task's Stop within reach
  * while the composer is hidden.
+ *
+ * An approval or a question can be minimized to a pill, to read the chat behind it; the pill brings the
+ * card back with what was picked and typed. A request that wasn't open when it was minimized opens the card again.
  */
 @Composable
 internal fun InputRequestPanel(
@@ -147,6 +154,19 @@ internal fun InputRequestPanel(
     onStop: (() -> Unit)? = null,
 ) {
     val request = requests.firstOrNull() ?: return
+    // The requests open when the card was minimized; null while it shows. Saved, so a rotation keeps the pill.
+    var minimizedWith by rememberSaveable(stateSaver = MinimizedWithSaver) { mutableStateOf<Set<String>?>(null) }
+    // A card shown again, by a request that came since or by a password or login in front, is shown for good:
+    // it doesn't fold back when that one goes.
+    if (minimizedWith != null && !isMinimized(minimizedWith, requests)) SideEffect { minimizedWith = null }
+    // Out here, so what was started on a question outlives the card while it's a pill.
+    val draft = remember(request.id) { (request as? InputRequest.Clarify)?.let { ClarifyDraft(it.questions) } }
+    val more = (requests.size - 1).takeIf { it > 0 }?.let { stringResource(Res.string.chat_requests_more, it) }
+    if (isMinimized(minimizedWith, requests)) {
+        RequestPill(request, more, onRestore = { minimizedWith = null })
+        return
+    }
+    val onMinimize = { minimizedWith = requests.mapTo(HashSet()) { it.id } }.takeIf { request.minimizable }
     // A floating card ringed in the request's own soft tint: amber for what needs care, the accent for a question.
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
     val ring = Theme[colors][if (request is InputRequest.Clarify) accentSoft else warningSoft]
@@ -167,18 +187,88 @@ internal fun InputRequestPanel(
             Modifier.heightIn(max = 460.dp).verticalScrollWithBar().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            val more = (requests.size - 1).takeIf { it > 0 }?.let { stringResource(Res.string.chat_requests_more, it) }
             // Keyed, so nothing carries over to the next request: a password shown with the eye stays hidden.
             key(request.id) {
                 when (request) {
-                    is InputRequest.Approval -> ApprovalContent(request, more, connected, onStop.takeIf { connected }) { onAnswer(request, it) }
-                    is InputRequest.Clarify -> ClarifyContent(request, more, connected, onStop.takeIf { connected }) { onAnswer(request, it) }
+                    is InputRequest.Approval -> ApprovalContent(request, more, connected, onStop.takeIf { connected }, onMinimize) { onAnswer(request, it) }
+                    is InputRequest.Clarify -> if (draft != null) {
+                        ClarifyContent(request, draft, more, connected, onStop.takeIf { connected }, onMinimize) { onAnswer(request, it) }
+                    }
                     is InputRequest.Secret -> SecretContent(request, more, connected, onStop.takeIf { connected }) { onAnswer(request, it) }
                     is InputRequest.VaultSaveLogin -> SaveLoginContent(request, more, connected, onStop.takeIf { connected }) { onAnswer(request, it) }
                 }
             }
         }
     }
+    }
+}
+
+/** Saves [InputRequestPanel]'s minimized requests as a list of ids, which a saved state can hold. */
+private val MinimizedWithSaver = Saver<Set<String>?, ArrayList<String>>(
+    save = { with -> with?.let(::ArrayList) },
+    restore = { it.toSet() },
+)
+
+/** Whether this request's card can be minimized to a pill: an approval or a question, not a password or a login to save. */
+internal val InputRequest.minimizable: Boolean
+    get() = this is InputRequest.Approval || this is InputRequest.Clarify
+
+/**
+ * Whether the panel shows as a pill: it was minimized with [minimizedWith] open, no request has come since, and
+ * the one in front can be minimized. One answered elsewhere meanwhile leaves it a pill.
+ */
+internal fun isMinimized(minimizedWith: Set<String>?, requests: List<InputRequest>): Boolean =
+    minimizedWith != null && requests.firstOrNull()?.minimizable == true && requests.all { it.id in minimizedWith }
+
+/**
+ * The open request, minimized: what waits, how many more, and an up arrow. A tap anywhere on it brings the card
+ * back, where it's answered.
+ */
+@Composable
+private fun RequestPill(request: InputRequest, more: String?, onRestore: () -> Unit) {
+    val question = request is InputRequest.Clarify
+    val ring = Theme[colors][if (question) accentSoft else warningSoft]
+    val restore = stringResource(Res.string.chat_request_restore)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier
+                .heightIn(min = MinTouchTarget)
+                .shadow(12.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.08f), spotColor = Color.Black.copy(alpha = 0.16f))
+                .clip(CircleShape)
+                .background(Theme[colors][surface])
+                .border(1.dp, ring, CircleShape)
+                .handCursor()
+                .clickable(role = Role.Button, onClickLabel = restore, onClick = onRestore)
+                .padding(start = 8.dp, end = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(28.dp).background(ring, CircleShape), contentAlignment = Alignment.Center) {
+                UnstyledIcon(
+                    if (question) Lucide.MessageCircleQuestion else Lucide.ShieldAlert,
+                    contentDescription = null,
+                    tint = Theme[colors][if (question) accentText else warning],
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Text(
+                stringResource(if (question) Res.string.chat_request_pill_question else Res.string.chat_request_pill_approval),
+                style = Theme[typography][label].copy(fontWeight = FontWeight.SemiBold),
+                color = Theme[colors][textColor],
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (more != null) Text(more, style = Theme[typography][caption], color = Theme[colors][textTertiary], maxLines = 1)
+            // The pill says what a tap does; the arrow only shows it.
+            UnstyledIcon(Lucide.ChevronUp, contentDescription = null, tint = Theme[colors][textSecondary], modifier = Modifier.size(18.dp))
+        }
     }
 }
 
@@ -218,6 +308,7 @@ private fun Header(
     trailing: String?,
     onStop: (() -> Unit)? = null,
     subtitle: String? = null,
+    onMinimize: (() -> Unit)? = null,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(36.dp).background(soft, RoundedCornerShape(Theme[radii][radiusSmall])), contentAlignment = Alignment.Center) {
@@ -228,6 +319,10 @@ private fun Header(
             subtitle?.let { Text(it, style = Theme[typography][caption], color = Theme[colors][textTertiary]) }
         }
         if (trailing != null) Text(trailing, style = Theme[typography][caption], color = Theme[colors][textTertiary])
+        // In the top corner: folds the card to a pill, so the chat behind it can be read.
+        if (onMinimize != null) {
+            IconButton(Lucide.ChevronDown, contentDescription = stringResource(Res.string.chat_request_minimize), onClick = onMinimize)
+        }
     }
     // On a line of its own, so the title and what it's about keep the width.
     if (onStop != null) {
@@ -309,7 +404,7 @@ private fun AnswerPill(text: String, strong: Boolean, enabled: Boolean, onClick:
 /** A command that wraps past this many lines shows its start until "Show full command". */
 private const val COMMAND_PREVIEW_LINES = 4
 
-/** How long a new approval ignores taps, so one aimed at the composer it replaced doesn't answer it. */
+/** How long a new approval or question ignores taps, so one aimed at the composer or pill it replaced doesn't answer it. */
 private const val APPROVAL_ARM_DELAY_MS = 700L
 
 /**
@@ -384,10 +479,17 @@ private fun approvalIntroText(intro: ApprovalIntro): String =
     listOfNotNull(intro.tool?.let { stringResource(Res.string.chat_approval_tool, it) }, intro.purpose).joinToString(" ")
 
 @Composable
-private fun ApprovalContent(request: InputRequest.Approval, more: String?, connected: Boolean, onStop: (() -> Unit)?, answer: (JsonObject) -> Unit) {
+private fun ApprovalContent(
+    request: InputRequest.Approval,
+    more: String?,
+    connected: Boolean,
+    onStop: (() -> Unit)?,
+    onMinimize: (() -> Unit)?,
+    answer: (JsonObject) -> Unit,
+) {
     var confirmAlways by remember(request.id) { mutableStateOf(false) }
     val choose = { choice: ApprovalChoice -> answer(InputAnswers.approval(choice)) }
-    // The panel lands where the composer was; a tap meant for the text field mustn't answer it.
+    // The panel lands where the composer or the pill was; a tap meant for either mustn't answer it.
     var armed by remember(request.id) { mutableStateOf(false) }
     LaunchedEffect(request.id) {
         delay(APPROVAL_ARM_DELAY_MS)
@@ -403,6 +505,7 @@ private fun ApprovalContent(request: InputRequest.Approval, more: String?, conne
         more,
         onStop,
         subtitle = approvalIntro(request)?.let { approvalIntroText(it) },
+        onMinimize = onMinimize,
     )
     if (request.command.isNotBlank()) CommandBlock(request.command)
     // Allow once is the stronger of the two, so a little wider.
@@ -455,12 +558,33 @@ private fun ApprovalContent(request: InputRequest.Approval, more: String?, conne
     )
 }
 
+/** What the user has started on a question: the one in view, the choices picked and the text typed. */
+internal class ClarifyDraft(questions: List<ClarifyQuestion>) {
+    var index by mutableStateOf(0)
+    val picked = questions.map { mutableStateListOf<String>() }
+    val typed = questions.map { TextFieldState() }
+}
+
 @Composable
-private fun ClarifyContent(request: InputRequest.Clarify, more: String?, connected: Boolean, onStop: (() -> Unit)?, answer: (JsonObject) -> Unit) {
+private fun ClarifyContent(
+    request: InputRequest.Clarify,
+    draft: ClarifyDraft,
+    more: String?,
+    connected: Boolean,
+    onStop: (() -> Unit)?,
+    onMinimize: (() -> Unit)?,
+    answer: (JsonObject) -> Unit,
+) {
     val questions = request.questions
-    var index by remember(request.id) { mutableStateOf(0) }
-    val picked = remember(request.id) { questions.map { mutableStateListOf<String>() } }
-    val drafts = remember(request.id) { questions.map { TextFieldState() } }
+    // The card lands where the composer or the pill was; a tap meant for either mustn't skip or send it.
+    var armed by remember(request.id) { mutableStateOf(false) }
+    LaunchedEffect(request.id) {
+        delay(APPROVAL_ARM_DELAY_MS)
+        armed = true
+    }
+    var index by draft::index
+    val picked = draft.picked
+    val drafts = draft.typed
     val question = questions[index]
     val last = index == questions.lastIndex
 
@@ -472,7 +596,7 @@ private fun ClarifyContent(request: InputRequest.Clarify, more: String?, connect
     }
 
     val counter = if (questions.size > 1) stringResource(Res.string.chat_find_position, index + 1, questions.size) else more
-    Header(Lucide.MessageCircleQuestion, Theme[colors][accentText], Theme[colors][accentSoft], stringResource(Res.string.chat_clarify_title), counter, onStop)
+    Header(Lucide.MessageCircleQuestion, Theme[colors][accentText], Theme[colors][accentSoft], stringResource(Res.string.chat_clarify_title), counter, onStop, onMinimize = onMinimize)
     CopyableOnDesktop { Text(question.question, style = Theme[typography][body], color = Theme[colors][textColor]) }
     if (question.choices.isNotEmpty()) {
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -512,13 +636,13 @@ private fun ClarifyContent(request: InputRequest.Clarify, more: String?, connect
             stringResource(if (index > 0) Res.string.common_back else Res.string.chat_skip),
             onClick = { if (index > 0) index-- else answer(InputAnswers.clarifyCancel.takeIf { request.batch } ?: InputAnswers.clarify(request, listOf(emptyList()))) },
             variant = ButtonVariant.Outline,
-            enabled = connected || index > 0,
+            enabled = armed && (connected || index > 0),
             modifier = Modifier.weight(1f),
         )
         Button(
             stringResource(if (last) Res.string.chat_send else Res.string.chat_next),
             onClick = goOn,
-            enabled = canGoOn,
+            enabled = armed && canGoOn,
             modifier = Modifier.weight(1f),
         )
     }
