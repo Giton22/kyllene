@@ -9,10 +9,14 @@ let applied = []
 let closed = []
 let takesTaps = false
 let sequence = 0
+const maxQueryChars = 64 * 1024
 
 function report(message) {
-  const request = JSON.stringify({ sequence, ...message })
-  if (request.length > 64 * 1024) return
+  let request = JSON.stringify({ sequence, ...message })
+  if (request.length > maxQueryChars) {
+    if (message.type !== 'answer' && message.type !== 'draft') return
+    request = JSON.stringify({ sequence, type: message.type + 'TooLarge' })
+  }
   window.cefQuery({
     request,
     onSuccess() {},
@@ -106,6 +110,12 @@ function reportLayout() {
 new ResizeObserver(reportLayout).observe(card)
 window.addEventListener('resize', reportLayout)
 window.addEventListener('scroll', reportLayout)
+
+window.setAgentScreenTheme = theme => {
+  for (const [name, value] of Object.entries(theme)) {
+    document.documentElement.style.setProperty(name, value)
+  }
+}
 
 window.renderAgentScreen = async (messages, allowed, nextSequence, savedDraft, validateOnly) => {
   sequence = nextSequence

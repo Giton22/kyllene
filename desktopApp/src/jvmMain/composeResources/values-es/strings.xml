@@ -64,4 +64,7 @@
     <string name="startup_no_answer">El escritorio no respondió a la solicitud de inicio automático.</string>
     <string name="startup_enable_reason">Iniciar Kyllene en la bandeja al iniciar sesión.</string>
     <string name="startup_disable_reason">Dejar de iniciar Kyllene automáticamente al iniciar sesión.</string>
+    <string name="agent_card_answer_too_large">La respuesta es demasiado grande. Acorta el formulario y vuelve a enviarlo.</string>
+    <string name="agent_card_draft_too_large">El borrador es demasiado grande para conservarlo al salir de la tarjeta.</string>
+    <string name="agent_card_draft_lost">El borrador era demasiado grande para restaurarlo. La tarjeta muestra los valores originales.</string>
 </resources>

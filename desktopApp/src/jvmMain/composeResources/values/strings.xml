@@ -73,4 +73,7 @@
     <string name="startup_no_answer">Desktop did not answer the startup request.</string>
     <string name="startup_enable_reason">Start Kyllene in the tray when you sign in.</string>
     <string name="startup_disable_reason">Stop starting Kyllene automatically when you sign in.</string>
+    <string name="agent_card_answer_too_large">The response is too large. Shorten the form and submit it again.</string>
+    <string name="agent_card_draft_too_large">This draft is too large to keep when you leave the card.</string>
+    <string name="agent_card_draft_lost">This draft was too large to restore. The card shows the original values.</string>
 </resources>

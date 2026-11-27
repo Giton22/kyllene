@@ -186,3 +186,28 @@ test('rolling back to a saved history restores its local edit', async () => {
   await page.render(initial, draft)
   assert.equal(page.surface('one').dataModel.get('/name'), 'user')
 })
+
+test('an oversized form answer reports the limit and can be retried', async () => {
+  const page = await openPage()
+  await page.render([create('one'), root('one'), data('one', '/name', 'x'.repeat(64 * 1024))])
+  const surface = page.surface('one')
+  await surface.dispatchAction({ event: { name: 'submit' } }, 'button')
+  assert.deepEqual(page.reports.at(-1), { sequence: 1, type: 'answerTooLarge' })
+  assert.equal(page.card.inert, false)
+  surface.dataModel.set('/name', 'shorter')
+  await surface.dispatchAction({ event: { name: 'submit' } }, 'button')
+  assert.equal(page.reports.at(-1).type, 'answer')
+  assert.deepEqual(page.reports.at(-1).result.data, { name: 'shorter' })
+})
+
+test('an oversized draft reports the limit without sending input data', async () => {
+  const page = await openPage()
+  await page.render([create('one'), root('one')])
+  const model = page.surface('one').dataModel
+  model.set('/name', 'earlier edit')
+  assert.equal(page.reports.at(-1).type, 'draft')
+  model.set('/name', 'x'.repeat(64 * 1024))
+  assert.deepEqual(page.reports.at(-1), { sequence: 1, type: 'draftTooLarge' })
+  model.set('/name', 'shorter')
+  assert.deepEqual(page.reports.at(-1), { sequence: 1, type: 'draft', models: { one: { name: 'shorter' } } })
+})

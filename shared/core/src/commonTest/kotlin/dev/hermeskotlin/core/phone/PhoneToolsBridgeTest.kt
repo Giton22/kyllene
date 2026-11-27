@@ -86,6 +86,8 @@ class PhoneToolsBridgeTest {
         val answers = mutableMapOf<String, JsonObject>()
         val answerAttempts = mutableListOf<JsonObject>()
         var pendingReads = 0
+        var refusePendingReads = 0
+        var delayNextPendingReply = 0L
         var refuseAnswers = 0
         var disconnectOnAnswer = false
         val installs = mutableListOf<JsonObject>()
@@ -147,7 +149,13 @@ class PhoneToolsBridgeTest {
                                 transport.serverClose(null)
                                 continue
                             }
-                            if (!installed) null else command(arg)
+                            val output = if (!installed) null else command(arg)
+                            if (arg.startsWith("phone pending ") && delayNextPendingReply > 0) {
+                                val wait = delayNextPendingReply
+                                delayNextPendingReply = 0
+                                delay(wait)
+                            }
+                            output
                         }
                         else -> "{}"
                     }
@@ -228,9 +236,14 @@ class PhoneToolsBridgeTest {
                         }
                         "pending" -> buildJsonObject {
                             pendingReads++
-                            put("ok", true)
-                            put("requests", JsonArray(waiting.filter { it["id"]!!.jsonPrimitive.content !in answers }))
-                            now?.let { put("now", it) }
+                            if (refusePendingReads > 0) {
+                                refusePendingReads--
+                                put("ok", false)
+                            } else {
+                                put("ok", true)
+                                put("requests", JsonArray(waiting.filter { it["id"]!!.jsonPrimitive.content !in answers }))
+                                now?.let { put("now", it) }
+                            }
                         }
                         else -> {
                             answerAttempts += body
@@ -287,6 +300,7 @@ class PhoneToolsBridgeTest {
         pushAnywhere: Boolean = false,
         store: KeyValueStore = InMemoryKeyValueStore(),
         desktopScreensOnly: Boolean = false,
+        now: () -> Long = { currentTime },
     ): Setup {
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
         // On the test's scheduler: on a thread of its own, a slow ticket lets virtual time run past a call's deadline.
@@ -303,7 +317,7 @@ class PhoneToolsBridgeTest {
         val gateways = GatewayRepository(InMemoryKeyValueStore()).apply { save(SavedGateway(URL)) }
         val api = PushApi(connection)
         val bridge = PhoneToolsBridge(
-            api, keys, store, connection, gateways, settings, runner, backgroundScope, { "Pixel" }, { currentTime },
+            api, keys, store, connection, gateways, settings, runner, backgroundScope, { "Pixel" }, now,
             desktopScreensOnly = desktopScreensOnly,
         )
         bridge.start()
@@ -372,16 +386,93 @@ class PhoneToolsBridgeTest {
         assertEquals(1, plugin.answerAttempts.size)
         assertTrue(plugin.answers.isEmpty())
 
-        val request = plugin.waiting.removeAt(0)
+        plugin.refusePendingReads = 2
         connect(s, plugin)
-        until { plugin.pendingReads >= 2 }
-        delay(PhoneToolsBridge.ANSWER_RETRY_MS + 100)
-        assertEquals(1, plugin.answerAttempts.size)
-
-        plugin.waiting += request
         until { "screen" in plugin.answers }
         assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
         assertEquals(listOf(plugin.answers["screen"], plugin.answers["screen"]), plugin.answerAttempts)
+    }
+
+    @Test
+    fun desktopStopsCheckingDeliveryWhenTheRequestIsNoLongerPending() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi), desktopScreensOnly = true)
+        val plugin = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id)
+            disconnectOnAnswer = true
+        }
+        connect(s, plugin)
+        until { s.connection.state.value is ConnectionState.Reconnecting }
+        plugin.waiting.clear()
+
+        val readsBeforeReconnect = plugin.pendingReads
+        connect(s, plugin)
+        until { plugin.pendingReads >= readsBeforeReconnect + 2 }
+        // The ordinary bridge poll runs every 15s. Any reads here would be from the delivery loop.
+        delay(2 * PhoneToolsBridge.ANSWER_RETRY_MS + 100)
+        assertEquals(readsBeforeReconnect + 2, plugin.pendingReads)
+        assertEquals(1, plugin.answerAttempts.size)
+        assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
+    }
+
+    @Test
+    fun aLatePendingSnapshotDoesNotRerunADesktopScreenWhenDeliveryExpires() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi), desktopScreensOnly = true)
+        val plugin = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id, expires = GATEWAY_NOW + 10)
+            refuseAnswers = Int.MAX_VALUE
+        }
+        connect(s, plugin)
+        until { plugin.answerAttempts.isNotEmpty() }
+        delay(7_000)
+
+        // Snapshot a live request, but deliver its pending reply after the desktop times out.
+        val readsBeforeWake = plugin.pendingReads
+        plugin.delayNextPendingReply = 4_000
+        s.bridge.wake()
+        until { plugin.pendingReads > readsBeforeWake }
+        plugin.waiting.clear()
+        delay(4_100)
+        assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
+    }
+
+    @Test
+    fun desktopCanFetchTheScreenAgainWhenItsSocketClosedBeforeTheToolRan() = runTest {
+        val runner = Runner()
+        var beforeHandle: (() -> Unit)? = null
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi), desktopScreensOnly = true, now = {
+            val action = beforeHandle
+            beforeHandle = null
+            action?.invoke()
+            currentTime
+        })
+        val plugin = Plugin().apply { call("screen", PhoneTool.ShowUi.id) }
+        // The tool reads its start time after entering handle(), immediately before it checks the socket.
+        beforeHandle = s.connection::stop
+        connect(s, plugin)
+        until { s.connection.state.value == ConnectionState.Idle }
+        assertTrue(plugin.answerAttempts.isEmpty())
+        assertTrue(runner.runs.isEmpty())
+
+        connect(s, plugin)
+        until { "screen" in plugin.answers }
+        assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
+        assertNull(plugin.error("screen"))
+        assertEquals(1, plugin.answerAttempts.size)
+    }
+
+    @Test
+    fun desktopDoesNotClaimAllPhoneToolsWhenItSendsATurn() = runTest {
+        val s = setup(Runner(), on = listOf(PhoneTool.ShowUi), desktopScreensOnly = true)
+        val plugin = Plugin()
+        connect(s, plugin)
+        until { plugin.reports.isNotEmpty() }
+        val client = (s.connection.state.value as ConnectionState.Connected).client
+
+        client.request("prompt.submit", buildJsonObject { put("session_id", "desktop-chat") })
+        delay(100)
+        assertTrue(plugin.heres.isEmpty())
     }
 
     @Test

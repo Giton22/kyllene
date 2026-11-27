@@ -176,15 +176,15 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     var wasLive by rememberSaveable(call.id) { mutableStateOf(false) }
     var tappedLive by rememberSaveable(call.id) { mutableStateOf(false) }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
-    val resumed = lifecycle.isAtLeast(Lifecycle.State.RESUMED)
+    val started = lifecycle.isAtLeast(Lifecycle.State.STARTED)
     // Ready and Showing use the same browser result. Validation is a separate callback.
     val validating = stage == DesktopStage.Validating
     var rendered by remember(call.id, screen.messages, validating) { mutableStateOf<Set<String>>(emptySet()) }
     var drawError by remember(call.id, screen.messages, validating) { mutableStateOf<String?>(null) }
     if (live) wasLive = true
     if (isDesktop) {
-        LaunchedEffect(chat, call.id, stage, rendered, drawError, resumed) {
-            if (stage != null && stage != DesktopStage.Ready && call.running && resumed) {
+        LaunchedEffect(chat, call.id, stage, rendered, drawError, started) {
+            if (stage != null && stage != DesktopStage.Ready && call.running && started) {
                 val registry = context.registry ?: return@LaunchedEffect
                 val error = drawError
                 if (error != null) {
@@ -200,7 +200,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
         }
     } else {
         LaunchedEffect(chat, screen.messages) { context.onDrawn(chat, screen) }
-        if (waits && !wasLive && resumed) {
+        if (waits && !wasLive && lifecycle.isAtLeast(Lifecycle.State.RESUMED)) {
             LaunchedEffect(chat, screen.surfaceIds) {
                 while (true) {
                     context.onShown(chat, screen.surfaceIds)

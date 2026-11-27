@@ -4,6 +4,7 @@ import dev.hermeskotlin.core.chat.AgentScreen
 import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatSession
+import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.NOT_DRAWN
 import dev.hermeskotlin.core.chat.SHOW_UI_TOOL
 import dev.hermeskotlin.core.chat.ToolActivity
@@ -16,8 +17,11 @@ import dev.hermeskotlin.core.phone.PhoneToolRunner
 import dev.hermeskotlin.core.phone.desktopAgentScreenChat
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
@@ -72,11 +76,7 @@ internal class DesktopScreenTool(
         // The plugin generates its own request UUID. The transcript carries the model's tool-call ID.
         // Match a unique, still-running call by its arguments before letting the browser act on it.
         val callId = withTimeoutOrNull(AgentScreens.SHOWN_WITHIN_MS) {
-            chat.state.mapNotNull { state ->
-                if (!accepts()) throw PhoneToolException(NOT_SHOWN)
-                val calls = state.messages.asSequence().filterIsInstance<ChatMessage.Assistant>().flatMap { it.tools }
-                matchDesktopScreenCall(calls, screen) { key to it in claimed }
-            }.first()
+            awaitDesktopScreenCall(chat.state, screen, accepts) { key to it in claimed }
         } ?: throw PhoneToolException(NOT_SHOWN)
         claimed += key to callId
         if (claimed.size > RECENT_CLAIMS) claimed.remove(claimed.first())
@@ -89,6 +89,19 @@ internal class DesktopScreenTool(
         return screens.await(screen, key, NOT_SHOWN, callId, accepts)
     }
 }
+
+internal suspend fun awaitDesktopScreenCall(
+    states: Flow<ChatState>,
+    screen: AgentScreen,
+    accepts: () -> Boolean,
+    claimed: (String) -> Boolean,
+): String = states.map { state ->
+    if (!accepts()) throw PhoneToolException(NOT_SHOWN)
+    state.messages.asSequence().filterIsInstance<ChatMessage.Assistant>()
+        .flatMap { it.tools }.filter { it.running && it.agentScreen != null }.toList()
+}.distinctUntilChanged().mapNotNull { calls ->
+    matchDesktopScreenCall(calls.asSequence(), screen, claimed)
+}.first()
 
 internal fun matchDesktopScreenCall(
     calls: Sequence<ToolActivity>,

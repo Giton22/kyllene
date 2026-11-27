@@ -109,8 +109,8 @@ class PhoneToolsBridge(
     /** The desktop has its response and is still delivering it. A pending fetch must not start the tool again. */
     private val desktopAnswering = mutableSetOf<RequestKey>()
 
-    /** Calls already answered, so a fetch made before the answer landed doesn't run them twice. */
-    private val answered = ArrayDeque<RequestKey>()
+    /** Calls we are done handling, so an earlier pending snapshot cannot run them twice. */
+    private val completed = ArrayDeque<RequestKey>()
     private val runningLock = Mutex()
     private val draining = Mutex()
     private val identityLock = Mutex()
@@ -163,10 +163,12 @@ class PhoneToolsBridge(
             return
         }
         coroutineScope {
-            // From the start: the turn sent while the report is on its way is the one about to call a tool.
-            val teller = launch { tellWhereTurnsComeFrom(client) }
+            // The plugin binds every phone tool to the turn's device when it hears "here". Desktop advertises
+            // only screens, so use the gateway's normal device order for its turns.
+            // On Android, start before the report so a turn sent while it is on its way is still told.
+            val teller = if (desktopScreensOnly) null else launch { tellWhereTurnsComeFrom(client) }
             if (!reportUntilDone(on, setUp)) {
-                teller.cancel()
+                teller?.cancel()
                 return@coroutineScope
             }
             launch { phonesCall { api.phoneList(it.id, it.key) } }
@@ -378,7 +380,7 @@ class PhoneToolsBridge(
         val socket = desktop?.connection
         for (request in waiting) {
             val key = RequestKey(request.id, socket?.gateway)
-            if (key in running || key in desktopAnswering || key in answered) continue
+            if (key in running || key in desktopAnswering || key in completed) continue
             val job = scope.launch { handle(request, key, desktop) }
             running[key] = Running(request.tool, job, socket?.client)
         }
@@ -387,6 +389,11 @@ class PhoneToolsBridge(
     private suspend fun handle(request: PhoneRequest, key: RequestKey, desktop: DesktopOrigin?) {
         val origin = desktop?.connection?.client
         val started = now()
+        if (desktop != null && connection.state.value !== desktop.connection) {
+            // There is no response to send yet. A fresh fetch on the new socket can start the tool.
+            runningLock.withLock { running.remove(key) }
+            return
+        }
         val tool = PhoneTool.byId(request.tool)
         // Up to the gateway's own deadline, less a margin: the phone may look late (a poll, Doze), and an Allow
         // the agent would never hear of must not change the phone. Measured on the gateway's clock, so a phone
@@ -397,9 +404,7 @@ class PhoneToolsBridge(
         } else {
             most
         }
-        val (result, error) = if (origin != null && (connection.state.value as? ConnectionState.Connected)?.client !== origin) {
-            null to SWITCHED_OFF
-        } else if (tool == null) {
+        val (result, error) = if (tool == null) {
             null to UNKNOWN_TOOL
         } else if (tool !in enabled(settings.settings.value)) {
             null to SWITCHED_OFF
@@ -425,10 +430,10 @@ class PhoneToolsBridge(
         if (!finish(key)) return
         if (desktop != null) {
             val deadline = started + limit + DEADLINE_MARGIN_MS
-            val acknowledged = deliverDesktopAnswer(request, desktop, result, error, deadline)
+            deliverDesktopAnswer(request, desktop, result, error, deadline)
             runningLock.withLock {
                 desktopAnswering.remove(key)
-                if (acknowledged) markAnswered(key)
+                markCompleted(key)
             }
             return
         }
@@ -439,13 +444,13 @@ class PhoneToolsBridge(
     /** Moves [key] out of the running list; false when switching off already did (and answered it). */
     private suspend fun finish(key: RequestKey): Boolean = runningLock.withLock {
         if (running.remove(key) == null) return@withLock false
-        if (key.gateway == null) markAnswered(key) else desktopAnswering.add(key)
+        if (key.gateway == null) markCompleted(key) else desktopAnswering.add(key)
         true
     }
 
-    private fun markAnswered(key: RequestKey) {
-        answered.addLast(key)
-        while (answered.size > MAX_ANSWERED) answered.removeFirst()
+    private fun markCompleted(key: RequestKey) {
+        completed.addLast(key)
+        while (completed.size > MAX_COMPLETED) completed.removeFirst()
     }
 
     /** Stops what runs for a tool that's off now (a question on screen, say) and refuses it. */
@@ -454,7 +459,7 @@ class PhoneToolsBridge(
         val stopped = runningLock.withLock {
             running.filterValues { it.tool !in ids }.toList().onEach { (key, _) ->
                 running.remove(key)?.job?.cancel()
-                markAnswered(key)
+                markCompleted(key)
             }
         }
         for ((key, call) in stopped) scope.launch { answer(key.id, null, SWITCHED_OFF, origin = call.origin) }
@@ -467,7 +472,7 @@ class PhoneToolsBridge(
         result: JsonElement?,
         error: String?,
         deadline: Long,
-    ): Boolean {
+    ) {
         val (origin, me) = desktop
         suspend fun send(client: JsonRpcClient): Boolean = try {
             api.phoneAnswer(me.id, me.key, request.id, result, error, client)
@@ -476,25 +481,24 @@ class PhoneToolsBridge(
         } catch (e: Exception) {
             false
         }
-        if (send(origin.client)) return true
+        if (send(origin.client)) return
 
         // Use the device credentials that fetched the call and compare the original request, excluding the
         // changing gateway clock. A reconnect can open a connection to an entirely different gateway.
         val expected = request.copy(gatewayNow = 0)
-        return withTimeoutOrNull(deadline - now()) {
+        withTimeoutOrNull(deadline - now()) {
             var last = origin
-            var acknowledged = false
-            while (!acknowledged) {
+            while (true) {
                 withTimeoutOrNull(ANSWER_RETRY_MS) { connection.state.first { it !== last } }
                 val connected = connection.state.first {
                     it is ConnectionState.Connected && it.gateway == origin.gateway
                 } as ConnectionState.Connected
                 last = connected
-                val stillPending = pending(me, connected.client)?.any { it.copy(gatewayNow = 0) == expected } == true
-                if (stillPending) acknowledged = send(connected.client)
+                val waiting = pending(me, connected.client) ?: continue
+                if (connection.state.value !== connected) continue
+                if (waiting.none { it.copy(gatewayNow = 0) == expected } || send(connected.client)) break
             }
-            acknowledged
-        } == true
+        }
     }
 
     private suspend fun answer(
@@ -587,7 +591,7 @@ class PhoneToolsBridge(
         const val SWITCHED_OFF = "The user turned this tool off on the phone."
         const val UNKNOWN_TOOL = "This version of Kyllene doesn't have that tool; the user can update Kyllene."
         private val WAITS_FOR_USER = setOf(State.NotInstalled, State.Outdated)
-        private const val MAX_ANSWERED = 200
+        private const val MAX_COMPLETED = 200
         private const val ID_BYTES = 16
         private const val KEY_BYTES = 32
         private const val KEY_IDENTITY = "phone.identity"

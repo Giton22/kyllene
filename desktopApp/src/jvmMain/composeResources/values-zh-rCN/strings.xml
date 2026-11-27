@@ -64,4 +64,7 @@
     <string name="startup_no_answer">桌面未响应启动请求。</string>
     <string name="startup_enable_reason">登录时将 Kyllene 启动到系统托盘。</string>
     <string name="startup_disable_reason">登录时不再自动启动 Kyllene。</string>
+    <string name="agent_card_answer_too_large">回复内容过长。请缩短表单内容后重新提交。</string>
+    <string name="agent_card_draft_too_large">草稿内容过长，离开卡片时无法保留。</string>
+    <string name="agent_card_draft_lost">草稿内容过长，无法恢复。卡片显示原始值。</string>
 </resources>

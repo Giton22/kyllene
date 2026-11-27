@@ -1,8 +1,10 @@
 package dev.hermeskotlin.desktop.web
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -15,12 +17,32 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.AgentScreen
+import dev.hermeskotlin.designsystem.accent
+import dev.hermeskotlin.designsystem.background
+import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
+import dev.hermeskotlin.designsystem.danger
+import dev.hermeskotlin.designsystem.input
+import dev.hermeskotlin.designsystem.onAccent
+import dev.hermeskotlin.designsystem.strokeStrong
+import dev.hermeskotlin.designsystem.surface
+import dev.hermeskotlin.designsystem.surface3
 import dev.hermeskotlin.designsystem.text
+import dev.hermeskotlin.designsystem.typography
+import dev.hermeskotlin.designsystem.warning
+import dev.hermeskotlin.desktop.resources.Res
+import dev.hermeskotlin.desktop.resources.agent_card_answer_too_large
+import dev.hermeskotlin.desktop.resources.agent_card_draft_lost
+import dev.hermeskotlin.desktop.resources.agent_card_draft_too_large
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -37,6 +59,7 @@ import org.cef.browser.CefFrame
 import org.cef.browser.CefMessageRouter
 import org.cef.callback.CefQueryCallback
 import org.cef.handler.CefMessageRouterHandlerAdapter
+import org.jetbrains.compose.resources.stringResource
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.atomic.AtomicBoolean
@@ -49,28 +72,26 @@ private const val MAX_DRAFTS = 32
 
 /** Local form state for cards that leave the lazy list, keyed by the chat and the call that owns the card. */
 internal class AgentCardDrafts {
-    private data class Draft(val prefix: Int, val fingerprint: String, val models: JsonObject)
+    // A null model records an edit that exceeded the bridge limit, replacing any older saved text.
+    data class Draft(val prefix: Int, val fingerprint: String, val models: JsonObject?)
 
     private val drafts = LinkedHashMap<String, Draft>(MAX_DRAFTS, 0.75f, true)
 
     @Synchronized
-    fun restore(key: String, messages: List<String>): JsonObject? {
+    fun restore(key: String, messages: List<String>): Draft? {
         val draft = drafts[key] ?: return null
         if (draft.prefix > messages.size || draft.fingerprint != messageFingerprint(messages.take(draft.prefix))) return null
-        return buildJsonObject {
-            put("prefix", draft.prefix)
-            put("models", draft.models)
-        }
+        return draft
     }
 
     @Synchronized
-    fun save(key: String, prefix: Int, fingerprint: String, models: JsonObject) {
+    fun save(key: String, prefix: Int, fingerprint: String, models: JsonObject?) {
         drafts[key] = Draft(prefix, fingerprint, models)
         if (drafts.size > MAX_DRAFTS) drafts.remove(drafts.keys.first())
     }
 }
 
-private fun messageFingerprint(messages: List<String>): String {
+internal fun messageFingerprint(messages: List<String>): String {
     val digest = MessageDigest.getInstance("SHA-256")
     for (message in messages) {
         digest.update(message.encodeToByteArray())
@@ -95,6 +116,8 @@ private class CardBridgeState {
     var lastDraftSequence = 0
 }
 
+private enum class DraftNotice { TooLarge, Lost }
+
 private val renderer by lazy {
     val resource = checkNotNull(object {}.javaClass.getResourceAsStream("/agent-screen/renderer.js.gz"))
     GZIPInputStream(resource).bufferedReader().use { it.readText() }
@@ -116,7 +139,35 @@ private fun document() = """
     <main></main><script>$renderer</script>
 """.trimIndent()
 
-private fun Color.css() = "#%06x".format(toArgb() and 0xffffff)
+private fun Color.css(): String {
+    val argb = toArgb()
+    val alpha = argb ushr 24
+    return if (alpha == 255) "#%06x".format(argb and 0xffffff) else "#%08x".format((argb shl 8) or alpha)
+}
+
+@Composable
+private fun agentCardTheme(): JsonObject {
+    val palette = Theme[colors]
+    val ink = palette[text].css()
+    val ground = palette[background]
+    // Basic Catalog fallbacks live on :root. A surface can still supply its own primary color.
+    return buildJsonObject {
+        put("color-scheme", if (ground.luminance() < 0.5f) "dark" else "light")
+        put("color", ink)
+        put("--a2ui-color-background", ground.css())
+        put("--a2ui-color-on-background", ink)
+        put("--a2ui-color-surface", palette[surface].css())
+        put("--a2ui-color-on-surface", ink)
+        put("--a2ui-color-primary", palette[accent].css())
+        put("--a2ui-color-on-primary", palette[onAccent].css())
+        put("--a2ui-color-secondary", palette[surface3].css())
+        put("--a2ui-color-on-secondary", ink)
+        put("--a2ui-color-input", palette[input].css())
+        put("--a2ui-color-on-input", ink)
+        put("--a2ui-color-border", palette[strokeStrong].css())
+        put("--a2ui-textfield-color-error", palette[danger].css())
+    }
+}
 
 @Composable
 internal fun JcefAgentCard(
@@ -149,6 +200,8 @@ internal fun JcefAgentCard(
     var ready by remember(client) { mutableStateOf(false) }
     var height by remember(client) { mutableFloatStateOf(48f) }
     val bridge = remember(client) { CardBridgeState() }
+    var answerTooLarge by remember(client) { mutableStateOf(false) }
+    var draftNotice by remember(client) { mutableStateOf<DraftNotice?>(null) }
     var canScrollUp by remember(client) { mutableStateOf(false) }
     var canScrollDown by remember(client) { mutableStateOf(false) }
     val page = remember(client) {
@@ -170,14 +223,15 @@ internal fun JcefAgentCard(
                     val sequence = (message["sequence"] as? JsonPrimitive)?.intOrNull ?: return@invokeLater
                     val type = (message["type"] as? JsonPrimitive)?.content
                     val submitted = bridge.submitted
-                    if (type == "draft") {
+                    if (type == "draft" || type == "draftTooLarge") {
                         // An edit already sent by the page can arrive while its row is being disposed or updated.
                         val source = submitted?.takeIf { it.sequence == sequence && it.takesTaps && !it.validateOnly }
                             ?: bridge.previousInteractive?.takeIf { it.sequence == sequence }
                         val models = message["models"] as? JsonObject
-                        if (source != null && models != null && sequence >= bridge.lastDraftSequence) {
+                        if (source != null && (models != null || type == "draftTooLarge") && sequence >= bridge.lastDraftSequence) {
                             drafts.save(draftKey, source.messages.size, source.fingerprint, models)
                             bridge.lastDraftSequence = sequence
+                            if (active.get()) draftNotice = if (models == null) DraftNotice.TooLarge else null
                         }
                         return@invokeLater
                     }
@@ -193,6 +247,9 @@ internal fun JcefAgentCard(
                             if (surfaces.isNotEmpty()) rendered(surfaces)
                         }
                         "error" -> failure()
+                        "answerTooLarge" -> if (live && submitted.takesTaps && !submitted.validateOnly) {
+                            answerTooLarge = true
+                        }
                         "layout" -> (message["height"] as? JsonPrimitive)?.floatOrNull
                             ?.takeIf { it.isFinite() }?.let {
                                 height = it.coerceIn(48f, 520f)
@@ -204,7 +261,10 @@ internal fun JcefAgentCard(
                             val result = message["result"] as? JsonObject
                             if (live && submitted.takesTaps && !submitted.validateOnly &&
                                 surface != null && surface in currentScreen.surfaceIds && result != null
-                            ) answer(surface, result)
+                            ) {
+                                answerTooLarge = false
+                                answer(surface, result)
+                            }
                         }
                     }
                 }
@@ -221,23 +281,51 @@ internal fun JcefAgentCard(
             client.dispose()
         }
     }
-    val foreground = Theme[colors][text].css()
-    LaunchedEffect(ready, revision, screen.messages, takesTaps, validateOnly, foreground) {
+    val theme = agentCardTheme()
+    LaunchedEffect(revision) { answerTooLarge = false }
+    LaunchedEffect(ready, revision, screen.messages, takesTaps, validateOnly, theme) {
         if (!ready) return@LaunchedEffect
         val messages = JsonArray(screen.messages.map(::JsonPrimitive))
         val saved = drafts.restore(draftKey, screen.messages)
-        val draft = saved?.let { "JSON.parse(${JsonPrimitive(it.toString())})" } ?: "null"
         val previous = bridge.submitted
+        if (previous == null && saved != null && saved.models == null) draftNotice = DraftNotice.Lost
+        val draft = saved?.models?.let { models ->
+            val payload = buildJsonObject {
+                put("prefix", saved.prefix)
+                put("models", models)
+            }
+            "JSON.parse(${JsonPrimitive(payload.toString())})"
+        } ?: "null"
         if (previous != null && previous.takesTaps && !previous.validateOnly) bridge.previousInteractive = previous
         val sequence = (previous?.sequence ?: 0) + 1
         bridge.submitted = CardSubmission(sequence, revision, screen.messages, takesTaps, validateOnly)
         page.browser.executeJavaScript(
-            "document.body.style.color='$foreground';window.renderAgentScreen($messages,$takesTaps,$sequence,$draft,$validateOnly)",
+            "window.setAgentScreenTheme($theme);window.renderAgentScreen($messages,$takesTaps,$sequence,$draft,$validateOnly)",
             CARD_URL,
             0,
         )
     }
-    BrowserSurface(page, modifier.fillMaxWidth().height(height.dp)) { down ->
-        if (down) canScrollDown else canScrollUp
+    Column(modifier.fillMaxWidth()) {
+        BrowserSurface(page, Modifier.fillMaxWidth().height(height.dp)) { down ->
+            if (down) canScrollDown else canScrollUp
+        }
+        if (takesTaps && answerTooLarge) {
+            AgentCardNotice(stringResource(Res.string.agent_card_answer_too_large))
+        }
+        when (draftNotice) {
+            DraftNotice.TooLarge -> AgentCardNotice(stringResource(Res.string.agent_card_draft_too_large))
+            DraftNotice.Lost -> AgentCardNotice(stringResource(Res.string.agent_card_draft_lost))
+            null -> Unit
+        }
     }
+}
+
+@Composable
+private fun AgentCardNotice(message: String) {
+    Text(
+        text = message,
+        style = Theme[typography][caption],
+        color = Theme[colors][warning],
+        modifier = Modifier.padding(top = 4.dp).semantics { liveRegion = LiveRegionMode.Polite },
+    )
 }
