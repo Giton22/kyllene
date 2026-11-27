@@ -114,6 +114,7 @@ import com.composables.icons.lucide.Brain
 import com.composables.icons.lucide.Cat
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Clock
+import com.composables.icons.lucide.ExternalLink
 import com.composables.icons.lucide.Gauge
 import com.composables.icons.lucide.Globe
 import com.composables.icons.lucide.Image
@@ -749,6 +750,16 @@ internal fun SettingsView(
                         onCheckedChange = { on -> onUpdate { it.copy(showLinkPreviews = on) } },
                         icon = Lucide.Globe,
                     )
+                    if (!isDesktop) {
+                        Divider()
+                        SwitchRow(
+                            title = stringResource(Res.string.settings_open_web_links_in_browser),
+                            detail = stringResource(Res.string.settings_open_web_links_in_browser_detail),
+                            checked = settings.openWebLinksInBrowser,
+                            onCheckedChange = { on -> onUpdate { it.copy(openWebLinksInBrowser = on) } },
+                            icon = Lucide.ExternalLink,
+                        )
+                    }
                     Divider()
                     SwitchRow(
                         title = stringResource(Res.string.settings_suggested_replies),

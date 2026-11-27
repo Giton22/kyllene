@@ -97,7 +97,11 @@ class HeraldActivity : FragmentActivity() {
         followAppLockSetting()
         askForNotificationsOnFirstTurn()
         if (savedInstanceState == null) handleIntent(intent)
-        val browser = InAppBrowser(this) { windowPrefs.getBoolean(KEY_DARK, false) }
+        val browser = InAppBrowser(
+            this,
+            dark = { windowPrefs.getBoolean(KEY_DARK, false) },
+            openWebLinksInBrowser = { settings.settings.value?.openWebLinksInBrowser == true },
+        )
         askPhoneQuestionsInApp()
         bots.republishIfIconChanged()
         setContent {

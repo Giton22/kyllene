@@ -112,6 +112,8 @@
     <string name="settings_show_pet_detail">Das Pet des Profils sitzt auf dem Eingabefeld und spielt nach, was der Agent tut. Mit /pet eins adoptieren.</string>
     <string name="settings_link_previews">Link-Vorschauen zeigen</string>
     <string name="settings_link_previews_detail">Eine Karte für jeden Weblink in einer fertigen Antwort. Kyllene öffnet die verlinkten Seiten und ihre Bilder selbst, ohne die Cookies deines Gateways.</string>
+    <string name="settings_open_web_links_in_browser">Weblinks im Standardbrowser öffnen</string>
+    <string name="settings_open_web_links_in_browser_detail">Öffne Links in deiner Browser-App statt in einem Tab über Kyllene.</string>
     <string name="settings_suggested_replies">Antwortvorschläge</string>
     <string name="settings_suggestions_what">Nach einer Antwort die Nachricht, die du wahrscheinlich als Nächstes senden würdest, über dem Eingabefeld: antippen, dann bearbeiten und senden. Sie kommt vom Next-Prompt-Plugin des Gateways, das pro Zug einmal ein Modell fragt.</string>
     <string name="settings_suggestions_what_desktop">Nach einer Antwort die Nachricht, die du wahrscheinlich als Nächstes senden würdest, über dem Eingabefeld: anklicken, dann bearbeiten und senden. Sie kommt vom Next-Prompt-Plugin des Gateways, das pro Zug einmal ein Modell fragt.</string>
