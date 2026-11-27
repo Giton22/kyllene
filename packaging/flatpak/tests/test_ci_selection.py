@@ -18,7 +18,7 @@ class SelectionTest(unittest.TestCase):
                      'shared/core/build.gradle.kts', 'gradle.properties', 'gradlew',
                      'desktopApp/src/jvmMain/Main.kt', '.github/workflows/release.yml',
                      '.github/workflows/linux.yml', '.github/workflows/linux-checks.yml',
-                     '.github/workflows/flatpak-repo.yml',
+                     '.github/workflows/flatpak-repo.yml', '.github/actions/apt-install/apt-install.sh',
                      'website/kyllene.flatpakref', 'website/kyllene.flatpakrepo'):
             with self.subTest(path=path):
                 self.assertTrue(selection.package_required('pull_request', [path]))

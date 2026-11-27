@@ -18,6 +18,7 @@ on:
       - ".github/workflows/linux-checks.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/flatpak-repo.yml"
+      - ".github/actions/apt-install/**"
       - "website/*.flatpakref"
       - "website/*.flatpakrepo"
       - "gradlew*"
@@ -64,7 +65,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: sudo apt-get update && sudo apt-get install -y flatpak ostree
+      - uses: ./.github/actions/apt-install
+        with:
+          packages: flatpak ostree
       # Through the unittest, which also checks the script leaves nothing behind; a skip here means a tool is missing.
       - name: Repository protocol and trust
         run: |
@@ -84,11 +87,13 @@ jobs:
           persist-credentials: false
           # The Flatpak build clones this checkout; a shallow one can't be cloned reliably.
           fetch-depth: 0
-      - name: Install Flatpak tools and SDK
+      - name: Install Flatpak tools
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            flatpak flatpak-builder fontconfig xvfb xauth xdotool python3-pil xdg-desktop-portal gnome-keyring ostree
+      - name: Install Flatpak SDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak flatpak-builder fontconfig xvfb xauth xdotool python3-pil \
-            xdg-desktop-portal gnome-keyring ostree
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.freedesktop.Sdk//26.08 org.freedesktop.Platform//26.08
       - name: Packaging contracts

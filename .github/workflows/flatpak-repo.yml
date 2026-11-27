@@ -40,9 +40,9 @@ jobs:
           persist-credentials: false
 
       - name: Install Flatpak tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y flatpak ostree
+        uses: ./.github/actions/apt-install
+        with:
+          packages: flatpak ostree
 
       # Only the latest release: the repository's stable ref is replaced, and Flatpak refuses an older commit than
       # the one installed, so publishing an older tag (a backport) would stop every update until the next release.
