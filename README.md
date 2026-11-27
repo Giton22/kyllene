@@ -117,7 +117,8 @@ developer fees it needs. If it's useful to you:
 - Give once on [Ko-fi](https://ko-fi.com/giton), or every month on [GitHub Sponsors](https://github.com/sponsors/Giton22).
 
 In the app, it's all under **Settings → Support Kyllene**, with the people who build Kyllene and help pay for it
-under **Contributors and supporters**. If you'd like your name there after giving, say so in your message.
+under **Contributors and supporters**. New contributors and public GitHub sponsors are added each week. If you give
+on Ko-fi and would like your name there, say so in your message.
 
 **Maintainer:** [Giton22](https://github.com/Giton22)
 

@@ -59,16 +59,18 @@ internal const val KOFI_URL = "https://ko-fi.com/giton"
 internal const val SPONSORS_URL = "https://github.com/sponsors/Giton22"
 
 /**
- * The people named on Settings › Contributors and supporters, by GitHub login. Add a contributor when their first
- * pull request merges, and a supporter only when they gave publicly or said they'd like to be named.
+ * The people named on Settings › Contributors and supporters, by GitHub login. A weekly job adds new contributors and
+ * public GitHub sponsors here and in the README (.github/workflows/credits.yml), so keep each list as one `listOf`.
+ * Add a Ko-fi supporter by hand, and only when they said they'd like to be named. Someone who asks to be taken off
+ * also goes in that script's LEAVE_OFF (.github/scripts/update-credits.py), or the job adds them back.
  */
 internal object Credits {
     val maintainers = listOf("Giton22")
 
     val contributors = listOf(
-        "StavenCross", "AlexGreenUK", "StefanoHernandez", "Rockey011", "faultoverload", "jcrabapple", "asmodaydoescoding",
-        "goetterbote2342", "oriolj", "0rcasec", "guberm", "matanrom", "jaffer1979", "vdexter221", "smhc",
-        "maxdewald", "kiwipaulrob", "humbledude", "crabiosa", "ZeroOttantotto", "subhashhhhhh", "rusty4444",
+        "StavenCross", "AlexGreenUK", "StefanoHernandez", "Rockey011", "faultoverload", "jcrabapple",
+        "asmodaydoescoding", "goetterbote2342", "oriolj", "0rcasec", "guberm", "matanrom", "jaffer1979", "vdexter221",
+        "smhc", "maxdewald", "kiwipaulrob", "humbledude", "crabiosa", "ZeroOttantotto", "subhashhhhhh", "rusty4444",
         "lamahuissn-web", "danno131313", "Aquillum", "palominoz",
     )
 
