@@ -154,12 +154,6 @@ class ChatSession(
     private var ownTurnsPending = 0
     private var foreignTurn = false
 
-    /** The live status at which the live list's attach last failed; retried once the row's status moves. */
-    private var failedAtStatus: LiveStatus? = null
-
-    /** The gateway turned the attach down for good: no status transition will change the answer, so the live list stops trying until the row unloads. */
-    private var refusedForGood = false
-
     /** Authority refusals a status transition cannot clear: a missing capability, a gone session, another profile. */
     private val durableRefusals = setOf("permission_denied", "not_found", "profile_mismatch")
 
@@ -2206,8 +2200,8 @@ class ChatSession(
         return send(fresh, generation)
     }
 
-    /** A resume after a gap that a reconnect overtook: the chat is attached on the new socket, so it isn't sent. */
-    private class StaleGapResume : Exception()
+    /** A background or replay-gap attach whose socket a reconnect overtook. */
+    private class StaleAttach : Exception()
 
     /** A steer that never went out: the running turn's generation couldn't be read ([cause]). */
     private class SteerNotSent(cause: Throwable) : Exception(cause.message, cause)
@@ -2456,7 +2450,7 @@ class ChatSession(
     fun retry() {
         scope.launch { if (rowExists) loadHistory() }
         val client = connectedClient() ?: return connection.retry()
-        if (_state.value.attachment is Attachment.Failed) scope.launch { runCatchingAttach(client) }
+        if (_state.value.attachment is Attachment.Failed) scope.launch { runCatchingAttach(client, reuse = true) }
     }
 
     fun dismissError() = _state.update { it.copy(error = null, refused = null) }
@@ -2541,65 +2535,51 @@ class ChatSession(
 
     private suspend fun followLiveSessions() {
         val active = active ?: return
-        // Plain collect, not collectLatest: a cancelled attach would leave the state "Attaching", and the
-        // attach mutex serializes anyway. Each block re-checks, so queued emissions after an attach no-op.
+        var attemptedClient: JsonRpcClient? = null
+        var attemptedRuntime: String? = null
+        var failedAtStatus: LiveStatus? = null
+        var refusedForGood = false
+        var transientFailures = 0
+        var retryAfter = active.live.value
         active.live.collect { live ->
             val client = connectedClient() ?: return@collect
             val stored = _state.value.storedSessionId ?: return@collect
-            // Compressing a chat goes on in a new stored session on the same runtime (as the watcher notes):
-            // match that row too, or a compressed chat's turns would never stream in. The runtime the chat
-            // last attached to outlives the drop (the state's own goes with the attachment).
+            // Compression can move the stored id while keeping the runtime.
             val lastRuntime = streamMutex.withLock { seqRuntime }
             val row = live.rows[stored] ?: live.rows.values.firstOrNull { it.runtimeId == lastRuntime }
-            if (row == null) {
-                // The session unloaded: whatever turned an attach down is gone.
+            val alreadyAttached = liveRuntimeId(client) != null
+            if (attemptedClient !== client || attemptedRuntime != row?.runtimeId || alreadyAttached) {
+                attemptedClient = client
+                attemptedRuntime = row?.runtimeId
                 failedAtStatus = null
                 refusedForGood = false
-                return@collect
+                transientFailures = 0
             }
+            if (row == null || alreadyAttached || refusedForGood) return@collect
             val status = row.status
-            // Attached chats already receive the turn's events; the resume would only rebind. Not running:
-            // the gateway streams a session only to attached sockets, but attaching keeps it loaded and
-            // detaching would hand the session back, so idle chats attach on a send or a turn, as they always have.
-            if (liveRuntimeId(client) != null) {
-                // Attached by whichever path (the connection's, a send's, the user's Retry): whatever failed
-                // before no longer applies.
-                failedAtStatus = null
-                refusedForGood = false
-                return@collect
-            }
-            // A refusal that outlives any turn (a missing capability, a gone session, another profile, the
-            // legacy backend's "session not found") keeps being the answer; the live list stops trying until
-            // the session unloads.
-            if (refusedForGood) return@collect
-            // The gateway turned an attach down or away (an RpcException — the legacy backend's 4009
-            // "disconnect interrupt settling", the 4007 "session no longer live" race, the authority's
-            // not_found or permission_denied, 4130/4132 — or a timeout): a refusal keeps being the answer for
-            // the rest of the turn's scope; a timeout is not turn-scoped, but gating it by status too keeps a
-            // wedged gateway from flipping the banner Attaching → Failed every poll. The live list carries no
-            // turn identity, so the row's status transitions are the only observable scope boundaries: retry
-            // once per transition — including the session settling to idle, when a turn-scoped refusal ends —
-            // instead of every poll.
-            if (failedAtStatus == status) return@collect
-            if (!status.running && failedAtStatus == null) return@collect
-            // What was never read still isn't there; the resume replays only the turn itself.
+            if (failedAtStatus == status || transientFailures > LIVE_ATTACH_RETRIES) return@collect
+            // After a transient failure, wait for a poll newer than the one already available when it failed.
+            if (transientFailures > 0 && live === retryAfter) return@collect
+            if (!status.running && failedAtStatus == null && transientFailures == 0) return@collect
             if (!_state.value.historyRead && !historyMutex.isLocked) loadHistory()
-            // reuse: an attach racing this one (the connection's) may have won; it is kept, not resumed again.
-            // reconnected: attached before, so the resume picks up where the stream left off, as the
-            // connection's attach would have. The resume still names the chat's stored id: after a compression
-            // the gateway follows the tip to the newest child itself.
             val reconnected = streamMutex.withLock { seqRuntime != null }
-            when (val outcome = runCatchingAttach(client, reconnected = reconnected, reuse = true)) {
+            val outcome = runCatchingAttach(client, reconnected = reconnected, reuse = true, liveRetry = true)
+            if (connectedClient() !== client) return@collect
+            when (outcome) {
                 AttachOutcome.Attached -> {
                     failedAtStatus = null
-                    refusedForGood = false
+                    transientFailures = 0
                 }
                 is AttachOutcome.Refused -> {
                     failedAtStatus = status
-                    if (outcome.permanent) refusedForGood = true
+                    refusedForGood = outcome.permanent
                 }
-                AttachOutcome.Lost -> failedAtStatus = status
-                AttachOutcome.StaleGap -> Unit // cannot occur here (afterGap is false on the live path); defensive
+                AttachOutcome.Transient -> {
+                    failedAtStatus = null
+                    transientFailures++
+                    retryAfter = active.live.value
+                }
+                AttachOutcome.Stale -> Unit
             }
         }
     }
@@ -3105,19 +3085,11 @@ class ChatSession(
     private sealed interface AttachOutcome {
         data object Attached : AttachOutcome
 
-        /**
-         * The gateway answered with an error ([RpcException]). A retry into the same turn would be refused the
-         * same way; when [permanent] — a missing capability, a gone session, another profile, or the legacy
-         * backend's 4007 "session not found" — no status transition will change the answer either. The 4007
-         * "session no longer live; retry resume" race, by contrast, clears on a retry.
-         */
+        /** A refusal that lasts until the live status changes, or until the row or socket changes if permanent. */
         data class Refused(val permanent: Boolean) : AttachOutcome
 
-        /** A transient failure (a lost link, a timeout): the attach may well succeed again. */
-        data object Lost : AttachOutcome
-
-        /** A [StaleGapResume]: the attach raced and was stale; nothing is known about it. */
-        data object StaleGap : AttachOutcome
+        data object Transient : AttachOutcome
+        data object Stale : AttachOutcome
     }
 
     private suspend fun runCatchingAttach(
@@ -3125,37 +3097,36 @@ class ChatSession(
         reconnected: Boolean = false,
         reuse: Boolean = false,
         afterGap: Boolean = false,
+        liveRetry: Boolean = false,
     ): AttachOutcome = try {
-        val runtimeId = attach(client, reconnected, reuse, afterGap)
+        val runtimeId = attach(client, reconnected, reuse, afterGap, liveRetry)
         scope.launch { refreshSubagents(client, runtimeId) }
         AttachOutcome.Attached
     } catch (e: CancellationException) {
         throw e
-    } catch (e: StaleGapResume) {
-        AttachOutcome.StaleGap
+    } catch (e: StaleAttach) {
+        AttachOutcome.Stale
     } catch (e: Exception) {
-        // The link dropped mid-attach: the connection's own path shows Detached and re-attaches. Writing
-        // Failed over it would say the session is broken while it is just reconnecting — checked inside the
-        // update, so the write applies only while the client this attach used is still the connected one.
-        // (A stale attach usually fails right on the close, before the state flips; the guard only matters
-        // when the connection's flip wins that race, so it cannot be pinned in a deterministic test.)
         _state.update {
             if (connectedClient() === client) {
                 it.copy(
-                    attachment = Attachment.Failed(e.message ?: "Couldn't open the session."),
-                    // The gateway itself turned the chat down (gone with its deleted bot, say): no turn of it can be
-                    // followed, so none shows as running, nor keeps "Working…" in the shade. A lost link isn't that.
+                    attachment = if (liveRetry && it.attachment is Attachment.Failed) {
+                        it.attachment
+                    } else Attachment.Failed(e.message ?: "Couldn't open the session."),
+                    // A gateway refusal can end the chat's running state. A lost link does not.
                     running = it.running && e !is RpcException,
                 )
             } else it
         }
-        if (e is RpcException) {
-            // 4007 doubles for two refusals: "session no longer live; retry resume" (a transient locate race the
-            // gateway itself says to retry) and "session not found" (the stored row is gone for good). Only the
-            // latter is durable.
-            val goneForGood = e.code == 4007 && e.message == "session not found"
-            AttachOutcome.Refused(permanent = e.reason in durableRefusals || goneForGood)
-        } else AttachOutcome.Lost
+        when {
+            connectedClient() !== client -> AttachOutcome.Stale
+            e is RpcTimeoutException -> AttachOutcome.Transient
+            e is RpcException && e.code == 4007 && e.message == "session no longer live; retry resume" -> AttachOutcome.Transient
+            e is RpcException -> AttachOutcome.Refused(
+                permanent = e.reason in durableRefusals || (e.code == 4007 && e.message == "session not found"),
+            )
+            else -> AttachOutcome.Refused(permanent = false)
+        }
     }
 
     private suspend fun ensureAttached(client: JsonRpcClient): String {
@@ -3195,11 +3166,17 @@ class ChatSession(
         reconnected: Boolean = false,
         reuse: Boolean = false,
         afterGap: Boolean = false,
+        liveRetry: Boolean = false,
     ): String = attachMutex.withLock {
+        fun requireCurrentLiveClient() {
+            if (liveRetry && connectedClient() !== client) throw StaleAttach()
+        }
+        requireCurrentLiveClient()
         if (reuse) liveRuntimeId(client)?.let { return@withLock it }
-        if (afterGap && (attachedClient !== client || connectedClient() !== client)) throw StaleGapResume()
+        if (afterGap && (attachedClient !== client || connectedClient() !== client)) throw StaleAttach()
         val stored = _state.value.storedSessionId ?: error("No stored session to resume")
-        _state.update { it.copy(attachment = Attachment.Attaching) }
+        // A background retry keeps the last visible failure in place until an attach succeeds.
+        if (!liveRetry) _state.update { it.copy(attachment = Attachment.Attaching) }
         val result = client.request(
             "session.resume",
             buildJsonObject {
@@ -3211,21 +3188,29 @@ class ChatSession(
             },
         ) as? JsonObject ?: error("Empty session.resume reply")
         val runtimeId = result.string("session_id") ?: error("session.resume returned no session_id")
-        executionGeneration = result.long("execution_generation")
-        revision = result.long("revision")
         val running = result.boolean("running") == true
-        // A turn already running when we attach is someone else's; reconcile with the stored rows when it ends.
-        if (running && ownTurnsPending == 0) foreignTurn = true
         val inflight = result["inflight"] as? JsonObject
-        turnStartedAt = result.double("turn_started_at").takeIf { running }
         // Questions asked while no socket of ours was attached; the gateway keeps them open for us.
         val open = InputRequest.parseResume(result)
         val streamed = inflight.string("assistant").orEmpty()
         val epoch = replayEpoch(client, result)
+        fun canReplay() =
+            !afterGap && reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
+        // A reconnect can overtake a live retry's history read. Read before publishing its stream cursor.
+        requireCurrentLiveClient()
+        if (liveRetry && reconnected) {
+            val resumable = streamMutex.withLock { canReplay() }
+            if (!resumable || (!_state.value.historyRead && !historyMutex.isLocked)) loadHistory()
+        }
         val (resumable, catchingUp) = streamMutex.withLock {
+            requireCurrentLiveClient()
+            executionGeneration = result.long("execution_generation")
+            revision = result.long("revision")
+            // Reconcile a foreign turn with the stored rows when it ends.
+            if (running && ownTurnsPending == 0) foreignTurn = true
+            turnStartedAt = result.double("turn_started_at").takeIf { running }
             inflightText = streamed
-            // Seqs count per runtime session and per epoch, so only the same of both can be picked up.
-            val resumable = !afterGap && reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
+            val resumable = canReplay()
             if (!resumable) {
                 lastSeq = startSeq(client, result, epoch)
                 // The turn may have changed while away: the gateway's copy names its reply again below.
@@ -3240,11 +3225,13 @@ class ChatSession(
             if (catchingUp) held = mutableListOf()
             resumable to catchingUp
         }
-        if (reconnected && (!resumable || (!_state.value.historyRead && !historyMutex.isLocked))) loadHistory()
+        if (!liveRetry && reconnected && (!resumable || (!_state.value.historyRead && !historyMutex.isLocked))) loadHistory()
         var replyKey: String? = null
         // Named with the id it goes with, so no reader ever pairs this socket with the old id or the old socket with this one.
+        requireCurrentLiveClient()
         attachedClient = client
         _state.update { state ->
+            requireCurrentLiveClient()
             state.copy(
                 attachment = Attachment.Attached(runtimeId),
                 running = running,
@@ -3274,6 +3261,7 @@ class ChatSession(
         // prompt doesn't show: lay them out again, now apart, so they fold into the live reply.
         if (running && !resumable && turnStartedAt != null && _state.value.historyLoaded) {
             historyMutex.withLock {
+                requireCurrentLiveClient()
                 if (rows.isNotEmpty() && rowsLaidOutFor != turnStartedAt) {
                     showRows(risks?.all().orEmpty(), _state.value.olderMessages, _state.value.savedCopyAt, relaid = true)
                 }
@@ -3377,6 +3365,8 @@ class ChatSession(
     private fun connectedClient(): JsonRpcClient? = (connection.state.value as? ConnectionState.Connected)?.client
 
     private companion object {
+        const val LIVE_ATTACH_RETRIES = 2
+
         /** The session authority's notice that it ended this socket's subscription to a session. */
         const val REPLAY_GAP = "session.replay_gap"
 
