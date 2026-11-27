@@ -650,7 +650,10 @@ class ChatNotifications(
      * conversations and can be prioritised or bubbled like a person's.
      */
     fun postBotMessage(bot: Bot, picture: ByteArray?, storedSessionId: String, text: String, viaPush: Boolean = false) {
-        val preview = text.replyTextOrNull()?.toPlainText()?.take(MAX_PREVIEW)?.takeIf(String::isNotBlank) ?: return
+        val preview = text.replyTextOrNull()?.toPlainText()?.take(MAX_PREVIEW)
+            // As in postReply: a reply that is only a picture is still a reply.
+            ?.ifBlank { if (MARKDOWN_IMAGE.containsMatchIn(text)) finished else "" }
+            ?.takeIf(String::isNotBlank) ?: return
         // One message can arrive both over the gateway socket and through push: the second copy is dropped.
         // The same words twice from one path are two messages (a bot repeating itself) and both notify.
         val now = System.currentTimeMillis()

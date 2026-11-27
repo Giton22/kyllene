@@ -3,7 +3,9 @@ package dev.hermeskotlin.android.notify
 import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
 import dev.hermeskotlin.android.R
+import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.chat.TurnOutcome
 import dev.hermeskotlin.core.chat.WatchedTurnEnd
 import org.junit.Assert.assertEquals
@@ -40,6 +42,16 @@ class ChatNotificationsTest {
         notifications.postReply("chat", "Bot chat", "![](https://gateway.test/image.png)", failed = false)
 
         assertEquals(context.getString(R.string.notification_finished), preview())
+    }
+
+    @Test
+    fun aBotMessageThatIsOnlyAPictureStillPosts() {
+        notifications.postBotMessage(Bot("work"), picture = null, storedSessionId = "chat", text = "[](/document)")
+        assertEquals(0, posted.activeNotifications.size)
+
+        notifications.postBotMessage(Bot("work"), picture = null, storedSessionId = "chat", text = "![](https://gateway.test/image.png)")
+        val messages = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(posted.activeNotifications.single().notification)
+        assertEquals(context.getString(R.string.notification_finished), messages?.messages?.last()?.text?.toString())
     }
 
     @Test
