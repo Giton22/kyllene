@@ -121,6 +121,7 @@ import com.composables.icons.lucide.Download
 import com.composables.icons.lucide.LayoutGrid
 import com.composables.icons.lucide.Languages
 import androidx.compose.runtime.saveable.rememberSaveable
+import dev.hermeskotlin.ui.gateways.savedLabel
 import dev.hermeskotlin.ui.LanguagePageReturn
 import dev.hermeskotlin.ui.rememberLanguageChoice
 import com.composables.icons.lucide.Lightbulb
@@ -290,7 +291,7 @@ fun SettingsScreen(
     val anchors = remember { mutableStateMapOf<String, Int>() }
     CompositionLocalProvider(LocalSectionAnchors provides anchors.takeIf { isDesktop }) { SettingsView(
         settings, info, gateway.url, viewModel::update, onBack, onSignOut, onOpenGateways,
-        gatewayName = gateway.label,
+        gatewayName = gateway.savedLabel(),
         onCheckConnection = {
             checkOpen = true
             viewModel.runConnectionCheck()

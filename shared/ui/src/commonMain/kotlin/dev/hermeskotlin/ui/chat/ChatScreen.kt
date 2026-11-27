@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.ui.gateways.savedLabel
 import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
@@ -302,7 +303,6 @@ import dev.hermeskotlin.core.chat.canEdit
 import dev.hermeskotlin.core.chat.discardedAfter
 import dev.hermeskotlin.core.chat.regenerateTarget
 import dev.hermeskotlin.core.connection.ConnectionState
-import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.models.displayModelName
 import dev.hermeskotlin.core.slash.SlashCommand
 import dev.hermeskotlin.core.slash.SlashKind
@@ -438,7 +438,6 @@ fun ChatScreen(
     greetingPlaces: GreetingPlaces? = null,
 ) {
     LaunchedEffect(target) { viewModel.open(target) }
-    val gateways by koinInject<GatewayRepository>().list.collectAsStateWithLifecycle()
     val transcript = viewModel.transcript.collectAsStateWithLifecycle().value
     val state = transcript.state
     // The same chat reopened with a new position (a notification for it) keeps the last one until the new one is read.
@@ -667,7 +666,7 @@ fun ChatScreen(
         onOpenFile = { previewing = it; railShown = true },
         onNotice = { notice = it },
         wallpaper = rememberChatWallpaper(),
-        place = gateways.find(target.gateway.url)?.label ?: target.gateway.label,
+        place = target.gateway.savedLabel(),
         profile = target.profile,
         // Only while nothing has been sent: a stored chat stays where it began.
         places = greetingPlaces?.takeIf { target.storedSessionId == null && state.storedSessionId == null && target.bot == null },

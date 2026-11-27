@@ -38,6 +38,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import com.composables.icons.lucide.AppWindow
+import dev.hermeskotlin.ui.gateways.savedLabel
 import dev.hermeskotlin.ui.clearOfWindowControls
 import dev.hermeskotlin.ui.CopyableOnDesktop
 import dev.hermeskotlin.ui.arrowFocus
@@ -796,7 +797,7 @@ fun SessionsSidebar(
                     onBack = { viewModel.setFilter(SessionListFilter.Recent) },
                 )
                 else -> MainHeader(
-                    gatewayLabel = gateway.label,
+                    gatewayLabel = gateway.savedLabel(),
                     connection = connection,
                     onAccount = {
                         accountAnchor = null
