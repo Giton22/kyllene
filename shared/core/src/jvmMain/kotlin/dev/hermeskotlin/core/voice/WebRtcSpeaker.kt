@@ -2,7 +2,6 @@ package dev.hermeskotlin.core.voice
 
 import dev.onvoid.webrtc.media.MediaDevices
 import dev.onvoid.webrtc.media.audio.AudioDeviceModule
-import dev.onvoid.webrtc.media.audio.AudioLayer
 
 /** Each playback owns its output module and leaves device selection, mute and volume defaults alone. */
 internal class WebRtcSpeaker : SpeechOutput {
@@ -11,7 +10,7 @@ internal class WebRtcSpeaker : SpeechOutput {
     override fun start(fill: (ByteArray, Int, Int) -> Unit, fail: (Throwable) -> Unit) {
         check(module == null)
         try {
-            val native = AudioDeviceModule(AudioLayer.kLinuxPulseAudio)
+            val native = AudioDeviceModule(desktopAudioLayer())
             module = native
             val device = MediaDevices.getDefaultAudioRenderDevice() ?: error("No default speaker")
             native.setPlayoutDevice(device)

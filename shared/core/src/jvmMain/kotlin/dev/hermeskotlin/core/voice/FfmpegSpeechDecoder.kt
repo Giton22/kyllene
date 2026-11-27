@@ -17,12 +17,15 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 
 /** Decode only pipe input; media cannot open URLs, files or inherited credential-bearing environment. */
-internal class FfmpegSpeechDecoder(private val start: (ProcessBuilder) -> Process = { it.start() }) : SpeechDecoder {
+internal class FfmpegSpeechDecoder(
+    private val ffmpeg: String = desktopFfmpegCommand(),
+    private val start: (ProcessBuilder) -> Process = { it.start() },
+) : SpeechDecoder {
     override suspend fun decode(chunks: ReceiveChannel<ByteArray>, format: PcmFormat?, emit: suspend (ByteArray) -> Unit) {
         var process: Process? = null
         var failure: Throwable? = null
         try {
-            val args = mutableListOf("/usr/bin/ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", "1",
+            val args = mutableListOf(ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-threads", "1",
                 "-protocol_whitelist", "pipe", "-format_whitelist", "mp3,wav,ogg,flac,aac,mov,s16le")
             if (format != null) args += listOf("-f", "s16le", "-ar", format.sampleRate.toString(), "-ac", format.channels.toString())
             args += listOf("-i", "pipe:0", "-map", "0:a:0", "-vn", "-sn", "-dn", "-acodec", "pcm_s16le",

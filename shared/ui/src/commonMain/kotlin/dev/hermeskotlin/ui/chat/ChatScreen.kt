@@ -547,7 +547,7 @@ fun ChatScreen(
                 ChatRequest.OpenCheckpoints -> checkpointsOpen = true
                 // The goal may have been cleared since the menu offered it; an empty sheet would stay up.
                 ChatRequest.OpenControl -> controlOpen = viewModel.state.value.control != null
-                // `/voice` and the like on the desktop, which has no voice yet: say so, as a silent no-op reads as broken.
+                // `/voice` and the like where the desktop has no native audio (macOS): say so, as a silent no-op reads as broken.
                 // A voice chat answers aloud, so it also needs spoken replies; a call and dictation don't.
                 ChatRequest.StartVoice -> when {
                     hasSpeechPlayback -> startVoiceChat(false)
