@@ -138,6 +138,21 @@ class MinimizeRequestCardTest {
     }
 
     @Test
+    fun aCardOpenedByANewRequestStaysOpenWhenThatRequestGoes() {
+        val requests = mutableStateListOf<InputRequest>(approval)
+        show(requests)
+        minimize()
+        composeRule.runOnIdle { requests += questions }
+        button("Allow once").assertIsDisplayed()
+
+        // The new question answered on another client: the card the user was shown stays.
+        composeRule.runOnIdle { requests.remove(questions) }
+
+        button("Allow once").assertIsDisplayed()
+        gone("Approval needed")
+    }
+
+    @Test
     fun oneAnsweredElsewhereWhileMinimizedLeavesThePill() {
         val requests = mutableStateListOf<InputRequest>(approval, questions)
         show(requests)

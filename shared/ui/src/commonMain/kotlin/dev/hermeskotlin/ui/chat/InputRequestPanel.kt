@@ -47,6 +47,7 @@ import dev.hermeskotlin.designsystem.components.verticalScrollWithBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -153,6 +154,8 @@ internal fun InputRequestPanel(
     val request = requests.firstOrNull() ?: return
     // The requests open when the card was minimized; null while it shows.
     var minimizedWith by remember { mutableStateOf<Set<String>?>(null) }
+    // A request that came since opens the card for good: it doesn't fold back when that one goes.
+    minimizedWith?.let { with -> if (requests.any { it.id !in with }) SideEffect { minimizedWith = null } }
     // Out here, so what was started on a question outlives the card while it's a pill.
     val draft = remember(request.id) { (request as? InputRequest.Clarify)?.let { ClarifyDraft(it.questions) } }
     val more = (requests.size - 1).takeIf { it > 0 }?.let { stringResource(Res.string.chat_requests_more, it) }
