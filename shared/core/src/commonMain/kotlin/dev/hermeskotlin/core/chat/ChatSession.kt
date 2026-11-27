@@ -2592,17 +2592,25 @@ class ChatSession(
             // Attached chats already receive the turn's events; the resume would only rebind. Not running:
             // the gateway streams a session only to attached sockets, but attaching keeps it loaded and
             // detaching would hand the session back, so idle chats attach on a send or a turn, as they always have.
-            if (liveRuntimeId(client) != null) return@collect
-            // A refusal that outlives any turn (a missing capability, a gone session) keeps being the answer;
-            // the live list stops trying until the session unloads.
+            if (liveRuntimeId(client) != null) {
+                // Attached by whichever path (the connection's, a send's, the user's Retry): whatever failed
+                // before no longer applies.
+                failedAtStatus = null
+                refusedForGood = false
+                return@collect
+            }
+            // A refusal that outlives any turn (a missing capability, a gone session, another profile, the
+            // legacy backend's "session not found") keeps being the answer; the live list stops trying until
+            // the session unloads.
             if (refusedForGood) return@collect
             // The gateway turned an attach down or away (an RpcException — the legacy backend's 4009
-            // "disconnect interrupt settling" or 4007 "session no longer live", the authority's not_found or
-            // permission_denied — or a timeout): it keeps doing so for the rest of the turn's scope. The live
-            // list carries no turn identity, so the row's status transitions are the only observable scope
-            // boundaries: retry once per transition — including the session settling to idle, when a
-            // turn-scoped refusal ends — instead of every poll, or each attempt would flip the banner
-            // Attaching → Failed.
+            // "disconnect interrupt settling", the 4007 "session no longer live" race, the authority's
+            // not_found or permission_denied, 4130/4132 — or a timeout): a refusal keeps being the answer for
+            // the rest of the turn's scope; a timeout is not turn-scoped, but gating it by status too keeps a
+            // wedged gateway from flipping the banner Attaching → Failed every poll. The live list carries no
+            // turn identity, so the row's status transitions are the only observable scope boundaries: retry
+            // once per transition — including the session settling to idle, when a turn-scoped refusal ends —
+            // instead of every poll.
             if (failedAtStatus == status) return@collect
             if (!status.running && failedAtStatus == null) return@collect
             // What was never read still isn't there; the resume replays only the turn itself.
@@ -3131,7 +3139,8 @@ class ChatSession(
         /**
          * The gateway answered with an error ([RpcException]). A retry into the same turn would be refused the
          * same way; when [permanent] — a missing capability, a gone session, another profile, or the legacy
-         * backend's 4007 "session no longer live" — no status transition will change the answer either.
+         * backend's 4007 "session not found" — no status transition will change the answer either. The 4007
+         * "session no longer live; retry resume" race, by contrast, clears on a retry.
          */
         data class Refused(val permanent: Boolean) : AttachOutcome
 
@@ -3172,7 +3181,11 @@ class ChatSession(
             } else it
         }
         if (e is RpcException) {
-            AttachOutcome.Refused(permanent = e.reason in durableRefusals || e.code == 4007)
+            // 4007 doubles for two refusals: "session no longer live; retry resume" (a transient locate race the
+            // gateway itself says to retry) and "session not found" (the stored row is gone for good). Only the
+            // latter is durable.
+            val goneForGood = e.code == 4007 && e.message == "session not found"
+            AttachOutcome.Refused(permanent = e.reason in durableRefusals || goneForGood)
         } else AttachOutcome.Lost
     }
 

@@ -741,6 +741,87 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aPermanentlyRefusedLiveAttachStopsRetryingUntilTheRowUnloads() = runTest {
+        var resumes = 0
+        var liveSessions = """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" -> {
+                        resumes++
+                        call.error(4007, "session not found")
+                    }
+                    call.method == "session.active_list" -> liveSessions
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope)
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        // The connection's attach and the live list's are refused with "session not found": nothing a status
+        // transition would change, so the live list stops trying.
+        chat.state.first { it.attachment is Attachment.Failed }
+        runCurrent()
+        assertEquals(2, resumes)
+        for (status in listOf("waiting", "idle", "working")) {
+            liveSessions = """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"$status"}]}"""
+            advanceTimeBy(10_001)
+            runCurrent()
+            assertEquals(2, resumes, "no retry for $status")
+        }
+
+        // The row unloads (the session went away): the refusal's scope is gone, so a later row gets one fresh try.
+        liveSessions = """{"sessions":[]}"""
+        advanceTimeBy(10_001)
+        runCurrent()
+        assertEquals(2, resumes)
+        liveSessions = """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
+        advanceTimeBy(10_001)
+        runCurrent()
+        assertEquals(3, resumes)
+    }
+
+    @Test
+    fun aTransientRefusalRetriesOnTheNextTransition() = runTest {
+        var resumes = 0
+        var liveStatus = "working"
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" ->
+                        if (resumes++ < 2) call.error(4007, "session no longer live; retry resume")
+                        else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
+                    call.method == "session.active_list" ->
+                        """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"$liveStatus"}]}"""
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope)
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        chat.state.first { it.attachment is Attachment.Failed }
+        runCurrent()
+        assertEquals(2, gateway.sent("session.resume").size)
+
+        // The 4007 "session no longer live" variant is a race the gateway says to retry: it is not treated as
+        // permanent, so the next status transition retries and attaches.
+        liveStatus = "waiting"
+        advanceTimeBy(10_001)
+        runCurrent()
+        val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
+        assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
+        assertEquals(3, gateway.sent("session.resume").size)
+    }
+
+    @Test
     fun aLinkDroppedMidAttachEndsReattachedAndStreamingNotStuckOnFailed() = runTest {
         var resumes = 0
         gateway(backgroundScope, emptyMap(), reconnects = true).apply {
@@ -774,9 +855,11 @@ class ChatSessionTest {
         // The link drops mid-attach. The stale attach fails on the closed socket (before or just after the
         // connection's state flips — the race the guard defends), the connection reconnects, and the chat
         // re-attaches: however the race falls, it must end attached to the running turn, never stuck on Failed.
+        assertEquals(2, gateway.sent("session.resume").size, "the connection's and the live list's attaches are both in flight")
         gateway.sockets.last().serverClose(1006, "abnormal")
         advanceTimeBy(61_000)
         runCurrent()
+        assertTrue(gateway.sent("session.resume").size >= 3, "the reconnect must have resumed again")
         val healed = chat.state.value
         assertTrue(healed.attachment is Attachment.Attached)
         assertTrue(healed.running)
