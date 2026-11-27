@@ -356,6 +356,8 @@ private fun ModelField(editor: JobEditor, onPick: () -> Unit, onClear: () -> Uni
     val desktop = LocalDesktopLayout.current
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
     val model = editor.model
+    // A job pinned from the CLI may have a provider or endpoint but no model; it isn't on the default either.
+    val pinned = model != null || editor.provider != null || editor.baseUrl != null
     val title = stringResource(Res.string.sessions_job_model)
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = Theme[typography][label], color = Theme[colors][textSecondary], modifier = Modifier.padding(start = 4.dp))
@@ -369,22 +371,23 @@ private fun ModelField(editor: JobEditor, onPick: () -> Unit, onClear: () -> Uni
                 .handCursor()
                 .clickable(enabled = !editor.saving, onClickLabel = title, role = Role.Button, onClick = onPick)
                 // The clear button brings its own touch target, so the field keeps to its height round it.
-                .padding(start = if (desktop) 12.dp else 16.dp, end = if (model != null) 4.dp else if (desktop) 12.dp else 16.dp),
+                .padding(start = if (desktop) 12.dp else 16.dp, end = if (pinned) 4.dp else if (desktop) 12.dp else 16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             UnstyledIcon(Lucide.Cpu, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))
             Text(
-                model?.let { id ->
-                    listOfNotNull(displayModelName(id), editor.provider?.let { displayProviderName(it) }).joinToString(" · ")
-                } ?: stringResource(Res.string.sessions_job_model_default),
+                listOfNotNull(model?.let { displayModelName(it) }, editor.provider?.let { displayProviderName(it) })
+                    .ifEmpty { listOfNotNull(editor.baseUrl) }
+                    .joinToString(" · ")
+                    .ifEmpty { stringResource(Res.string.sessions_job_model_default) },
                 style = Theme[typography][body],
-                color = if (model != null) Theme[colors][text] else Theme[colors][textSecondary],
+                color = if (pinned) Theme[colors][text] else Theme[colors][textSecondary],
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(vertical = 6.dp),
             )
-            if (model != null) {
+            if (pinned) {
                 IconButton(Lucide.X, contentDescription = stringResource(Res.string.sessions_job_model_clear), onClick = onClear, enabled = !editor.saving, iconSize = 16.dp)
             } else {
                 UnstyledIcon(Lucide.ChevronRight, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(16.dp))

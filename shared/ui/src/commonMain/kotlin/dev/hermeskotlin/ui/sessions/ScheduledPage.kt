@@ -228,7 +228,7 @@ internal fun ScheduledPage(
             visible = pickingModel,
             onDismiss = { pickingModel = false },
             state = ChatState(model = editor.model, provider = editor.provider),
-            picker = picker,
+            picker = picker.forJob(),
             onRefresh = viewModel::loadModels,
             onSelectModel = { model ->
                 viewModel.setModel(model)

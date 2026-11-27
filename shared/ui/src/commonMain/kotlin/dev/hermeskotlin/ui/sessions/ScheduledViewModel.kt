@@ -67,6 +67,8 @@ data class JobEditor(
     /** The model its runs use, and its provider; null runs them on the profile's default. */
     val model: String? = null,
     val provider: String? = null,
+    /** The endpoint a CLI-pinned job's runs call; it isn't shown, and goes when the model is picked or cleared. */
+    val baseUrl: String? = null,
     val saving: Boolean = false,
     val error: Said? = null,
 ) {
@@ -196,12 +198,13 @@ class ScheduledViewModel(
         prompt.setTextAndPlaceCursorAtEnd(job.prompt)
         schedule.setTextAndPlaceCursorAtEnd(job.editableSchedule)
         editorGeneration++
-        val model = job.model?.takeIf { it.isNotBlank() }
+        // A provider or endpoint without a model still pins the job's runs, so the form shows it and can clear it.
         val editor = JobEditor(
             jobId = job.id,
             deliver = job.deliver ?: LOCAL_DELIVERY.id,
-            model = model,
-            provider = job.provider?.takeIf { it.isNotBlank() && model != null },
+            model = job.model.orNone(),
+            provider = job.provider.orNone(),
+            baseUrl = job.baseUrl.orNone(),
         )
         _state.update { it.copy(editor = editor) }
         opened = formNow()
@@ -219,7 +222,7 @@ class ScheduledViewModel(
 
     private fun formNow() = listOf(
         prompt.text.toString(), schedule.text.toString(), name.text.toString(),
-        _state.value.editor?.deliver, _state.value.editor?.model, _state.value.editor?.provider,
+        _state.value.editor?.deliver, _state.value.editor?.model, _state.value.editor?.provider, _state.value.editor?.baseUrl,
     )
 
     /** Whether the open form holds changes that leaving it would drop. */
@@ -229,10 +232,10 @@ class ScheduledViewModel(
 
     /** Runs the job on [model]; it's sent when the job is saved. */
     fun setModel(model: ModelOption) =
-        _state.update { state -> state.copy(editor = state.editor?.copy(model = model.id, provider = model.provider, error = null)) }
+        _state.update { state -> state.copy(editor = state.editor?.copy(model = model.id, provider = model.provider, baseUrl = null, error = null)) }
 
     /** Runs the job on its profile's default model again. */
-    fun clearModel() = _state.update { state -> state.copy(editor = state.editor?.copy(model = null, provider = null, error = null)) }
+    fun clearModel() = _state.update { state -> state.copy(editor = state.editor?.copy(model = null, provider = null, baseUrl = null, error = null)) }
 
     private val _modelPicker = MutableStateFlow(ModelPickerState())
 
@@ -287,7 +290,7 @@ class ScheduledViewModel(
             schedule = schedule.text.toString().trim(),
             deliver = editor.deliver,
             model = editor.model,
-            provider = editor.provider?.takeIf { editor.model != null },
+            provider = editor.provider,
         )
         val problem = when {
             // Removed elsewhere while the form was open; saving would quietly create it again.
@@ -315,10 +318,13 @@ class ScheduledViewModel(
                     if (draft.prompt != existing.prompt.trim()) put("prompt", draft.prompt)
                     if (draft.schedule.isNotEmpty() && draft.schedule != existing.editableSchedule) put("schedule", draft.schedule)
                     if (draft.deliver != (existing.deliver ?: LOCAL_DELIVERY.id)) put("deliver", draft.deliver)
-                    // Both go together: a model kept with another provider's name would be looked up there. Empty clears.
-                    if (draft.model != existing.model?.takeIf { it.isNotBlank() } || (draft.model != null && draft.provider != existing.provider?.takeIf { it.isNotBlank() })) {
+                    // All go together: a model kept with another provider's name would be looked up there, and a kept
+                    // endpoint would still be called (v0.23.2+ refuse a provider that doesn't match it). Empty clears.
+                    val existingBaseUrl = existing.baseUrl.orNone()
+                    if (draft.model != existing.model.orNone() || draft.provider != existing.provider.orNone() || editor.baseUrl != existingBaseUrl) {
                         put("model", draft.model.orEmpty())
                         put("provider", draft.provider.orEmpty())
+                        if (existingBaseUrl != null) put("base_url", editor.baseUrl.orEmpty())
                     }
                 }
                 if (changes.isEmpty()) ApiResult.Success(existing) else api.update(url, existing.id, changes, existing.profile).withProfile(existing.profile)
@@ -487,3 +493,11 @@ class ScheduledViewModel(
  */
 private fun ApiResult<CronJob>.withProfile(profile: String?): ApiResult<CronJob> =
     if (this is ApiResult.Success && value.profile == null && profile != null) ApiResult.Success(value.copy(profile = profile)) else this
+
+private fun String?.orNone(): String? = this?.takeIf { it.isNotBlank() }
+
+/**
+ * The picker as a job's form shows it: the catalog's current model is the profile's chat default, but cron runs can
+ * use another (`cron.model`), so with no model of its own the job has nothing marked.
+ */
+internal fun ModelPickerState.forJob(): ModelPickerState = copy(catalog = catalog?.copy(currentModel = null, currentProvider = null))

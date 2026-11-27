@@ -57,8 +57,10 @@ data class CronJob(
     val profile: String? = null,
     /** The model the job runs on, when it doesn't use its profile's default; null or blank means the default. */
     val model: String? = null,
-    /** The provider [model] is from; with no provider, the job uses its profile's. */
+    /** The provider [model] is from; with no provider, the job uses its profile's. A provider alone still pins its runs. */
     val provider: String? = null,
+    /** The endpoint the job's runs call instead of its provider's own, set from the CLI; null or blank means none. */
+    @SerialName("base_url") val baseUrl: String? = null,
     /** Where a run's reply goes: `local` (kept on the gateway) or a messaging platform such as `telegram`. */
     val deliver: String? = null,
     /**

@@ -6,10 +6,15 @@ import dev.hermeskotlin.core.auth.PersistentCookiesStorage
 import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.cron.CronApi
 import dev.hermeskotlin.core.gateway.SavedGateway
+import dev.hermeskotlin.core.models.ModelCatalog
 import dev.hermeskotlin.core.models.ModelOption
+import dev.hermeskotlin.core.models.ModelProvider
 import dev.hermeskotlin.core.models.ModelsApi
 import dev.hermeskotlin.core.network.createHttpClient
 import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
+import dev.hermeskotlin.core.chat.ChatState
+import dev.hermeskotlin.ui.chat.ModelPickerState
+import dev.hermeskotlin.ui.chat.ModelSelection
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.respond
@@ -340,5 +345,89 @@ class ScheduledViewModelTest {
         val picker = vm.modelPicker.first { !it.loading }
         assertNotNull(picker.error)
         assertNull(picker.catalog)
+    }
+
+    private val cliPinnedBody = """[
+        {"id":"c1","name":"Local","prompt":"Brief me","model":"m1","provider":"custom:lab","base_url":"http://lab:8000/v1","schedule":{"kind":"cron","expr":"0 9 * * *"}},
+        {"id":"c2","name":"Provider only","prompt":"Brief me","model":null,"provider":"anthropic","schedule":{"kind":"cron","expr":"0 9 * * *"}}
+    ]"""
+
+    private suspend fun ScheduledViewModel.editCliJob(id: String) {
+        jobsBody = cliPinnedBody
+        bind(gateway)
+        awaitLoaded()
+        openJob(id)
+        editJob()
+    }
+
+    @Test
+    fun pickingAModelForAJobWithAnEndpointClearsTheEndpoint() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.editCliJob("c1")
+
+        vm.setModel(ModelOption(id = "gpt-5.1", provider = "openrouter"))
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        // The scheduler calls a job's base_url whatever its provider, so the old endpoint mustn't stay behind.
+        assertEquals("""{"updates":{"model":"gpt-5.1","provider":"openrouter","base_url":""}}""", updatedBody)
+    }
+
+    @Test
+    fun clearingAJobWithAnEndpointClearsTheEndpointToo() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.editCliJob("c1")
+        assertEquals("http://lab:8000/v1", vm.state.value.editor?.baseUrl)
+
+        vm.clearModel()
+        assertTrue(vm.editorChanged())
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        assertEquals("""{"updates":{"model":"","provider":"","base_url":""}}""", updatedBody)
+    }
+
+    @Test
+    fun aJobPinnedToAProviderAloneShowsItAndCanBeCleared() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.editCliJob("c2")
+
+        // Its runs go to that provider, so the form mustn't say it's on the profile default.
+        assertNull(vm.state.value.editor?.model)
+        assertEquals("anthropic", vm.state.value.editor?.provider)
+        assertFalse(vm.editorChanged())
+
+        vm.clearModel()
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        assertEquals("""{"updates":{"model":"","provider":""}}""", updatedBody)
+    }
+
+    @Test
+    fun anUntouchedProviderOnlyJobSendsNothingForIt() = runTest(dispatcher) {
+        val vm = viewModel()
+        vm.editCliJob("c2")
+
+        vm.name.setTextAndPlaceCursorAtEnd("Renamed")
+        vm.saveJob()
+        vm.state.first { it.editor == null }
+
+        assertEquals("""{"updates":{"name":"Renamed"}}""", updatedBody)
+    }
+
+    @Test
+    fun thePickerMarksNothingForAJobOnTheDefault() {
+        // The catalog's current model is the chat default; cron runs can use cron.model instead.
+        val catalog = ModelCatalog(
+            providers = listOf(ModelProvider(slug = "anthropic", name = "Anthropic", models = listOf(ModelOption(id = "claude-x", provider = "anthropic")))),
+            currentModel = "claude-x",
+            currentProvider = "anthropic",
+        )
+        val picker = ModelPickerState(catalog = catalog).forJob()
+
+        assertNull(ModelSelection.of(ChatState(model = null, provider = null), picker.catalog).option)
+        // A job's own model is still marked.
+        assertEquals("claude-x", ModelSelection.of(ChatState(model = "claude-x", provider = "anthropic"), picker.catalog).option?.id)
     }
 }

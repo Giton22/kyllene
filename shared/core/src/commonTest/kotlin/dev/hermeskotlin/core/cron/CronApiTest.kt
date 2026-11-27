@@ -155,6 +155,14 @@ class CronApiTest {
     }
 
     @Test
+    fun aJobsEndpointIsRead() {
+        val job = HermesJson.decodeFromString<CronJob>(
+            """{"id":"b3","prompt":"Brief me","model":"m1","provider":"custom:lab","base_url":"http://lab:8000/v1","schedule":{"kind":"cron","expr":"0 9 * * *"}}""",
+        )
+        assertEquals("http://lab:8000/v1", job.baseUrl)
+    }
+
+    @Test
     fun updateSendsOnlyTheChangesAndSurfacesABadSchedule() = runTest {
         var body: String? = null
         val api = CronApi(createHttpClient(MockEngine { request ->

@@ -303,8 +303,8 @@
     <string name="sessions_preset_once">Une fois, dans 1 h</string>
     <string name="sessions_routine_name_example">Briefing du matin</string>
     <string name="sessions_job_model">Modèle</string>
-    <string name="sessions_job_model_default">Celui du profil par défaut</string>
-    <string name="sessions_job_model_clear">Utiliser celui du profil par défaut</string>
+    <string name="sessions_job_model_default">Modèle par défaut du profil</string>
+    <string name="sessions_job_model_clear">Utiliser le modèle par défaut du profil</string>
     <string name="sessions_job_model_hint">Les exécutions utilisent le modèle par défaut du profil, sauf si vous en choisissez un pour cette tâche.</string>
     <string name="sessions_job_model_note">Seules les exécutions de cette tâche l’utilisent. Le modèle par défaut du profil ne change pas.</string>
     <string name="sessions_deliver_to">Envoyer vers</string>
