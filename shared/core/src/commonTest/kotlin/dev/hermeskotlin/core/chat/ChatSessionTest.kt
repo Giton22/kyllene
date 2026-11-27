@@ -609,6 +609,158 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aRefusedLiveAttachRetriesOnlyWhenTheStatusChanges() = runTest {
+        var resumes = 0
+        var liveStatus = "working"
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" ->
+                        if (resumes++ < 2) call.error(4090, "taken", "SESSION_NOT_OWNED")
+                        else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
+                    call.method == "session.active_list" ->
+                        """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"$liveStatus"}]}"""
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        // The connection's attach and the live list's are both refused; the same status is then left alone.
+        chat.state.first { it.attachment is Attachment.Failed }
+        runCurrent()
+        assertEquals(2, gateway.sent("session.resume").size)
+        advanceTimeBy(30_001)
+        runCurrent()
+        assertEquals(2, gateway.sent("session.resume").size)
+
+        // The status changes (a question now holds the turn): one retry, which attaches.
+        liveStatus = "waiting"
+        advanceTimeBy(10_001)
+        runCurrent()
+        val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
+        assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
+        assertEquals(3, gateway.sent("session.resume").size)
+    }
+
+    @Test
+    fun aLiveAttachThatFailsAfterADropDoesNotWriteFailedOverDetached() = runTest {
+        var resumes = 0
+        gateway(backgroundScope, emptyMap(), reconnects = true).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" -> {
+                        resumes++
+                        if (resumes == 1) null // silent: the answer is lost, not refused
+                        else null.also {
+                            backgroundScope.launch {
+                                delay(1_000)
+                                call.socket.push(call.reply("""{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""))
+                            }
+                        }
+                    }
+                    call.method == "session.active_list" ->
+                        """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        // The connection's resume goes unanswered and times out; the live attach is waiting on its own reply.
+        advanceTimeBy(30_001)
+        runCurrent()
+        // The link drops mid-attach: the stale attach fails on the closed socket, but the connection's own
+        // path owns the state now (Detached, reconnecting), so it must not read "Couldn't open the session".
+        gateway.sockets.last().serverClose(1006, "abnormal")
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertTrue(chat.state.value.attachment !is Attachment.Failed)
+    }
+
+    @Test
+    fun aCompressedChatsRunningTurnStillRetriesByItsRuntime() = runTest {
+        var resumes = 0
+        gateway(backgroundScope, emptyMap(), reconnects = true).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" ->
+                        if (resumes++ == 0) """{"session_id":"rt1","running":false}"""
+                        else call.error(4090, "taken", "SESSION_NOT_OWNED")
+                    call.method == "session.active_list" ->
+                        """{"sessions":[{"id":"rt1","session_key":"stored-9","status":"working"}]}"""
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+        chat.state.first { it.attachment is Attachment.Attached }
+
+        // Compression moved the chat to a new stored id on the same runtime; the link drops before the
+        // reconnect learns that. Its resume by the old stored id is refused, and the live list names the
+        // same runtime under the new key: it retries there once, then leaves the status alone.
+        gateway.sockets.last().serverClose(1006, "abnormal")
+        chat.state.first { it.attachment is Attachment.Failed }
+        advanceTimeBy(10_001)
+        runCurrent()
+        assertEquals(3, gateway.sent("session.resume").size)
+        advanceTimeBy(30_001)
+        runCurrent()
+        assertEquals(3, gateway.sent("session.resume").size)
+    }
+
+    @Test
+    fun aLiveAttachLoadsTheHistoryThatCouldNotBeReadBefore() = runTest {
+        var resumes = 0
+        historyFails = true
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" ->
+                        if (resumes++ == 0) call.error(4090, "taken", "SESSION_NOT_OWNED")
+                        else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
+                    call.method == "session.active_list" ->
+                        null.also {
+                            backgroundScope.launch {
+                                delay(20_000)
+                                call.socket.push(call.reply("""{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""))
+                            }
+                        }
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        // The transcript couldn't be read and the first attach was refused; by the time the live list
+        // answers, the transcript can be read again: the live attach fetches what the chat is missing.
+        chat.state.first { it.attachment is Attachment.Failed }
+        historyFails = false
+        advanceTimeBy(20_001)
+        runCurrent()
+        val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
+        assertTrue(running.historyRead)
+        assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
+        assertEquals(2, gateway.sent("session.resume").size)
+    }
+
+    @Test
     fun aTimedNoticeGoesByItselfAndAStickyOneStays() = runTest {
         val (connection, transport) = setup(backgroundScope, mapOf("session.resume" to """{"session_id":"rt1","running":false}"""))
         val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)

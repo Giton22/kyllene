@@ -11,6 +11,7 @@ import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.rpc.RpcTimeoutException
 import dev.hermeskotlin.core.sessions.ActiveSessions
+import dev.hermeskotlin.core.sessions.LiveStatus
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.sessions.putStartInstruction
@@ -151,6 +152,12 @@ class ChatSession(
      */
     private var ownTurnsPending = 0
     private var foreignTurn = false
+
+    /** The gateway answered the last attach with an error (an [RpcException], not a lost link): a retry into the same turn would be refused the same way. */
+    private var lastAttachRefused = false
+
+    /** The live status at which the gateway last refused an attach; the live list retries once the status changes. */
+    private var refusedWhileRunning: LiveStatus? = null
 
     /** A [rewind] cut the transcript; the stored rows replace the live copy once its turn ends. */
     private var rewound = false
@@ -2567,16 +2574,33 @@ class ChatSession(
         active.live.collect { live ->
             val client = connectedClient() ?: return@collect
             val stored = _state.value.storedSessionId ?: return@collect
-            val status = live.rows[stored]?.status ?: return@collect
+            // Compressing a chat goes on in a new stored session on the same runtime (as the watcher notes):
+            // match that row too, or a compressed chat's turns would never stream in. The runtime the chat
+            // last attached to outlives the drop (the state's own goes with the attachment).
+            val row = live.rows[stored]
+                ?: live.rows.values.firstOrNull { it.runtimeId == streamMutex.withLock { seqRuntime } }
+            val status = row?.status ?: return@collect
             // Attached chats already receive the turn's events; the resume would only rebind. Not running:
             // the gateway streams a session only to attached sockets, but attaching keeps it loaded and
             // detaching would hand the session back, so idle chats attach on a send or a turn, as they always have.
-            if (!status.running || liveRuntimeId(client) != null) return@collect
+            if (liveRuntimeId(client) != null) return@collect
+            if (!status.running) {
+                // The turn ended: whatever turned an attach down may be gone.
+                refusedWhileRunning = null
+                return@collect
+            }
+            // The gateway turned an attach down (another client owns the session, the session is gone): it
+            // keeps doing so while this turn runs. Retry once the status changes, not on every poll — each
+            // attempt would flip the banner Attaching → Failed.
+            if (refusedWhileRunning == status) return@collect
+            // What was never read still isn't there; the resume replays only the turn itself.
+            if (!_state.value.historyRead && !historyMutex.isLocked) loadHistory()
             // reuse: an attach racing this one (the connection's) may have won; it is kept, not resumed again.
             // reconnected: attached before, so the resume picks up where the stream left off, as the
             // connection's attach would have.
             val reconnected = streamMutex.withLock { seqRuntime != null }
             runCatchingAttach(client, reconnected = reconnected, reuse = true)
+            if (lastAttachRefused) refusedWhileRunning = status
         }
     }
 
@@ -3084,6 +3108,7 @@ class ChatSession(
         afterGap: Boolean = false,
     ): Boolean = try {
         val runtimeId = attach(client, reconnected, reuse, afterGap)
+        lastAttachRefused = false
         scope.launch { refreshSubagents(client, runtimeId) }
         true
     } catch (e: CancellationException) {
@@ -3091,13 +3116,18 @@ class ChatSession(
     } catch (e: StaleGapResume) {
         false
     } catch (e: Exception) {
-        _state.update {
-            it.copy(
-                attachment = Attachment.Failed(e.message ?: "Couldn't open the session."),
-                // The gateway itself turned the chat down (gone with its deleted bot, say): no turn of it can be
-                // followed, so none shows as running, nor keeps "Working…" in the shade. A lost link isn't that.
-                running = it.running && e !is RpcException,
-            )
+        lastAttachRefused = e is RpcException
+        // The link dropped mid-attach: the connection's own path shows Detached and re-attaches. Writing
+        // Failed over it would say the session is broken while it is just reconnecting.
+        if (connectedClient() === client) {
+            _state.update {
+                it.copy(
+                    attachment = Attachment.Failed(e.message ?: "Couldn't open the session."),
+                    // The gateway itself turned the chat down (gone with its deleted bot, say): no turn of it can be
+                    // followed, so none shows as running, nor keeps "Working…" in the shade. A lost link isn't that.
+                    running = it.running && e !is RpcException,
+                )
+            }
         }
         false
     }
