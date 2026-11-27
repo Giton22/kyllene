@@ -1510,7 +1510,7 @@ internal fun MainHeader(
         }
         // Search looks through chats; the bot roster is short enough to read. The header keeps its height
         // without the pill, so switching sides doesn't move the switch under the finger.
-        if (onSearch != null) SearchPill(onSearch) else Spacer(Modifier.height(maxOf(MinTouchTarget, SEARCH_PILL_HEIGHT)))
+        if (onSearch != null) SearchPill(onSearch) else Spacer(Modifier.height(searchRowHeight()))
     }
 }
 
@@ -1536,6 +1536,14 @@ private val PROFILE_NAME_MAX_WIDTH = 120.dp
 /** How tall the search pill is drawn; the touch target around it can be taller. */
 private val SEARCH_PILL_HEIGHT = 40.dp
 
+/**
+ * The search row: the touch target, and never less than the pill with 4dp over and under it, as a phone's 48dp
+ * gives. The desktop's 36dp target is shorter than the pill, which left what follows (the Chats / Bots switch,
+ * the support card) touching it.
+ */
+@Composable
+private fun searchRowHeight() = maxOf(MinTouchTarget, SEARCH_PILL_HEIGHT + 8.dp)
+
 /** A pill that opens search, in a full-height touch target. */
 @Composable
 private fun SearchPill(onClick: () -> Unit) {
@@ -1544,7 +1552,7 @@ private fun SearchPill(onClick: () -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = MinTouchTarget)
+            .heightIn(min = searchRowHeight())
             .padding(horizontal = 14.dp)
             .handCursor()
             .clickable(interaction, indication = null, role = Role.Button, onClick = onClick),
