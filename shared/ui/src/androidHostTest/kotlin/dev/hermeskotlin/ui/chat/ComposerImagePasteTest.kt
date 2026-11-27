@@ -26,6 +26,7 @@ import dev.hermeskotlin.core.chat.ChatHost
 import dev.hermeskotlin.core.chat.DraftStore
 import dev.hermeskotlin.core.chat.LastChatStore
 import dev.hermeskotlin.core.connection.GatewayConnection
+import dev.hermeskotlin.core.gateway.GatewayRepository
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.journey.JourneyApi
 import dev.hermeskotlin.core.media.MediaApi
@@ -59,6 +60,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -97,6 +99,7 @@ class ComposerImagePasteTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val gateway = SavedGateway("https://fixture.example")
     private val socket = FixtureSocket()
+    private val gateways = GatewayRepository(InMemoryKeyValueStore())
     private lateinit var viewModel: ChatViewModel
 
     @get:Rule
@@ -150,6 +153,21 @@ class ComposerImagePasteTest {
         assertEquals("copied.jpg", viewModel.attachments.value.single().name)
     }
 
+    @Test
+    fun renamingTheGatewayUpdatesTheOpenChatWithoutLosingItsDraft() {
+        runBlocking { gateways.save(gateway) }
+        val input = showChat()
+        composeRule.runOnIdle { assertTrue(input.commitText("Keep this draft", 1)) }
+        composeRule.onNodeWithText("Hermes · fixture.example").assertExists()
+
+        runBlocking { gateways.rename(gateway.url, "Homelab") }
+
+        composeRule.onNodeWithText("Hermes · Homelab").assertExists()
+        composeRule.onNodeWithText("Paste test").assertExists()
+        composeRule.runOnIdle { assertEquals("Keep this draft", viewModel.composer.text.toString()) }
+        assertEquals(1, socket.methods.count { it == "session.resume" })
+    }
+
     private fun showChat(): InputConnection {
         val store = InMemoryKeyValueStore()
         val cookies = PersistentCookiesStorage(store)
@@ -166,6 +184,7 @@ class ComposerImagePasteTest {
         startKoin {
             modules(module {
                 single { settings }
+                single { gateways }
                 single { ProjectsApi(connection) }
                 single { WallpaperStore(InMemoryBlobFile(), scope) }
             })
