@@ -29,6 +29,7 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.X
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
+import dev.hermeskotlin.core.chat.AgentScreen
 import dev.hermeskotlin.core.auth.WebCookieJar
 import dev.hermeskotlin.core.auth.WebSession
 import dev.hermeskotlin.core.gateway.GatewayRepository
@@ -51,6 +52,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonElement
 import org.cef.CefApp
 import org.cef.CefClient
 import org.cef.browser.CefBrowser
@@ -89,6 +91,7 @@ import java.util.Vector
 
 /** Widgets and plugin pages in the Chromium the JetBrains Runtime carries; see [Jcef]. */
 internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: GatewayRepository) : DesktopWeb {
+    private val cardDrafts = AgentCardDrafts()
 
     private suspend fun app(): CefApp? {
         val saved = gateways.all().gateways.map { it.url }
@@ -132,6 +135,19 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
         }
         BrowserSurface(page, modifier) { down -> keepsWheel(page.title, down) }
     }
+
+    @Composable
+    override fun AgentCard(
+        draftKey: String,
+        revision: String,
+        screen: AgentScreen,
+        takesTaps: Boolean,
+        validateOnly: Boolean,
+        modifier: Modifier,
+        onRendered: (Set<String>) -> Unit,
+        onAnswer: (String, JsonElement) -> Unit,
+        onFailure: () -> Unit,
+    ) = JcefAgentCard({ app() }, cardDrafts, draftKey, revision, screen, takesTaps, validateOnly, modifier, onRendered, onAnswer, onFailure)
 
     @Composable
     override fun PluginPage(url: String, gateway: String, title: String, onClose: () -> Unit) {
@@ -375,13 +391,18 @@ private const val RENEW_RETRY_MS = 60_000L
 private const val RECOVERY_WINDOW_MS = 30_000L
 
 /**
- * A widget's client: the only thing it loads is [document] at [WIDGET_URL]; anything else, from the network to
+ * An inline page's client: the only thing it loads is [document] at [pageUrl]; anything else, from the network to
  * another page, a new window, the camera or a file, is refused. Inline data (pictures and the font) still loads.
  */
-private fun CefClient.lockDown(document: () -> String, onFailure: () -> Unit) {
+internal fun CefClient.lockDown(
+    document: () -> String,
+    onFailure: () -> Unit,
+    pageUrl: String = WIDGET_URL,
+    onReady: () -> Unit = {},
+) {
     addRequestHandler(object : CefRequestHandlerAdapter() {
         override fun onBeforeBrowse(browser: CefBrowser, frame: CefFrame, request: CefRequest, userGesture: Boolean, isRedirect: Boolean): Boolean =
-            !(request.url == WIDGET_URL || request.url.startsWith("about:"))
+            !(request.url == pageUrl || request.url.startsWith("about:"))
 
         override fun getResourceRequestHandler(
             browser: CefBrowser, frame: CefFrame, request: CefRequest, isNavigation: Boolean, isDownload: Boolean,
@@ -389,11 +410,11 @@ private fun CefClient.lockDown(document: () -> String, onFailure: () -> Unit) {
         ): CefResourceRequestHandler = object : CefResourceRequestHandlerAdapter() {
             override fun onBeforeResourceLoad(browser: CefBrowser, frame: CefFrame, request: CefRequest): Boolean {
                 val url = request.url
-                return !(url == WIDGET_URL || url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:"))
+                return !(url == pageUrl || url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("about:"))
             }
 
             override fun getResourceHandler(browser: CefBrowser, frame: CefFrame, request: CefRequest): CefResourceHandler? =
-                if (request.url == WIDGET_URL) TextResource(document()) else null
+                if (request.url == pageUrl) TextResource(document()) else null
         }
 
         override fun onRenderProcessTerminated(browser: CefBrowser, status: CefRequestHandler.TerminationStatus, errorCode: Int, errorString: String?) {
@@ -401,8 +422,12 @@ private fun CefClient.lockDown(document: () -> String, onFailure: () -> Unit) {
         }
     })
     addLoadHandler(object : CefLoadHandlerAdapter() {
+        override fun onLoadEnd(browser: CefBrowser, frame: CefFrame, httpStatusCode: Int) {
+            if (frame.isMain && frame.url == pageUrl) onReady()
+        }
+
         override fun onLoadError(browser: CefBrowser, frame: CefFrame, errorCode: CefLoadHandler.ErrorCode, errorText: String?, failedUrl: String?) {
-            if (frame.isMain && failedUrl == WIDGET_URL && errorCode != CefLoadHandler.ErrorCode.ERR_ABORTED) onFailure()
+            if (frame.isMain && failedUrl == pageUrl && errorCode != CefLoadHandler.ErrorCode.ERR_ABORTED) onFailure()
         }
     })
     addLifeSpanHandler(object : CefLifeSpanHandlerAdapter() {

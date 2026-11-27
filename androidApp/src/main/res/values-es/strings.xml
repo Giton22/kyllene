@@ -42,6 +42,8 @@
     <string name="notification_read_aloud_stop">Detener</string>
     <string name="notification_read_aloud_pause">Pausar</string>
     <string name="notification_read_aloud_resume">Reanudar</string>
+    <string name="notification_sign_in_title">Terminando de iniciar sesión…</string>
+    <string name="notification_sign_in_text">Esperando a que el navegador te traiga de vuelta</string>
 
     <string name="notification_approve_title">¿Permitir este comando?</string>
     <string name="notification_question_title">Hermes tiene una pregunta</string>

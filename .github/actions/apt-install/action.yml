@@ -1,0 +1,17 @@
+name: Install apt packages
+description: >
+  apt-get update and install from Ubuntu's own sources only. The runner image adds third-party sources we don't
+  install from, such as packages.microsoft.com; when one of them is down, apt-get update would fail the job. Those
+  sources stay off for the rest of the job.
+inputs:
+  packages:
+    description: "What follows `apt-get install -y`: package names and any options, separated by spaces."
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      # Unquoted on purpose: one argument per word.
+      run: 'bash "$GITHUB_ACTION_PATH/apt-install.sh" $PACKAGES'

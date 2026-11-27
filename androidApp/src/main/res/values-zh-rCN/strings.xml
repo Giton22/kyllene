@@ -42,6 +42,8 @@
     <string name="notification_read_aloud_stop">停止</string>
     <string name="notification_read_aloud_pause">暂停</string>
     <string name="notification_read_aloud_resume">继续</string>
+    <string name="notification_sign_in_title">正在完成登录…</string>
+    <string name="notification_sign_in_text">正在等待浏览器返回</string>
 
     <string name="notification_approve_title">允许此命令？</string>
     <string name="notification_question_title">Hermes 有个问题</string>

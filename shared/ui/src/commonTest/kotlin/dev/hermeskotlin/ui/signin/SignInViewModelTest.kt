@@ -6,6 +6,7 @@ import dev.hermeskotlin.core.auth.LoopbackListener
 import dev.hermeskotlin.core.auth.LoopbackReceiver
 import dev.hermeskotlin.core.auth.NativeTokens
 import dev.hermeskotlin.core.auth.PersistentCookiesStorage
+import dev.hermeskotlin.core.auth.SignInKeepAlive
 import dev.hermeskotlin.core.gateway.GatewayProbe
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.network.createHttpClient
@@ -20,6 +21,7 @@ import io.ktor.http.Url
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -64,6 +66,19 @@ class SignInViewModelTest {
         }
     }
 
+    private val restricted = MutableStateFlow(false)
+    private val keepAlive = object : SignInKeepAlive {
+        var holding = false
+        override val restricted = this@SignInViewModelTest.restricted
+        override fun hold(): Boolean {
+            holding = true
+            return true
+        }
+        override fun release() {
+            holding = false
+        }
+    }
+
     private fun viewModel(): SignInViewModel {
         val json = headersOf(HttpHeaders.ContentType, "application/json")
         val config = MockEngineConfig()
@@ -84,7 +99,7 @@ class SignInViewModelTest {
         }
         val client = createHttpClient(MockEngine(config), cookies, bearer = tokens)
         val auth = AuthApi(client, cookies, tokens)
-        return SignInViewModel(auth, GatewayProbe(client), BrowserSignIn(auth, loopback))
+        return SignInViewModel(auth, GatewayProbe(client), BrowserSignIn(auth, loopback, keepAlive))
     }
 
     private fun answer() = callback.complete(mapOf("code" to "C", "state" to opened!!.parameters["state"]!!))
@@ -144,5 +159,43 @@ class SignInViewModelTest {
         vm.cancelBrowser()
         assertFalse(vm.state.value.signingIn)
         assertEquals(1, listenersClosed)
+    }
+
+    @Test
+    fun theAppIsHeldUpOnlyWhileTheBrowserIsWaitedFor() = runTest {
+        val vm = viewModel()
+        vm.load(sso)
+        vm.signInWithBrowser(sso) { opened = Url(it) }
+        assertTrue(keepAlive.holding)
+        answer()
+        assertFalse(keepAlive.holding)
+
+        // A new sign-in waits for a new answer.
+        callback = CompletableDeferred()
+        vm.signInWithBrowser(sso) { opened = Url(it) }
+        vm.cancelBrowser()
+        assertFalse(keepAlive.holding)
+
+        vm.signInWithBrowser(sso) { opened = Url(it) }
+        vm.load(password)
+        assertFalse(keepAlive.holding)
+    }
+
+    @Test
+    fun saysWhenBatteryRestrictionsKeepTheBrowserFromComingBack() = runTest {
+        val vm = viewModel()
+        vm.load(sso)
+        assertFalse(vm.state.value.batteryRestricted)
+        restricted.value = true
+        vm.signInWithBrowser(sso) { opened = Url(it) }
+        assertTrue(vm.state.value.batteryRestricted)
+        // Lifted in the battery settings while the sign-in still waits.
+        restricted.value = false
+        assertFalse(vm.state.value.batteryRestricted)
+        assertTrue(vm.state.value.waitingForBrowser)
+        // Another gateway's screen still knows.
+        restricted.value = true
+        vm.load(password)
+        assertTrue(vm.state.value.batteryRestricted)
     }
 }

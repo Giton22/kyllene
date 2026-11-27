@@ -126,6 +126,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import dev.hermeskotlin.core.settings.AppSettings
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.showsSidebarPage
 import dev.hermeskotlin.core.settings.sidebarMode
@@ -773,12 +776,7 @@ fun SessionsSidebar(
         }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .halo()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)),
-    ) {
+    SidebarFrame { footer ->
         if (pageKey != null && !pageInMain && !searchOpen) pageView() else Column(Modifier.fillMaxSize()) {
             when {
                 searchOpen -> SearchHeader(viewModel, focusAsks = searchFocusAsks, list = searchList, onClose = ::closeSearch, onSubmit = {
@@ -1076,7 +1074,7 @@ fun SessionsSidebar(
                 openAccount()
             },
             onAccountBounds = { accountRow[0] = it },
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).then(footer),
         )
     }
 
@@ -1220,12 +1218,7 @@ internal fun SessionsSidebarSample(
     // Folds for real in the gallery, kept only while the preview shows.
     var pinnedCollapsed by remember { mutableStateOf(false) }
     var threadsCollapsed by remember { mutableStateOf(false) }
-    Box(
-        Modifier
-            .fillMaxSize()
-            .halo()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)),
-    ) {
+    SidebarFrame { footer ->
         Column(Modifier.fillMaxSize()) {
             MainHeader(
                 gatewayLabel = "homelab",
@@ -1294,7 +1287,7 @@ internal fun SessionsSidebarSample(
             onDismissMessage = {},
             onNewChat = {},
             onAccount = {},
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).then(footer),
         )
     }
 }
@@ -1308,12 +1301,7 @@ internal fun BotsSidebarSample(
     needsYou: List<NeedsYou> = emptyList(),
     rooms: List<Room> = emptyList(),
 ) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .halo()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)),
-    ) {
+    SidebarFrame { footer ->
         Column(Modifier.fillMaxSize()) {
             MainHeader(gatewayLabel = "homelab", connection = null, onAccount = {}, onSettings = {}, onSearch = null)
             val modeNames = sidebarModeNames()
@@ -1347,7 +1335,7 @@ internal fun BotsSidebarSample(
             onDismissMessage = {},
             onNewChat = {},
             onAccount = {},
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier.align(Alignment.BottomCenter).then(footer),
         )
     }
 }
@@ -1899,6 +1887,30 @@ private fun NavTile(link: NavLink, modifier: Modifier = Modifier) {
 }
 
 /**
+ * How much of a sidebar list's end the floating footer covers: room for its last rows to scroll out from under it,
+ * and where its scrollbar stops. Measured on the desktop, whose account row is shorter than the 96dp kept for the
+ * phone's New chat pill; with that fixed room counted as content, a list that fits showed a scrollbar (#556).
+ */
+internal val LocalFooterInset = compositionLocalOf { 96.dp }
+
+/** The sidebar's ground, under the system bars' insets; [content] puts the modifier it's given on the footer. */
+@Composable
+private fun SidebarFrame(content: @Composable BoxScope.(footer: Modifier) -> Unit) {
+    val density = LocalDensity.current
+    var measured by remember { mutableStateOf<Dp?>(null) }
+    CompositionLocalProvider(LocalFooterInset provides (measured.takeIf { isDesktop } ?: 96.dp)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .halo()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical + WindowInsetsSides.Start)),
+        ) {
+            content(Modifier.onSizeChanged { measured = with(density) { it.height.toDp() } })
+        }
+    }
+}
+
+/**
  * Footer: the full-width "New chat" pill and the account avatar, the list fading out above them. A failed
  * row action shows its message just above.
  */
@@ -2307,13 +2319,13 @@ private fun SessionList(
             state = listState,
             modifier = Modifier.fillMaxSize().arrowFocus().then(if (isDesktop) Modifier.onKeyEvent(jump) else Modifier),
             // Room to scroll the last rows out from under the floating footer.
-            contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = LocalFooterInset.current),
             content = {
                 positions.clear()
                 PositionsScope(this, positions).rows()
             },
         )
-        VerticalScrollbar(listState, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = 96.dp, end = 1.dp))
+        VerticalScrollbar(listState, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = LocalFooterInset.current, end = 1.dp))
     }
 }
 

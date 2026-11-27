@@ -63,9 +63,12 @@ jobs:
       # action installs it only for reviews of non-write users, so it's installed here the same way.
       - name: Install the command sandbox
         if: steps.token.outputs.set == 'true'
+        uses: ./.github/actions/apt-install
+        with:
+          packages: --no-install-recommends bubblewrap socat
+      - name: Let the sandbox use user namespaces
+        if: steps.token.outputs.set == 'true'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bubblewrap socat
           # Ubuntu 24.04 and later keep unprivileged user namespaces, which bubblewrap needs, behind AppArmor.
           if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

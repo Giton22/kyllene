@@ -1,8 +1,6 @@
 package dev.hermeskotlin.desktop
 
 import dev.hermeskotlin.core.inbox.InboxApi
-import dev.hermeskotlin.core.phone.PhoneTool
-import dev.hermeskotlin.core.phone.PhoneToolException
 import dev.hermeskotlin.core.phone.PhoneToolRunner
 import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.push.PushGateway
@@ -15,8 +13,6 @@ import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.desktop.web.Jcef
 import dev.hermeskotlin.desktop.web.JcefWeb
 import dev.hermeskotlin.ui.DesktopWeb
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import org.koin.dsl.module
 import java.net.InetAddress
 
@@ -33,8 +29,9 @@ val desktopModule = module {
     single<PushKeys> { linuxPushKeys(get()) ?: NoPushKeys }
     single { PushSetup(get(), get(), get(), get(), get(), get(), available = linuxPushInbox(get()) != null, deviceName = ::computerName) }
     single { InboxApi(get(), get()) }
-    single<PhoneToolRunner> { NoPhoneTools }
-    single { PhoneToolsBridge(get(), get(), get(), get(), get(), get(), get(), get(), deviceName = ::computerName) }
+    single { DesktopScreenTool(get(), get(), get()) }
+    single<PhoneToolRunner> { get<DesktopScreenTool>() }
+    single { PhoneToolsBridge(get(), get(), get(), get(), get(), get(), get(), get(), deviceName = ::computerName, desktopScreensOnly = true) }
     // Widgets and plugin pages in the app, where the runtime carries Chromium (the installer's does).
     if (Jcef.available) single<DesktopWeb> { JcefWeb(get(), get()) }
 }
@@ -61,10 +58,4 @@ private object NoPushKeys : PushKeys {
     override fun forgetRetired(gatewayUrl: String, deviceId: String) = Unit
 
     override fun pinnedGatewayUrl(): String? = null
-}
-
-/** The phone tools are the phone's. */
-private object NoPhoneTools : PhoneToolRunner {
-    override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement =
-        throw PhoneToolException("${tool.title} needs Kyllene on an Android phone.")
 }

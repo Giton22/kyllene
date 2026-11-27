@@ -12,6 +12,7 @@ import io.ktor.http.Url
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.headersOf
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -41,18 +42,54 @@ class BrowserSignInTest {
         }
     }
 
-    private fun signIn(tokenBody: (String) -> Unit = {}, answer: (Url) -> Map<String, String>): Pair<BrowserSignIn, FakeLoopback> {
+    /** What happened, in order: the app held up, the browser opened, the app let go. */
+    private val events = mutableListOf<String>()
+
+    private inner class FakeKeepAlive(private val grants: Boolean = true) : SignInKeepAlive {
+        var held = false
+        override val restricted = MutableStateFlow(false)
+        override fun hold(): Boolean {
+            events += "hold"
+            held = grants
+            return grants
+        }
+        override fun release() {
+            events += "release"
+            held = false
+        }
+    }
+
+    private val keepAlive = FakeKeepAlive()
+
+    private fun signIn(
+        tokenBody: (String) -> Unit = {},
+        tokenStatus: HttpStatusCode = HttpStatusCode.OK,
+        keepAlive: SignInKeepAlive = this.keepAlive,
+        answer: (Url) -> Map<String, String>,
+    ): Pair<BrowserSignIn, FakeLoopback> {
         val engine = MockEngine { request ->
             assertEquals("/hermes/auth/native/token", request.url.encodedPath)
             tokenBody((request.body as OutgoingContent.ByteArrayContent).bytes().decodeToString())
-            respond(
-                """{"access_token":"AT1","refresh_token":"RT1","token_type":"Bearer","expires_at":1900000000,"provider":"self-hosted","user_id":"u1"}""",
-                HttpStatusCode.OK, json,
-            )
+            if (tokenStatus != HttpStatusCode.OK) {
+                respond("""{"detail":"Invalid or expired authorization code."}""", tokenStatus, json)
+            } else {
+                respond(
+                    """{"access_token":"AT1","refresh_token":"RT1","token_type":"Bearer","expires_at":1900000000,"provider":"self-hosted","user_id":"u1"}""",
+                    HttpStatusCode.OK, json,
+                )
+            }
         }
         val auth = AuthApi(createHttpClient(engine, cookies, bearer = tokens), cookies, tokens)
         val loopback = FakeLoopback(answer)
-        return BrowserSignIn(auth, loopback) to loopback
+        return BrowserSignIn(auth, loopback, keepAlive) to loopback
+    }
+
+    private fun waitsForever(closed: () -> Unit = {}) = object : LoopbackReceiver {
+        override suspend fun start() = object : LoopbackListener {
+            override val redirectUri = "http://127.0.0.1:1/callback"
+            override suspend fun awaitCallback(): Map<String, String> = CompletableDeferred<Map<String, String>>().await()
+            override fun close() = closed()
+        }
     }
 
     @Test
@@ -146,6 +183,76 @@ class BrowserSignInTest {
         job.cancel()
         job.join()
         assertTrue(loopback.closed)
+    }
+
+    @Test
+    fun holdsTheAppUpFromBeforeTheBrowserOpensUntilTheCodeIsRedeemed() = runTest {
+        var heldWhileWaiting = false
+        val (browser, loopback) = signIn { opened ->
+            heldWhileWaiting = keepAlive.held
+            mapOf("code" to "C", "state" to opened.parameters["state"]!!)
+        }
+        assertIs<ApiResult.Success<Unit>>(browser.signIn(url, null) { events += "open"; loopback.opened = Url(it) })
+        assertTrue(heldWhileWaiting)
+        assertEquals(listOf("hold", "open", "release"), events)
+    }
+
+    @Test
+    fun letsGoWhenTheGatewayTurnsTheCodeDown() = runTest {
+        val (browser, loopback) = signIn(tokenStatus = HttpStatusCode.BadRequest) { mapOf("code" to "C", "state" to it.parameters["state"]!!) }
+        assertIs<ApiResult.Failed>(browser.signIn(url, null) { loopback.opened = Url(it) })
+        assertEquals(listOf("hold", "release"), events)
+        assertNull(tokens.get(url))
+    }
+
+    @Test
+    fun letsGoWhenTheBrowserNeverComesBack() = runTest {
+        val browser = BrowserSignIn(AuthApi(createHttpClient(MockEngine { error("no calls") }), cookies, tokens), waitsForever(), keepAlive)
+        assertIs<ApiResult.Failed>(browser.signIn(url, null) {})
+        assertEquals(listOf("hold", "release"), events)
+    }
+
+    @Test
+    fun letsGoWhenTheSignInIsCancelled() = runTest {
+        val browser = BrowserSignIn(AuthApi(createHttpClient(MockEngine { error("no calls") }), cookies, tokens), waitsForever(), keepAlive)
+        val job = backgroundScope.launch { browser.signIn(url, null) { events += "open" } }
+        testScheduler.runCurrent()
+        assertTrue(keepAlive.held)
+        job.cancel()
+        job.join()
+        assertEquals(listOf("hold", "open", "release"), events)
+    }
+
+    @Test
+    fun aCancelledSignInLettingGoLateKeepsTheNextOneHeld() = runTest {
+        val browser = BrowserSignIn(AuthApi(createHttpClient(MockEngine { error("no calls") }), cookies, tokens), waitsForever(), keepAlive)
+        val first = backgroundScope.launch { browser.signIn(url, null) { events += "open" } }
+        testScheduler.runCurrent()
+        // Tapped again before the cancelled one has stopped listening.
+        val second = backgroundScope.launch { browser.signIn(url, null) { events += "open" } }
+        testScheduler.runCurrent()
+        first.cancel()
+        first.join()
+        assertTrue(keepAlive.held)
+        assertEquals(listOf("hold", "open", "open"), events)
+        second.cancel()
+        second.join()
+        assertEquals(listOf("hold", "open", "open", "release"), events)
+    }
+
+    @Test
+    fun holdsNothingWhenItCantListen() = runTest {
+        val loopback = LoopbackReceiver { throw IllegalStateException("no port") }
+        val browser = BrowserSignIn(AuthApi(createHttpClient(MockEngine { error("no calls") }), cookies, tokens), loopback, keepAlive)
+        assertIs<ApiResult.Failed>(browser.signIn(url, null) { events += "open" })
+        assertEquals(emptyList(), events)
+    }
+
+    @Test
+    fun aRefusedHoldStillSignsIn() = runTest {
+        val (browser, loopback) = signIn(keepAlive = FakeKeepAlive(grants = false)) { mapOf("code" to "C", "state" to it.parameters["state"]!!) }
+        assertIs<ApiResult.Success<Unit>>(browser.signIn(url, null) { events += "open"; loopback.opened = Url(it) })
+        assertEquals(listOf("hold", "open", "release"), events)
     }
 
     @Test

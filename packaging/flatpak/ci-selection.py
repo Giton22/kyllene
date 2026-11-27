@@ -10,7 +10,7 @@ def package_required(event, paths):
         return True
     if event != 'pull_request':
         raise ValueError('Unsupported CI event: ' + event)
-    return any(path.startswith(('packaging/flatpak/', 'gradle/', 'desktopApp/'))
+    return any(path.startswith(('packaging/flatpak/', 'gradle/', 'desktopApp/', '.github/actions/apt-install/'))
                or path.endswith('.gradle.kts')
                or path in ('gradle.properties', 'gradlew', 'gradlew.bat',
                            '.github/workflows/linux.yml', '.github/workflows/linux-checks.yml',

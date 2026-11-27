@@ -137,6 +137,7 @@ import dev.hermeskotlin.ui.sessions.RowMenuItem
 import dev.hermeskotlin.ui.sessions.onSecondaryPress
 import dev.hermeskotlin.ui.sessions.ListSpinner
 import dev.hermeskotlin.ui.sessions.MessageBanner
+import dev.hermeskotlin.ui.sessions.LocalFooterInset
 
 /** What a roster card's long-press menu can ask for. */
 interface BotActions {
@@ -265,7 +266,7 @@ fun BotsRoster(
             modifier = Modifier.fillMaxSize(),
             state = list,
             // Room to scroll the last cards out from under the floating footer.
-            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = LocalFooterInset.current),
         ) {
             if (top != null) item(key = "top") { top() }
             // Row keys carry a ':', which no profile name has, so a bot named like a key can't collide.
@@ -363,9 +364,9 @@ fun BotsRoster(
                 }
             }
         }
-        VerticalScrollbar(list, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = 96.dp, end = 1.dp))
+        VerticalScrollbar(list, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = LocalFooterInset.current, end = 1.dp))
         state.notice?.let { message ->
-            MessageBanner(message.text(), onDismiss = onDismissNotice, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            MessageBanner(message.text(), onDismiss = onDismissNotice, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = LocalFooterInset.current - 8.dp))
         }
     }
     StartOverDialog(startOver, onDismiss = { startOver = null }, onConfirm = actions::startFresh)

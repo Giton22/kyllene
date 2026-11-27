@@ -64,4 +64,7 @@
     <string name="startup_no_answer">Le bureau n’a pas répondu à la demande de démarrage automatique.</string>
     <string name="startup_enable_reason">Lancer Kyllene dans la zone de notification à la connexion.</string>
     <string name="startup_disable_reason">Ne plus lancer Kyllene automatiquement à la connexion.</string>
+    <string name="agent_card_answer_too_large">La réponse est trop volumineuse. Raccourcissez le formulaire et renvoyez-le.</string>
+    <string name="agent_card_draft_too_large">Ce brouillon est trop volumineux pour être conservé en quittant la carte.</string>
+    <string name="agent_card_draft_lost">Ce brouillon était trop volumineux pour être restauré. La carte affiche les valeurs d’origine.</string>
 </resources>

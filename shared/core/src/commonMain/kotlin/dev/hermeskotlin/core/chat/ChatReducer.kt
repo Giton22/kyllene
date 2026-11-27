@@ -15,6 +15,29 @@ import kotlinx.serialization.json.contentOrNull
  */
 fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
     val payload = event.payload as? JsonObject
+    return retireCompactionDone(event.type, payload).fold(event, payload, now)
+}
+
+/**
+ * `compacted` ("✓ Context compaction complete — continuing turn...") is a one-off edge: the gateway sends no clear after
+ * it, and its own clients drop it once the turn moves on. So the next sign of the turn going on, or the next turn,
+ * retires it. Any other kind stays until it is replaced or the turn ends.
+ */
+private fun ChatState.retireCompactionDone(type: String, payload: JsonObject?): ChatState {
+    if (statusKind != COMPACTED_KIND) return this
+    val movesOn = when (type) {
+        "thinking.delta" -> !payload.string("text").isNullOrBlank()
+        "reasoning.delta", "reasoning.available", "message.delta", "message.interim", "tool.start", "tool.generating", "message.start" -> true
+        else -> false
+    }
+    return if (movesOn) withoutCompactionDone() else this
+}
+
+/** Drops a `compacted` line, for when the turn is known to have gone on past it (a resume that can't replay what was missed). */
+internal fun ChatState.withoutCompactionDone(): ChatState =
+    if (statusKind == COMPACTED_KIND) copy(status = null, statusKind = null) else this
+
+private fun ChatState.fold(event: GatewayEvent, payload: JsonObject?, now: Double?): ChatState {
     return when (event.type) {
         // Read from the released state: a missed turn's end it found no longer counts as running.
         "message.start" -> releaseQueued(event.admissionId).let { before ->
@@ -47,7 +70,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
         // Not reasoning: each frame is the TUI's spinner rewritten ("(>∀<☆)☆ musing..."), so the latest one
         // labels the live activity. An explained provider wait goes to the status line, like Desktop.
         "thinking.delta" -> payload.string("text")?.trim()?.takeIf { it.isNotEmpty() }?.let { frame ->
-            if (PROVIDER_WAIT.containsMatchIn(frame)) copy(status = frame) else copy(thinkingFrame = frame)
+            if (PROVIDER_WAIT.containsMatchIn(frame)) copy(status = frame, statusKind = null) else copy(thinkingFrame = frame)
         } ?: this
         "tool.start" -> {
             val id = payload.string("tool_id") ?: return this
@@ -112,7 +135,16 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
         "message.complete" -> complete(payload, now).withPromptRow(payload?.get("persisted_turn") as? JsonObject).withoutAgentNotices()
         "notification.show" -> showNotice(payload)
         "notification.clear" -> withoutNotice(payload.string("key"))
-        "status.update" -> copy(status = payload.string("text")?.takeIf { it.isNotBlank() })
+        "status.update" -> {
+            val kind = payload.string("kind")
+            val text = payload.string("text")?.takeIf { it.isNotBlank() }
+            // "ready" is the gateway's clear (a manual /compress ends with it), not a line to show.
+            if (kind == READY_KIND || (kind == "status" && text?.trim() == READY_KIND)) {
+                copy(status = null, statusKind = null)
+            } else {
+                copy(status = text, statusKind = kind.takeIf { text != null })
+            }
+        }
         // A turn cancelled while the agent was still being built ends with only an error, and no clear.
         "error" -> copy(error = payload.string("message")).withoutAgentNotices()
         "session.title" -> copy(title = payload.string("title") ?: title)
@@ -306,6 +338,7 @@ private fun ChatState.withPromptRow(persisted: JsonObject?): ChatState {
 private fun ChatState.endTurn(messages: List<ChatMessage>, finalUsage: SessionUsage?) = copy(
     running = false,
     status = null,
+    statusKind = null,
     thinkingFrame = null,
     messages = messages,
     correctedReplyKey = null,
@@ -761,3 +794,7 @@ fun messageTarget(arguments: kotlinx.serialization.json.JsonElement?): String? {
     } ?: return null
     return (obj["target"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.trim()?.removePrefix("@")?.substringBefore('@')?.takeIf { it.isNotEmpty() }
 }
+
+/** `status.update` kinds: auto-compaction's terminal edge, and the clear a manual `/compress` ends with. */
+private const val COMPACTED_KIND = "compacted"
+private const val READY_KIND = "ready"

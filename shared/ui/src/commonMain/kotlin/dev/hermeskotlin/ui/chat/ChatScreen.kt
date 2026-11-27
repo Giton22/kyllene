@@ -25,6 +25,7 @@ import dev.hermeskotlin.ui.windowControlsHeight
 import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
+import dev.hermeskotlin.core.phone.desktopAgentScreenChat
 import dev.hermeskotlin.core.bots.MentionQuery
 import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.core.chat.PathRefKind
@@ -600,7 +601,10 @@ fun ChatScreen(
         attachments.size < OutgoingAttachment.MAX_COUNT
     ) attachmentPicker.imagePasteModifier { read -> viewModel.pasteImages(target, read) } else Modifier
     Box(Modifier.fillMaxSize().onSizeChanged { paneWidth = with(density) { it.width.toDp() } }) {
-    CompositionLocalProvider(LocalModelPillBounds provides modelPillBounds) {
+    CompositionLocalProvider(
+        LocalModelPillBounds provides modelPillBounds,
+        LocalAgentScreens provides rememberAgentScreenContext(),
+    ) {
     ChatView(
         // A bot's chat is titled "Bot Chat" on the gateway; the bot's name says more.
         // A stored chat opened without its title (a branch, until its resume names it) isn't a new one.
@@ -611,6 +615,9 @@ fun ChatScreen(
         },
         state = if (readPosition == null || !ownsTranscript) state.copy(historyLoaded = false) else state,
         conversationKey = conversationKey,
+        agentScreenChat = state.storedSessionId?.let {
+            if (isDesktop) desktopAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it) else it
+        },
         savedViewport = { viewModel.viewportFor(conversationKey, target) },
         onSaveViewport = viewModel::saveViewport,
         picker = picker,
@@ -780,6 +787,7 @@ internal fun ChatView(
     state: ChatState,
     /** Isolates the transcript's scroll state across gateways, profiles and chats. */
     conversationKey: Any? = null,
+    agentScreenChat: String? = state.storedSessionId,
     /** Where the reader was in this chat's list when it last left the screen, read as the list comes back. */
     savedViewport: () -> TranscriptViewport? = { null },
     onSaveViewport: ((TranscriptViewport) -> Unit)? = null,
@@ -1126,13 +1134,18 @@ internal fun ChatView(
                             LocalFileLinks provides { link -> GatewayFile.fromLink(link)?.let(onOpenFile) },
                             LocalNotice provides onNotice,
                             LocalSubagents provides SubagentContext(state.subagents, actions::stopSubagent),
-                            LocalAgentScreenChat provides state.storedSessionId,
+                            LocalAgentScreenChat provides agentScreenChat,
                             LocalScreenViews provides LocalAgentScreens.current.let { screens ->
                                 // Worked out again when a tool call changes, not on every token of a reply.
                                 val calls = ScreenViews.calls(state.messages)
                                 val newest = ScreenViews.newest(state.messages)
-                                remember(calls, newest, screens, state.storedSessionId) {
-                                    ScreenViews(screenViews(calls) { screens.took(state.storedSessionId, it) }, newest)
+                                remember(calls, newest, screens, agentScreenChat) {
+                                    val views = if (isDesktop) {
+                                        screenViews(calls, canShowRunning = { screens.desktopCall(agentScreenChat, it.id) != null })
+                                    } else {
+                                        screenViews(calls, took = { screens.took(agentScreenChat, it) })
+                                    }
+                                    ScreenViews(views, newest)
                                 }
                             },
                             LocalAgentScreenSend provides actions::sendPrompt,

@@ -62,13 +62,10 @@ import dev.hermeskotlin.designsystem.components.Button
 import dev.hermeskotlin.ui.bots.StartOverDialog
 import dev.hermeskotlin.ui.bots.BotsViewModel
 import dev.hermeskotlin.ui.bots.LocalBotFaces
-import dev.hermeskotlin.core.phone.AgentScreens
-import dev.hermeskotlin.ui.chat.AgentScreenContext
 import dev.hermeskotlin.ui.chat.ChatScreen
 import dev.hermeskotlin.ui.chat.GreetingPlaces
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import dev.hermeskotlin.ui.chat.LocalAgentScreens
 import dev.hermeskotlin.ui.rooms.RoomScreen
 import dev.hermeskotlin.ui.rooms.DesktopRoomScreen
 import dev.hermeskotlin.ui.rooms.RoomsViewModel
@@ -181,20 +178,6 @@ fun App(
         settingsStore.update { it.copy(zoom = zoom) }
         true
     }
-    val agentScreens = koinInject<AgentScreens>()
-    val liveScreens by agentScreens.live.collectAsStateWithLifecycle()
-    val screensGot by agentScreens.got.collectAsStateWithLifecycle()
-    val screenContext = remember(liveScreens, screensGot) {
-        AgentScreenContext(
-            liveScreens,
-            agentScreens::shown,
-            agentScreens::answer,
-            agentScreens::fail,
-            // Only a chat Kyllene knows the id of: the phone's calls are kept by it.
-            onDrawn = { chat, screen -> if (chat != null) agentScreens.drawn(screen, chat) },
-            took = { chat, screen -> AgentScreens.took(screen, chat, screensGot) },
-        )
-    }
     ProvideAppLanguage(settings.language) { hermesTheme(palette)(schemeFor(settings, dark)) {
         val ground = Theme[colors][background]
         LaunchedEffect(ground) { onBackground(ground) }
@@ -203,7 +186,6 @@ fun App(
             LocalAppSettings provides settings,
             LocalCodeWrap provides settings.wrapCode,
             LocalGlow provides settings.glow,
-            LocalAgentScreens provides screenContext,
             LocalAppVersion provides appVersion,
             LocalUpdateOffer provides rememberUpdateOffer(releasesRepo, appVersion, settings.checkForUpdates),
             LocalSupportOffer provides rememberSupportOffer(),
@@ -213,7 +195,7 @@ fun App(
         ) {
             // The screens leave composition rather than sit under the cover, so their sheets and dialogs
             // (windows of their own) can't show over it. View models and drafts outlive this.
-            val screens = @Composable {
+            AppScreens(titleBar, zoom = if (isDesktop) settings.zoom / 100f else 1f) {
                 PlatformTextContextMenu {
                     if (locked) {
                         AppLockCover(onUnlock)
@@ -223,30 +205,34 @@ fun App(
                     }
                 }
             }
-            if (titleBar == null) {
-                screens()
-            } else {
-                // The screens run up to the window's top edge, one surface with the title bar: the sidebar's
-                // header and the chat's sit in its row, as a modern desktop app's do, clear of the system's buttons.
-                val text = LocalDensity.current
-                val controls = with(text) {
-                    WindowControls(
-                        start = if (titleBar.start > 0.dp) (titleBar.start + WINDOW_CONTROLS_GAP).roundToPx() else 0,
-                        end = if (titleBar.end > 0.dp) (titleBar.end + WINDOW_CONTROLS_GAP).roundToPx() else 0,
-                        height = titleBar.height.roundToPx(),
-                    )
-                }
-                Box(Modifier.fillMaxSize().background(Theme[colors][background]).then(titleBar.frame)) {
-                    CompositionLocalProvider(
-                        LocalWindowControls provides controls,
-                        LocalDensity provides Density(text.density * settings.zoom / 100f, text.fontScale),
-                    ) {
-                        screens()
-                    }
-                }
-            }
         }
     } }
+}
+
+/** Draws the screens at the app zoom while keeping the window's frame and controls at their original scale. */
+@Composable
+internal fun AppScreens(titleBar: TitleBar?, zoom: Float, content: @Composable () -> Unit) {
+    val text = LocalDensity.current
+    val screens = @Composable {
+        CompositionLocalProvider(LocalDensity provides Density(text.density * zoom, text.fontScale), content = content)
+    }
+    if (titleBar == null) {
+        screens()
+    } else {
+        // The sidebar and chat headers share the title bar's row, clear of the system buttons.
+        val controls = with(text) {
+            WindowControls(
+                start = if (titleBar.start > 0.dp) (titleBar.start + WINDOW_CONTROLS_GAP).roundToPx() else 0,
+                end = if (titleBar.end > 0.dp) (titleBar.end + WINDOW_CONTROLS_GAP).roundToPx() else 0,
+                height = titleBar.height.roundToPx(),
+            )
+        }
+        Box(Modifier.fillMaxSize().background(Theme[colors][background]).then(titleBar.frame)) {
+            CompositionLocalProvider(LocalWindowControls provides controls) {
+                screens()
+            }
+        }
+    }
 }
 
 /** The zoom levels Ctrl+= and Ctrl+- step through, in percent, as a browser's. */

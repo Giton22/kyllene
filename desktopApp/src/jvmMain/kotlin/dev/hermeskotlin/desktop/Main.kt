@@ -48,6 +48,7 @@ import dev.hermeskotlin.core.push.NtfyClient
 import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushMessage
+import dev.hermeskotlin.core.phone.PhoneToolsBridge
 import dev.hermeskotlin.core.push.PushSetup
 import dev.hermeskotlin.core.push.linuxPushInbox
 import kotlinx.coroutines.Dispatchers
@@ -165,6 +166,7 @@ fun main(args: Array<String>) {
     colorScheme?.awaitFirst(1_000)
     val links = koin.get<ChatLinks>()
     koin.get<PushSetup>().start()
+    if (Jcef.available) koin.get<PhoneToolsBridge>().start()
     val portal = BackgroundPortal()
     // The choice the desktop last confirmed, from the app's own store: a portal still starting at login doesn't hold
     // up the window or decide whether it shows.

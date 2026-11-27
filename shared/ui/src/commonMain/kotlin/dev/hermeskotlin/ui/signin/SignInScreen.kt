@@ -71,6 +71,7 @@ fun SignInScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val uriHandler = LocalUriHandler.current
+    val openBatterySettings = rememberBatterySettingsOpener()
 
     // One view model serves every gateway's sign-in screen, so it starts over when the gateway changes. A
     // browser sign-in still running goes on across a rotation, and only ever signs its own gateway in.
@@ -93,6 +94,7 @@ fun SignInScreen(
         onSignInWithBrowser = { viewModel.signInWithBrowser(gateway) { uriHandler.openUri(it) } },
         onCancelBrowser = viewModel::cancelBrowser,
         onChangeGateway = onChangeGateway,
+        onBatterySettings = openBatterySettings,
     )
 }
 
@@ -111,6 +113,7 @@ internal fun SignInView(
     onSignInWithBrowser: () -> Unit,
     onCancelBrowser: () -> Unit,
     onChangeGateway: () -> Unit,
+    onBatterySettings: (() -> Unit)? = null,
 ) {
     val methods = state.methods
     ScreenScaffold {
@@ -182,6 +185,16 @@ internal fun SignInView(
                         style = Theme[typography][bodySmall],
                         color = Theme[colors][textSecondary],
                     )
+                    // Android drops the browser's way back while battery usage is Restricted: say so, and where to change it.
+                    if (state.batteryRestricted && onBatterySettings != null) {
+                        StatusDot(Status.Warning, stringResource(Res.string.signin_battery_restricted))
+                        Button(
+                            text = stringResource(Res.string.signin_battery_settings),
+                            onClick = onBatterySettings,
+                            variant = ButtonVariant.Secondary,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     Button(
                         text = stringResource(Res.string.common_cancel),
                         onClick = onCancelBrowser,

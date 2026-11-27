@@ -37,7 +37,7 @@ sealed interface ConnectionState {
 
     data class Connecting(val attempt: Int) : ConnectionState
 
-    data class Connected(val client: JsonRpcClient, val ready: JsonObject) : ConnectionState
+    data class Connected(val client: JsonRpcClient, val ready: JsonObject, val gateway: GatewayUrl) : ConnectionState
 
     /** Lost or failed to connect; retrying at [retryAtMillis] (epoch ms). */
     data class Reconnecting(val attempt: Int, val retryAtMillis: Long, val reason: String) : ConnectionState
@@ -87,7 +87,8 @@ class GatewayConnection(
         job = scope.launch { loop(gateway) }
     }
 
-    fun isConnectedTo(gatewayUrl: String): Boolean = url?.value == gatewayUrl && state.value is ConnectionState.Connected
+    fun isConnectedTo(gatewayUrl: String): Boolean =
+        (state.value as? ConnectionState.Connected)?.gateway?.value == gatewayUrl
 
     fun stop() {
         job?.cancel()
@@ -128,7 +129,7 @@ class GatewayConnection(
 
             var connectedAt: Long? = null
             val failure: Exception = try {
-                runSession(openSocket(gateway, ticket)) { connectedAt = clock() }
+                runSession(gateway, openSocket(gateway, ticket)) { connectedAt = clock() }
             } catch (e: TimeoutCancellationException) {
                 // The ready wait gives up as a cancellation; that is a failed attempt, not a cancelled loop.
                 e
@@ -194,7 +195,7 @@ class GatewayConnection(
      * Waits for `gateway.ready`, publishes [ConnectionState.Connected], then pumps until the socket
      * dies. Never returns normally.
      */
-    private suspend fun runSession(transport: RpcTransport, onConnected: () -> Unit): Nothing = coroutineScope {
+    private suspend fun runSession(gateway: GatewayUrl, transport: RpcTransport, onConnected: () -> Unit): Nothing = coroutineScope {
         val client = JsonRpcClient(transport, answers = InputRequest.METHODS::contains)
         // Followed for the socket's whole life, the wait for gateway.ready included: a change made then isn't lost.
         launch { idle.collect { client.setIdle(it) } }
@@ -207,7 +208,7 @@ class GatewayConnection(
             throw e
         }
         onConnected()
-        _state.value = ConnectionState.Connected(client, ready)
+        _state.value = ConnectionState.Connected(client, ready, gateway)
         pump.await()
     }
 

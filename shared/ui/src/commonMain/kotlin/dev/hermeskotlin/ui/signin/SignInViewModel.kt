@@ -38,6 +38,8 @@ data class SignInUiState(
     val signingIn: Boolean = false,
     /** The browser is open on the gateway's sign-in page and the app waits for it to come back. */
     val waitingForBrowser: Boolean = false,
+    /** Android won't let the browser hand the sign-in back (battery usage Restricted); shown while it's waited for. */
+    val batteryRestricted: Boolean = false,
     val error: SignInError? = null,
     /** The gateway just signed in to. The view model outlives one sign-in screen, so the screen checks it's its own. */
     val signedInUrl: String? = null,
@@ -60,6 +62,12 @@ class SignInViewModel(
     private var methodsKnown = false
     private var browserJob: Job? = null
 
+    init {
+        viewModelScope.launch {
+            browserSignIn.restricted.collect { restricted -> _state.update { it.copy(batteryRestricted = restricted) } }
+        }
+    }
+
     /**
      * Shows [gateway]'s sign-in: another gateway's unfinished one is dropped, and the gateway is asked which ways in
      * it offers. When it can't be asked, both show, and the next visit asks again.
@@ -70,7 +78,7 @@ class SignInViewModel(
             methodsKnown = false
             browserJob?.cancel()
             browserJob = null
-            _state.value = SignInUiState()
+            _state.value = SignInUiState(batteryRestricted = _state.value.batteryRestricted)
         }
         if (methodsKnown) return
         viewModelScope.launch {

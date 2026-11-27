@@ -42,6 +42,8 @@
     <string name="notification_read_aloud_stop">Arrêter</string>
     <string name="notification_read_aloud_pause">Pause</string>
     <string name="notification_read_aloud_resume">Reprendre</string>
+    <string name="notification_sign_in_title">Connexion en cours…</string>
+    <string name="notification_sign_in_text">En attente du retour depuis le navigateur</string>
 
     <string name="notification_approve_title">Autoriser cette commande ?</string>
     <string name="notification_question_title">Hermes a une question</string>

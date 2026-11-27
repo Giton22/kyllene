@@ -9,9 +9,11 @@ import dev.hermeskotlin.core.rpc.json
 import dev.hermeskotlin.core.rpc.param
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -32,6 +34,7 @@ class ChatSessionResumeTest {
 
     /** Every transcript read, as `limit/offset`. */
     private val reads = mutableListOf<String>()
+    private var beforeRead: suspend () -> Unit = {}
 
     private fun rowsUpTo(last: Int) = (1..last).map { id ->
         if (id % 2 == 1) """{"id":$id,"role":"user","content":"p$id"}""" else """{"id":$id,"role":"assistant","content":"a$id"}"""
@@ -58,6 +61,7 @@ class ChatSessionResumeTest {
                 val limit = request.url.parameters["limit"]!!.toInt()
                 val offset = request.url.parameters["offset"]?.toInt() ?: 0
                 reads += "$limit/$offset"
+                beforeRead()
                 // order=latest: the offset and limit count back from the newest row.
                 val page = transcript.reversed().drop(offset).take(limit).reversed()
                 json("""{"session_id":"stored-1","messages":[${page.joinToString(",")}]}""")
@@ -68,8 +72,8 @@ class ChatSessionResumeTest {
         return gateway.connection to gateway.sockets
     }
 
-    private fun event(type: String, seq: Long?, payload: String = "{}") =
-        """{"jsonrpc":"2.0","method":"event","params":{"type":"$type","session_id":"rt1",${seq?.let { "\"seq\":$it," } ?: ""}"payload":$payload}}"""
+    private fun event(type: String, seq: Long?, payload: String = "{}", runtime: String = "rt1") =
+        """{"jsonrpc":"2.0","method":"event","params":{"type":"$type","session_id":"$runtime",${seq?.let { "\"seq\":$it," } ?: ""}"payload":$payload}}"""
 
     private fun delta(seq: Long, text: String) = event("message.delta", seq, """{"text":"$text"}""")
 
@@ -107,6 +111,76 @@ class ChatSessionResumeTest {
         first.serverClose(1006)
         chat.state.first { it.runtimeSessionId == null }
         return chat to transports
+    }
+
+    private suspend fun pauseNextHistory(): CompletableDeferred<Unit> {
+        val reading = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        beforeRead = {
+            beforeRead = {}
+            reading.complete(Unit)
+            release.await()
+        }
+        reading.await()
+        return release
+    }
+
+    @Test
+    fun aCompletionDuringReconnectHistoryClearsTheLiveReply() = runTest {
+        val (chat, sockets) = droppedMidTurn(
+            backgroundScope,
+            """{"session_id":"rt2","running":true,"inflight":{"assistant":"Partial"}}""",
+        )
+        val release = pauseNextHistory()
+
+        // An unrelated session's completion must stay out of this chat.
+        sockets.last().push(event("message.complete", null, """{"text":"Other reply","status":"complete"}""", "other"))
+        sockets.last().push(event("message.delta", 1, """{"text":" reply"}""", "rt2"))
+        sockets.last().push(event("message.complete", 2, """{"text":"Final answer","status":"complete"}""", "rt2"))
+        runCurrent()
+        transcript = rowsUpTo(3) + """{"id":4,"role":"assistant","content":"Final answer"}"""
+        release.complete(Unit)
+        runCurrent()
+
+        val state = chat.state.value
+        assertEquals("rt2", state.runtimeSessionId)
+        assertFalse(state.running)
+        assertEquals(listOf("a2", "Final answer"), state.messages.filterIsInstance<ChatMessage.Assistant>().map { it.text })
+    }
+
+    @Test
+    fun deltasDuringReconnectHistoryKeepTheirOrder() = runTest {
+        val (chat, sockets) = droppedMidTurn(
+            backgroundScope,
+            """{"session_id":"rt2","running":true,"inflight":{"assistant":"Hel"}}""",
+        )
+        val release = pauseNextHistory()
+        sockets.last().push(event("message.delta", 1, """{"text":"lo"}""", "rt2"))
+        sockets.last().push(event("message.delta", 1, """{"text":"lo"}""", "rt2"))
+        sockets.last().push(event("message.delta", 2, """{"text":" world"}""", "rt2"))
+        runCurrent()
+        release.complete(Unit)
+        runCurrent()
+        assertEquals("Hello world", chat.state.value.reply()?.text)
+        assertTrue(chat.state.value.running)
+    }
+
+    @Test
+    fun aSecondDisconnectDiscardsTheAbandonedResumesEvents() = runTest {
+        val (chat, sockets) = droppedMidTurn(
+            backgroundScope,
+            """{"session_id":"rt2","running":true,"inflight":{"assistant":"Hel"}}""",
+        )
+        val release = pauseNextHistory()
+        val abandoned = sockets.last()
+        abandoned.push(event("message.complete", 1, """{"text":"Stale completion","status":"complete"}""", "rt2"))
+        runCurrent()
+        abandoned.serverClose(1006)
+        chat.state.first { it.attachment is Attachment.Detached }
+        release.complete(Unit)
+        chat.state.first { sockets.size == 3 && it.runtimeSessionId == "rt2" }
+        assertTrue(chat.state.value.running)
+        assertFalse(chat.state.value.messages.any { (it as? ChatMessage.Assistant)?.text == "Stale completion" })
     }
 
     /** A turn that started at 100 (gateway clock) and saved its first step, text and a tool call, at [at]. */
