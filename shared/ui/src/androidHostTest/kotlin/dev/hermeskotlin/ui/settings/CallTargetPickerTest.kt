@@ -113,10 +113,8 @@ class CallTargetPickerTest {
                 }
             }
             compose.onNodeWithText("Call a bot").performClick()
-            compose.waitUntil(5_000) {
-                compose.onAllNodes(hasText("Hermes") or hasText("default") or hasText("No bots available."))
-                    .fetchSemanticsNodes().isNotEmpty()
-            }
+            // Not "No bots available.": the picker shows it for a frame before the profiles request starts.
+            compose.waitUntil(5_000) { compose.onAllNodes(hasText("Hermes")).fetchSemanticsNodes().isNotEmpty() }
             check { selected }
         } finally {
             viewModel.viewModelScope.cancel()
