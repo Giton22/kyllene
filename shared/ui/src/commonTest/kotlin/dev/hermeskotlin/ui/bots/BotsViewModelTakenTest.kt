@@ -35,6 +35,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -90,6 +91,12 @@ class BotsViewModelTakenTest {
         private val createFails: Boolean = false,
         var fixedRoster: String? = null,
     ) : RpcTransport {
+        /** While set, a roster read's answer (the roster as it was when asked) comes this many ms late. */
+        var holdRosterMs: Long? = null
+
+        /** While set, a roster read fails. */
+        var rosterFails = false
+
         private val inbound = Channel<String>(Channel.UNLIMITED).apply {
             val payload = if (authority) """{"session_authority":true}""" else "{}"
             trySend("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":$payload}}""")
@@ -108,7 +115,9 @@ class BotsViewModelTakenTest {
             val params = message["params"]?.jsonObject ?: JsonObject(emptyMap())
             requests += method to params
             val reply = answer(method, params)
+            val hold = holdRosterMs.takeIf { method == "profiles.list" }
             scope.launch {
+                hold?.let { delay(it) }
                 inbound.send(
                     if (reply is Refused) """{"jsonrpc":"2.0","id":$id,"error":{"code":${reply.code},"message":"${reply.message}"}}"""
                     else """{"jsonrpc":"2.0","id":$id,"result":$reply}""",
@@ -120,7 +129,7 @@ class BotsViewModelTakenTest {
 
         private fun answer(method: String, params: JsonObject): Any = when (method) {
             "profiles.create" -> { made = true; "{}" }
-            "profiles.list" -> fixedRoster ?: roster()
+            "profiles.list" -> if (rosterFails) Refused(5000, "Session store is busy") else fixedRoster ?: roster()
             "profiles.configure" -> """{"applied":{"ui_meta":true}}"""
             "setup.runtime_check" -> """{"ok":true}"""
             "session.create" -> if (createFails) Refused(5000, "Session store is busy") else {
@@ -400,6 +409,151 @@ class BotsViewModelTakenTest {
         // The second bot's badge confirms the worker has finished the first bot's scan.
         assertEquals(setOf("after"), vm.state.first { "after" in it.unread }.unread)
         return offsets
+    }
+
+    @Test
+    fun aPageThatReachesTheLastLookEndsTheScan() = runTest(dispatcher, timeout = 10.seconds) {
+        // Pages go back in time: the oldest row here is from before the last look (1000), so nothing on the next
+        // page is new, even though most of this one came after it.
+        val offsets = scannedOffsets { offset ->
+            if (offset == 0) {
+                val rows = toolRows()
+                rows[0] = """{"id":1,"role":"tool","timestamp":900}"""
+                historyPage(*rows)
+            } else historyPage(readableReply)
+        }
+        assertEquals(listOf(0), offsets)
+    }
+
+    @Test
+    fun aHistoryThatCantBeReadBeforeAnyBadgeGoesByTheActivity() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        var history = HttpStatusCode.ServiceUnavailable to "{}"
+        val vm = viewModel(socket) { profile, _ -> if (profile == "after") historyPage(readableReply) else history }
+        vm.bind(gateway.gatewayUrl)
+        // `work` was active after the last look (1100 > 1000) and its history couldn't say otherwise.
+        assertEquals(setOf("work", "after"), vm.state.first { "after" in it.unread }.unread)
+
+        // That was a guess: once the history can be read and shows only tool steps, the badge goes.
+        history = historyPage("""{"role":"tool","timestamp":1100}""")
+        vm.refresh()
+        assertEquals(setOf("after"), vm.state.first { "work" !in it.unread }.unread)
+    }
+
+    @Test
+    fun anOlderRosterReadThatAnswersLastIsDropped() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        val vm = viewModel(socket) { _, _ -> historyPage() }
+        vm.bind(gateway.gatewayUrl)
+        vm.state.first { it.all.size == 2 }
+
+        // A read asked while both bots were there is slow to answer; meanwhile `after` is removed and a newer
+        // read shows that.
+        socket.holdRosterMs = 10_000
+        vm.refresh()
+        runCurrent()
+        socket.holdRosterMs = null
+        socket.fixedRoster = historyRoster()
+        vm.refresh()
+        assertEquals(listOf("work"), vm.state.first { it.all.size == 1 }.all.map { it.name })
+
+        // The slow answer comes in (well inside the request's 30 s timeout) and changes nothing.
+        delay(15_000)
+        assertEquals(3, socket.sent("profiles.list").size)
+        assertEquals(listOf("work"), vm.state.value.all.map { it.name })
+        assertNull(vm.state.value.error)
+    }
+
+    @Test
+    fun anOlderRosterReadThatFailsLastShowsNoError() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        val vm = viewModel(socket) { _, _ -> historyPage() }
+        vm.bind(gateway.gatewayUrl)
+        vm.state.first { it.all.size == 2 }
+
+        // A read that will fail is slow to answer; a newer one shows the roster meanwhile.
+        socket.holdRosterMs = 10_000
+        socket.rosterFails = true
+        vm.refresh()
+        runCurrent()
+        socket.holdRosterMs = null
+        socket.rosterFails = false
+        vm.refresh()
+        runCurrent()
+
+        // Its failure comes in after, and says nothing about the roster on screen.
+        delay(15_000)
+        assertEquals(3, socket.sent("profiles.list").size)
+        assertNull(vm.state.value.error)
+        assertEquals(listOf("work", "after"), vm.state.value.all.map { it.name })
+    }
+
+    @Test
+    fun aRosterReadAskedBeforeAPinDoesNotUndoIt() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        val vm = viewModel(socket) { _, _ -> historyPage() }
+        vm.bind(gateway.gatewayUrl)
+        val after = vm.state.first { it.all.size == 2 }.all.single { it.name == "after" }
+        fun afterPinned() = vm.state.value.all.single { it.name == "after" }.meta.pinned
+
+        // A poll read, asked before the pin, answers in 1 s; the pin's own read takes 5 s.
+        socket.holdRosterMs = 1_000
+        vm.refresh()
+        runCurrent()
+        socket.holdRosterMs = 5_000
+        socket.fixedRoster = historyRoster(nextActivity = 1050).replace(""""name":"after",""", """"name":"after","ui_meta":{"hermes-bots":{"pinned":true}},""")
+        vm.setPinned(after, true)
+        runCurrent()
+        assertTrue(afterPinned())
+
+        // The older answer lands first and doesn't unpin it on screen.
+        delay(2_000)
+        assertTrue(afterPinned())
+        delay(5_000)
+        assertTrue(afterPinned())
+    }
+
+    @Test
+    fun aFreshChatWhoseHistoryCantBeReadGoesByTheActivity() = runTest(dispatcher, timeout = 10.seconds) {
+        fun roster(chat: String) =
+            """{"profiles":[{"name":"work","canonical_session":{"id":"$chat","last_active":1100,"message_count":3}},""" +
+                """{"name":"after","canonical_session":{"id":"chat-after","last_active":1050,"message_count":1}}],"bot_mode_protocol":true}"""
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = roster("chat"))
+        var history = historyPage("""{"role":"tool","timestamp":1100}""")
+        val vm = viewModel(socket) { profile, _ -> if (profile == "after") historyPage(readableReply) else history }
+        vm.bind(gateway.gatewayUrl)
+        // `work`'s first chat was read: only tool steps since the last look.
+        assertEquals(setOf("after"), vm.state.first { "after" in it.unread }.unread)
+
+        // It starts a fresh chat, whose history can't be read yet: what the first chat said doesn't answer for it.
+        socket.fixedRoster = roster("chat-2")
+        history = HttpStatusCode.ServiceUnavailable to "{}"
+        vm.refresh()
+        assertEquals(setOf("work", "after"), vm.state.first { "work" in it.unread }.unread)
+    }
+
+    @Test
+    fun aChatReadBeforeKeepsItsBadgeWhenItsHistoryCantBeReadAgain() = runTest(dispatcher, timeout = 10.seconds) {
+        val socket = RaceGateway(CoroutineScope(dispatcher), authority = false, fixedRoster = historyRoster(nextActivity = 1050))
+        var history = historyPage("""{"role":"tool","timestamp":1100}""")
+        var reads = 0
+        val vm = viewModel(socket) { profile, _ ->
+            if (profile == "after") historyPage(readableReply) else {
+                reads++
+                history
+            }
+        }
+        vm.bind(gateway.gatewayUrl)
+        assertEquals(setOf("after"), vm.state.first { "after" in it.unread }.unread)
+
+        // Another tool step in the same chat, and this time its history can't be read: it was read here before,
+        // so the badge stays as it was rather than going by the activity.
+        socket.fixedRoster = historyRoster(activity = 1200, nextActivity = 1050)
+        history = HttpStatusCode.ServiceUnavailable to "{}"
+        vm.refresh()
+        while (reads < 2) delay(100)
+        runCurrent()
+        assertEquals(setOf("after"), vm.state.value.unread)
     }
 
     @Test

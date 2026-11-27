@@ -72,6 +72,14 @@ class DesktopNotifierTest {
     }
 
     @Test
+    fun aReplyReadBackOnAReconnectBeforeTheTurnEndsIsStillTold() {
+        // Back on line, the stored transcript has the reply, finished, before the resume says the turn is over.
+        val readBack = done("Done while away", TurnOutcome.Complete).copy(running = true)
+        val notices = noticesFor(readBack, readBack.copy(running = false), focused = false, prefs, mutableSetOf(), words, turnStart = running())
+        assertEquals(listOf(DesktopNotice("Release", "Done while away", "s1", "Release", replyPreview = "Done while away")), notices)
+    }
+
+    @Test
     fun silentCompletionDoesNotNotifyAgainForThePreviousReply() {
         val previousReply = done("Already answered", TurnOutcome.Complete)
         val runningSilently = previousReply.copy(running = true)

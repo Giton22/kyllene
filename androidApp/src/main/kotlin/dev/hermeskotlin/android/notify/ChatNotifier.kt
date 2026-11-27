@@ -66,6 +66,8 @@ class ChatNotifier(
     private suspend fun follow(session: ChatSession) = coroutineScope {
         val notified = mutableSetOf<String>()
         var previous: ChatState? = null
+        // The chat when the turn now running began: what a finished reply is new against.
+        var turnStart: ChatState? = null
         var shown: Shown? = null
         try {
             combine(session.state, visibility.visible, settings.settings, connection.state, outsideWork) { state, visible, stored, link, outside ->
@@ -106,11 +108,12 @@ class ChatNotifier(
                     notifications.cancelRequest(it)
                 }
 
+                if (state.running && previous?.running != true) turnStart = state
                 val storedId = state.storedSessionId
                 if (storedId != null) {
                     if (state.running && previous?.running == false) notifications.cancelReply(storedId)
                     if (previous?.running == true && !state.running && !visible && prefs.notifyReplies) {
-                        val reply = state.newFinishedReply(previous)
+                        val reply = state.newFinishedReply(turnStart, previous)
                         if (reply != null && reply.outcome != TurnOutcome.Interrupted) {
                             val failed = reply.outcome == TurnOutcome.Error
                             val text = if (failed) reply.error ?: reply.text else reply.text
