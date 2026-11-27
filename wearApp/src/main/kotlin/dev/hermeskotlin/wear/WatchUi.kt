@@ -169,11 +169,13 @@ fun HeraldWatchApp(
                         onFinishRecording = onFinishRecording,
                         onDismissListeningError = onDismissListeningError,
                         onChats = { nav.navigate(CHATS) },
+                        onHistory = { nav.navigate(HISTORY) },
                     )
                 }
                 composable(CHATS) {
                     ChatsScreen(link = link, store = store, onPicked = { nav.popBackStack() }, onSettings = { nav.navigate(SETTINGS) })
                 }
+                composable(HISTORY) { WatchHistoryScreen(link, store, speech) }
                 composable(SETTINGS) { SettingsScreen(link = link, store = store) }
             }
         }
@@ -246,6 +248,7 @@ private fun TalkScreen(
     onFinishRecording: () -> Unit,
     onDismissListeningError: () -> Unit,
     onChats: () -> Unit,
+    onHistory: () -> Unit,
 ) {
     val turn by link.turn.collectAsState()
     val phone by link.phone.collectAsState()
@@ -324,7 +327,17 @@ private fun TalkScreen(
             }
         }
     }
-    ScreenScaffold(scrollState = listState, modifier = Modifier.halo(mood, MaterialTheme.colorScheme.primaryContainer)) { contentPadding -> content(contentPadding) }
+    ScreenScaffold(
+        scrollState = listState,
+        modifier = Modifier.halo(mood, MaterialTheme.colorScheme.primaryContainer),
+        edgeButton = {
+            if (chat.id != null || chat.botProfile != null) {
+                EdgeButton(onClick = onHistory, buttonSize = EdgeButtonSize.Medium) {
+                    Text(stringResource(R.string.wear_history_view), fontFamily = Geist, fontSize = 14.sp, maxLines = 1)
+                }
+            }
+        },
+    ) { contentPadding -> content(contentPadding) }
 }
 
 /**
@@ -916,4 +929,5 @@ internal fun activityLine(phase: ReplyPhase, activity: String?): WatchLine = act
 
 private const val TALK = "talk"
 private const val CHATS = "chats"
+private const val HISTORY = "history"
 private const val SETTINGS = "settings"
