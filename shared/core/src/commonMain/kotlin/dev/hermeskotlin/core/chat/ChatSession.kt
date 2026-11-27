@@ -8,6 +8,7 @@ import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.rpc.GatewayEvent
 import dev.hermeskotlin.core.rpc.JsonRpcClient
+import dev.hermeskotlin.core.rpc.ResumeBoundary
 import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.rpc.RpcTimeoutException
 import dev.hermeskotlin.core.sessions.SessionMessage
@@ -182,12 +183,11 @@ class ChatSession(
     /** Live events held back while the gap before them is filled; null when nothing is being caught up. */
     private var held: MutableList<GatewayEvent>? = null
 
-    /** Frames received after the gateway resumed a chat, while its transcript is still being read. */
-    private class PendingResume(val client: JsonRpcClient, val runtimeId: String) {
-        val events = mutableListOf<GatewayEvent>()
-    }
+    private class PendingResume(val client: JsonRpcClient, val boundary: ResumeBoundary = ResumeBoundary())
 
     private var pendingResume: PendingResume? = null
+    /** Old frames can still be queued in the collector when the new attachment is published. */
+    private var resumeReceiveOrder = 0L
 
     /** The socket waiting for a replay-gap resume to start. */
     private var pendingGapClient: JsonRpcClient? = null
@@ -2543,11 +2543,9 @@ class ChatSession(
                 val runtimeId = event.sessionId ?: return@collect
                 val replayGap = streamMutex.withLock {
                     if (connectedClient() !== client) return@collect
-                    val pending = pendingResume
-                    if (pending?.client === client && pending.runtimeId == runtimeId) {
-                        pending.events += event
-                        return@collect
-                    }
+                    // The socket holds this resume's frames until the snapshot and transcript are in.
+                    if (pendingResume?.client === client) return@collect
+                    if (attachedClient === client && event.receiveOrder <= resumeReceiveOrder) return@collect
                     val live = liveRuntimeId(client)
                     if (live == null) {
                         gapHeld?.takeIf { gapRuntime == runtimeId }?.add(event)
@@ -3123,7 +3121,10 @@ class ChatSession(
             resume(client, reconnected, afterGap)
         } finally {
             if (reconnected && !afterGap) withContext(NonCancellable) {
-                streamMutex.withLock { pendingResume = null }
+                streamMutex.withLock {
+                    pendingResume?.let { client.endResume(it.boundary) }
+                    pendingResume = null
+                }
             }
         }
     }
@@ -3131,16 +3132,19 @@ class ChatSession(
     private suspend fun resume(client: JsonRpcClient, reconnected: Boolean, afterGap: Boolean): String {
         val stored = _state.value.storedSessionId ?: error("No stored session to resume")
         _state.update { it.copy(attachment = Attachment.Attaching) }
-        val result = client.request(
-            "session.resume",
-            buildJsonObject {
-                put("session_id", stored)
-                profile?.let { put("profile", it) }
-                put("source", CLIENT_SOURCE)
-                put("cols", TERMINAL_COLUMNS)
-                put("omit_messages", true)
-            },
-        ) as? JsonObject ?: error("Empty session.resume reply")
+        val params = buildJsonObject {
+            put("session_id", stored)
+            profile?.let { put("profile", it) }
+            put("source", CLIENT_SOURCE)
+            put("cols", TERMINAL_COLUMNS)
+            put("omit_messages", true)
+        }
+        val pending = if (reconnected && !afterGap) streamMutex.withLock {
+            PendingResume(client).also { pendingResume = it }
+        } else null
+        val response = if (pending != null) client.resumeAtBoundary(params, pending.boundary)
+            else client.request("session.resume", params)
+        val result = response as? JsonObject ?: error("Empty session.resume reply")
         val runtimeId = result.string("session_id") ?: error("session.resume returned no session_id")
         executionGeneration = result.long("execution_generation")
         revision = result.long("revision")
@@ -3156,7 +3160,7 @@ class ChatSession(
         val (resumable, waiting) = streamMutex.withLock {
             if (connectedClient() !== client) throw StaleResume()
             if (!afterGap && (reconnected || attachedClient !== client)) resetReplayWork()
-            if (reconnected && !afterGap) pendingResume = PendingResume(client, runtimeId)
+            if (attachedClient !== client) resumeReceiveOrder = 0
             inflightText = streamed
             // Seqs count per runtime session and per epoch, so only the same of both can be picked up.
             val resumable = !afterGap && reconnected && lastSeq != null && runtimeId == seqRuntime && epoch != null && epoch == seqEpoch
@@ -3174,6 +3178,30 @@ class ChatSession(
             resumable to waiting
         }
         if (reconnected && (!resumable || (!_state.value.historyRead && !historyMutex.isLocked))) loadHistory()
+        if (connectedClient() !== client) throw StaleResume()
+        val receipt = pending?.boundary?.receipt
+        val early = receipt?.early.orEmpty()
+        val interruptedReplay = client.sessionAuthority && (
+            receipt?.overflow == true || early.any {
+                it.type == REPLAY_GAP || (epoch != null && it.replayEpoch != null && it.replayEpoch != epoch)
+            }
+        )
+        val beforeReply = when {
+            client.sessionAuthority -> {
+                val watermark = startSeq(client, result, epoch)
+                early.filter { event ->
+                    event.replayEpoch == epoch && watermark != null && (event.seq ?: 0) > watermark
+                }
+            }
+            // Picked up from the last seq: the catch-up orders these frames among the replayed ones, and applies them
+            // itself when the ring can't answer, so a newer turn can't be ended by an older completion.
+            running && resumable -> early
+            running && pending != null && early.lastOrNull()?.type == "message.complete" &&
+                (legacyReceiptEndsTurn(early.last(), result.double("turn_started_at")) ||
+                    legacyTurnEnded(client, result.string("session_key") ?: stored, runtimeId, pending.boundary)) ->
+                listOf(early.last())
+            else -> emptyList()
+        }
         if (connectedClient() !== client) throw StaleResume()
         var replyKey: String? = null
         // Named with the id it goes with, so no reader ever pairs this socket with the old id or the old socket with this one.
@@ -3217,10 +3245,16 @@ class ChatSession(
         }
         val replayGap = streamMutex.withLock {
             if (connectedClient() !== client) throw StaleResume()
-            val pending = pendingResume ?: return@withLock false
+            if (pending == null) return@withLock false
+            val handoff = client.endResume(pending.boundary)
+            if (connectedClient() !== client) throw StaleResume()
+            resumeReceiveOrder = handoff.receiveOrder
             pendingResume = null
-            if (client.sessionAuthority && pending.events.any { it.type == REPLAY_GAP }) true else {
-                pending.events.forEach(::deliver)
+            if (client.sessionAuthority && (interruptedReplay || handoff.events.any { it.type == REPLAY_GAP })) {
+                true
+            } else {
+                beforeReply.forEach(::deliver)
+                handoff.events.forEach(::deliver)
                 false
             }
         }
@@ -3236,6 +3270,40 @@ class ChatSession(
         }
         return runtimeId
     }
+
+    /** A committed reply made after the snapshot's start belongs to that turn or a later one. */
+    private suspend fun legacyReceiptEndsTurn(event: GatewayEvent, started: Double?): Boolean {
+        if (started == null) return false
+        val receipt = (event.payload as? JsonObject)?.get("persisted_turn") as? JsonObject
+        val id = receipt.long("final_assistant_row_id") ?: return false
+        return historyMutex.withLock { rows.any { it.id == id && it.role == "assistant" && (it.timestamp ?: 0.0) > started } }
+    }
+
+    /** The legacy gateway publishes completion before it clears running. Let that turn settle before checking again. */
+    private suspend fun legacyTurnEnded(
+        client: JsonRpcClient, stored: String, runtimeId: String, boundary: ResumeBoundary,
+    ): Boolean = withTimeoutOrNull(3_000) {
+        for (wait in LEGACY_END_RECHECK_DELAYS) {
+            if (wait > 0) delay(wait)
+            if (connectedClient() !== client) throw StaleResume()
+            if (boundary.hasLaterTurn) return@withTimeoutOrNull false
+            val result = try {
+                client.request("session.active_list") as? JsonObject
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                return@withTimeoutOrNull false
+            }
+            val row = (result?.get("sessions") as? JsonArray).orEmpty().filterIsInstance<JsonObject>()
+                .firstOrNull { it.string("id") == runtimeId && it.string("session_key") == stored }
+            when (row.string("status")) {
+                "idle" -> return@withTimeoutOrNull true
+                "working" -> continue
+                else -> return@withTimeoutOrNull false
+            }
+        }
+        false
+    } ?: false
 
     /** [withSavedStepsInLiveReply] for the running turn. */
     private fun List<ChatMessage>.withSavedStepsFolded(): List<ChatMessage> =
@@ -3298,6 +3366,7 @@ class ChatSession(
         if (client.sessionAuthority || !instruction.isNullOrBlank()) rowExists = true
         streamMutex.withLock {
             resetReplayWork()
+            resumeReceiveOrder = 0
             seqEpoch = replayEpoch(client, result)
             lastSeq = startSeq(client, result, seqEpoch)
             seqRuntime = runtimeId
@@ -3327,6 +3396,8 @@ class ChatSession(
     private companion object {
         /** The session authority's notice that it ended this socket's subscription to a session. */
         const val REPLAY_GAP = "session.replay_gap"
+
+        val LEGACY_END_RECHECK_DELAYS = listOf(0L, 350L, 1_000L)
 
         /** A message key made from a stored row (`historyToMessages`): `row-<id>`, or `row-<id>-<n>` for one of its events. */
         val ROW_KEY = Regex("row-(\\d+)(?:-\\d+)?")
