@@ -11,6 +11,7 @@ import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.rpc.RpcTimeoutException
 import dev.hermeskotlin.core.sessions.ActiveSessions
+import dev.hermeskotlin.core.sessions.LiveSessions
 import dev.hermeskotlin.core.sessions.LiveStatus
 import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionsApi
@@ -2200,7 +2201,7 @@ class ChatSession(
         return send(fresh, generation)
     }
 
-    /** A background or replay-gap attach whose socket a reconnect overtook. */
+    /** An attach that lost its socket or its reason to run while waiting. */
     private class StaleAttach : Exception()
 
     /** A steer that never went out: the running turn's generation couldn't be read ([cause]). */
@@ -2535,6 +2536,10 @@ class ChatSession(
 
     private suspend fun followLiveSessions() {
         val active = active ?: return
+        // Compression can move the stored id while keeping the runtime.
+        fun LiveSessions.match(stored: String, runtime: String?) =
+            rows[stored] ?: rows.values.firstOrNull { it.runtimeId == runtime }
+
         var attemptedClient: JsonRpcClient? = null
         var attemptedRuntime: String? = null
         var failedAtStatus: LiveStatus? = null
@@ -2544,9 +2549,8 @@ class ChatSession(
         active.live.collect { live ->
             val client = connectedClient() ?: return@collect
             val stored = _state.value.storedSessionId ?: return@collect
-            // Compression can move the stored id while keeping the runtime.
             val lastRuntime = streamMutex.withLock { seqRuntime }
-            val row = live.rows[stored] ?: live.rows.values.firstOrNull { it.runtimeId == lastRuntime }
+            val row = live.match(stored, lastRuntime)
             val alreadyAttached = liveRuntimeId(client) != null
             if (attemptedClient !== client || attemptedRuntime != row?.runtimeId || alreadyAttached) {
                 attemptedClient = client
@@ -2563,7 +2567,10 @@ class ChatSession(
             if (!status.running && failedAtStatus == null && transientFailures == 0) return@collect
             if (!_state.value.historyRead && !historyMutex.isLocked) loadHistory()
             val reconnected = streamMutex.withLock { seqRuntime != null }
-            val outcome = runCatchingAttach(client, reconnected = reconnected, reuse = true, liveRetry = true)
+            val outcome = runCatchingAttach(client, reconnected = reconnected, reuse = true) {
+                val latest = active.live.value.match(stored, lastRuntime)
+                latest != null && latest.runtimeId == row.runtimeId && latest.status == status
+            }
             if (connectedClient() !== client) return@collect
             when (outcome) {
                 AttachOutcome.Attached -> {
@@ -3097,9 +3104,9 @@ class ChatSession(
         reconnected: Boolean = false,
         reuse: Boolean = false,
         afterGap: Boolean = false,
-        liveRetry: Boolean = false,
+        canRetryLive: (() -> Boolean)? = null,
     ): AttachOutcome = try {
-        val runtimeId = attach(client, reconnected, reuse, afterGap, liveRetry)
+        val runtimeId = attach(client, reconnected, reuse, afterGap, canRetryLive)
         scope.launch { refreshSubagents(client, runtimeId) }
         AttachOutcome.Attached
     } catch (e: CancellationException) {
@@ -3110,7 +3117,7 @@ class ChatSession(
         _state.update {
             if (connectedClient() === client) {
                 it.copy(
-                    attachment = if (liveRetry && it.attachment is Attachment.Failed) {
+                    attachment = if (canRetryLive != null && it.attachment is Attachment.Failed) {
                         it.attachment
                     } else Attachment.Failed(e.message ?: "Couldn't open the session."),
                     // A gateway refusal can end the chat's running state. A lost link does not.
@@ -3166,14 +3173,17 @@ class ChatSession(
         reconnected: Boolean = false,
         reuse: Boolean = false,
         afterGap: Boolean = false,
-        liveRetry: Boolean = false,
+        canRetryLive: (() -> Boolean)? = null,
     ): String = attachMutex.withLock {
+        val liveRetry = canRetryLive != null
         fun requireCurrentLiveClient() {
             if (liveRetry && connectedClient() !== client) throw StaleAttach()
         }
         requireCurrentLiveClient()
         if (reuse) liveRuntimeId(client)?.let { return@withLock it }
         if (afterGap && (attachedClient !== client || connectedClient() !== client)) throw StaleAttach()
+        // History and the attach mutex can both wait long enough for a newer live list to arrive.
+        if (canRetryLive?.invoke() == false) throw StaleAttach()
         val stored = _state.value.storedSessionId ?: error("No stored session to resume")
         // A background retry keeps the last visible failure in place until an attach succeeds.
         if (!liveRetry) _state.update { it.copy(attachment = Attachment.Attaching) }

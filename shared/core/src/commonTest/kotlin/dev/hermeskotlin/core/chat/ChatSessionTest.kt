@@ -957,6 +957,49 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aLiveRetrySkipsAChatThatUnloadedWhileHistoryWasRead() = runTest {
+        val historyRequested = CompletableDeferred<Unit>()
+        val releaseHistory = CompletableDeferred<Unit>()
+        var resumes = 0
+        var working = false
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when (call.method) {
+                    "session.resume" -> if (++resumes == 1) call.error(5000, "temporarily unavailable")
+                        else """{"session_id":"rt1","running":false}"""
+                    "session.active_list" -> if (working) {
+                        """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
+                    } else """{"sessions":[]}"""
+                    else -> "{}"
+                }
+            }
+            http = {
+                if (!working) json("{}", HttpStatusCode.InternalServerError)
+                else {
+                    historyRequested.complete(Unit)
+                    releaseHistory.await()
+                    json(history)
+                }
+            }
+        }
+        val active = ActiveSessions(gateway.connection, backgroundScope, clock = { testScheduler.currentTime })
+        val host = ChatHost(gateway.connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+        chat.state.first { it.attachment is Attachment.Failed }
+
+        working = true
+        historyRequested.await()
+        working = false
+        active.live.first { it.rows.isEmpty() && it.askedAtMillis > 0 }
+        releaseHistory.complete(Unit)
+        runCurrent()
+
+        assertTrue(chat.state.value.historyRead)
+        assertIs<Attachment.Failed>(chat.state.value.attachment)
+        assertEquals(1, resumes, "the newer live list no longer permits a background resume")
+    }
+
+    @Test
     fun aCompressedChatsRunningTurnStillRetriesByItsRuntime() = runTest {
         var resumes = 0
         gateway(backgroundScope, emptyMap(), reconnects = true).apply {
