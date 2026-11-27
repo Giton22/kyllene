@@ -281,6 +281,128 @@ class FinalReplyAfterToolsTest {
     }
 
     @Test
+    fun twoSteersMidFinalShowTheFinalOnce() {
+        val parts = twoSegments(event("message.delta", """{"text":"\n\nDone: the "}"""))
+            .let { it.copy(messages = it.messages + ChatMessage.User("s1", "one")) }.sealReplyBefore("s1")
+            .apply(event("message.delta", """{"text":"file "}"""))
+            .let { it.copy(messages = it.messages + ChatMessage.User("s2", "two")) }.sealReplyBefore("s2")
+            .apply(
+                event("message.delta", """{"text":"is saved."}"""),
+                event("message.complete", """{"text":"$final","status":"complete"}"""),
+            ).messages.filterIsInstance<ChatMessage.Assistant>()
+        assertEquals(listOf("$before\n\n$middle\n\nDone: the ", "file ", "is saved."), parts.map { it.text })
+    }
+
+    @Test
+    fun aRedirectMidFinalShowsTheNewResponseWhole() {
+        // session.redirect interrupts the response and the model answers again, so the new final is all new.
+        val parts = twoSegments(event("message.delta", """{"text":"\n\nDone: the fi"}"""))
+            .let { it.copy(messages = it.messages + ChatMessage.User("r", "log it too")) }
+            .sealReplyBefore("r", sameResponse = false)
+            .apply(event("message.complete", """{"text":"Done: the file is saved and logged.","status":"complete"}"""))
+            .messages.filterIsInstance<ChatMessage.Assistant>()
+        assertEquals("Done: the file is saved and logged.", parts.last().text)
+    }
+
+    @Test
+    fun aGapInsideTheFinalIsFilledFromTheFinal() {
+        val state = twoSegments(
+            event("message.delta", """{"text":"\n\nFound "}"""),
+            event("message.delta", """{"text":"saved."}"""),
+            event("message.complete", """{"text":"Found it. File saved.","status":"complete"}"""),
+        )
+        assertEquals("$before\n\n$middle\n\nFound it. File saved.", state.replyText())
+    }
+
+    @Test
+    fun aFinalThatRepeatsTheEndOfAnEarlierSegmentStillShows() {
+        val state = start.apply(
+            event("message.start", "{}"),
+            event("message.delta", """{"text":"Checking the file is saved."}"""),
+            *tool("c1", "terminal"),
+            event("message.complete", """{"text":"file is saved.","status":"complete"}"""),
+        )
+        assertEquals("Checking the file is saved.\n\nfile is saved.", state.replyText())
+    }
+
+    @Test
+    fun aFinalAlreadyAddedAsTextBesideTheCallsShowsOnce() {
+        // An interim that didn't stream, then no tool: the final is that text, and an older gateway sets no flag.
+        val state = start.apply(
+            event("message.start", "{}"),
+            *tool("c1", "terminal"),
+            event("message.interim", """{"text":"$final","already_streamed":false}"""),
+            event("message.complete", """{"text":"$final","status":"complete"}"""),
+        )
+        assertEquals(final, state.replyText().trim())
+    }
+
+    @Test
+    fun aCatchUpThatAddsStepsForgetsTheBoundary() {
+        // The boundary is at c1; while away, a middle segment, c2 and part of the final came, read back whole.
+        val away = start.apply(
+            event("message.start", "{}"),
+            event("message.delta", """{"text":"$before"}"""),
+            *tool("c1", "clarify"),
+        ).withInflight("$before\n\n$middle\n\nDone: the fi")
+        assertEquals(null, away.responseStart)
+        val state = away.apply(event("message.complete", """{"text":"$final","status":"complete","response_transformed":true}"""))
+        assertInOrder(state.replyText(), before, middle, final)
+    }
+
+    @Test
+    fun aSteeredTurnWhoseEndWasLostCarriesNothingIntoTheNext() {
+        val state = twoSegments(event("message.delta", """{"text":"\n\nSure, "}"""))
+            .let { it.copy(messages = it.messages + ChatMessage.User("s", "and log it")) }.sealReplyBefore("s")
+            .apply(
+                event("message.start", "{}"),
+                event("message.complete", """{"text":"Sure, here is the list.","status":"complete"}"""),
+            )
+        assertEquals("Sure, here is the list.", state.replyText())
+    }
+
+    @Test
+    fun aStaleReplyDropsTheCarriedStart() {
+        val stale = twoSegments(event("message.delta", """{"text":"\n\nSure, "}"""))
+            .let { it.copy(messages = it.messages + ChatMessage.User("s", "and log it")) }.sealReplyBefore("s")
+            .apply(event("message.delta", """{"text":"here"}"""))
+            .withoutStaleReply()
+        assertEquals(null, stale.responseStart)
+    }
+
+    @Test
+    fun anInterimAfterTheFinalBeganDoesntMoveTheBoundary() {
+        val state = twoSegments(
+            event("message.delta", """{"text":"\n\n$final"}"""),
+            event("message.interim", """{"text":"Note: logged too.","already_streamed":false}"""),
+            event("message.complete", """{"text":"$final","status":"complete"}"""),
+        )
+        assertEquals(1, state.replyText().count(final), state.replyText())
+    }
+
+    @Test
+    fun crlfLineEndsMatchTheFinal() {
+        val state = start.apply(
+            event("message.start", "{}"),
+            *tool("c1", "terminal"),
+            event("message.delta", """{"text":"Line one\r\nLine tw"}"""),
+            event("message.complete", """{"text":"Line one\nLine two","status":"complete"}"""),
+        )
+        assertEquals("Line one\nLine two", state.replyText())
+    }
+
+    @Test
+    fun aCumulativeFinalWithCrlfDropsTheEarlierSegments() {
+        val state = start.apply(
+            event("message.start", "{}"),
+            event("message.delta", """{"text":"Step one.\r\nChecked."}"""),
+            *tool("c1", "terminal"),
+            event("message.complete", """{"text":"Step one.\nChecked.\n\nAll done.","status":"complete"}"""),
+        )
+        assertEquals("Step one.\r\nChecked.\n\nAll done.", state.replyText())
+    }
+
+    @Test
     fun aSteerBeforeTheFinalShowsTheWholeFinalBelow() {
         val parts = steeredMidFinal(0)
         assertEquals(2, parts.size)
