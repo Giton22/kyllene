@@ -15,7 +15,6 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInputModeManager
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -23,7 +22,6 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.rememberCursorPositionProvider
 import kotlinx.coroutines.delay
 
 /**
@@ -37,7 +35,7 @@ actual fun Tooltip(text: String, modifier: Modifier, content: @Composable () -> 
     // A click puts the label away until the mouse leaves and comes back.
     var pressed by remember { mutableStateOf(false) }
     var shown by remember { mutableStateOf(false) }
-    // Reached with Tab, a button names itself too, under it, since there's no pointer to follow.
+    // Reached with Tab, a button names itself too, in the same place as on hover.
     var focused by remember { mutableStateOf(false) }
     val inputMode = LocalInputModeManager.current
     LaunchedEffect(hovered, pressed) {
@@ -63,21 +61,30 @@ actual fun Tooltip(text: String, modifier: Modifier, content: @Composable () -> 
     ) {
         content()
         when {
-            // Under the pointer, clear of it.
             text.isEmpty() -> Unit
-            shown -> Popup(popupPositionProvider = rememberCursorPositionProvider(DpOffset(0.dp, 18.dp))) { TooltipLabel(text) }
-            focused -> Popup(popupPositionProvider = remember(below) { UnderAnchor(below) }) { TooltipLabel(text) }
+            // By the element, not the pointer: a label that lands on the pointer takes the hover and flickers.
+            shown || focused -> Popup(popupPositionProvider = remember(below) { UnderAnchor(below) }) { TooltipLabel(text) }
         }
     }
 }
 
-/** Centred under the element, [gap] below it; above it when there's no room beneath; kept inside the window. */
+/**
+ * Centred under the element, [gap] below it; above it when there's no room beneath; kept inside the window across.
+ * Too tall for either side, it goes to the roomier one and the window cuts it off, never over the element, which it
+ * would take the hover from.
+ */
 private class UnderAnchor(private val gap: Int) : PopupPositionProvider {
     override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
         val x = (anchorBounds.center.x - popupContentSize.width / 2).coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
         val under = anchorBounds.bottom + gap
-        val y = if (under + popupContentSize.height <= windowSize.height) under else anchorBounds.top - gap - popupContentSize.height
-        return IntOffset(x, y.coerceAtLeast(0))
+        val over = anchorBounds.top - gap - popupContentSize.height
+        val y = when {
+            under + popupContentSize.height <= windowSize.height -> under
+            over >= 0 -> over
+            windowSize.height - under >= anchorBounds.top -> under
+            else -> over
+        }
+        return IntOffset(x, y)
     }
 }
 

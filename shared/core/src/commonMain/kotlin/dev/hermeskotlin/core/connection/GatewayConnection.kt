@@ -87,6 +87,8 @@ class GatewayConnection(
         job = scope.launch { loop(gateway) }
     }
 
+    fun isConnectedTo(gatewayUrl: String): Boolean = url?.value == gatewayUrl && state.value is ConnectionState.Connected
+
     fun stop() {
         job?.cancel()
         job = null
@@ -170,7 +172,7 @@ class GatewayConnection(
                     return
                 }
                 failure is HandshakeRejectedException && failure.status == 404 -> {
-                    _state.value = ConnectionState.Failed("This dashboard has no chat endpoint (/api/ws). Update Hermes.")
+                    _state.value = ConnectionState.Failed("This dashboard has no chat endpoint (/api/ws). Check that the proxy forwards /api/ws.")
                     return
                 }
                 failure is TransportClosedException && failure.code == GatewayCloseCodes.TICKET_REJECTED -> {

@@ -61,13 +61,29 @@ class DesktopNotifierTest {
     @Test
     fun aFinishedReplyIsToldByItsFirstLine() {
         val notices = noticesFor(running(), done("\nAll green.\nDetails follow"), focused = false, prefs, mutableSetOf())
-        assertEquals(listOf(DesktopNotice("Release", "All green.", "s1", "Release")), notices)
+        assertEquals(listOf(DesktopNotice("Release", "All green.", "s1", "Release", replyPreview = "All green.")), notices)
     }
 
     @Test
-    fun anEmptyReplyInAnUntitledChatSaysItReplied() {
-        val notices = noticesFor(running(null), done(" ", title = null), focused = false, prefs, mutableSetOf())
-        assertEquals(listOf(DesktopNotice("<replied>", "<reply in>", "s1", null)), notices)
+    fun toolOnlyAndSilentTurnsDoNotSendReplyNotices() {
+        for (text in listOf(" ", "[SILENT]")) {
+            assertTrue(noticesFor(running(), done(text), focused = false, prefs, mutableSetOf()).isEmpty())
+        }
+    }
+
+    @Test
+    fun aReplyReadBackOnAReconnectBeforeTheTurnEndsIsStillTold() {
+        // Back on line, the stored transcript has the reply, finished, before the resume says the turn is over.
+        val readBack = done("Done while away", TurnOutcome.Complete).copy(running = true)
+        val notices = noticesFor(readBack, readBack.copy(running = false), focused = false, prefs, mutableSetOf(), words, turnStart = running())
+        assertEquals(listOf(DesktopNotice("Release", "Done while away", "s1", "Release", replyPreview = "Done while away")), notices)
+    }
+
+    @Test
+    fun silentCompletionDoesNotNotifyAgainForThePreviousReply() {
+        val previousReply = done("Already answered", TurnOutcome.Complete)
+        val runningSilently = previousReply.copy(running = true)
+        assertTrue(noticesFor(runningSilently, previousReply, focused = false, prefs, mutableSetOf()).isEmpty())
     }
 
     @Test

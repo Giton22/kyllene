@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -71,28 +72,16 @@ class ChatSessionControlTest {
     }
 
     @Test
-    fun aGatewayWithoutSessionControlIsAskedOncePerLink() = runTest {
-        val connection = gateway(
-            backgroundScope,
-            mapOf("session.resume" to RESUME, "session.control.read" to "error:-32601"),
-            reconnects = true,
-        ).connection
+    fun aReadThatFailsLeavesTheStateAndIsAskedAgain() = runTest {
+        val connection = gateway(backgroundScope, mapOf("session.resume" to RESUME, "session.control.read" to "error:5031"), reconnects = false).connection
         val chat = ChatSession(url, "stored-1", "Greeting", connection, SessionsApi(client()), backgroundScope)
         chat.start()
         chat.state.first { it.runtimeSessionId == "rt1" }
         gateway.socket.awaitSent { it.isCall("session.control.read") }
-        assertNull(chat.state.value.control)
-        // Let the read's error land, then ask again on the same link: the latch holds it back.
         kotlinx.coroutines.delay(1_000)
-        chat.refreshControl()
-        assertEquals(1, gateway.sent("session.control.read").size)
 
-        // Updating a gateway restarts it, so a new link may well know the method now.
-        gateway.socket.serverClose(1006)
-        chat.state.first { it.runtimeSessionId == null }
-        chat.state.first { it.runtimeSessionId == "rt1" }
-        gateway.socket.awaitSent { it.isCall("session.control.read") }
-
+        assertFalse(chat.refreshControl())
+        assertNull(chat.state.value.control)
         assertEquals(2, gateway.sent("session.control.read").size)
     }
 

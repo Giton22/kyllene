@@ -212,9 +212,27 @@ together, retaining the old device ID only for that gateway's later unregistrati
 A subsequent registration creates fresh material. Public gateway keys must be valid
 protocol-version-one P-256 points before they are pinned.
 
-This adds registration storage, not push reception or a background service. The
-desktop Notifications anywhere control remains hidden until receiving is supported.
-The existing authenticated registration coordinator and gateway protocol are reused.
+Notifications anywhere is off by default. On supported Linux storage, enabling it
+uses the existing gateway plugin installation consent and authenticated registration
+coordinator. While Kyllene is running, an outbound ntfy stream receives signed,
+encrypted bot replies, scheduled runs and test pings. Scheduled runs are saved in
+their source gateway's Inbox; only runs marked for notification produce a notice.
+Reply notifications follow the existing reply preference. Phone tools and incoming
+calls are not handled by this receiver. No remote images or message URLs are fetched.
+
+Replay IDs and the subscription cursor are saved encrypted before a message is handed
+to the app. Duplicates in the bounded recent-ID cache are dropped across reconnects
+and restarts; this is an at-most-once delivery attempt, not guaranteed delivery.
+Invalid, stale and future messages are rejected. Corrupt replay state is preserved
+and blocks receipt. Network failures reconnect with bounded backoff; Settings shows
+safe receiver guidance without exposing topic URLs. Turning the setting off, retiring
+its registration or changing gateway/profile invalidates queued actions. Open waits
+for sign-in and dialogs and rechecks ownership before opening its named bot session
+or Inbox run. It does not look up a missing bot session under a different owner.
+
+The receiver shares the app's lifetime, including the existing close-to-tray behavior
+where a tray is available. Explicit Quit stops it. This adds no daemon, autostart or
+cold-start notification actions; delivery while Kyllene is stopped is not promised.
 
 ### Gateway client certificates
 
@@ -434,7 +452,7 @@ Repeated actions are consumed once. Questions and other requests open the app.
 Open waits for an existing sign-in, modal, editor or plugin page to close,
 preserving its input, and rechecks ownership before revealing the chat.
 
-Notices expire when their source chat closes or is replaced. Separate chat windows
+Notices from live chats expire when their source chat closes or is replaced. Separate chat windows
 retain their own notices across main-window chat and profile changes, and go on
 notifying; sign-out and gateway changes close them and revoke their notices. A
 completed profile selection revokes the main window's previous notices.

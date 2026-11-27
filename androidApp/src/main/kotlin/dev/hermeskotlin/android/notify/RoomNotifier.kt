@@ -84,7 +84,7 @@ class RoomNotifier(
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            // An older gateway without rooms, or the socket dropping: nothing to tell.
+            // A failed read, or the socket dropping: nothing to tell.
             return false
         }
         roomIds = rooms.mapTo(HashSet()) { it.roomId }

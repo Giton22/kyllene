@@ -11,6 +11,7 @@ import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.cache.OfflineCache
 import dev.hermeskotlin.core.bots.BotDetails
 import dev.hermeskotlin.core.bots.BotDraft
+import dev.hermeskotlin.core.bots.BotSession
 import dev.hermeskotlin.core.bots.BotHealth
 import dev.hermeskotlin.core.bots.BotTrouble
 import dev.hermeskotlin.core.bots.displayNameFor
@@ -26,6 +27,7 @@ import dev.hermeskotlin.core.rooms.DesktopRoom
 import dev.hermeskotlin.core.rooms.parseDesktopRooms
 import dev.hermeskotlin.core.chat.AttentionTracker
 import dev.hermeskotlin.core.chat.ChatHost
+import dev.hermeskotlin.core.chat.hasUnreadBotMessage
 import dev.hermeskotlin.core.connection.ConnectionState
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -43,11 +45,13 @@ import dev.hermeskotlin.core.network.ApiResult
 import dev.hermeskotlin.core.network.errorMessage
 import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.sessions.SeenStore
+import dev.hermeskotlin.core.sessions.SessionMessage
 import dev.hermeskotlin.core.sessions.SessionSummary
 import dev.hermeskotlin.core.sessions.SessionsApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,6 +65,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
@@ -76,7 +81,7 @@ data class BotsUiState(
     val loading: Boolean = true,
     /** The roster itself failed to load: the gateway's words for why, empty when it gave none. */
     val error: String? = null,
-    /** The gateway predates Bot Mode's roster call. */
+    /** The gateway doesn't serve Bot Mode's roster call (`profiles.list`). */
     val unsupported: Boolean = false,
     /** Bots whose chat has something the user hasn't seen. */
     val unread: Set<String> = emptySet(),
@@ -160,9 +165,16 @@ class BotsViewModel(
     private val avatarsAsked = mutableSetOf<String>()
 
     private val gateway = MutableStateFlow<GatewayUrl?>(null)
+    private val unreadRefreshes = Channel<GatewayUrl>(Channel.CONFLATED)
+
+    private data class CheckedHistory(val session: BotSession, val readUpTo: Double, val unread: Boolean)
 
     /** Bots whose chats the gateway was asked to watch on this connection. */
     private val watched = mutableSetOf<String>()
+
+    /** Roster reads asked for, and the one whose answer shows. */
+    private var rosterReads = 0L
+    private var rosterShown = 0L
 
 
     init {
@@ -183,6 +195,19 @@ class BotsViewModel(
                 .filter { it.type == "sessions.changed" && (visible.value && _mode.value == SidebarMode.Bots || desktopRoomOpen.value) }
                 .debounce(EVENT_DEBOUNCE_MS)
                 .collect { refreshNow() }
+        }
+        // History can be slow. Keep a single worker per gateway and recheck the latest roster after it catches up.
+        viewModelScope.launch {
+            gateway.collectLatest { url ->
+                if (url == null) return@collectLatest
+                val checked = mutableMapOf<String, CheckedHistory>()
+                unreadRefreshes.receiveAsFlow().collect { requested ->
+                    if (requested != url) return@collect
+                    val bots = _state.value.all
+                    checked.keys.retainAll(bots.mapTo(mutableSetOf()) { it.name })
+                    bots.forEach { bot -> refreshUnread(url, bot, checked) }
+                }
+            }
         }
         // A bot's chat read to its end on screen: its row's activity counts as seen and its badge goes at once.
         viewModelScope.launch {
@@ -505,6 +530,7 @@ class BotsViewModel(
                 is ApiResult.Success -> {
                     chats.forget(bot.name)
                     cache?.forgetProfile(url, bot.name)
+                    dropRosterReadsInFlight()
                     _state.update { it.regroup(it.all.filterNot { b -> b.name == bot.name }).copy(notice = words(Res.string.bots_deleted, bot.label)) }
                     onDeleted()
                 }
@@ -517,10 +543,13 @@ class BotsViewModel(
 
     private fun changeMeta(bot: Bot, key: String, value: JsonElement) {
         // Shown at once; the next roster read brings the gateway's version.
+        dropRosterReadsInFlight()
         _state.update { state -> state.regroup(state.all.map { if (it.name == bot.name) it.withMeta(key, value) else it }) }
         viewModelScope.launch {
             try {
                 api.updateMeta(bot.name, mapOf(key to value))
+                // A read asked while the write was on its way has the roster from before it.
+                dropRosterReadsInFlight()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -532,27 +561,49 @@ class BotsViewModel(
 
     private suspend fun refreshNow() {
         val url = gateway.value ?: return
+        val read = ++rosterReads
         try {
             val roster = api.roster()
             if (gateway.value != url) return
+            // Reads overlap (the poll, an event, an action's own read) and can finish out of order: one asked
+            // before the roster now shown is older than it, e.g. from before a bot was removed. It's dropped
+            // whole, so it can't mark a forgotten chat as known again either.
+            if (read < rosterShown) return
+            rosterShown = read
             chats.note(roster.bots)
+            if (gateway.value != url) return
+            if (read < rosterShown) return
             val ordered = roster.bots.forRoster()
-            val unread = unread(url, ordered)
+            val chatIds = ordered.associate { it.name to it.canonicalSession?.id }
             // Desktop's rooms ride the roster's default row, so they refresh without a call of their own.
             val desktopRooms = parseDesktopRooms(roster.bots.firstOrNull { it.isDefault || it.name == Bot.DEFAULT }?.uiMeta)
-            _state.update { it.regroup(ordered).copy(loading = false, error = null, unsupported = false, unread = unread, desktopRooms = desktopRooms) }
+            _state.update { state ->
+                val unread = state.all.filter { bot ->
+                    bot.name in state.unread && bot.canonicalSession?.id?.let { it == chatIds[bot.name] } == true
+                }.mapTo(mutableSetOf()) { it.name }
+                state.regroup(ordered).copy(loading = false, error = null, unsupported = false, unread = unread, desktopRooms = desktopRooms)
+            }
             loadAvatars(ordered)
             watch(ordered)
+            unreadRefreshes.trySend(url)
             health.checkOnce(ordered.map { it.name })
             readRoutines(url, ordered)
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
+            // An older read that fails, or one from the gateway before a switch, says nothing about the roster on screen.
+            if (read < rosterShown || gateway.value != url) return
             val unsupported = UNKNOWN_METHOD.containsMatchIn(e.message)
             _state.update { it.copy(loading = false, unsupported = unsupported, error = e.message.takeUnless { unsupported }) }
         } catch (e: Exception) {
+            if (read < rosterShown || gateway.value != url) return
             _state.update { it.copy(loading = false, error = e.message.orEmpty()) }
         }
+    }
+
+    /** The roster just changed here (a delete, an edit): a read asked before it would undo it on screen. */
+    private fun dropRosterReadsInFlight() {
+        rosterShown = rosterReads + 1
     }
 
     /** Finds each bot's failing routine, at most once a minute; a failed read keeps what was known. */
@@ -581,12 +632,67 @@ class BotsViewModel(
     }
 
     /** Local fallback read state follows both the stable id and the resolved transcript after compression. */
-    private suspend fun unread(url: GatewayUrl, bots: List<Bot>): Set<String> = bots.mapNotNull { bot ->
-        // A chat just begun has nothing in it to read.
-        if (bot.canonicalSession?.messageCount == 0) return@mapNotNull null
-        val chat = bot.chatSummary() ?: return@mapNotNull null
-        bot.name.takeIf { seenStore.seen(url, bot.name).first().isUnread(chat, resolvedId = bot.canonicalSession?.openId) }
-    }.toSet()
+    private suspend fun refreshUnread(url: GatewayUrl, bot: Bot, checked: MutableMap<String, CheckedHistory>) {
+        val session = bot.canonicalSession ?: return
+        val chat = bot.chatSummary() ?: return
+        val tip = session.openId ?: return
+        try {
+            val seen = seenStore.seen(url, bot.name).first()
+            val looked = maxOf(seen.lastLook(chat.id), seen.lastLook(tip))
+            val mayBeUnread = session.messageCount != 0 && seen.isUnread(chat, resolvedId = tip)
+            // A history that can't be read keeps the badge; before one was read here, the activity answers. That
+            // guess isn't kept as read, so the next refresh asks the history again.
+            var guessed = false
+            val unread = if (mayBeUnread) {
+                checked[bot.name]?.takeIf { it.session == session && it.readUpTo == looked }?.unread
+                    ?: hasUnreadBotHistory(url, bot.name, tip, looked) {
+                        true.takeUnless { checked[bot.name]?.session?.id == session.id }?.also { guessed = true }
+                    }
+                    ?: return
+            } else false
+
+            val latest = seenStore.seen(url, bot.name).first()
+            if (maxOf(latest.lastLook(chat.id), latest.lastLook(tip)) != looked || gateway.value != url) return
+            _state.update { state ->
+                if (state.all.none { it.name == bot.name && it.canonicalSession == session }) return@update state
+                state.copy(unread = if (unread) state.unread + bot.name else state.unread - bot.name)
+            }
+            if (mayBeUnread && !guessed) checked[bot.name] = CheckedHistory(session, looked, unread)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // A failed history or local read leaves this badge as it was. The next refresh can retry it.
+        }
+    }
+
+    // Roster activity also advances on tool calls. Check the underlying history, including when
+    // many silent steps came in after the last readable message.
+    private suspend fun hasUnreadBotHistory(
+        url: GatewayUrl,
+        profile: String,
+        tip: String,
+        looked: Double,
+        /** The answer when a page can't be read. */
+        whenUnreadable: () -> Boolean?,
+    ): Boolean? {
+        val pageSize = 100
+        var offset = 0
+        var previous: List<SessionMessage>? = null
+        repeat(UNREAD_HISTORY_PAGE_LIMIT) {
+            if (gateway.value != url) return null
+            val result = sessions.messages(url, tip, limit = pageSize, profile = profile, offset = offset, inlineImages = false)
+            val rows = (result as? ApiResult.Success)?.value?.messages ?: return whenUnreadable()
+            val firstId = rows.firstOrNull()?.id
+            if ((firstId != null && firstId == previous?.firstOrNull()?.id) || rows == previous) return null
+            if (rows.hasUnreadBotMessage(looked)) return true
+            // Pages go back in time: one that reaches the last look has nothing newer behind it.
+            if (rows.size < pageSize || rows.any { it.timestamp?.let { at -> at <= looked } == true }) return false
+            previous = rows
+            offset += rows.size
+        }
+        // A very long run of steps since the last look: older pages may still hold a reply, so it isn't known.
+        return null
+    }
 
     private fun loadAvatars(bots: List<Bot>) {
         val wanted = bots.filter { it.hasAvatar && avatarsAsked.add(it.name) }
@@ -618,6 +724,7 @@ class BotsViewModel(
         /** The roster's fallback read, for changes that send no event; chat activity arrives as events. */
         const val POLL_MS = 30_000L
         const val EVENT_DEBOUNCE_MS = 400L
+        const val UNREAD_HISTORY_PAGE_LIMIT = 5
         const val ROUTINES_EVERY_MS = 60_000L
 
         /** Brief gaps (a screen rotating) keep the inbox collected; collecting it asks the gateway for live statuses. */

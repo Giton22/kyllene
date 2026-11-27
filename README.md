@@ -114,7 +114,7 @@ What it does, and how, is in [docs/pebble.md](docs/pebble.md).
 
 | | |
 |---|---|
-| **Hermes Agent** | The dashboard running (`hermes dashboard`) and reachable from your phone. Kyllene is built against Hermes Agent's main branch as of October 2026; older versions may lack some features. |
+| **Hermes Agent** | Hermes Agent 0.22.0 or newer (tested to 0.23.4), with the dashboard running (`hermes dashboard`) and reachable from your phone. On an older version Kyllene still connects, and says to run `hermes update`. |
 | **Network** | The same Wi-Fi, [Tailscale](https://tailscale.com), or an `https://` address. Kyllene warns before it would send a password over the internet unencrypted. Gateways behind Cloudflare Access are supported with a service token. |
 | **Sign-in** | A dashboard username and password, or browser sign-in on SSO/OIDC gateways. |
 

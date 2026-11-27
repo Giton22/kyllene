@@ -149,7 +149,12 @@ data class RosterPreview(val text: String, val fromBot: String? = null)
 fun Bot.rosterPreview(): RosterPreview? {
     val line = previewLine() ?: return null
     val agent = dev.hermeskotlin.core.chat.AgentMessage.parse(line) ?: return RosterPreview(line)
-    return RosterPreview(agent.body.ifEmpty { "…" }, fromBot = agent.sender)
+    // The gateway cuts a preview at 60 characters plus "..." (persistence/sqlite/_state/common.py `_shape_preview`),
+    // which can land inside the no-reply marker after a long signature.
+    val cut = agent.body.removeSuffix("...")
+    val cutMarker = agent.handle != null && cut != agent.body && cut.length >= 2 &&
+        dev.hermeskotlin.core.chat.AgentMessage.NO_REPLY_MARKER.startsWith(cut)
+    return RosterPreview(agent.body.takeUnless { cutMarker }.orEmpty().ifEmpty { "…" }, fromBot = agent.sender)
 }
 
 /** The Bot Chat's latest line as a roster row shows it: Markdown marks taken out, one line (labels.ts `stripPreviewMarkdown`). */

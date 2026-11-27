@@ -255,7 +255,7 @@ class ChatSessionResumeTest {
         answer = { _, method, _ ->
             when (method) {
                 "session.resume" -> if (resumes++ == 0) midTurn("Running it. First I need the address.") else """{"session_id":"rt2","running":false}"""
-                "session.events.since" -> "error:-32601"
+                "session.events.since" -> since(latest = 99, truncated = true)
                 else -> "{}"
             }
         }
@@ -323,6 +323,67 @@ class ChatSessionResumeTest {
         assertTrue(reply.streaming)
         assertEquals(listOf("t1"), reply.tools.map { it.id })
         assertTrue(merged.any { it is ChatMessage.Notice && it.key == "n1" })
+    }
+
+    @Test
+    fun foldingSavedStepsKeepsOnlyCommentaryMissingFromLiveText() {
+        val rows = listOf(
+            """{"id":2,"role":"assistant","content":"Starting.","timestamp":101,
+                "display_commentary":["Checking.\r\n\r\nMore detail.","Looking.\r\nStill looking.","More detail","Only in history."]}""",
+        ).map { lenient.decodeFromString<SessionMessage>(it) }
+        val saved = historyToMessages(rows, turnStartedAt = 100.0)
+        val live = ChatMessage.Assistant(
+            "live-0", text = "Starting.\n\nChecking.\n\nMore detail.\n\nLooking.\nStill looking.\n\nDone.",
+            streaming = true,
+        )
+
+        val merged = (saved + live).withSavedStepsInLiveReply(100.0, live.text, turnReplyKey = live.key)
+        val reply = assertIs<ChatMessage.Assistant>(merged.single())
+        assertEquals(live.text, reply.text)
+        assertEquals(listOf("More detail", "Only in history."), reply.commentary)
+    }
+
+    @Test
+    fun foldingSavedStepsRecognizesCommentaryRunTogetherWithOtherSentences() {
+        val row = lenient.decodeFromString<SessionMessage>(
+            """{"id":2,"role":"assistant","timestamp":101,"display_commentary":["Checking."]}""",
+        )
+        val saved = historyToMessages(listOf(row), turnStartedAt = 100.0)
+        val examples = listOf(
+            "Checking.Done." to emptyList(),
+            "Earlier.Checking.\n\nDone." to emptyList(),
+            "Earlier.Checking.Done." to emptyList(),
+            "Earlier. Checking. Done." to emptyList(),
+            "Earlier.\nChecking.\n\nDone." to emptyList(),
+            "Earlier. Checking. CI is green." to emptyList(),
+            "Earlier. Checking. 3 suites ran." to emptyList(),
+            "e.g. checking. Done." to listOf("Checking."),
+            "Checking.com" to listOf("Checking."),
+            "Checking.COM" to listOf("Checking."),
+            "See https://example.Checking.Com/path" to listOf("Checking."),
+            "Run `Example.Checking.Parser`." to listOf("Checking."),
+            "```\nExample.Checking.Parser\n```" to listOf("Checking."),
+            "Still Checking." to listOf("Checking."),
+        )
+
+        examples.forEach { (text, expected) ->
+            val live = ChatMessage.Assistant("live-0", text = text, streaming = true)
+            val folded = (saved + live).withSavedStepsInLiveReply(100.0, live.text, turnReplyKey = live.key)
+            val reply = assertIs<ChatMessage.Assistant>(folded.single())
+            assertEquals(text, reply.text)
+            assertEquals(expected, reply.commentary, text)
+        }
+    }
+
+    @Test
+    fun savedCommentaryTheStreamAlreadyShowsIsntRepeated() {
+        // The stream had it as reply text (message.interim), spaced and line-ended its own way.
+        val saved = ChatMessage.Assistant("s1", commentary = listOf("Step one.\r\n\r\nStep two.", "Not streamed yet."), timestamp = 101.0)
+        val live = ChatMessage.Assistant("live-0", text = "Looking. Step one.\n\nStep two.\n\nStill going.", streaming = true)
+
+        val reply = (listOf(saved, live).withSavedStepsInLiveReply(100.0, "Looking.", turnReplyKey = "live-0").single()) as ChatMessage.Assistant
+
+        assertEquals(listOf("Not streamed yet."), reply.commentary)
     }
 
     @Test
@@ -512,8 +573,8 @@ class ChatSessionResumeTest {
     }
 
     @Test
-    fun aGatewayWithoutReplayReloadsAsBefore() = runTest {
-        answer = { _, method, _ -> if (method == "session.events.since") "error:-32601" else "{}" }
+    fun aGapTheRingCantFillReloadsAsBefore() = runTest {
+        answer = { _, method, _ -> if (method == "session.events.since") since(latest = 99, truncated = true) else "{}" }
         val (chat, _) = droppedMidTurn(
             backgroundScope,
             resume = """{"session_id":"rt1","running":true,"inflight":{"assistant":"Hello"}}""",
@@ -529,7 +590,7 @@ class ChatSessionResumeTest {
             """{"id":4,"role":"assistant","content":"Hello","timestamp":105,""" +
                 """"tool_calls":[{"id":"t1","type":"function","function":{"name":"terminal","arguments":"{}"}}]}""",
         )
-        answer = { _, method, _ -> if (method == "session.events.since") "error:-32601" else "{}" }
+        answer = { _, method, _ -> if (method == "session.events.since") since(latest = 99, truncated = true) else "{}" }
         val (chat, _) = droppedMidTurn(
             backgroundScope,
             resume = """{"session_id":"rt1","running":true,"turn_started_at":100,"inflight":{"assistant":"Hello wor"}}""",
@@ -707,8 +768,8 @@ class ChatSessionResumeTest {
     }
 
     @Test
-    fun comingBackInSightMidTurnOnAGatewayWithoutReplayKeepsTheReply() = runTest {
-        answer = { _, method, _ -> if (method == "session.events.since") "error:-32601" else "{}" }
+    fun comingBackInSightMidTurnWithoutAReplayKeepsTheReply() = runTest {
+        answer = { _, method, _ -> if (method == "session.events.since") since(latest = 99, truncated = true) else "{}" }
         val (chat, socket) = streamingHel(backgroundScope)
         // The turn starting read the transcript again; that read is done before counting.
         testScheduler.runCurrent()

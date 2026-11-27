@@ -23,6 +23,7 @@ import dev.hermeskotlin.core.sessions.SessionsApi
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.settings.WallpaperStore
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.SharingStarted
@@ -184,7 +185,11 @@ class SettingsViewModel(
     }
 
     /** Notifications anywhere: where its setup stands on this gateway. */
-    val pushStatus: StateFlow<PushStatus> = push.status
+    val pushAvailable: Boolean = push.available
+    val pushStatus: StateFlow<PushStatus> = combine(push.status, push.receiverDetail) { status, receiver ->
+        if (status.state != PushStatus.State.On || receiver == null) status
+        else status.copy(detail = listOfNotNull(status.detail, receiver).joinToString("\n"))
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, push.status.value)
 
     private val _pushTest = MutableStateFlow<Boolean?>(null)
     /** The last "Send a test": true when the gateway sent it, false when it couldn't, null before or while sending. */

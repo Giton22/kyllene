@@ -1,7 +1,10 @@
 # Bot Mode: integration design
 
+> Researched on Hermes Agent v0.21.5, before Kyllene's support window (v0.22.0 to v0.23.4). Check a method or route
+> against those tags before relying on what this says.
+
 Built from five research passes (2026-10-05) over `NousResearch/hermes-agent` at tag `v2026.9.24` (v0.21.5, which
-is what the test gateway runs) and `main` @ 6cd2817. They covered Desktop's Bot Mode plugin
+was what the test gateway ran then) and `main` @ 6cd2817. They covered Desktop's Bot Mode plugin
 (`apps/desktop/src/plugins/hermes-bots/`), the gateway contract (`tui_gateway/`), group chats, how bot messages
 appear in a transcript, and upstream issues and PRs. Paths are upstream and line numbers are at the tag unless
 marked. The emulator check of 2026-10-05 is in §11.
@@ -144,6 +147,7 @@ Classify a row **before** picking a bubble, in this order:
 | message from another bot | user row matching the parser in `AgentMessage.kt`. For `display_kind:"internal_notification"`, it must have the full `Message from 🤖 Name (@handle): …` sender stamp or the legacy `[Message from agent 'name'] …` form. | a small centred note: the sender's face (from the handle; `hermes` means default) and "Message from X", body collapsed, no edit. *(Done as a card; make it collapsed and add the face.)* |
 | reply to that message | the next settled assistant row after an agent note | collapse to "↗ Replied to X · show reply", except while streaming and except when this bot itself messaged X earlier in the same exchange (`agent-delivery.tsx:48-83`) |
 | compaction handoff | user or assistant row starting `[CONTEXT COMPACTION — REFERENCE ONLY]`, unless a real prompt follows the summary end marker | reference text inside System messages |
+| compaction reminders | exact first line of the in-flight request restatement; the preserved task list header followed by its first `- ` item, as a row of its own or folded into the last real user row (a prompt, bot message or scheduled result) after a blank line or as a text part of its own; or the skill reload notice alone. Recognized scheduled results take precedence | task-list reminder and reload notice stay hidden, and are cut from the row they were folded into (its pictures stay); the restated request shows without its header only while its original is missing from the loaded history. History pages and `/branch N` skip the hidden rows |
 | routine output | user row starting `[Cronjob "<name>" output — scheduled job, not the user…]\n\n` | routine name and content inside System messages |
 | cron mirror | `[Cron delivery: <name>]\n…` | same treatment |
 | scheduled-job result | `display_kind:"internal_notification"` with `display_metadata.completion_note` whose entries all name producer `cron` (a cron `deliver: origin` result for a local chat, hermes-agent 0.22.6+); where the route leaves the metadata out, only the whole `Cronjob Response: <name>\n(job_id: …)` wrapper with its footer | the job's message, open, outside System messages; red when `notification_category` is `diagnostic` |
@@ -157,7 +161,9 @@ those entries in order. Replies, other bots' messages, delivery outcomes and fai
 group. Gateway-hidden rows remain hidden; `display_content` takes precedence over raw stored content.
 User rows typed `internal_notification` are shown when they carry a bot-message envelope or a known cron
 envelope above, or when their `completion_note` names only `cron`. Wakes, watch notes and heartbeats share
-the kind and remain hidden.
+the kind and remain hidden. A signed bot message's leading `[no reply needed]` marker is for the
+recipient's model and isn't shown. Hermes sends nothing back after it, so the reply that follows isn't
+folded as an answer to the sender.
 
 **Delivery outcome** (parse the process `Output:`):
 - plain text, `{"reply",…,"status":"settled"}` or `Reply from X:` → "💬 Reply from @x", collapsed. Strip

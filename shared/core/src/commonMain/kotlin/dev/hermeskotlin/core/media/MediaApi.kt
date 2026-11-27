@@ -79,12 +79,11 @@ class MediaApi(
 
     /**
      * A whole gateway file a reply linked to (`GET /api/fs/download`, which reads through the profile's
-     * backend like the preview does), falling back to [file] on a gateway without it when no [profile]
-     * is asked for.
+     * backend like the preview does).
      */
-    suspend fun download(url: GatewayUrl, path: String, profile: String? = null): ApiResult<ByteArray> {
+    suspend fun download(url: GatewayUrl, path: String, profile: String? = null): ApiResult<ByteArray> =
         // Streamed and counted: unlike the managed route, /api/fs/download has no size cap of its own.
-        val result = client.prepareGet(url.resolve("api/fs/download")) {
+        client.prepareGet(url.resolve("api/fs/download")) {
             parameter("path", path)
             profile?.let { parameter("profile", it) }
         }.execute { response ->
@@ -101,30 +100,18 @@ class MediaApi(
                 if (bytes.size > maxDownloadBytes) ApiResult.Failed(413, TOO_LARGE) else ApiResult.Success(bytes)
             }
         }
-        // FastAPI's own "Not Found" means no such route; the route's own 404 says "File not found".
-        val noRoute = result is ApiResult.Failed && (result.status == 405 || result.status == 404 && result.message in setOf("Not Found", "HTTP 404"))
-        return when {
-            !noRoute -> result
-            // The managed route reads the host's disk, not the profile's backend: the same path in a
-            // sandboxed profile could be a different file there, or none.
-            profile != null -> ApiResult.Failed(501, NO_PROFILE_DOWNLOAD)
-            else -> file(url, path)
-        }
-    }
 
     /**
      * Makes the folder [path] on the gateway's machine, and any folders above it that are missing
      * (`POST /api/files/mkdir`, Desktop's New folder). One already there is fine. `~/` paths are the
      * gateway's home; like the managed downloads, this is the host's disk, not a sandboxed profile's.
-     * The route makes missing folders rather than answering 404, so any 404 is a gateway without it. So is a
-     * 405: the dashboard's catch-all only takes GET, so a POST to a route it lacks is "Method Not Allowed".
      */
     suspend fun makeFolder(url: GatewayUrl, path: String): ApiResult<Unit> = apiCall {
         client.post(url.resolve("api/files/mkdir")) {
             contentType(ContentType.Application.Json)
             setBody(buildJsonObject { put("path", path) })
         }
-    }.map { }.let { if (it is ApiResult.Failed && (it.status == 404 || it.status == 405)) ApiResult.Failed(404, NO_MKDIR) else it }
+    }.map { }
 
     /** A reply's picture from the web (`![alt](https://...)`). */
     suspend fun remote(url: String): ApiResult<ByteArray> = apiCall { web.get(url) }.map { response ->
@@ -139,11 +126,6 @@ class MediaApi(
         const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
 
         const val TOO_LARGE = "It's over 64 MB, too large to fetch to the phone from the chat."
-
-        /** Why [makeFolder] failed on a gateway older than `POST /api/files/mkdir`. */
-        const val NO_MKDIR = "This gateway can't make folders. Update Hermes, or make the folder on the gateway's machine."
-
-        const val NO_PROFILE_DOWNLOAD = "This gateway can't hand over whole files from a profile yet. Update Hermes on it."
     }
 
     /** The image's bytes, decoded from the `data_url` the gateway answers with (media folders only). */

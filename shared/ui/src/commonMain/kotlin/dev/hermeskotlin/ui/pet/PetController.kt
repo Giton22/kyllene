@@ -58,7 +58,7 @@ class PetController(private val api: PetApi, private val scope: CoroutineScope) 
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                // An older gateway without pets, or offline: keep whatever is showing.
+                // Offline, or the read failed: keep whatever is showing.
             }
         }
     }

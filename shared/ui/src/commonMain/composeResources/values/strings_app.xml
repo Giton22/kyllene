@@ -352,7 +352,8 @@
     <string name="check_fix_wait_a_minute">Wait a minute, then try again.</string>
     <string name="check_fix_sign_in_or_update">Sign in again; if it keeps failing, update Hermes.</string>
     <string name="check_fix_update_hermes_try_again">Update Hermes, then try again.</string>
-    <string name="check_fix_update_hermes">Update Hermes on the server.</string>
+    <string name="hermes_unsupported_version">Kyllene needs Hermes Agent 0.22 or newer. Run `hermes update`.</string>
+    <string name="check_fix_proxy_forwards_ws">Check that the proxy forwards /api/ws.</string>
     <string name="check_fix_agent_running">Check that the agent gateway is running on the server. Behind a proxy, allow WebSocket upgrades on /api/ws.</string>
     <string name="check_fix_exact_address">Use the exact address the dashboard is configured for, and check that embedded chat is enabled.</string>
     <string name="check_fix_access_token_or_proxy">Behind Cloudflare Access, add a service token for this gateway. Otherwise check that the proxy forwards /api/ws.</string>

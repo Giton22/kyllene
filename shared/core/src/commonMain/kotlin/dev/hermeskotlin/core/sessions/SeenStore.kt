@@ -70,7 +70,7 @@ data class SeenChats(
 data class CaughtUp(val gateway: GatewayUrl, val profile: String?, val sessionId: String)
 
 /** Timestamps from the gateway and this phone's clock round differently. */
-private const val SEEN_SLACK_SECONDS = 1.0
+const val SEEN_SLACK_SECONDS = 1.0
 
 /** Remembers [SeenChats] per gateway and profile (null: the launch profile), kept across restarts. */
 class SeenStore(private val store: KeyValueStore, private val now: () -> Double) {

@@ -26,7 +26,6 @@ import dev.hermeskotlin.core.profiles.ProfilesApi
 import dev.hermeskotlin.core.projects.FolderListing
 import dev.hermeskotlin.core.projects.Project
 import dev.hermeskotlin.core.projects.ProjectsApi
-import dev.hermeskotlin.core.rpc.RpcException
 import dev.hermeskotlin.core.sessions.SessionListFilter
 import dev.hermeskotlin.core.sessions.SessionSummary
 import dev.hermeskotlin.core.sessions.SessionsApi
@@ -86,9 +85,9 @@ data class SessionsUiState(
     val sessionExpired: Boolean = false,
     /** The last archive or unarchive, which "Undo" can take back for a few seconds. */
     val undo: ArchiveUndo? = null,
-    /** The gateway's projects that have chats; empty when it has none or doesn't know projects. */
+    /** The gateway's projects that have chats; empty when it has none or the read hasn't come in. */
     val projects: List<Project> = emptyList(),
-    /** The gateway answers `projects.*`, so a project can be made here even before there are any. */
+    /** The project list was read, so a project can be made here even before there are any. */
     val canMakeProjects: Boolean = false,
     /** The project the recent list is narrowed to; null for every chat. */
     val project: Project? = null,
@@ -312,7 +311,6 @@ class SessionsViewModel(
         projectsAskedAt = 0
         projectsAgain = false
         selectAfterLoad = null
-        projectChangesMissing = false
         _binding.value = ListBinding(gateway, profile)
         load(refresh = false)
         if (newGateway) {
@@ -441,24 +439,12 @@ class SessionsViewModel(
         null
     } catch (e: CancellationException) {
         throw e
-    } catch (e: RpcException) {
-        if (e.code == METHOD_NOT_FOUND) {
-            // The tree answers but changes don't: stop offering them.
-            projectChangesMissing = true
-            _state.update { it.copy(canMakeProjects = false) }
-            said(Res.string.sessions_gateway_cant_change_projects)
-        } else {
-            saidOr(e.message, said(Res.string.sessions_project_change_failed))
-        }
     } catch (e: Exception) {
         saidOr(e.message, said(Res.string.sessions_project_change_failed))
     }
 
     /** A project just made, to pick once the tree shows it. */
     private var selectAfterLoad: String? = null
-
-    /** The gateway turned down a project change as unknown, so New project, Rename and Delete stay hidden. */
-    private var projectChangesMissing = false
 
     private var projectsJob: Job? = null
     private var projectSessionsJob: Job? = null
@@ -505,16 +491,12 @@ class SessionsViewModel(
         val scope = bound.value
         projectsAskedAt = now
         projectsJob = viewModelScope.launch {
-            var supported = true
             val projects = try {
                 projectsApi.projects(scope?.second)
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: RpcException) {
-                // A gateway that doesn't know projects: no chips. Any other failure keeps what shows.
-                supported = e.code != METHOD_NOT_FOUND
-                if (e.code == METHOD_NOT_FOUND) emptyList() else null
             } catch (_: Exception) {
+                // A failed read keeps what shows.
                 null
             }
             if (projects != null && bound.value == scope) {
@@ -526,7 +508,7 @@ class SessionsViewModel(
                         ?: state.project?.let { p -> shown.firstOrNull { it.id == p.id } }
                     state.copy(
                         projects = shown,
-                        canMakeProjects = supported && !projectChangesMissing,
+                        canMakeProjects = true,
                         project = picked,
                         projectSessions = state.projectSessions.takeIf { picked != null && picked.id == state.project?.id },
                     )
@@ -902,9 +884,6 @@ class SessionsViewModel(
 
         /** How often a change on the gateway may ask for the projects again; a turn changes sessions every 2 s. */
         const val PROJECTS_EVERY_MS = 30_000L
-
-        /** JSON-RPC's "method not found": a gateway from before projects. */
-        const val METHOD_NOT_FOUND = -32601
     }
 
     private fun getTimeMillis(): Long = Clock.System.now().toEpochMilliseconds()

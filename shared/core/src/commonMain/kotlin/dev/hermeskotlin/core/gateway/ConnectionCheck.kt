@@ -64,6 +64,7 @@ data class CheckNote(val kind: Kind, val args: List<String> = emptyList()) {
         FixSignInOrUpdate,
         FixUpdateHermesTryAgain,
         FixUpdateHermes,
+        FixProxyForwardsWs,
         FixAgentRunning,
         FixExactAddress,
         FixAccessTokenOrProxy,
@@ -84,7 +85,8 @@ data class CheckNote(val kind: Kind, val args: List<String> = emptyList()) {
 private fun note(kind: CheckNote.Kind, vararg args: String) = CheckNote(kind, args.toList())
 
 sealed interface StageResult {
-    data class Passed(val detail: CheckNote) : StageResult
+    /** It works; [warning], when set, is something to fix that doesn't stop it working. */
+    data class Passed(val detail: CheckNote, val warning: CheckNote? = null) : StageResult
 
     /** What went wrong, and the specific thing to do about it. */
     data class Failed(val problem: CheckNote, val fix: CheckNote) : StageResult
@@ -174,7 +176,7 @@ class ConnectionCheck(
 
     private fun liveFailure(e: Exception): StageResult.Failed = when {
         e is HandshakeRejectedException && e.status == 404 ->
-            StageResult.Failed(note(CheckNote.Kind.NoChatEndpoint), note(CheckNote.Kind.FixUpdateHermes))
+            StageResult.Failed(note(CheckNote.Kind.NoChatEndpoint), note(CheckNote.Kind.FixProxyForwardsWs))
         e is HandshakeRejectedException && e.status == 403 || e is TransportClosedException && e.code == GatewayCloseCodes.REQUEST_GUARD ->
             StageResult.Failed(note(CheckNote.Kind.ChatGuarded), note(CheckNote.Kind.FixExactAddress))
         e is HandshakeRejectedException && e.status in 300..399 ->
@@ -198,7 +200,10 @@ class ConnectionCheck(
 
 /** The server-access stage as the probe found it. */
 fun ProbeResult.toStageResult(): StageResult = when (this) {
-    is ProbeResult.Reachable -> StageResult.Passed(note(CheckNote.Kind.ServerAnswers, status.version.toString(), url.toString()))
+    is ProbeResult.Reachable -> StageResult.Passed(
+        note(CheckNote.Kind.ServerAnswers, status.version.toString(), url.toString()),
+        warning = if (unsupportedVersion) note(CheckNote.Kind.FixUpdateHermes) else null,
+    )
     is ProbeResult.ClientCertRequired -> StageResult.Failed(note(CheckNote.Kind.ServerCertRequired, url.toString(), reason), CLIENT_CERT_FIX)
     is ProbeResult.NotHermes -> StageResult.Failed(
         httpStatus?.let { note(CheckNote.Kind.NotHermesStatus, url.toString(), it.toString()) } ?: note(CheckNote.Kind.NotHermes, url.toString()),

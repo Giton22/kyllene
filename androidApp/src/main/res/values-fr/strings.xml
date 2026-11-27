@@ -64,7 +64,6 @@
     <string name="notification_deny">Refuser</string>
 
     <string name="notification_turn_failed_text">Le tour a échoué.</string>
-    <string name="notification_done">Terminé.</string>
     <string name="notification_finished">Fini.</string>
     <string name="notification_message_hermes">Écrire à Hermes</string>
     <string name="notification_turn_failed">Échec du tour</string>

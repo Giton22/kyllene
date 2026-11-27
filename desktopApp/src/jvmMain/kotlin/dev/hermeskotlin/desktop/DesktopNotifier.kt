@@ -1,11 +1,12 @@
 package dev.hermeskotlin.desktop
 
 import dev.hermeskotlin.core.chat.ChatHost
-import dev.hermeskotlin.core.chat.ChatMessage
+import dev.hermeskotlin.core.chat.newFinishedReply
 import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.chat.TurnOutcome
+import dev.hermeskotlin.core.chat.replyTextOrNull
 import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.desktop.resources.*
@@ -27,6 +28,7 @@ data class DesktopNotice(
     val chatTitle: String?,
     val request: InputRequest? = null,
     val origin: DesktopNoticeOrigin? = null,
+    val replyPreview: String? = null,
 )
 
 /** The actual source lifetime, including for a chat window's separate host. */
@@ -65,6 +67,8 @@ internal fun noticesFor(
     prefs: AppSettings,
     notified: MutableSet<String>,
     words: NoticeWords,
+    /** The chat when the turn now ending began. */
+    turnStart: ChatState? = previous,
 ): List<DesktopNotice> {
     val notices = mutableListOf<DesktopNotice>()
     val chat = state.title?.takeIf { it.isNotBlank() }
@@ -78,15 +82,17 @@ internal fun noticesFor(
         }
     }
     if (previous?.running == true && !state.running && !focused && prefs.notifyReplies) {
-        val reply = state.messages.lastOrNull() as? ChatMessage.Assistant
+        val reply = state.newFinishedReply(turnStart, previous)
         if (reply != null && reply.outcome != TurnOutcome.Interrupted) {
             val failed = reply.outcome == TurnOutcome.Error
             val text = (if (failed) reply.error ?: reply.text else reply.text).trim()
+            if (!failed && text.replyTextOrNull() == null) return notices
             notices += DesktopNotice(
                 title = if (failed) words.replyFailed else chat ?: words.replied,
                 body = text.lineSequence().firstOrNull { it.isNotBlank() }?.take(BODY_LIMIT) ?: words.replyIn,
                 sessionId = state.storedSessionId,
                 chatTitle = chat,
+                replyPreview = if (failed) null else desktopReplyPreview(text),
             )
         }
     }
@@ -130,12 +136,14 @@ class DesktopNotifier(
     private suspend fun follow(session: ChatSession) {
         val notified = mutableSetOf<String>()
         var previous: ChatState? = null
+        var turnStart: ChatState? = null
         val origin = DesktopNoticeOrigin(session) { host.session.value === session && host.ownerVersion.value == session.ownerVersion }
         val words = NoticeWords.load()
         combine(session.state, focused, settings.settings) { state, focused, prefs -> Triple(state, focused, prefs ?: AppSettings()) }
             .collect { (state, focused, prefs) ->
                 changed()
-                noticesFor(previous, state, focused, prefs, notified, words).forEach { post(it.copy(origin = origin)) }
+                if (state.running && previous?.running != true) turnStart = state
+                noticesFor(previous, state, focused, prefs, notified, words, turnStart).forEach { post(it.copy(origin = origin)) }
                 previous = state
             }
     }

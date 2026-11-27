@@ -119,13 +119,11 @@ sealed interface HubActionResult {
 }
 
 private val scanBlockedNow = Regex("""Not installed:\s+the security scan found\s+(?:(\d+)\s+)?high-risk\s+pattern""", RegexOption.IGNORE_CASE)
-private val scanBlockedLegacy = Regex("""Installation blocked:.*?\(([a-z_-]+) source \+ ([a-z_]+) verdict, (\d+) findings?\)""", RegexOption.IGNORE_CASE)
 
 /** [Blocked][HubActionResult.Blocked] when the action's log says the scan refused it, else null. */
 internal fun scanBlock(lines: List<String>): HubActionResult.Blocked? {
     for (line in lines) {
         scanBlockedNow.find(line)?.let { return HubActionResult.Blocked(it.groupValues[1].toIntOrNull(), lines) }
-        scanBlockedLegacy.find(line)?.let { return HubActionResult.Blocked(it.groupValues[3].toIntOrNull(), lines) }
     }
     return null
 }

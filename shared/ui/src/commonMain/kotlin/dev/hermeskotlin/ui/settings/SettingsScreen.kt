@@ -145,6 +145,7 @@ import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.rememberHoverIndication
+import dev.hermeskotlin.core.gateway.HermesVersion
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.phone.enabledPhoneTools
@@ -194,6 +195,7 @@ import dev.hermeskotlin.designsystem.text
 import dev.hermeskotlin.designsystem.textMuted
 import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
+import dev.hermeskotlin.designsystem.warning
 import dev.hermeskotlin.designsystem.title
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.bots.BotFaces
@@ -294,6 +296,7 @@ fun SettingsScreen(
             viewModel.runConnectionCheck()
         },
         push = push,
+        pushAvailable = viewModel.pushAvailable,
         pushTest = pushTest,
         onPushAnywhere = viewModel::setPushAnywhere,
         onPushTest = viewModel::sendPushTest,
@@ -404,6 +407,7 @@ internal fun SettingsView(
     gatewayName: String = gatewayUrl.substringAfter("://").trimEnd('/'),
     onCheckConnection: () -> Unit = {},
     push: PushStatus = PushStatus(),
+    pushAvailable: Boolean = !isDesktop,
     pushTest: Boolean? = null,
     onPushAnywhere: (Boolean) -> Unit = {},
     onPushTest: () -> Unit = {},
@@ -809,7 +813,7 @@ internal fun SettingsView(
                     PluginInstallDialog(
                         visible = installAsked,
                         feature = stringResource(Res.string.settings_notifications_anywhere),
-                        what = stringResource(Res.string.plugin_notifications_what),
+                        what = stringResource(if (isDesktop) Res.string.plugin_notifications_what_desktop else Res.string.plugin_notifications_what),
                         onDismiss = { installAsked = false },
                     ) {
                         installAsked = false
@@ -871,9 +875,8 @@ internal fun SettingsView(
                             icon = Lucide.Vibrate,
                         )
                     }
-                    // The phone's push through ntfy; the desktop has no way to receive it yet.
-                    if (!isDesktop) Divider()
-                    if (!isDesktop) SwitchRow(
+                    if (pushAvailable) Divider()
+                    if (pushAvailable) SwitchRow(
                         title = stringResource(Res.string.settings_notifications_anywhere),
                         detail = pushDetail(settings.pushAnywhere, push),
                         checked = settings.pushAnywhere,
@@ -882,11 +885,11 @@ internal fun SettingsView(
                         icon = Lucide.Globe,
                     )
                     val pushUpdate = push.update
-                    if (settings.pushAnywhere && pushUpdate != null) {
+                    if (pushAvailable && settings.pushAnywhere && pushUpdate != null) {
                         Divider()
                         PluginUpdateRow(pushUpdate, onPushUpdate)
                     }
-                    if (settings.pushAnywhere && push.state == PushStatus.State.On) {
+                    if (pushAvailable && settings.pushAnywhere && push.state == PushStatus.State.On) {
                         Divider()
                         ActionRow(
                             when (pushTest) {
@@ -956,6 +959,7 @@ internal fun SettingsView(
                         stringResource(Res.string.settings_gateway),
                         info.version?.let { stringResource(Res.string.settings_hermes_version, it) }
                             ?: stringResource(Res.string.common_checking),
+                        alert = if (HermesVersion.isUnsupported(info.version)) stringResource(Res.string.hermes_unsupported_version) else null,
                     )
                     Divider()
                     val uriHandler = LocalUriHandler.current
@@ -1071,7 +1075,7 @@ private fun suggestionsDetail(on: Boolean, plugin: SuggestionsPlugin): String =
 /** What Notifications anywhere does, or where its setup on the gateway stands. */
 @Composable
 private fun pushDetail(on: Boolean, push: PushStatus): String {
-    if (!on) return stringResource(Res.string.settings_notifications_anywhere_detail)
+    if (!on) return stringResource(if (isDesktop) Res.string.settings_notifications_anywhere_desktop_detail else Res.string.settings_notifications_anywhere_detail)
     return when (push.state) {
         PushStatus.State.On -> push.detail ?: stringResource(Res.string.settings_push_on)
         PushStatus.State.Working -> push.detail ?: stringResource(Res.string.settings_push_working)
@@ -1604,13 +1608,15 @@ private fun accentName(palette: AccentPalette): String {
 }
 
 
+/** A setting that only shows a [value]; [alert], when set, says under it what needs doing. */
 @Composable
-internal fun InfoRow(title: String, value: String) {
+internal fun InfoRow(title: String, value: String, alert: String? = null) {
     if (!settingShown(title, value)) return
     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(title, style = Theme[typography][body], color = Theme[colors][text])
         // A desktop's mouse can select and copy it (a version, an address), as a desktop's About panel allows.
         CopyableOnDesktop { Text(value, style = Theme[typography][bodySmall], color = Theme[colors][textTertiary], maxLines = 2, overflow = TextOverflow.Ellipsis) }
+        if (alert != null) CopyableOnDesktop { Text(alert, style = Theme[typography][bodySmall], color = Theme[colors][warning]) }
     }
 }
 

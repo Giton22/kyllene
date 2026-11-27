@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
@@ -91,7 +92,6 @@ class PushSetupTest {
         val profiles = mutableMapOf<String, Copy?>()
         val failedProfiles = mutableSetOf<String>()
         val failedChecks = mutableSetOf<String>()
-        var profilesSupported = true
         var profileListFails = false
         val calls = mutableListOf<JsonObject>()
         val registered = mutableSetOf<String>()
@@ -108,9 +108,9 @@ class PushSetupTest {
                     calls += request
                     val params = request["params"] as? JsonObject ?: JsonObject(emptyMap())
                     val reply = when ((request["method"] as JsonPrimitive).content) {
-                        "profiles.list" -> if (profileListFails) "ERROR:profiles unavailable" else if (profilesSupported) buildJsonObject {
+                        "profiles.list" -> if (profileListFails) "ERROR:profiles unavailable" else buildJsonObject {
                             put("profiles", JsonArray(profiles.keys.map { name -> buildJsonObject { put("name", name) } }))
-                        }.toString() else "UNSUPPORTED"
+                        }.toString()
                         "plugins.manage" -> manage(params)
                         "session.create" -> if (!authority) "UNSUPPORTED" else {
                             val id = chats.firstOrNull() ?: "chat-${++minted}".also { if (!chatsVanish) chats += it }
@@ -224,18 +224,19 @@ class PushSetupTest {
 
     private data class Copy(val version: String, val enabled: Boolean = true, val source: String = "git")
 
-    private class Setup(val setup: PushSetup, val connection: GatewayConnection, val settings: SettingsStore, val gateways: GatewayRepository)
+    private class Setup(val setup: PushSetup, val connection: GatewayConnection, val settings: SettingsStore, val gateways: GatewayRepository, val api: PushApi)
 
-    private suspend fun TestScope.setup(keys: PushKeys, url: String = "https://a.example"): Setup {
+    private suspend fun TestScope.setup(keys: PushKeys, url: String = "https://a.example", available: Boolean = true): Setup {
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
         val engine = MockEngine { respond("""{"ticket":"T","ttl_seconds":30}""", headers = headersOf(HttpHeaders.ContentType, "application/json")) }
         val connection = GatewayConnection(AuthApi(createHttpClient(engine, cookies), cookies), { _, _ -> transports.removeFirst() }, backgroundScope)
         val settings = SettingsStore(InMemoryKeyValueStore(), backgroundScope)
         settings.settings.filterNotNull().first()
         val gateways = GatewayRepository(InMemoryKeyValueStore()).apply { save(SavedGateway(url)) }
-        val setup = PushSetup(PushApi(connection), keys, connection, gateways, settings, backgroundScope) { "Pixel" }
+        val api = PushApi(connection)
+        val setup = PushSetup(api, keys, connection, gateways, settings, backgroundScope, available = available) { "Pixel" }
         setup.start()
-        return Setup(setup, connection, settings, gateways)
+        return Setup(setup, connection, settings, gateways, api)
     }
 
     private val transports = ArrayDeque<FakeTransport>()
@@ -255,6 +256,49 @@ class PushSetupTest {
         """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}"""
 
     private suspend fun until(condition: () -> Boolean) = withTimeout(10_000) { while (!condition()) delay(10) }
+
+    @Test
+    fun reconnectWithTheSameKeysKeepsExistingNoticeOwnership() = runTest {
+        val s = setup(FakeKeys())
+        val first = FakeGateway(installed = true)
+        connect(s, first)
+        s.setup.enable()
+        until { s.setup.status.value.state == PushStatus.State.On }
+        val owner = s.api.registrations.value
+        s.connection.stop()
+        runCurrent()
+        val second = FakeGateway(installed = true)
+        connect(s, second)
+        until { "register" in second.actions() && s.setup.status.value.state == PushStatus.State.On }
+        assertEquals(owner, s.api.registrations.value)
+        s.setup.disable()
+        assertEquals(owner + 1, s.api.registrations.value)
+    }
+
+    @Test
+    fun unsupportedReceiverCannotEnableOrInstall() = runTest {
+        val keys = FakeKeys()
+        val s = setup(keys, available = false)
+        val gateway = FakeGateway(installed = false)
+        connect(s, gateway)
+        s.setup.enable()
+        s.setup.updatePlugin()
+        assertFalse(s.setup.test())
+        assertFalse(s.settings.settings.value!!.pushAnywhere)
+        assertTrue(gateway.actions().isEmpty())
+        assertEquals(null, keys.pin)
+    }
+
+    @Test
+    fun unsupportedReceiverDoesNotRegisterAnExistingPreference() = runTest {
+        val s = setup(FakeKeys(), available = false)
+        s.settings.update { it.copy(pushAnywhere = true) }
+        val gateway = FakeGateway(installed = true)
+        connect(s, gateway)
+        kotlinx.coroutines.yield()
+        assertTrue(gateway.actions().isEmpty())
+        assertEquals(PushStatus.State.Off, s.setup.status.value.state)
+    }
 
     @Test
     fun enableInstallsThePinnedCommitThenRegistersAndPins() = runTest {
@@ -567,18 +611,6 @@ class PushSetupTest {
 
         assertEquals(PushStatus.State.Outdated, s.setup.status.value.state)
         assertTrue(s.setup.status.value.update?.needed == true)
-    }
-
-    @Test
-    fun gatewaysWithoutProfilesKeepTheirExistingUpdateFlow() = runTest {
-        val s = setup(FakeKeys())
-        val gateway = FakeGateway(installed = true, version = "0.1.1").apply { profilesSupported = false }
-        connect(s, gateway)
-        s.setup.enable()
-        s.setup.updatePlugin()
-
-        assertEquals(PushApi.PLUGIN_VERSION, gateway.version)
-        assertEquals(PushStatus.State.On, s.setup.status.value.state)
     }
 
     @Test

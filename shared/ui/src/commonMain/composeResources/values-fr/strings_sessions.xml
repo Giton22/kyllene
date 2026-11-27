@@ -175,7 +175,6 @@
     <string name="sessions_delete_project_detail">« %1$s » est supprimé de la gateway. Ses conversations restent et sont de nouveau regroupées par dossier.</string>
     <string name="sessions_not_connected">Non connecté.</string>
     <string name="sessions_cant_make_folders">Cette version ne peut pas créer de dossiers.</string>
-    <string name="sessions_gateway_cant_change_projects">Cette gateway ne peut pas modifier les projets.</string>
     <string name="sessions_project_change_failed">Impossible de modifier le projet.</string>
 
     <!-- Account and profiles -->
