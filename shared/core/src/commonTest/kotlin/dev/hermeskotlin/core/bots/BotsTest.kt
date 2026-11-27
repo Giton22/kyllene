@@ -1,6 +1,7 @@
 package dev.hermeskotlin.core.bots
 
 import dev.hermeskotlin.core.network.HermesJson
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -105,5 +106,20 @@ class BotsTest {
     fun previewDropsMarkdown() {
         assertEquals("Everything in one bundle", parseBotRoster(reply).bots[0].previewLine())
         assertNull(parseBotRoster(reply).bots[2].previewLine())
+    }
+
+    @Test
+    fun previewCutInsideTheNoReplyMarkerShowsNoneOfIt() {
+        fun preview(text: String) = parseBotRoster(
+            HermesJson.parseToJsonElement(
+                """{"profiles":[{"name":"b","canonical_session":{"id":"s","preview":${JsonPrimitive(text)}}}]}""",
+            ),
+        ).bots.single().rosterPreview()
+        // Hermes cuts at 60 characters plus "...": a long signature leaves only part of the marker.
+        val signature = "Message from 🤖 Research Buddy (@research-buddy): "
+        assertEquals(RosterPreview("…", fromBot = "Research Buddy"), preview(signature + "[no reply n..."))
+        assertEquals(RosterPreview("Build is gr...", fromBot = "Research Buddy"), preview(signature + "Build is gr..."))
+        assertEquals(RosterPreview("[...", fromBot = "Research Buddy"), preview(signature + "[..."))
+        assertEquals(RosterPreview("Build is green", fromBot = "Research Buddy"), preview(signature + "[no reply needed] Build is green"))
     }
 }

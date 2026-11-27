@@ -427,9 +427,13 @@ fun historyToMessages(rows: List<SessionMessage>, liveSessionId: String? = null,
                     events.forEachIndexed { i, event ->
                         if (event is TranscriptEvent.FromBot) rememberRequest(row, shownText)
                         messages += ChatMessage.Event(if (events.size == 1) key else "$key-$i", event, timestamp = row.timestamp)
-                        replyingTo = (event as? TranscriptEvent.FromBot)?.takeUnless { from ->
-                            from.handle?.lowercase() in messagedSinceUser || from.sender.lowercase() in messagedSinceUser
-                        }?.sender
+                        // After "[no reply needed]" hermes sends nothing back to that sender (gateway/session_bot_outcome.py),
+                        // so a reply still owed to an earlier bot stays owed.
+                        if ((event as? TranscriptEvent.FromBot)?.noReplyNeeded != true) {
+                            replyingTo = (event as? TranscriptEvent.FromBot)?.takeUnless { from ->
+                                from.handle?.lowercase() in messagedSinceUser || from.sender.lowercase() in messagedSinceUser
+                            }?.sender
+                        }
                     }
                     return@forEachIndexed
                 }
