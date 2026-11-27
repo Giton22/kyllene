@@ -2725,6 +2725,26 @@ class ChatSessionTest {
     }
 
     @Test
+    fun branchingCountsEachMessageOfARowShownAsSeveral() = runTest {
+        val batch = "[IMPORTANT: 2 background processes completed. Review below.]\\n\\n" +
+            "[IMPORTANT: Background process a exited (exit code 2).\\nCommand: scan\\nOutput:\\nx]\\n\\n" +
+            "[IMPORTANT: Background process b exited (exit code 2).\\nCommand: lint\\nOutput:\\ny]"
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
+            {"id":3,"role":"user","content":"$batch","display_kind":"process_complete"},
+            {"id":4,"role":"user","content":"two"},{"id":5,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        assertEquals(6, chat.state.value.messages.size)
+
+        // Up to the second finished process: four shown, three stored, since both come from one row.
+        assertEquals("stored-2" to "Greeting #2", chat.branch(4))
+        assertEquals("3", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
     fun branchingSkipsARestatedRequestWhoseOriginalIsLoaded() = runTest {
         history = """{"session_id":"stored-1","messages":[
             {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
