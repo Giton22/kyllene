@@ -53,7 +53,7 @@ enum class LiveStatus {
     val running: Boolean get() = this == Working || this == Waiting
 
     companion object {
-        /** `streaming` and `resuming` are in the contract but no handler sets them yet; both are a turn going. */
+        /** `streaming` and `resuming` appear only in `session.resume`'s own status, never in `session.active_list`; both are a turn going. */
         fun parse(value: String?): LiveStatus = when (value) {
             "starting" -> Starting
             "waiting" -> Waiting

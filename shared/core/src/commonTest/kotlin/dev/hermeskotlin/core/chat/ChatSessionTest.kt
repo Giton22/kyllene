@@ -28,9 +28,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -492,11 +490,14 @@ class ChatSessionTest {
 
     @Test
     fun aChatOpenedWhileItsSessionRunsElsewhereShowsAndStreamsThatTurn() = runTest {
+        // A smoke of the feature's premise: opening the chat mid-turn streams the turn in. The attach here is
+        // the connection's own resume (the pre-existing path); the live list's attach is covered by the
+        // aRefusedLiveAttach… tests.
         val (connection, transport) = setup(
             backgroundScope,
             mapOf("session.resume" to """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""),
         )
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
 
@@ -525,7 +526,7 @@ class ChatSessionTest {
         gateway(backgroundScope, emptyMap(), reconnects = false).apply {
             answer = { call ->
                 when {
-                    call.method == "session.resume" -> if (resumeCalls++ == 0) call.error(4090, "busy", "SESSION_NOT_OWNED")
+                    call.method == "session.resume" -> if (resumeCalls++ == 0) call.error(4009, "session disconnect interrupt settling")
                     else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
                     call.method == "session.active_list" ->
                         if (liveRunning) """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""
@@ -536,7 +537,7 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
 
@@ -573,7 +574,7 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
 
@@ -586,10 +587,14 @@ class ChatSessionTest {
 
     @Test
     fun aLiveRowThatNamesAnotherSessionDoesNotAttach() = runTest {
+        var resumes = 0
         gateway(backgroundScope, emptyMap(), reconnects = false).apply {
             answer = { call ->
                 when {
-                    call.method == "session.resume" -> """{"session_id":"rt1","running":false}"""
+                    call.method == "session.resume" -> {
+                        resumes++
+                        call.error(4009, "session disconnect interrupt settling")
+                    }
                     call.method == "session.active_list" ->
                         """{"sessions":[{"id":"rt9","session_key":"stored-9","status":"working"}]}"""
                     else -> "{}"
@@ -598,16 +603,17 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
 
+        // The connection's attach is turned down, so the chat is not attached when the live list arrives:
+        // the row names another session (a different stored id, no runtime the chat ever attached to), so
+        // the live list must not resume this chat over it.
+        chat.state.first { it.attachment is Attachment.Failed }
         advanceTimeBy(10_001)
         runCurrent()
-        chat.state.first { it.attachment is Attachment.Attached }
-        // The only resume is the connection's own: another session's running row must not attach this chat.
-        assertEquals(1, gateway.sent("session.resume").size)
-        assertFalse(chat.state.value.running)
+        assertEquals(1, resumes)
     }
 
     @Test
@@ -618,7 +624,7 @@ class ChatSessionTest {
             answer = { call ->
                 when {
                     call.method == "session.resume" ->
-                        if (resumes++ < 2) call.error(4090, "taken", "SESSION_NOT_OWNED")
+                        if (resumes++ < 2) call.error(4009, "session disconnect interrupt settling")
                         else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
                     call.method == "session.active_list" ->
                         """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"$liveStatus"}]}"""
@@ -628,7 +634,7 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
 
@@ -657,8 +663,8 @@ class ChatSessionTest {
             answer = { call ->
                 when {
                     call.method == "session.resume" ->
-                        if (resumes++ < 2) call.error(4090, "taken", "SESSION_NOT_OWNED")
-                        else """{"session_id":"rt1","running":false}"""
+                        if (resumes++ < 3) call.error(4009, "session disconnect interrupt settling")
+                        else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
                     call.method == "session.active_list" ->
                         """{"sessions":[{"id":"rt1","session_key":"stored-1","status":"$liveStatus"}]}"""
                     else -> "{}"
@@ -667,7 +673,7 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
 
@@ -675,12 +681,23 @@ class ChatSessionTest {
         runCurrent()
         assertEquals(2, gateway.sent("session.resume").size)
 
-        // The turn ends: the refusal's scope is over, so the live list attaches once more.
+        // The turn ends: the refusal's scope is over, so the live list attaches once more — and is refused
+        // again at idle. That idle refusal is also remembered.
         liveStatus = "idle"
         advanceTimeBy(10_001)
         runCurrent()
-        chat.state.first { it.attachment is Attachment.Attached }
         assertEquals(3, gateway.sent("session.resume").size)
+
+        // The same idle status is left alone; a new turn (the refusal's scope) is retried and attaches.
+        advanceTimeBy(10_001)
+        runCurrent()
+        assertEquals(3, gateway.sent("session.resume").size)
+        liveStatus = "working"
+        advanceTimeBy(10_001)
+        runCurrent()
+        val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
+        assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
+        assertEquals(4, gateway.sent("session.resume").size)
     }
 
     @Test
@@ -691,7 +708,7 @@ class ChatSessionTest {
             answer = { call ->
                 when {
                     call.method == "session.resume" ->
-                        if (resumes++ < 2) call.error(4090, "taken", "SESSION_NOT_OWNED")
+                        if (resumes++ < 2) call.error(4009, "session disconnect interrupt settling")
                         else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
                     call.method == "session.active_list" -> liveSessions
                     else -> "{}"
@@ -700,7 +717,7 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
 
@@ -724,7 +741,7 @@ class ChatSessionTest {
     }
 
     @Test
-    fun aLiveAttachThatFailsAfterADropDoesNotWriteFailedOverDetached() = runTest {
+    fun aLinkDroppedMidAttachEndsReattachedAndStreamingNotStuckOnFailed() = runTest {
         var resumes = 0
         gateway(backgroundScope, emptyMap(), reconnects = true).apply {
             answer = { call ->
@@ -747,23 +764,23 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
-        val attachments = mutableListOf<Attachment>()
-        backgroundScope.launch { chat.state.map { it.attachment }.distinctUntilChanged().collect { attachments += it } }
 
         // The connection's resume goes unanswered and times out; the live attach is waiting on its own reply.
         advanceTimeBy(30_001)
         runCurrent()
-        // The link drops mid-attach: the stale attach fails on the closed socket, but the connection's own
-        // path owns the state now (Detached, reconnecting). Failed must not be written over it: the timeout's
-        // is the last Failed the chat shows.
+        // The link drops mid-attach. The stale attach fails on the closed socket (before or just after the
+        // connection's state flips — the race the guard defends), the connection reconnects, and the chat
+        // re-attaches: however the race falls, it must end attached to the running turn, never stuck on Failed.
         gateway.sockets.last().serverClose(1006, "abnormal")
-        advanceTimeBy(2_000)
+        advanceTimeBy(61_000)
         runCurrent()
-        assertFalse(attachments.dropWhile { it !is Attachment.Failed }.drop(1).any { it is Attachment.Failed })
-        assertTrue(chat.state.value.attachment !is Attachment.Failed)
+        val healed = chat.state.value
+        assertTrue(healed.attachment is Attachment.Attached)
+        assertTrue(healed.running)
+        assertEquals("Half done", healed.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
     }
 
     @Test
@@ -774,7 +791,7 @@ class ChatSessionTest {
                 when {
                     call.method == "session.resume" ->
                         if (resumes++ == 0) """{"session_id":"rt1","running":false}"""
-                        else call.error(4090, "taken", "SESSION_NOT_OWNED")
+                        else call.error(4009, "session disconnect interrupt settling")
                     call.method == "session.active_list" ->
                         """{"sessions":[{"id":"rt1","session_key":"stored-9","status":"working"}]}"""
                     else -> "{}"
@@ -783,7 +800,7 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
         chat.state.first { it.attachment is Attachment.Attached }
@@ -809,7 +826,7 @@ class ChatSessionTest {
             answer = { call ->
                 when {
                     call.method == "session.resume" ->
-                        if (resumes++ == 0) call.error(4090, "taken", "SESSION_NOT_OWNED")
+                        if (resumes++ == 0) call.error(4009, "session disconnect interrupt settling")
                         else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
                     call.method == "session.active_list" ->
                         null.also {
@@ -824,7 +841,7 @@ class ChatSessionTest {
             start(awaitConnected = false)
         }
         val connection = gateway.connection
-        val active = ActiveSessions(connection, backgroundScope, clock = { testScheduler.currentTime + 1 })
+        val active = ActiveSessions(connection, backgroundScope)
         val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
         val chat = host.open(url, "stored-1", "Greeting")
 
@@ -836,6 +853,44 @@ class ChatSessionTest {
         runCurrent()
         val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
         assertTrue(running.historyRead)
+        assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
+        assertEquals(2, gateway.sent("session.resume").size)
+    }
+
+    @Test
+    fun aLiveAttachStreamsEvenWhenTheHistoryStillCannotBeRead() = runTest {
+        var resumes = 0
+        historyFails = true
+        gateway(backgroundScope, emptyMap(), reconnects = false).apply {
+            answer = { call ->
+                when {
+                    call.method == "session.resume" ->
+                        if (resumes++ == 0) call.error(4009, "session disconnect interrupt settling")
+                        else """{"session_id":"rt1","running":true,"inflight":{"assistant":"Half done"}}"""
+                    call.method == "session.active_list" ->
+                        null.also {
+                            backgroundScope.launch {
+                                delay(20_000)
+                                call.socket.push(call.reply("""{"sessions":[{"id":"rt1","session_key":"stored-1","status":"working"}]}"""))
+                            }
+                        }
+                    else -> "{}"
+                }
+            }
+            start(awaitConnected = false)
+        }
+        val connection = gateway.connection
+        val active = ActiveSessions(connection, backgroundScope)
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope, active = active)
+        val chat = host.open(url, "stored-1", "Greeting")
+
+        // The transcript stays unreadable: the live attach's reload fails, and the attach still goes ahead —
+        // the resume replays the turn itself, so the stream comes through without the history.
+        chat.state.first { it.attachment is Attachment.Failed }
+        advanceTimeBy(20_001)
+        runCurrent()
+        val running = chat.state.first { it.running && it.attachment is Attachment.Attached }
+        assertFalse(running.historyRead)
         assertEquals("Half done", running.messages.filterIsInstance<ChatMessage.Assistant>().last().text)
         assertEquals(2, gateway.sent("session.resume").size)
     }

@@ -153,8 +153,14 @@ class ChatSession(
     private var ownTurnsPending = 0
     private var foreignTurn = false
 
-    /** The live status at which the live list's attach was last refused; retried once the row's status moves. */
-    private var refusedAtStatus: LiveStatus? = null
+    /** The live status at which the live list's attach last failed; retried once the row's status moves. */
+    private var failedAtStatus: LiveStatus? = null
+
+    /** The gateway turned the attach down for good: no status transition will change the answer, so the live list stops trying until the row unloads. */
+    private var refusedForGood = false
+
+    /** Authority refusals a status transition cannot clear: a missing capability, a gone session, another profile. */
+    private val durableRefusals = setOf("permission_denied", "not_found", "profile_mismatch")
 
     /** A [rewind] cut the transcript; the stored rows replace the live copy once its turn ends. */
     private var rewound = false
@@ -2578,7 +2584,8 @@ class ChatSession(
             val row = live.rows[stored] ?: live.rows.values.firstOrNull { it.runtimeId == lastRuntime }
             if (row == null) {
                 // The session unloaded: whatever turned an attach down is gone.
-                refusedAtStatus = null
+                failedAtStatus = null
+                refusedForGood = false
                 return@collect
             }
             val status = row.status
@@ -2586,24 +2593,36 @@ class ChatSession(
             // the gateway streams a session only to attached sockets, but attaching keeps it loaded and
             // detaching would hand the session back, so idle chats attach on a send or a turn, as they always have.
             if (liveRuntimeId(client) != null) return@collect
-            // The gateway turned an attach down outright (an RpcException: the legacy backend's SESSION_NOT_OWNED
-            // ledger refusal, the authority's not_found or permission_denied): it keeps doing so for the rest of
-            // the turn's scope. The live list carries no turn identity, so the row's status transitions are the
-            // only observable scope boundaries: retry once per transition — including the session settling to
-            // idle, when the refusal's scope ends — instead of every poll, or each attempt would flip the
-            // banner Attaching → Failed.
-            if (refusedAtStatus == status) return@collect
-            if (!status.running && refusedAtStatus == null) return@collect
+            // A refusal that outlives any turn (a missing capability, a gone session) keeps being the answer;
+            // the live list stops trying until the session unloads.
+            if (refusedForGood) return@collect
+            // The gateway turned an attach down or away (an RpcException — the legacy backend's 4009
+            // "disconnect interrupt settling" or 4007 "session no longer live", the authority's not_found or
+            // permission_denied — or a timeout): it keeps doing so for the rest of the turn's scope. The live
+            // list carries no turn identity, so the row's status transitions are the only observable scope
+            // boundaries: retry once per transition — including the session settling to idle, when a
+            // turn-scoped refusal ends — instead of every poll, or each attempt would flip the banner
+            // Attaching → Failed.
+            if (failedAtStatus == status) return@collect
+            if (!status.running && failedAtStatus == null) return@collect
             // What was never read still isn't there; the resume replays only the turn itself.
             if (!_state.value.historyRead && !historyMutex.isLocked) loadHistory()
             // reuse: an attach racing this one (the connection's) may have won; it is kept, not resumed again.
             // reconnected: attached before, so the resume picks up where the stream left off, as the
-            // connection's attach would have.
+            // connection's attach would have. The resume still names the chat's stored id: after a compression
+            // the gateway follows the tip to the newest child itself.
             val reconnected = streamMutex.withLock { seqRuntime != null }
-            when (runCatchingAttach(client, reconnected = reconnected, reuse = true)) {
-                AttachOutcome.Refused -> refusedAtStatus = status
-                AttachOutcome.StaleGap -> Unit // nothing is known about it
-                AttachOutcome.Attached, AttachOutcome.Lost -> refusedAtStatus = null
+            when (val outcome = runCatchingAttach(client, reconnected = reconnected, reuse = true)) {
+                AttachOutcome.Attached -> {
+                    failedAtStatus = null
+                    refusedForGood = false
+                }
+                is AttachOutcome.Refused -> {
+                    failedAtStatus = status
+                    if (outcome.permanent) refusedForGood = true
+                }
+                AttachOutcome.Lost -> failedAtStatus = status
+                AttachOutcome.StaleGap -> Unit // cannot occur here (afterGap is false on the live path); defensive
             }
         }
     }
@@ -3109,8 +3128,12 @@ class ChatSession(
     private sealed interface AttachOutcome {
         data object Attached : AttachOutcome
 
-        /** The gateway answered with an error ([RpcException]): a retry into the same turn would be refused the same way. */
-        data object Refused : AttachOutcome
+        /**
+         * The gateway answered with an error ([RpcException]). A retry into the same turn would be refused the
+         * same way; when [permanent] — a missing capability, a gone session, another profile, or the legacy
+         * backend's 4007 "session no longer live" — no status transition will change the answer either.
+         */
+        data class Refused(val permanent: Boolean) : AttachOutcome
 
         /** A transient failure (a lost link, a timeout): the attach may well succeed again. */
         data object Lost : AttachOutcome
@@ -3136,6 +3159,8 @@ class ChatSession(
         // The link dropped mid-attach: the connection's own path shows Detached and re-attaches. Writing
         // Failed over it would say the session is broken while it is just reconnecting — checked inside the
         // update, so the write applies only while the client this attach used is still the connected one.
+        // (A stale attach usually fails right on the close, before the state flips; the guard only matters
+        // when the connection's flip wins that race, so it cannot be pinned in a deterministic test.)
         _state.update {
             if (connectedClient() === client) {
                 it.copy(
@@ -3146,7 +3171,9 @@ class ChatSession(
                 )
             } else it
         }
-        if (e is RpcException) AttachOutcome.Refused else AttachOutcome.Lost
+        if (e is RpcException) {
+            AttachOutcome.Refused(permanent = e.reason in durableRefusals || e.code == 4007)
+        } else AttachOutcome.Lost
     }
 
     private suspend fun ensureAttached(client: JsonRpcClient): String {
