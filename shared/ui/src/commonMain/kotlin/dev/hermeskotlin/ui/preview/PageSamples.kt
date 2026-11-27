@@ -261,7 +261,7 @@ internal object PageSamples {
         )
     }
 
-    val jobEditor = JobEditor(deliver = "telegram")
+    val jobEditor = JobEditor(deliver = "telegram", model = "claude-sonnet-4.5", provider = "anthropic")
     const val JOB_PROMPT = "Check last night's backup, the free space on the NAS and the SMART health of each disk. Send me a short summary, and say first if anything needs me."
     const val JOB_SCHEDULE = "0 9 * * 1-5"
     const val JOB_NAME = "Morning server check"

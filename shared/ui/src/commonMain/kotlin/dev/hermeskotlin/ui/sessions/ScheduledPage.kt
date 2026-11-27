@@ -111,6 +111,8 @@ import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.PlatformBackHandler
+import dev.hermeskotlin.core.chat.ChatState
+import dev.hermeskotlin.ui.chat.ModelSheet
 import dev.hermeskotlin.ui.components.EmptyState
 import dev.hermeskotlin.ui.components.ListSkeleton
 import kotlinx.coroutines.delay
@@ -175,6 +177,9 @@ internal fun ScheduledPage(
     PlatformBackHandler(enabled = visible && job != null && state.editor == null) { viewModel.closeJob() }
     PlatformBackHandler(enabled = visible && state.editor != null) { leaveEditor {} }
 
+    // The model picker over the open form; it closes with the form.
+    var pickingModel by remember { mutableStateOf(false) }
+    LaunchedEffect(state.editor == null) { if (state.editor == null) pickingModel = false }
     val editorPane: (@Composable () -> Unit)? = state.editor?.let { editor ->
         {
             JobEditorPage(
@@ -184,6 +189,8 @@ internal fun ScheduledPage(
                 name = viewModel.name,
                 deliveryTargets = state.deliveryTargets,
                 onSetDeliver = viewModel::setDeliver,
+                onPickModel = { pickingModel = true },
+                onClearModel = viewModel::clearModel,
                 onSave = viewModel::saveJob,
                 onClose = { leaveEditor {} },
                 routineOf = owner?.label,
@@ -214,6 +221,24 @@ internal fun ScheduledPage(
             )
         }
         state.message?.let { MessageBanner(it.text(), onDismiss = viewModel::dismissMessage, modifier = Modifier.padding(bottom = PageFoot)) }
+    }
+    state.editor?.let { editor ->
+        val picker by viewModel.modelPicker.collectAsStateWithLifecycle()
+        ModelSheet(
+            visible = pickingModel,
+            onDismiss = { pickingModel = false },
+            state = ChatState(model = editor.model, provider = editor.provider),
+            picker = picker.forJob(),
+            onRefresh = viewModel::loadModels,
+            onSelectModel = { model ->
+                viewModel.setModel(model)
+                pickingModel = false
+            },
+            onSelectEffort = {},
+            onFast = {},
+            modelOnly = true,
+            note = stringResource(Res.string.sessions_job_model_note),
+        )
     }
     Dialog(
         visible = leaving != null,

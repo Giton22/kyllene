@@ -302,6 +302,11 @@
     <string name="sessions_preset_mondays">Segundas 9:00</string>
     <string name="sessions_preset_once">Uma vez, em 1 h</string>
     <string name="sessions_routine_name_example">Resumo matinal</string>
+    <string name="sessions_job_model">Modelo</string>
+    <string name="sessions_job_model_default">O padrão do perfil</string>
+    <string name="sessions_job_model_clear">Usar o padrão do perfil</string>
+    <string name="sessions_job_model_hint">As execuções usam o modelo padrão do perfil, a menos que você escolha um para esta tarefa.</string>
+    <string name="sessions_job_model_note">Só as execuções desta tarefa o usam. O padrão do perfil continua como está.</string>
     <string name="sessions_deliver_to">Enviar para</string>
     <string name="sessions_deliver_no_home">%1$s não tem canal principal no gateway, então as execuções não teriam para onde ir.</string>
     <string name="sessions_deliver_bot_chat_detail">O resultado de cada execução é enviado para %1$s como uma mensagem que o bot lê e responde, então cada execução custa a ele mais um turno.</string>
