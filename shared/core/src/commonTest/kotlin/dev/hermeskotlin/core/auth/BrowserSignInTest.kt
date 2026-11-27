@@ -224,6 +224,23 @@ class BrowserSignInTest {
     }
 
     @Test
+    fun aCancelledSignInLettingGoLateKeepsTheNextOneHeld() = runTest {
+        val browser = BrowserSignIn(AuthApi(createHttpClient(MockEngine { error("no calls") }), cookies, tokens), waitsForever(), keepAlive)
+        val first = backgroundScope.launch { browser.signIn(url, null) { events += "open" } }
+        testScheduler.runCurrent()
+        // Tapped again before the cancelled one has stopped listening.
+        val second = backgroundScope.launch { browser.signIn(url, null) { events += "open" } }
+        testScheduler.runCurrent()
+        first.cancel()
+        first.join()
+        assertTrue(keepAlive.held)
+        assertEquals(listOf("hold", "open", "open"), events)
+        second.cancel()
+        second.join()
+        assertEquals(listOf("hold", "open", "open", "release"), events)
+    }
+
+    @Test
     fun holdsNothingWhenItCantListen() = runTest {
         val loopback = LoopbackReceiver { throw IllegalStateException("no port") }
         val browser = BrowserSignIn(AuthApi(createHttpClient(MockEngine { error("no calls") }), cookies, tokens), loopback, keepAlive)

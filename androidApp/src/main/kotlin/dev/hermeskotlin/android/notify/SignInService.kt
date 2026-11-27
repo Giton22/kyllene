@@ -53,7 +53,7 @@ class SignInService : Service() {
         } catch (e: Exception) {
             // Android refuses a foreground service started from the background.
             Log.w("SignInService", "Couldn't keep the app up for the sign-in", e)
-            keeper.stopped()
+            keeper.lost()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -99,6 +99,8 @@ class SignInKeeper(private val context: Context, visibility: AppVisibility) : Si
     private var running = false
     /** The service is in the foreground, so it may be stopped. */
     private var foreground = false
+    /** Android refused the service for this sign-in: it isn't asked again until the app is back in sight. */
+    private var refused = false
 
     init {
         MainScope().launch {
@@ -106,13 +108,17 @@ class SignInKeeper(private val context: Context, visibility: AppVisibility) : Si
                 if (!visible) return@collect
                 _restricted.value = backgroundRestricted()
                 // Back from the battery settings with the restriction lifted: hold up the sign-in still waiting.
-                if (wanted && !running && !_restricted.value) start()
+                if (wanted && !running && !_restricted.value) {
+                    refused = false
+                    start()
+                }
             }
         }
     }
 
     override fun hold(): Boolean {
         wanted = true
+        refused = false
         _restricted.value = backgroundRestricted()
         return !_restricted.value && (running || start())
     }
@@ -139,9 +145,16 @@ class SignInKeeper(private val context: Context, visibility: AppVisibility) : Si
         return wanted
     }
 
+    /** The service couldn't go into the foreground after all. */
+    internal fun lost() {
+        refused = true
+    }
+
     internal fun stopped() {
         foreground = false
         running = false
+        // Stopped for a sign-in that ended, just as the next one started (held while this one was still up).
+        if (wanted && !refused && !_restricted.value) start()
     }
 
     private fun backgroundRestricted(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&

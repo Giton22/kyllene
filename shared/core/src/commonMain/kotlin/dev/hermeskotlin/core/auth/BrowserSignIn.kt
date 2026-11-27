@@ -5,6 +5,10 @@ import dev.hermeskotlin.core.network.ApiResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.decrementAndFetch
+import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.io.encoding.Base64
 import kotlin.time.Duration.Companion.minutes
 
@@ -34,6 +38,13 @@ class BrowserSignIn(
     private val keepAlive: SignInKeepAlive = SignInKeepAlive.None,
 ) {
 
+    /**
+     * Sign-ins waiting for the browser. Usually one, but a cancelled one lets go only once its listener notices, which
+     * can be after the next one started: the app is held while any waits.
+     */
+    @OptIn(ExperimentalAtomicApi::class)
+    private val waiting = AtomicInt(0)
+
     /** The platform won't let the browser hand a sign-in back (battery usage Restricted): see [SignInKeepAlive.restricted]. */
     val restricted: StateFlow<Boolean> get() = keepAlive.restricted
 
@@ -50,7 +61,7 @@ class BrowserSignIn(
             val verifier = pkceVerifier()
             val state = randomToken(16)
             // Held while the app is still in front, which is when Android allows it, and until the code is redeemed.
-            keepAlive.hold()
+            hold()
             try {
                 openBrowser(auth.nativeAuthorizeUrl(url, provider, pkceChallenge(verifier), listener.redirectUri, state))
                 // The gateway forgets an unfinished sign-in after 10 minutes. Anything else that reaches the address (a
@@ -63,9 +74,19 @@ class BrowserSignIn(
                 if (code == null) ApiResult.Failed(0, "The sign-in took too long. Try again.")
                 else auth.redeemNativeCode(url, code, verifier)
             } finally {
-                keepAlive.release()
+                release()
             }
         }
+    }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun hold() {
+        if (waiting.incrementAndFetch() == 1) keepAlive.hold()
+    }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun release() {
+        if (waiting.decrementAndFetch() == 0) keepAlive.release()
     }
 }
 
