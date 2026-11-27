@@ -55,6 +55,19 @@ class ChatNotificationsTest {
     }
 
     @Test
+    fun twoPicturesFromTwoPathsAreTwoMessages() {
+        notifications.postBotMessage(Bot("work"), picture = null, storedSessionId = "chat", text = "![](https://gateway.test/a.png)")
+        notifications.postBotMessage(Bot("work"), picture = null, storedSessionId = "chat", text = "![](https://gateway.test/b.png)", viaPush = true)
+        val messages = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(posted.activeNotifications.single().notification)
+        assertEquals(2, messages?.messages?.size)
+
+        // The same picture over both paths is one message.
+        notifications.postBotMessage(Bot("work"), picture = null, storedSessionId = "chat", text = "![](https://gateway.test/b.png)")
+        val after = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(posted.activeNotifications.single().notification)
+        assertEquals(2, after?.messages?.size)
+    }
+
+    @Test
     fun aFailureWithoutDetailsStillPosts() {
         notifications.postReply("chat", "Bot chat", "", failed = true)
 

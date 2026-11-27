@@ -657,7 +657,8 @@ class ChatNotifications(
         // One message can arrive both over the gateway socket and through push: the second copy is dropped.
         // The same words twice from one path are two messages (a bot repeating itself) and both notify.
         val now = System.currentTimeMillis()
-        val key = bot.name + "\u0000" + preview.take(DEDUPE_PREFIX)
+        // Every picture says "Finished.": its own Markdown tells two pictures apart.
+        val key = bot.name + "\u0000" + (if (preview == finished) text.trim() else preview).take(DEDUPE_PREFIX)
         synchronized(recentBotMessages) {
             recentBotMessages.values.removeAll { now - it.second > DEDUPE_WINDOW_MS }
             val earlier = recentBotMessages[key]
