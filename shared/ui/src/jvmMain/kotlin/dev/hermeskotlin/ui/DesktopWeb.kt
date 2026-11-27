@@ -24,10 +24,13 @@ interface DesktopWeb {
 
     @Composable
     fun AgentCard(
+        draftKey: String,
+        revision: String,
         screen: AgentScreen,
         takesTaps: Boolean,
+        validateOnly: Boolean,
         modifier: Modifier,
-        onRendered: () -> Unit,
+        onRendered: (Set<String>) -> Unit,
         onAnswer: (String, JsonElement) -> Unit,
         onFailure: () -> Unit,
     )

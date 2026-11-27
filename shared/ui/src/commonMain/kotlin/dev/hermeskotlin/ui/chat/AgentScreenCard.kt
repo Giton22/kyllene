@@ -31,6 +31,7 @@ import dev.hermeskotlin.core.chat.ScreenView
 import dev.hermeskotlin.core.chat.ToolActivity
 import dev.hermeskotlin.core.chat.screenViews
 import dev.hermeskotlin.core.phone.AgentScreens
+import dev.hermeskotlin.core.phone.AgentScreens.DesktopStage
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
 import dev.hermeskotlin.designsystem.caption
@@ -42,6 +43,7 @@ import dev.hermeskotlin.designsystem.surface
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -65,7 +67,11 @@ internal class AgentScreenContext(
     val onFail: (chat: String?, surfaceId: String, message: String) -> Unit,
     val onDrawn: (chat: String?, screen: AgentScreen) -> Unit = { _, _ -> },
     val took: (chat: String?, screen: AgentScreen) -> Boolean = { _, _ -> true },
+    val registry: AgentScreens? = null,
+    private val desktopCalls: List<AgentScreens.DesktopCall> = emptyList(),
 ) {
+    fun desktopCall(chat: String?, id: String) = desktopCalls.find { it.chat == chat && it.id == id }
+
     companion object {
         val None = AgentScreenContext(emptyList(), { _, _ -> }, { _, _, _ -> false }, { _, _, _ -> })
     }
@@ -79,15 +85,18 @@ internal fun rememberAgentScreenContext(): AgentScreenContext {
     val agentScreens = remember(koin) { koin.getOrNull<AgentScreens>() } ?: return LocalAgentScreens.current
     val liveScreens by agentScreens.live.collectAsStateWithLifecycle()
     val screensGot by agentScreens.got.collectAsStateWithLifecycle()
-    return remember(liveScreens, screensGot) {
+    val desktopCalls by agentScreens.desktop.collectAsStateWithLifecycle()
+    return remember(liveScreens, screensGot, desktopCalls) {
         AgentScreenContext(
             liveScreens,
-            agentScreens::shown,
-            agentScreens::answer,
-            agentScreens::fail,
+            onShown = { chat, ids -> agentScreens.shown(chat, ids) },
+            onAnswer = { chat, id, result -> agentScreens.answer(chat, id, result) },
+            onFail = { chat, id, message -> agentScreens.fail(chat, id, message) },
             // Only a chat Kyllene knows the id of: the phone's calls are kept by it.
             onDrawn = { chat, screen -> if (chat != null) agentScreens.drawn(screen, chat) },
             took = { chat, screen -> AgentScreens.took(screen, chat, screensGot) },
+            registry = agentScreens,
+            desktopCalls = desktopCalls,
         )
     }
 }
@@ -117,7 +126,10 @@ internal expect fun AgentScreenSurface(
     onAnswer: (surfaceId: String, result: JsonElement) -> Unit,
     onFail: (surfaceId: String, message: String) -> Unit,
     modifier: Modifier = Modifier,
-    onRendered: () -> Unit = {},
+    onRendered: (Set<String>) -> Unit = {},
+    draftKey: String = key,
+    revision: String = key,
+    validateOnly: Boolean = false,
 )
 
 /**
@@ -153,27 +165,47 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     if (!agentScreenRendererAvailable()) return
     val context = LocalAgentScreens.current
     val chat = LocalAgentScreenChat.current
-    // So a call that updates it is checked against what's here, even one made after Kyllene restarted.
-    LaunchedEffect(chat, screen.messages) { context.onDrawn(chat, screen) }
+    val desktopCall = context.desktopCall(chat, call.id)
+    val stage = desktopCall?.stage
     val waits = screen.wait && call.running
-    val live = waits && context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it) } }
-    // Saved, so it outlives the card scrolling out of the list.
+    val live = waits && if (isDesktop) {
+        desktopCall?.takesTaps == true
+    } else {
+        context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it) } }
+    }
     var wasLive by rememberSaveable(call.id) { mutableStateOf(false) }
     var tappedLive by rememberSaveable(call.id) { mutableStateOf(false) }
-    // Only while the app is in front: in the background nobody sees the screen, and the call should know.
-    val resumed by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
-    var rendered by remember(call.id, screen.messages) { mutableStateOf(!isDesktop) }
-    var drawError by remember(call.id, screen.messages) { mutableStateOf<String?>(null) }
-    if (live && !isDesktop) wasLive = true
-    val confirming = if (isDesktop) call.running else waits && !wasLive
-    if ((rendered || drawError != null) && confirming && resumed.isAtLeast(Lifecycle.State.RESUMED)) {
-        // The bridge may receive the request after its card has been rendered.
-        LaunchedEffect(chat, screen.surfaceIds, drawError) {
-            while (true) {
+    val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    val resumed = lifecycle.isAtLeast(Lifecycle.State.RESUMED)
+    // Ready and Showing use the same browser result. Validation is a separate callback.
+    val validating = stage == DesktopStage.Validating
+    var rendered by remember(call.id, screen.messages, validating) { mutableStateOf<Set<String>>(emptySet()) }
+    var drawError by remember(call.id, screen.messages, validating) { mutableStateOf<String?>(null) }
+    if (live) wasLive = true
+    if (isDesktop) {
+        LaunchedEffect(chat, call.id, stage, rendered, drawError, resumed) {
+            if (stage != null && stage != DesktopStage.Ready && call.running && resumed) {
+                val registry = context.registry ?: return@LaunchedEffect
                 val error = drawError
-                if (error == null) context.onShown(chat, screen.surfaceIds)
-                else screen.surfaceIds.forEach { context.onFail(chat, it, error) }
-                delay(SHOWN_EVERY_MS)
+                if (error != null) {
+                    screen.surfaceIds.forEach { registry.fail(chat, it, error, call.id) }
+                } else if (validating) {
+                    registry.validated(chat, rendered, call.id)
+                } else {
+                    registry.shown(chat, rendered, call.id)
+                }
+            } else if (!call.running && !call.failed && rendered.containsAll(screen.surfaceIds)) {
+                context.onDrawn(chat, screen)
+            }
+        }
+    } else {
+        LaunchedEffect(chat, screen.messages) { context.onDrawn(chat, screen) }
+        if (waits && !wasLive && resumed) {
+            LaunchedEffect(chat, screen.surfaceIds) {
+                while (true) {
+                    context.onShown(chat, screen.surfaceIds)
+                    delay(SHOWN_EVERY_MS)
+                }
             }
         }
     }
@@ -181,7 +213,10 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     // seen running: an old one in the history must not end a new call that reuses its surface id.
     var wasRunning by rememberSaveable(call.id) { mutableStateOf(call.running) }
     LaunchedEffect(call.running) {
-        if (wasRunning && !call.running) screen.surfaceIds.forEach { context.onFail(chat, it, ENDED) }
+        if (wasRunning && !call.running) screen.surfaceIds.forEach {
+            if (isDesktop) context.registry?.fail(chat, it, ENDED, call.id)
+            else context.onFail(chat, it, ENDED)
+        }
         wasRunning = call.running
     }
     // No call waits on it (the agent didn't wait, or the call ended without an answer): on the newest reply, a tap
@@ -204,7 +239,9 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
             onAnswer = { surface, result ->
                 if (live) {
                     // Only a tap a call took: one just after the turn stopped went nowhere, and may be tapped again.
-                    if (context.onAnswer(chat, surface, result)) tappedLive = true
+                    val answeredHere = if (isDesktop) context.registry?.answer(chat, surface, result, call.id) == true
+                    else context.onAnswer(chat, surface, result)
+                    if (answeredHere) tappedLive = true
                 } else if (replies && send != null && !sent.value) {
                     sent.value = true
                     send(screenTapMessage(result))
@@ -213,7 +250,10 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
             onFail = { surface, message ->
                 if (isDesktop) drawError = message else context.onFail(chat, surface, message)
             },
-            onRendered = { rendered = true },
+            onRendered = { rendered = it },
+            draftKey = JsonArray(listOf(JsonPrimitive(chat), JsonPrimitive(view.owner.id))).toString(),
+            revision = call.id,
+            validateOnly = validating,
             modifier = Modifier
                 .fillMaxWidth()
                 // Bounded, since the chat is a lazy list; a taller screen scrolls inside the card.

@@ -91,6 +91,7 @@ import java.util.Vector
 
 /** Widgets and plugin pages in the Chromium the JetBrains Runtime carries; see [Jcef]. */
 internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: GatewayRepository) : DesktopWeb {
+    private val cardDrafts = AgentCardDrafts()
 
     private suspend fun app(): CefApp? {
         val saved = gateways.all().gateways.map { it.url }
@@ -137,13 +138,16 @@ internal class JcefWeb(private val cookies: WebCookieJar, private val gateways: 
 
     @Composable
     override fun AgentCard(
+        draftKey: String,
+        revision: String,
         screen: AgentScreen,
         takesTaps: Boolean,
+        validateOnly: Boolean,
         modifier: Modifier,
-        onRendered: () -> Unit,
+        onRendered: (Set<String>) -> Unit,
         onAnswer: (String, JsonElement) -> Unit,
         onFailure: () -> Unit,
-    ) = JcefAgentCard({ app() }, screen, takesTaps, modifier, onRendered, onAnswer, onFailure)
+    ) = JcefAgentCard({ app() }, cardDrafts, draftKey, revision, screen, takesTaps, validateOnly, modifier, onRendered, onAnswer, onFailure)
 
     @Composable
     override fun PluginPage(url: String, gateway: String, title: String, onClose: () -> Unit) {

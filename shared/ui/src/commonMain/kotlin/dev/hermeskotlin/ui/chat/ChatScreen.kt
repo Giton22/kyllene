@@ -1140,7 +1140,12 @@ internal fun ChatView(
                                 val calls = ScreenViews.calls(state.messages)
                                 val newest = ScreenViews.newest(state.messages)
                                 remember(calls, newest, screens, agentScreenChat) {
-                                    ScreenViews(screenViews(calls) { screens.took(agentScreenChat, it) }, newest)
+                                    val views = if (isDesktop) {
+                                        screenViews(calls, canShowRunning = { screens.desktopCall(agentScreenChat, it.id) != null })
+                                    } else {
+                                        screenViews(calls, took = { screens.took(agentScreenChat, it) })
+                                    }
+                                    ScreenViews(views, newest)
                                 }
                             },
                             LocalAgentScreenSend provides actions::sendPrompt,

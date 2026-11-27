@@ -120,7 +120,10 @@ internal actual fun AgentScreenSurface(
     onAnswer: (surfaceId: String, result: JsonElement) -> Unit,
     onFail: (surfaceId: String, message: String) -> Unit,
     modifier: Modifier,
-    onRendered: () -> Unit,
+    onRendered: (Set<String>) -> Unit,
+    draftKey: String,
+    revision: String,
+    validateOnly: Boolean,
 ) {
     val context = LocalContext.current
     val drawn = remember(key, screen) { DrawnScreens.of(context, key, screen) }

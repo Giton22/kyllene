@@ -84,6 +84,10 @@ class PhoneToolsBridgeTest {
         val ids = mutableSetOf<String>()
         val waiting = mutableListOf<JsonObject>()
         val answers = mutableMapOf<String, JsonObject>()
+        val answerAttempts = mutableListOf<JsonObject>()
+        var pendingReads = 0
+        var refuseAnswers = 0
+        var disconnectOnAnswer = false
         val installs = mutableListOf<JsonObject>()
         val heres = mutableListOf<String>()
 
@@ -135,7 +139,16 @@ class PhoneToolsBridgeTest {
                                 """{"ok":true}"""
                             }
                         }
-                        "command.dispatch" -> if (!installed) null else command(params["arg"]!!.jsonPrimitive.content)
+                        "command.dispatch" -> {
+                            val arg = params["arg"]!!.jsonPrimitive.content
+                            if (disconnectOnAnswer && arg.startsWith("phone answer ")) {
+                                disconnectOnAnswer = false
+                                answerAttempts += HermesJson.parseToJsonElement(arg.removePrefix("phone answer ")).jsonObject
+                                transport.serverClose(null)
+                                continue
+                            }
+                            if (!installed) null else command(arg)
+                        }
                         else -> "{}"
                     }
                     transport.push(
@@ -214,13 +227,20 @@ class PhoneToolsBridgeTest {
                             listing()
                         }
                         "pending" -> buildJsonObject {
+                            pendingReads++
                             put("ok", true)
                             put("requests", JsonArray(waiting.filter { it["id"]!!.jsonPrimitive.content !in answers }))
                             now?.let { put("now", it) }
                         }
                         else -> {
-                            answers[body["id"]!!.jsonPrimitive.content] = body
-                            buildJsonObject { put("ok", true) }
+                            answerAttempts += body
+                            if (refuseAnswers > 0) {
+                                refuseAnswers--
+                                buildJsonObject { put("ok", false) }
+                            } else {
+                                answers[body["id"]!!.jsonPrimitive.content] = body
+                                buildJsonObject { put("ok", true) }
+                            }
                         }
                     }
                 }
@@ -248,7 +268,10 @@ class PhoneToolsBridgeTest {
                 }
             }
             if (args["fail"] != null) throw PhoneToolException("Battery is unknown.")
-            return buildJsonObject { put("tool", tool.id) }
+            return buildJsonObject {
+                put("tool", tool.id)
+                args["value"]?.let { put("value", it) }
+            }
         }
     }
 
@@ -287,11 +310,11 @@ class PhoneToolsBridgeTest {
         return Setup(bridge, connection, settings, store, api)
     }
 
-    private suspend fun TestScope.connect(s: Setup, plugin: Plugin): FakeTransport {
+    private suspend fun TestScope.connect(s: Setup, plugin: Plugin, url: String = URL): FakeTransport {
         val transport = FakeTransport()
         transports += transport
         plugin.serve(backgroundScope, transport)
-        s.connection.start(GatewayUrl.parse(URL))
+        s.connection.start(GatewayUrl.parse(url))
         transport.push(FakeTransport.READY)
         s.connection.state.first { it is ConnectionState.Connected }
         return transport
@@ -319,6 +342,71 @@ class PhoneToolsBridgeTest {
         assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
         assertEquals(PhoneTool.ShowUi.id, plugin.answers["screen"]?.get("result")?.jsonObject?.get("tool")?.jsonPrimitive?.content)
         assertTrue(plugin.error("battery").orEmpty().isNotBlank())
+    }
+
+    @Test
+    fun desktopRetriesARefusedAnswerWithoutRunningTheScreenAgain() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi), desktopScreensOnly = true)
+        val plugin = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id)
+            refuseAnswers = 1
+        }
+        connect(s, plugin)
+
+        until { "screen" in plugin.answers }
+        assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
+        assertEquals(listOf(plugin.answers["screen"], plugin.answers["screen"]), plugin.answerAttempts)
+    }
+
+    @Test
+    fun desktopRetriesAfterReconnectWhenTheSameRequestIsStillPending() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi), desktopScreensOnly = true)
+        val plugin = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id, buildJsonObject { put("value", "submitted") })
+            disconnectOnAnswer = true
+        }
+        connect(s, plugin)
+        until { s.connection.state.value is ConnectionState.Reconnecting }
+        assertEquals(1, plugin.answerAttempts.size)
+        assertTrue(plugin.answers.isEmpty())
+
+        val request = plugin.waiting.removeAt(0)
+        connect(s, plugin)
+        until { plugin.pendingReads >= 2 }
+        delay(PhoneToolsBridge.ANSWER_RETRY_MS + 100)
+        assertEquals(1, plugin.answerAttempts.size)
+
+        plugin.waiting += request
+        until { "screen" in plugin.answers }
+        assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
+        assertEquals(listOf(plugin.answers["screen"], plugin.answers["screen"]), plugin.answerAttempts)
+    }
+
+    @Test
+    fun desktopNeverSendsAQueuedAnswerToADifferentGateway() = runTest {
+        val results = ArrayDeque(listOf("first gateway", "second gateway"))
+        val runner = object : PhoneToolRunner {
+            override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement =
+                JsonPrimitive(results.removeFirst())
+        }
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi), desktopScreensOnly = true)
+        val first = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id)
+            disconnectOnAnswer = true
+        }
+        connect(s, first)
+        until { s.connection.state.value is ConnectionState.Reconnecting }
+
+        val other = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id)
+        }
+        connect(s, other, "https://b.example")
+        until { "screen" in other.answers }
+        delay(PhoneToolsBridge.ANSWER_RETRY_MS + 100)
+        assertEquals("second gateway", other.answerAttempts.single()["result"]?.jsonPrimitive?.content)
+        assertTrue(first.answers.isEmpty())
     }
 
     @Test

@@ -20,11 +20,14 @@ internal actual fun AgentScreenSurface(
     onAnswer: (surfaceId: String, result: JsonElement) -> Unit,
     onFail: (surfaceId: String, message: String) -> Unit,
     modifier: Modifier,
-    onRendered: () -> Unit,
+    onRendered: (Set<String>) -> Unit,
+    draftKey: String,
+    revision: String,
+    validateOnly: Boolean,
 ) {
     val renderer = rememberDesktopWeb() ?: return
     key(key) {
-        renderer.AgentCard(screen, takesTaps, modifier, onRendered, onAnswer) {
+        renderer.AgentCard(draftKey, revision, screen, takesTaps, validateOnly, modifier, onRendered, onAnswer) {
             screen.surfaceIds.firstOrNull()?.let { onFail(it, NOT_DRAWN + "The desktop renderer could not display the A2UI card.") }
         }
     }
