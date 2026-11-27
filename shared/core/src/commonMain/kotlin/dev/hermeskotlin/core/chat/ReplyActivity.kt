@@ -32,16 +32,30 @@ fun List<SessionMessage>.hasUnreadBotMessage(readUpTo: Double): Boolean = any { 
  * is over.
  *
  * A history read during the turn (a reconnect, a turn that isn't ours) gives the old reply its stored row's key. A
- * reply this turn didn't stream, under a key the start doesn't have, is the old one when its words are the same.
+ * reply this turn didn't stream, under a key the start doesn't have, is the old one when its words are the same and
+ * it didn't finish later than the old one did (a routine's "Nothing new." read back on a reconnect is a new reply).
  */
 fun ChatState.newFinishedReply(atStart: ChatState?, previous: ChatState? = atStart): ChatMessage.Assistant? {
     val reply = messages.lastOrNull() as? ChatMessage.Assistant ?: return null
     val before = atStart?.messages ?: return reply
     val streamed = previous?.messages?.any { it.key == reply.key && it is ChatMessage.Assistant && it.streaming } == true
     val old = before.lastOrNull { it.key == reply.key } as? ChatMessage.Assistant
-        ?: before.lastOrNull { it is ChatMessage.Assistant && !it.streaming }.takeUnless { streamed } as? ChatMessage.Assistant
+        ?: (before.lastOrNull { it is ChatMessage.Assistant && !it.streaming } as? ChatMessage.Assistant)
+            ?.takeUnless { streamed || reply.finishedAfter(it) }
         ?: return reply
     return reply.takeUnless {
         !old.streaming && old.text == it.text && old.outcome == it.outcome && old.error == it.error
     }
 }
+
+/**
+ * Whether this reply finished well after [other]. A live reply's time is this device's clock and a stored row's the
+ * gateway's, so the two may be a little apart for the same reply.
+ */
+private fun ChatMessage.Assistant.finishedAfter(other: ChatMessage.Assistant): Boolean {
+    val at = timestamp ?: return false
+    val then = other.timestamp ?: return false
+    return at > then + SAME_REPLY_CLOCK_SLACK_SECONDS
+}
+
+private const val SAME_REPLY_CLOCK_SLACK_SECONDS = 60.0

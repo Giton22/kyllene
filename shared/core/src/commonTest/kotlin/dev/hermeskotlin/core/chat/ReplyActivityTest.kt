@@ -99,6 +99,21 @@ class ReplyActivityTest {
     }
 
     @Test
+    fun aReplyReadBackOnAReconnectWithTheSameWordsAsTheLastIsNew() {
+        // A routine says "Nothing new." each run. This run's reply comes back from the stored transcript on a
+        // reconnect, finished an hour after the last one, under its row's key, and was never streamed here.
+        val last = ChatMessage.Assistant("live-1", text = "Nothing new.", outcome = TurnOutcome.Complete, timestamp = 1_000.0)
+        val started = ChatState(messages = listOf(last), running = true)
+        val readBack = started.copy(
+            messages = listOf(last.copy(key = "row-11", timestamp = 1_001.0), last.copy(key = "row-12", timestamp = 4_600.0)),
+        )
+        assertEquals("row-12", readBack.copy(running = false).newFinishedReply(started, readBack)?.key)
+        // The old reply re-keyed by that read, with only a clock's difference in its time, is still the old one.
+        val reread = started.copy(messages = listOf(last.copy(key = "row-11", timestamp = 1_020.0)))
+        assertNull(reread.copy(running = false).newFinishedReply(started, reread))
+    }
+
+    @Test
     fun aTurnsOwnReplyIsNew() {
         val running = answered.reduce(event("message.start")).reduce(event("message.delta", """{"text":"Again"}"""))
         val done = running.reduce(event("message.complete", """{"text":"Again"}"""))
