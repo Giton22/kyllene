@@ -2,6 +2,8 @@ package dev.hermeskotlin.core.phone
 
 import dev.hermeskotlin.core.chat.AgentScreen
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -41,6 +43,71 @@ class AgentScreensTest {
         assertEquals(result, call.await())
         assertFalse(screens.gatewayCards.value.single().call.takesTaps)
         assertFalse(screens.answer("gateway-chat", "form", result, "request-1"))
+    }
+
+    @Test
+    fun aGatewayUpdatePreservesUntouchedSurfacesAndUsesOnlyCurrentHistory() = runTest {
+        val screens = AgentScreens()
+        var owned = true
+        val original = AgentScreen(
+            listOf("""{"createSurface":{"surfaceId":"a"}}""", """{"createSurface":{"surfaceId":"b"}}"""),
+            setOf("a", "b"),
+            wait = false,
+        )
+        val first = async { screens.awaitGatewayCard(original, original, "chat", "first") { owned } }
+        runCurrent()
+        screens.validated("chat", original.surfaceIds, "first")
+        screens.shown("chat", original.surfaceIds, "first")
+        first.await()
+
+        val update = AgentScreen(listOf("""{"updateDataModel":{"surfaceId":"a"}}"""), setOf("a"), wait = false)
+        val drawing = screens.gatewayDrawing(update, "chat", null)
+        assertEquals(listOf(original.messages.first(), update.messages.single()), drawing.messages)
+        assertEquals(emptyMap(), screens.got.value)
+        val second = async { screens.awaitGatewayCard(update, drawing, "chat", "second") { owned } }
+        runCurrent()
+        assertEquals(listOf(setOf("b"), setOf("a")), screens.gatewayCards.value.map { it.screen.surfaceIds })
+        screens.validated("chat", update.surfaceIds, "second")
+        screens.shown("chat", update.surfaceIds, "second")
+        second.await()
+        assertEquals(listOf(setOf("b"), setOf("a")), screens.gatewayCards.value.map { it.screen.surfaceIds })
+        val tooMany = update.copy(messages = List(AgentScreen.MAX_MESSAGES) { update.messages.single() })
+        assertFailsWith<PhoneToolException> { screens.gatewayDrawing(tooMany, "chat", null) }
+        owned = false
+        assertFailsWith<PhoneToolException> { screens.gatewayDrawing(update, "chat", null) }
+    }
+
+    @Test
+    fun aShownGatewayRequestEndsAsSoonAsItsToolStops() = runTest {
+        val screens = AgentScreens()
+        val active = MutableStateFlow(true)
+        val form = screen("form")
+        val request = async {
+            runCatching {
+                screens.awaitGatewayCard(form, form, "chat", "request", changes = active.map { }, isWaiting = { active.value }) { true }
+            }
+        }
+        runCurrent()
+        screens.validated("chat", form.surfaceIds, "request")
+        screens.shown("chat", form.surfaceIds, "request")
+        active.value = false
+        runCurrent()
+        assertTrue(request.isCompleted)
+        assertEquals(AgentScreens.NOT_SHOWN, request.await().exceptionOrNull()?.message)
+        assertFalse(screens.gatewayCards.value.single().call.takesTaps)
+    }
+
+    @Test
+    fun aMatchedAndroidRequestOnlyAcceptsItsTranscriptCall() = runTest {
+        val screens = AgentScreens()
+        val card = screen("form")
+        val request = async { screens.await(card, "chat", transcriptId = "latest") }
+        runCurrent()
+        val result = JsonPrimitive("submitted")
+        assertFalse(screens.answer("chat", "form", result, transcriptId = "older"))
+        screens.shown("chat", card.surfaceIds, transcriptId = "latest")
+        assertTrue(screens.answer("chat", "form", result, transcriptId = "latest"))
+        assertEquals(result, request.await())
     }
 
     @Test

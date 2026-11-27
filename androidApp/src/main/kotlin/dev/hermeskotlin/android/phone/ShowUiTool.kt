@@ -10,7 +10,9 @@ import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.PhoneToolException
 import dev.hermeskotlin.core.phone.awaitScreenPlacement
+import dev.hermeskotlin.core.phone.desktopAgentScreenChat
 import dev.hermeskotlin.core.phone.gatewayAgentScreenChat
+import dev.hermeskotlin.core.phone.screenRequestChanges
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.ui.chat.agentScreenProblem
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +27,7 @@ import kotlin.uuid.Uuid
  * A screen the agent draws in the chat (experiment). The chat draws it from the call's own arguments; this checks
  * Kyllene can draw it and, when the agent waits, hands back what the user tapped there, in the chat that called.
  */
-class ShowUiTool(
+internal class ShowUiTool(
     private val context: Context,
     private val screens: AgentScreens,
     private val chats: ChatTargets,
@@ -33,47 +35,68 @@ class ShowUiTool(
     private val connection: GatewayConnection,
 ) {
 
+    private val claimed = LinkedHashSet<Pair<String, String>>()
+
     suspend fun run(args: JsonObject, session: String, origin: JsonRpcClient?): JsonElement {
         val screen = AgentScreen.from(SHOW_UI_TOOL, args)
             ?: throw PhoneToolException(
                 "messages must be a list of 1 to ${AgentScreen.MAX_MESSAGES} A2UI messages (JSON objects), each naming its surfaceId.",
             )
+        val socket = connection.state.value as? ConnectionState.Connected
+        if (origin == null || socket?.client !== origin) throw PhoneToolException(AgentScreens.NOT_SHOWN)
+        val connected = { (connection.state.value as? ConnectionState.Connected)?.client === origin }
         val open = host.session.value
         val state = open?.state?.value
         val stored = state?.storedSessionId
         if (open != null && stored != null && session.isNotBlank() && (session == stored || session == state.runtimeSessionId)) {
-            val accepts = {
-                origin != null && (connection.state.value as? ConnectionState.Connected)?.let {
-                    it.client === origin && it.gateway == open.gateway
-                } == true && host.session.value === open && host.ownerVersion.value == open.ownerVersion
+            val ownsChat = {
+                connected() && socket.gateway == open.gateway &&
+                    host.session.value === open && host.ownerVersion.value == open.ownerVersion
             }
-            if (!accepts()) throw PhoneToolException(AgentScreens.NOT_SHOWN)
-            val placement = awaitScreenPlacement(open.state, screen, accepts) { false }
-            if (placement.transcriptCallId == null) {
+            if (!ownsChat()) throw PhoneToolException(AgentScreens.NOT_SHOWN)
+            val transcriptKey = desktopAgentScreenChat(open.gateway.value, open.profile, stored)
+            val placement = awaitScreenPlacement(open.state, screen, ownsChat) { transcriptKey to it in claimed }
+            val changes = screenRequestChanges(host, open, connection)
+            val callId = placement.transcriptCallId
+            if (callId == null) {
                 val key = gatewayAgentScreenChat(open.gateway.value, open.profile, stored)
-                val drawing = checkedScreen(screen, key)
-                if (!accepts()) throw PhoneToolException(AgentScreens.NOT_SHOWN)
+                val drawing = checkedScreen { screens.gatewayDrawing(screen, key, open) }
                 return screens.awaitGatewayCard(
-                    screen, drawing, key, Uuid.random().toString(),
+                    screen, drawing, key, Uuid.random().toString(), owner = open, changes = changes,
                     isWaiting = { placement.canShowStandalone(open.state.value) },
-                    ownsChat = accepts,
+                    ownsChat = { ownsChat() && !placement.conflictsWithDirect(open.state.value, screen) },
                 )
             }
+            claimed += transcriptKey to callId
+            if (claimed.size > 128) claimed.remove(claimed.first())
+            val accepts = { ownsChat() && placement.isDirectRunning(open.state.value) }
+            prepareTranscript(screen, transcriptKey, accepts)
+            if (!screen.wait) return buildJsonObject { put("shown", true) }
+            return screens.await(screen, transcriptKey, transcriptId = callId, changes = changes, accepts = accepts)
         }
-        // The chat's stored id, as the chat screen knows it; the gateway may name it by its live id.
-        val chat = chats.of(session)?.storedSessionId ?: session.takeIf { it.isNotBlank() }
-        checkedScreen(screen, chat)
-        screens.record(screen, chat)
+        // Preserve compatibility for requests whose session isn't yet known to the currently open chat.
+        val chat = chats.of(session)?.let { desktopAgentScreenChat(it.gateway, it.profile, it.storedSessionId) }
+            ?: session.takeIf { it.isNotBlank() }
+        prepareTranscript(screen, chat, connected)
         if (!screen.wait) return buildJsonObject { put("shown", true) }
-        return screens.await(screen, chat)
+        return screens.await(screen, chat, accepts = connected)
     }
 
-    private suspend fun checkedScreen(screen: AgentScreen, chat: String?): AgentScreen {
-        val earlier = screens.earlier(screen, chat) ?: throw PhoneToolException(NOT_DRAWN + UNKNOWN_SURFACE)
-        val drawing = screen.copy(messages = earlier + screen.messages)
-        val problem = withContext(Dispatchers.IO) { agentScreenProblem(context, drawing) }
+    private suspend fun prepareTranscript(screen: AgentScreen, chat: String?, accepts: () -> Boolean) {
+        checkedScreen {
+            val earlier = screens.earlier(screen, chat) ?: throw PhoneToolException(NOT_DRAWN + UNKNOWN_SURFACE)
+            screen.copy(messages = earlier + screen.messages)
+        }
+        if (!accepts()) throw PhoneToolException(AgentScreens.NOT_SHOWN)
+        screens.record(screen, chat)
+    }
+
+    private suspend fun checkedScreen(drawing: () -> AgentScreen): AgentScreen {
+        val candidate = drawing()
+        val problem = withContext(Dispatchers.IO) { agentScreenProblem(context, candidate) }
         if (problem != null) throw PhoneToolException(NOT_DRAWN + problem)
-        return drawing
+        if (candidate != drawing()) throw PhoneToolException(NOT_DRAWN + "The screen changed while this update was being checked.")
+        return candidate
     }
 
     private companion object {

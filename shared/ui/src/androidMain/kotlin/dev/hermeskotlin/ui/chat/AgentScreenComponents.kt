@@ -152,7 +152,7 @@ internal object ScreenTextField : A2uiBasicCatalogV1.TextField {
         }
         with(material) {
             TypedContent(
-                label, value, variant, validationRegexp, change, enabled, accessibility,
+                label, value, variant, validationRegexp, change, enabled && LocalAgentScreenAllowsInput.current, accessibility,
                 if (edited) checks else emptyList(), if (LocalInRow.current) modifier else modifier.fillMaxWidth(),
             )
         }

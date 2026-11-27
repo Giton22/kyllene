@@ -25,6 +25,7 @@ import dev.hermeskotlin.ui.windowControlsHeight
 import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
+import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.desktopAgentScreenChat
 import dev.hermeskotlin.core.phone.gatewayAgentScreenChat
@@ -443,6 +444,7 @@ fun ChatScreen(
     LaunchedEffect(target) { viewModel.open(target) }
     val transcript = viewModel.transcript.collectAsStateWithLifecycle().value
     val state = transcript.state
+    val gatewayScreenOwner by viewModel.gatewayScreenOwner.collectAsStateWithLifecycle()
     // The same chat reopened with a new position (a notification for it) keeps the last one until the new one is read.
     val readPosition = viewModel.readPosition.collectAsStateWithLifecycle().value
         ?.takeIf { it.target.copy(readUpTo = null) == target.copy(readUpTo = null) }
@@ -618,11 +620,12 @@ fun ChatScreen(
         state = if (readPosition == null || !ownsTranscript) state.copy(historyLoaded = false) else state,
         conversationKey = conversationKey,
         agentScreenChat = state.storedSessionId?.let {
-            if (isDesktop) desktopAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it) else it
+            desktopAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it)
         },
         gatewayScreenChat = state.storedSessionId?.takeIf { ownsTranscript && screenShown && connected }?.let {
             gatewayAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it)
         },
+        gatewayScreenOwner = gatewayScreenOwner,
         savedViewport = { viewModel.viewportFor(conversationKey, target) },
         onSaveViewport = viewModel::saveViewport,
         picker = picker,
@@ -794,6 +797,7 @@ internal fun ChatView(
     conversationKey: Any? = null,
     agentScreenChat: String? = state.storedSessionId,
     gatewayScreenChat: String? = null,
+    gatewayScreenOwner: ChatSession? = null,
     /** Where the reader was in this chat's list when it last left the screen, read as the list comes back. */
     savedViewport: () -> TranscriptViewport? = { null },
     onSaveViewport: ((TranscriptViewport) -> Unit)? = null,
@@ -1132,7 +1136,7 @@ internal fun ChatView(
                         )
                     }
                     val gatewayCards = LocalAgentScreens.current.gatewayCards.filter {
-                        it.call.chat == gatewayScreenChat && it.isCurrent()
+                        gatewayScreenOwner != null && it.owner === gatewayScreenOwner && it.call.chat == gatewayScreenChat && it.isCurrent()
                     }
                     if (state.historyLoaded && (state.messages.isNotEmpty() || gatewayCards.isNotEmpty())) {
                         CompositionLocalProvider(
@@ -2339,7 +2343,8 @@ private fun Messages(
                 }
             }
             itemsIndexed(gatewayCards, key = { _, card -> "gateway-card:${card.call.id}" }) { _, card ->
-                GatewayAgentScreenCard(card)
+                val cardKey = "gateway-card:${card.call.id}"
+                GatewayAgentScreenCard(card) { listState.layoutInfo.visibleItemsInfo.any { it.key == cardKey } }
             }
         }
         // Clear of the composer floating over the chat's end. Any press on it moves the list, even a click on its track.

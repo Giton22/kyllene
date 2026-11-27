@@ -64,10 +64,10 @@ import org.koin.compose.getKoin
  */
 internal class AgentScreenContext(
     val live: List<AgentScreens.Live>,
-    val onShown: (chat: String?, surfaceIds: Set<String>) -> Unit,
+    val onShown: (chat: String?, surfaceIds: Set<String>, transcriptId: String) -> Unit,
     /** True when a call waiting on the screen took the tap. */
-    val onAnswer: (chat: String?, surfaceId: String, result: JsonElement) -> Boolean,
-    val onFail: (chat: String?, surfaceId: String, message: String) -> Unit,
+    val onAnswer: (chat: String?, surfaceId: String, result: JsonElement, transcriptId: String) -> Boolean,
+    val onFail: (chat: String?, surfaceId: String, message: String, transcriptId: String) -> Unit,
     val onDrawn: (chat: String?, screen: AgentScreen) -> Unit = { _, _ -> },
     val took: (chat: String?, screen: AgentScreen) -> Boolean = { _, _ -> true },
     val registry: AgentScreens? = null,
@@ -77,7 +77,7 @@ internal class AgentScreenContext(
     fun desktopCall(chat: String?, id: String) = desktopCalls.find { it.chat == chat && it.id == id }
 
     companion object {
-        val None = AgentScreenContext(emptyList(), { _, _ -> }, { _, _, _ -> false }, { _, _, _ -> })
+        val None = AgentScreenContext(emptyList(), { _, _, _ -> }, { _, _, _, _ -> false }, { _, _, _, _ -> })
     }
 }
 
@@ -85,6 +85,7 @@ internal val LocalAgentScreens = compositionLocalOf { AgentScreenContext.None }
 
 /** A standalone gateway card does not fetch images merely because the request arrived. */
 internal val LocalAgentScreenLoadsRemoteImages = compositionLocalOf { true }
+internal val LocalAgentScreenAllowsInput = compositionLocalOf { true }
 
 @Composable
 internal fun rememberAgentScreenContext(): AgentScreenContext {
@@ -97,9 +98,9 @@ internal fun rememberAgentScreenContext(): AgentScreenContext {
     return remember(liveScreens, screensGot, desktopCalls, gatewayCards) {
         AgentScreenContext(
             liveScreens,
-            onShown = { chat, ids -> agentScreens.shown(chat, ids) },
-            onAnswer = { chat, id, result -> agentScreens.answer(chat, id, result) },
-            onFail = { chat, id, message -> agentScreens.fail(chat, id, message) },
+            onShown = { chat, ids, call -> agentScreens.shown(chat, ids, transcriptId = call) },
+            onAnswer = { chat, id, result, call -> agentScreens.answer(chat, id, result, transcriptId = call) },
+            onFail = { chat, id, message, call -> agentScreens.fail(chat, id, message, transcriptId = call) },
             // Only a chat Kyllene knows the id of: the phone's calls are kept by it.
             onDrawn = { chat, screen -> if (chat != null) agentScreens.drawn(screen, chat) },
             took = { chat, screen -> AgentScreens.took(screen, chat, screensGot) },
@@ -180,7 +181,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     val live = waits && if (isDesktop) {
         desktopCall?.takesTaps == true
     } else {
-        context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it) } }
+        context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it, call.id) } }
     }
     var wasLive by rememberSaveable(call.id) { mutableStateOf(false) }
     var tappedLive by rememberSaveable(call.id) { mutableStateOf(false) }
@@ -209,10 +210,10 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
         }
     } else {
         LaunchedEffect(chat, screen.messages) { context.onDrawn(chat, screen) }
-        if (waits && !wasLive && lifecycle.isAtLeast(Lifecycle.State.RESUMED)) {
+        if (waits && (live || !wasLive) && lifecycle.isAtLeast(Lifecycle.State.RESUMED)) {
             LaunchedEffect(chat, screen.surfaceIds) {
                 while (true) {
-                    context.onShown(chat, screen.surfaceIds)
+                    context.onShown(chat, screen.surfaceIds, call.id)
                     delay(SHOWN_EVERY_MS)
                 }
             }
@@ -224,7 +225,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     LaunchedEffect(call.running) {
         if (wasRunning && !call.running) screen.surfaceIds.forEach {
             if (isDesktop) context.registry?.fail(chat, it, ENDED, call.id)
-            else context.onFail(chat, it, ENDED)
+            else context.onFail(chat, it, ENDED, call.id)
         }
         wasRunning = call.running
     }
@@ -249,7 +250,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
                 if (live) {
                     // Only a tap a call took: one just after the turn stopped went nowhere, and may be tapped again.
                     val answeredHere = if (isDesktop) context.registry?.answer(chat, surface, result, call.id) == true
-                    else context.onAnswer(chat, surface, result)
+                    else context.onAnswer(chat, surface, result, call.id)
                     if (answeredHere) tappedLive = true
                 } else if (replies && send != null && !sent.value) {
                     sent.value = true
@@ -257,7 +258,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
                 }
             },
             onFail = { surface, message ->
-                if (isDesktop) drawError = message else context.onFail(chat, surface, message)
+                if (isDesktop) drawError = message else context.onFail(chat, surface, message, call.id)
             },
             onRendered = { rendered = it },
             draftKey = JsonArray(listOf(JsonPrimitive(chat), JsonPrimitive(view.owner.id))).toString(),
@@ -291,7 +292,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
 
 /** A live, request-scoped card whose provenance is displayed by Kyllene outside the remote surface. */
 @Composable
-internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
+internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard, isVisible: () -> Boolean) {
     val registry = LocalAgentScreens.current.registry ?: return
     if (!agentScreenRendererAvailable()) return
     val (call, screen) = card
@@ -300,11 +301,12 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
     val minimum = if (isDesktop) Lifecycle.State.STARTED else Lifecycle.State.RESUMED
     val validating = call.stage == DesktopStage.Validating
     var rendered by remember(call.id, validating) { mutableStateOf<Set<String>>(emptySet()) }
-    LaunchedEffect(call.stage, rendered, state) {
+    val visible = isVisible()
+    LaunchedEffect(call.stage, rendered, state, visible) {
         if (!state.isAtLeast(minimum)) return@LaunchedEffect
         when (call.stage) {
             DesktopStage.Validating -> registry.validated(call.chat, rendered, call.id)
-            DesktopStage.Showing -> registry.shown(call.chat, rendered, call.id)
+            DesktopStage.Showing -> if (visible) registry.shown(call.chat, rendered, call.id)
             DesktopStage.Ready -> Unit
         }
     }
@@ -318,14 +320,18 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
             Text(stringResource(Res.string.chat_gateway_screen_title), style = Theme[typography][bodySmall])
             Text(stringResource(Res.string.chat_gateway_screen_notice), style = Theme[typography][caption])
         }
-        CompositionLocalProvider(LocalAgentScreenLoadsRemoteImages provides false) {
+        val takesTaps = visible && call.takesTaps && state.isAtLeast(minimum)
+        CompositionLocalProvider(
+            LocalAgentScreenLoadsRemoteImages provides false,
+            LocalAgentScreenAllowsInput provides takesTaps,
+        ) {
             AgentScreenSurface(
                 key = call.id,
                 screen = screen,
                 live = true,
-                takesTaps = call.takesTaps && state.isAtLeast(minimum),
+                takesTaps = takesTaps,
                 onAnswer = { surface, result ->
-                    if (lifecycle.currentState.isAtLeast(minimum)) registry.answer(call.chat, surface, result, call.id)
+                    if (isVisible() && lifecycle.currentState.isAtLeast(minimum)) registry.answer(call.chat, surface, result, call.id)
                 },
                 onFail = { surface, message -> registry.fail(call.chat, surface, message, call.id) },
                 onRendered = { rendered = it },

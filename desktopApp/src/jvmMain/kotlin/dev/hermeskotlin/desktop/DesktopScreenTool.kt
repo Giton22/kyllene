@@ -14,6 +14,7 @@ import dev.hermeskotlin.core.phone.PhoneToolRunner
 import dev.hermeskotlin.core.phone.awaitScreenPlacement
 import dev.hermeskotlin.core.phone.desktopAgentScreenChat
 import dev.hermeskotlin.core.phone.gatewayAgentScreenChat
+import dev.hermeskotlin.core.phone.screenRequestChanges
 import dev.hermeskotlin.core.rpc.JsonRpcClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -75,18 +76,19 @@ internal class DesktopScreenTool(
             claimed += key to callId
             if (claimed.size > RECENT_CLAIMS) claimed.remove(claimed.first())
         }
-        val earlier = screens.earlier(screen, key)
-            ?: throw PhoneToolException(NOT_DRAWN + "The screen to update hasn't been shown in this chat.")
-        val drawing = screen.copy(messages = earlier + screen.messages)
-        drawing.layoutProblem?.let {
-            throw PhoneToolException(NOT_DRAWN + it)
+        val drawing = if (callId == null) screens.gatewayDrawing(screen, key, chat) else {
+            val earlier = screens.earlier(screen, key)
+                ?: throw PhoneToolException(NOT_DRAWN + "The screen to update hasn't been shown in this chat.")
+            screen.copy(messages = earlier + screen.messages)
         }
+        drawing.layoutProblem?.let { throw PhoneToolException(NOT_DRAWN + it) }
         if (!accepts()) throw PhoneToolException(NOT_SHOWN)
-        if (callId != null) return screens.await(screen, key, NOT_SHOWN, callId, accepts)
+        if (callId != null) return screens.await(screen, key, NOT_SHOWN, callId, accepts = accepts)
         return screens.awaitGatewayCard(
-            screen, drawing, key, Uuid.random().toString(),
+            screen, drawing, key, Uuid.random().toString(), owner = chat,
+            changes = screenRequestChanges(host, chat, connection),
             isWaiting = { placement.canShowStandalone(chat.state.value) },
-            ownsChat = accepts,
+            ownsChat = { accepts() && !placement.conflictsWithDirect(chat.state.value, screen) },
         )
     }
 }

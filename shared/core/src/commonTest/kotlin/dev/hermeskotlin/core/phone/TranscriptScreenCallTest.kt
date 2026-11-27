@@ -51,6 +51,18 @@ class TranscriptScreenCallTest {
     }
 
     @Test
+    fun anUnrelatedDirectScreenDoesNotBlockThePluginCard() = runTest {
+        val outer = ToolActivity("plugin", "plugin_tool", running = true)
+        val pending = screen("pick")
+        val other = pending.copy(surfaceIds = setOf("other"))
+        val direct = call("other-direct", other)
+        val placement = awaitScreenPlacement(MutableStateFlow(state(outer, direct)), pending, { true }) { false }
+        assertNull(placement.transcriptCallId)
+        assertFalse(placement.conflictsWithDirect(state(outer, direct), pending))
+        assertTrue(placement.conflictsWithDirect(state(outer, direct, call("late-direct", pending)), pending))
+    }
+
+    @Test
     fun anIdleChatDoesNotShowAnUnmatchedGatewayRequest() = runTest {
         val idle = state(ToolActivity("old", "plugin_tool", running = false))
         assertFailsWith<PhoneToolException> {

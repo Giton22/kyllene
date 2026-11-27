@@ -10,6 +10,8 @@ import androidx.a2ui.model.processor.processInput
 import androidx.a2ui.model.protocol.A2uiClientErrorMessage
 import androidx.a2ui.model.protocol.A2uiClientEventMessage
 import androidx.a2ui.model.protocol.A2uiException
+import androidx.a2ui.compose.runtime.A2uiComponentState
+import androidx.a2ui.compose.runtime.observeA2uiComponentState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -141,7 +143,11 @@ internal actual fun AgentScreenSurface(
     }
     val surfaces by drawn.processor.activeSurfaces.collectAsStateWithLifecycle()
     val closed = remember(screen) { closedSurfaces(screen) }
-    val rendered = surfaces.mapTo(HashSet()) { it.id } + closed
+    val rendered = surfaces.mapNotNull { surface ->
+        key(surface.id) {
+            surface.id.takeIf { observeA2uiComponentState(surface) is A2uiComponentState.Success }
+        }
+    }.toSet() + closed
     val notifyRendered by rememberUpdatedState(onRendered)
     LaunchedEffect(rendered, error, validateOnly) {
         if (error == null && rendered.containsAll(screen.surfaceIds)) notifyRendered(screen.surfaceIds)
@@ -293,11 +299,15 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
     }
 }
 
-private fun closedSurfaces(screen: AgentScreen): Set<String> =
-    screen.messages.mapNotNullTo(HashSet()) { message ->
-        (runCatching { HermesJson.parseToJsonElement(message) }.getOrNull() as? JsonObject)
-            ?.let { it["deleteSurface"] as? JsonObject }?.let { (it["surfaceId"] as? JsonPrimitive)?.contentOrNull }
+private fun closedSurfaces(screen: AgentScreen): Set<String> = buildSet {
+    for (message in screen.messages) {
+        val body = runCatching { HermesJson.parseToJsonElement(message) }.getOrNull() as? JsonObject ?: continue
+        val created = (body["createSurface"] as? JsonObject)?.get("surfaceId") as? JsonPrimitive
+        val deleted = (body["deleteSurface"] as? JsonObject)?.get("surfaceId") as? JsonPrimitive
+        created?.contentOrNull?.let { remove(it) }
+        deleted?.contentOrNull?.let { add(it) }
     }
+}
 
 private suspend fun drawsWithoutError(context: Context, screen: AgentScreen, shown: Set<String>): String? =
     coroutineScope {

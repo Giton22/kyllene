@@ -1,16 +1,20 @@
 package dev.hermeskotlin.core.phone
 
 import dev.hermeskotlin.core.chat.AgentScreen
+import dev.hermeskotlin.core.chat.ChatHost
+import dev.hermeskotlin.core.chat.ChatSession
 import dev.hermeskotlin.core.chat.ChatMessage
 import dev.hermeskotlin.core.chat.ChatState
 import dev.hermeskotlin.core.chat.NOT_DRAWN
 import dev.hermeskotlin.core.chat.SHOW_UI_TOOL
 import dev.hermeskotlin.core.chat.ToolActivity
+import dev.hermeskotlin.core.connection.GatewayConnection
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 
@@ -19,6 +23,11 @@ private const val SCREEN_TRANSCRIPT_GRACE_MS = 1_000L
 
 data class ScreenPlacement(val transcriptCallId: String?, private val outerToolIds: Set<String> = emptySet()) {
     fun canShowStandalone(state: ChatState): Boolean = state.runningScreenTools().any { it.id in outerToolIds }
+
+    fun isDirectRunning(state: ChatState): Boolean = state.runningScreenTools().any { it.id == transcriptCallId }
+
+    fun conflictsWithDirect(state: ChatState, screen: AgentScreen): Boolean =
+        state.runningScreenTools().any { it.conflictsWith(screen) }
 }
 
 /**
@@ -40,13 +49,19 @@ suspend fun awaitScreenPlacement(
             val match = matchTranscriptScreenCall(calls.asSequence(), screen, claimed)
             when {
                 match != null -> ScreenPlacement(match)
-                calls.isNotEmpty() && calls.none { it.agentScreen != null || it.name == SHOW_UI_TOOL } ->
-                    ScreenPlacement(null, calls.mapTo(HashSet()) { it.id })
+                calls.none { it.conflictsWith(screen) } -> calls.filter { it.agentScreen == null && it.name != SHOW_UI_TOOL }
+                    .mapTo(HashSet()) { it.id }.takeIf { it.isNotEmpty() }?.let { ScreenPlacement(null, it) }
                 else -> null
             }
         }.first()
     } ?: throw PhoneToolException(AgentScreens.NOT_SHOWN)
 }
+
+fun screenRequestChanges(host: ChatHost, chat: ChatSession, connection: GatewayConnection): Flow<Unit> =
+    merge(host.session, host.ownerVersion, chat.state, connection.state).map { }
+
+private fun ToolActivity.conflictsWith(screen: AgentScreen): Boolean =
+    agentScreen?.let { same -> same.surfaceIds.any(screen.surfaceIds::contains) } ?: (name == SHOW_UI_TOOL)
 
 internal suspend fun awaitTranscriptScreenCall(
     states: Flow<ChatState>,
