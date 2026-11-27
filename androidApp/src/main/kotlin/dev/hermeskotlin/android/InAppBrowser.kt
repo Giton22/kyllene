@@ -38,17 +38,13 @@ class InAppBrowser(
         try {
             val intent = Intent(Intent.ACTION_VIEW, parsed)
             if (browserOnly) {
-                val browser = activity.browserPackage() ?: return showNoApp()
-                intent.addCategory(Intent.CATEGORY_BROWSABLE).setPackage(browser)
+                // No browser to name (none is the default, and none says it's one): let Android pick, as without the switch.
+                intent.addCategory(Intent.CATEGORY_BROWSABLE).setPackage(activity.browserPackage())
             }
             activity.startActivity(intent)
         } catch (_: ActivityNotFoundException) {
-            showNoApp()
+            Toast.makeText(activity, R.string.link_no_app, Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private fun showNoApp() {
-        Toast.makeText(activity, R.string.link_no_app, Toast.LENGTH_SHORT).show()
     }
 
     private fun customTab(): CustomTabsIntent {

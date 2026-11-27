@@ -15,6 +15,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowToast
@@ -74,7 +75,19 @@ class InAppBrowserTest {
     }
 
     @Test
-    fun withTheSwitchOnAndNoBrowserItSaysSoInsteadOfOpeningAnotherApp() {
+    fun withTheSwitchOnAndNoBrowserToNameAndroidPicksTheApp() {
+        // No default browser and none that says it's one (some phones' only browser): nothing to pin the link to.
+        val started = open("https://example.org/docs", inBrowser = true)!!
+
+        assertNull(started.`package`)
+        assertTrue(started.hasCategory(Intent.CATEGORY_BROWSABLE))
+        assertEquals("https://example.org/docs", started.dataString)
+    }
+
+    @Test
+    fun withTheSwitchOnAndNothingToOpenALinkItSaysSo() {
+        shadowOf(RuntimeEnvironment.getApplication()).checkActivities(true)
+
         assertNull(open("https://example.org/docs", inBrowser = true))
         assertEquals(activity.getString(R.string.link_no_app), ShadowToast.getTextOfLatestToast())
     }
