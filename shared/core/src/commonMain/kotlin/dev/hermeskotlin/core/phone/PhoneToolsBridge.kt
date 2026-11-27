@@ -102,12 +102,12 @@ class PhoneToolsBridge(
 
     private data class RequestKey(val id: String, val gateway: GatewayUrl?)
 
-    private data class DesktopOrigin(val connection: ConnectionState.Connected, val identity: Identity)
+    private data class RequestOrigin(val connection: ConnectionState.Connected, val identity: Identity)
 
     private val running = mutableMapOf<RequestKey, Running>()
 
-    /** The desktop has its response and is still delivering it. A pending fetch must not start the tool again. */
-    private val desktopAnswering = mutableSetOf<RequestKey>()
+    /** A socket-bound call has its response and is still delivering it. A pending fetch must not start the tool again. */
+    private val boundAnswering = mutableSetOf<RequestKey>()
 
     /** Calls we are done handling, so an earlier pending snapshot cannot run them twice. */
     private val completed = ArrayDeque<RequestKey>()
@@ -337,12 +337,10 @@ class PhoneToolsBridge(
 
     /** Fetches the calls waiting for this phone and starts each one not already running or answered. */
     private suspend fun drain() = draining.withLock {
-        val socket = if (desktopScreensOnly) {
-            connection.state.value as? ConnectionState.Connected ?: return@withLock
-        } else null
+        val socket = connection.state.value as? ConnectionState.Connected ?: return@withLock
         val me = identity()
-        val waiting = pending(me, socket?.client) ?: return@withLock
-        if (socket == null || connection.state.value === socket) startAll(waiting, socket?.let { DesktopOrigin(it, me) })
+        val waiting = pending(me, socket.client) ?: return@withLock
+        if (connection.state.value === socket) startAll(waiting, RequestOrigin(socket, me))
     }
 
     private suspend fun pending(me: Identity, client: JsonRpcClient?): List<PhoneRequest>? =
@@ -376,20 +374,21 @@ class PhoneToolsBridge(
     }
 
     /** Starts each of [waiting] not already running or being answered. */
-    private suspend fun startAll(waiting: List<PhoneRequest>, desktop: DesktopOrigin? = null) = runningLock.withLock {
-        val socket = desktop?.connection
+    private suspend fun startAll(waiting: List<PhoneRequest>, fetchedOn: RequestOrigin? = null) = runningLock.withLock {
         for (request in waiting) {
+            val bound = fetchedOn.takeIf { desktopScreensOnly || request.tool == PhoneTool.ShowUi.id }
+            val socket = bound?.connection
             val key = RequestKey(request.id, socket?.gateway)
-            if (key in running || key in desktopAnswering || key in completed) continue
-            val job = scope.launch { handle(request, key, desktop) }
+            if (key in running || key in boundAnswering || key in completed) continue
+            val job = scope.launch { handle(request, key, bound) }
             running[key] = Running(request.tool, job, socket?.client)
         }
     }
 
-    private suspend fun handle(request: PhoneRequest, key: RequestKey, desktop: DesktopOrigin?) {
-        val origin = desktop?.connection?.client
+    private suspend fun handle(request: PhoneRequest, key: RequestKey, bound: RequestOrigin?) {
+        val origin = bound?.connection?.client
         val started = now()
-        if (desktop != null && connection.state.value !== desktop.connection) {
+        if (bound != null && connection.state.value !== bound.connection) {
             // There is no response to send yet. A fresh fetch on the new socket can start the tool.
             runningLock.withLock { running.remove(key) }
             return
@@ -428,11 +427,11 @@ class PhoneToolsBridge(
         if (tool != null && error != SWITCHED_OFF) _recent.update { (listOf(PhoneToolUse(tool, now(), error)) + it).take(MAX_RECENT) }
         // Out of the running list before answering: switching the tool off now can't send a second answer.
         if (!finish(key)) return
-        if (desktop != null) {
+        if (bound != null) {
             val deadline = started + limit + DEADLINE_MARGIN_MS
-            deliverDesktopAnswer(request, desktop, result, error, deadline)
+            deliverBoundAnswer(request, bound, result, error, deadline)
             runningLock.withLock {
-                desktopAnswering.remove(key)
+                boundAnswering.remove(key)
                 markCompleted(key)
             }
             return
@@ -444,7 +443,7 @@ class PhoneToolsBridge(
     /** Moves [key] out of the running list; false when switching off already did (and answered it). */
     private suspend fun finish(key: RequestKey): Boolean = runningLock.withLock {
         if (running.remove(key) == null) return@withLock false
-        if (key.gateway == null) markCompleted(key) else desktopAnswering.add(key)
+        if (key.gateway == null) markCompleted(key) else boundAnswering.add(key)
         true
     }
 
@@ -465,15 +464,15 @@ class PhoneToolsBridge(
         for ((key, call) in stopped) scope.launch { answer(key.id, null, SWITCHED_OFF, origin = call.origin) }
     }
 
-    /** Sends the submitted response once, then retries while the same gateway still lists it for this desktop. */
-    private suspend fun deliverDesktopAnswer(
+    /** Sends the submitted response once, then retries while the same gateway still lists it for this device. */
+    private suspend fun deliverBoundAnswer(
         request: PhoneRequest,
-        desktop: DesktopOrigin,
+        bound: RequestOrigin,
         result: JsonElement?,
         error: String?,
         deadline: Long,
     ) {
-        val (origin, me) = desktop
+        val (origin, me) = bound
         suspend fun send(client: JsonRpcClient): Boolean = try {
             api.phoneAnswer(me.id, me.key, request.id, result, error, client)
         } catch (e: CancellationException) {

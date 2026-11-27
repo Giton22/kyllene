@@ -141,6 +141,8 @@
     <string name="chat_sessions_next">Next chat needing you</string>
 
     <!-- A screen the agent shows -->
+    <string name="chat_gateway_screen_title">Gateway tool request</string>
+    <string name="chat_gateway_screen_notice">This card was created by a tool on your Hermes gateway. Information you submit can be sent back to that tool.</string>
     <string name="chat_screen_waiting">Waiting for your answer</string>
     <string name="chat_screen_opening">Opening…</string>
     <string name="chat_screen_tap_answers">A tap answers in the chat</string>

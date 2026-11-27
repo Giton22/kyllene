@@ -39,11 +39,15 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val takesTaps: Boolean,
     )
 
+    data class GatewayCard(val call: DesktopCall, val screen: AgentScreen, val isCurrent: () -> Boolean)
+
     private class Waiting(
         val live: Live,
         val screen: AgentScreen,
         val accepts: () -> Boolean,
         val callId: String?,
+        val gatewayScreen: AgentScreen?,
+        val ownsChat: () -> Boolean,
     ) {
         val shown = CompletableDeferred<Unit>()
         private val answer = CompletableDeferred<Result<JsonElement>>()
@@ -114,6 +118,18 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     private val shownDesktop = ArrayDeque<DesktopCall>()
     private val _desktop = MutableStateFlow<List<DesktopCall>>(emptyList())
     val desktop: StateFlow<List<DesktopCall>> = _desktop.asStateFlow()
+    private val _gatewayCards = MutableStateFlow<List<GatewayCard>>(emptyList())
+    val gatewayCards: StateFlow<List<GatewayCard>> = _gatewayCards.asStateFlow()
+    private val shownGatewayCards = ArrayDeque<GatewayCard>()
+
+    suspend fun awaitGatewayCard(
+        update: AgentScreen,
+        screen: AgentScreen,
+        chat: String,
+        id: String,
+        isWaiting: () -> Boolean = { true },
+        ownsChat: () -> Boolean,
+    ): JsonElement = await(update, chat, NOT_SHOWN, id, { ownsChat() && isWaiting() }, screen, ownsChat)
 
     /**
      * Waits until the user answers [screen] in [chat], and returns what they did, for the agent. Throws
@@ -126,9 +142,19 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         notShown: String = NOT_SHOWN,
         callId: String? = null,
         accepts: () -> Boolean = { true },
+    ): JsonElement = await(screen, chat, notShown, callId, accepts, null, accepts)
+
+    private suspend fun await(
+        screen: AgentScreen,
+        chat: String?,
+        notShown: String,
+        callId: String?,
+        accepts: () -> Boolean,
+        gatewayScreen: AgentScreen?,
+        ownsChat: () -> Boolean,
     ): JsonElement {
         require(callId == null || chat != null)
-        val entry = Waiting(Live(chat, screen.surfaceIds), screen, accepts, callId)
+        val entry = Waiting(Live(chat, screen.surfaceIds), screen, accepts, callId, gatewayScreen, ownsChat)
         var replaced = emptyList<Waiting>()
         waiting.update { list ->
             val (old, kept) = list.partition { it.live.chat == chat && it.live.surfaceIds.any(screen.surfaceIds::contains) }
@@ -162,8 +188,16 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val entry = desktopConfirmation(chat, surfaceIds, callId, DesktopStage.Showing) ?: return
         record(entry.screen, chat)
         entry.stage = DesktopStage.Ready
-        shownDesktop.addLast(checkNotNull(entry.desktopCall()).copy(takesTaps = false))
-        if (shownDesktop.size > RECENT_DESKTOP_CALLS) shownDesktop.removeFirst()
+        val gatewayScreen = entry.gatewayScreen
+        if (gatewayScreen == null) {
+            shownDesktop.addLast(checkNotNull(entry.desktopCall()).copy(takesTaps = false))
+            if (shownDesktop.size > RECENT_DESKTOP_CALLS) shownDesktop.removeFirst()
+        } else {
+            val call = checkNotNull(entry.desktopCall()).copy(takesTaps = false)
+            shownGatewayCards.removeAll { !it.isCurrent() || it.call.overlaps(call) }
+            shownGatewayCards.addLast(GatewayCard(call, gatewayScreen, entry.ownsChat))
+            if (shownGatewayCards.size > RECENT_GATEWAY_CARDS) shownGatewayCards.removeFirst()
+        }
         publishDesktop()
         acknowledge(entry)
     }
@@ -203,9 +237,17 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     }
 
     private fun publishDesktop() {
-        _desktop.value = (shownDesktop + waiting.value.mapNotNull { it.desktopCall() })
+        val entries = waiting.value
+        _desktop.value = (shownDesktop + entries.filter { it.gatewayScreen == null }.mapNotNull { it.desktopCall() })
             .associateBy { it.chat to it.id }.values.toList()
+        val pendingCards = entries.mapNotNull { entry ->
+            entry.gatewayScreen?.let { GatewayCard(checkNotNull(entry.desktopCall()), it, entry.accepts) }
+        }
+        _gatewayCards.value = shownGatewayCards.filter { shown -> pendingCards.none { it.call.overlaps(shown.call) } } + pendingCards
     }
+
+    private fun DesktopCall.overlaps(other: DesktopCall): Boolean =
+        chat == other.chat && surfaceIds.any(other.surfaceIds::contains)
 
     companion object {
         /**
@@ -224,6 +266,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         /** A screen the chat doesn't show by then isn't waited on: nobody would see it. */
         const val SHOWN_WITHIN_MS = 15_000L
         private const val RECENT_DESKTOP_CALLS = 128
+        private const val RECENT_GATEWAY_CARDS = 8
 
         const val REPLACED = "A newer screen with the same surface id took its place."
         const val NOT_SHOWN = "Kyllene isn't showing this chat on the phone right now, so the user can't see the " +
@@ -238,3 +281,7 @@ fun desktopAgentScreenChat(gateway: String, profile: String?, chat: String): Str
         add(profile?.let { JsonPrimitive(it) } ?: JsonNull)
         add(JsonPrimitive(chat))
     }.toString()
+
+/** Standalone surfaces have their own namespace, separate from transcript cards. */
+fun gatewayAgentScreenChat(gateway: String, profile: String?, chat: String): String =
+    "gateway:${desktopAgentScreenChat(gateway, profile, chat)}"

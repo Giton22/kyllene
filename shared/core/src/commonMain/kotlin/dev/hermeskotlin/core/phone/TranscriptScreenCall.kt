@@ -1,0 +1,85 @@
+package dev.hermeskotlin.core.phone
+
+import dev.hermeskotlin.core.chat.AgentScreen
+import dev.hermeskotlin.core.chat.ChatMessage
+import dev.hermeskotlin.core.chat.ChatState
+import dev.hermeskotlin.core.chat.NOT_DRAWN
+import dev.hermeskotlin.core.chat.SHOW_UI_TOOL
+import dev.hermeskotlin.core.chat.ToolActivity
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+
+/** Waits briefly for the transcript's separately delivered call before showing a standalone card. */
+private const val SCREEN_TRANSCRIPT_GRACE_MS = 1_000L
+
+data class ScreenPlacement(val transcriptCallId: String?, private val outerToolIds: Set<String> = emptySet()) {
+    fun canShowStandalone(state: ChatState): Boolean = state.runningScreenTools().any { it.id in outerToolIds }
+}
+
+/**
+ * The phone request and transcript travel separately. A standalone card requires a live outer tool in the
+ * chat. The outer tool's name is not proof of provenance, so the card only identifies the gateway.
+ */
+suspend fun awaitScreenPlacement(
+    states: Flow<ChatState>,
+    screen: AgentScreen,
+    accepts: () -> Boolean,
+    claimed: (String) -> Boolean,
+): ScreenPlacement {
+    val direct = withTimeoutOrNull(SCREEN_TRANSCRIPT_GRACE_MS) {
+        awaitTranscriptScreenCall(states, screen, accepts, claimed)
+    }
+    if (direct != null) return ScreenPlacement(direct)
+    return withTimeoutOrNull(AgentScreens.SHOWN_WITHIN_MS - SCREEN_TRANSCRIPT_GRACE_MS) {
+        runningTools(states, accepts).mapNotNull { calls ->
+            val match = matchTranscriptScreenCall(calls.asSequence(), screen, claimed)
+            when {
+                match != null -> ScreenPlacement(match)
+                calls.isNotEmpty() && calls.none { it.agentScreen != null || it.name == SHOW_UI_TOOL } ->
+                    ScreenPlacement(null, calls.mapTo(HashSet()) { it.id })
+                else -> null
+            }
+        }.first()
+    } ?: throw PhoneToolException(AgentScreens.NOT_SHOWN)
+}
+
+internal suspend fun awaitTranscriptScreenCall(
+    states: Flow<ChatState>,
+    screen: AgentScreen,
+    accepts: () -> Boolean,
+    claimed: (String) -> Boolean,
+): String = runningTools(states, accepts).mapNotNull { calls ->
+    matchTranscriptScreenCall(calls.asSequence(), screen, claimed)
+}.first()
+
+private fun runningTools(states: Flow<ChatState>, accepts: () -> Boolean): Flow<List<ToolActivity>> =
+    states.map { state ->
+        if (!accepts()) throw PhoneToolException(AgentScreens.NOT_SHOWN)
+        state.runningScreenTools().toList()
+    }.distinctUntilChanged()
+
+private fun ChatState.runningScreenTools(): Sequence<ToolActivity> =
+    messages.asSequence().filterIsInstance<ChatMessage.Assistant>().flatMap { it.tools }.filter { it.running }
+
+internal fun matchTranscriptScreenCall(
+    calls: Sequence<ToolActivity>,
+    screen: AgentScreen,
+    claimed: (String) -> Boolean,
+): String? {
+    val messages = screen.messages.map(Json::parseToJsonElement)
+    val candidates = calls.filter {
+        val candidate = it.agentScreen
+        it.running && candidate != null && !claimed(it.id) &&
+            candidate.wait == screen.wait && candidate.surfaceIds == screen.surfaceIds &&
+            candidate.messages.map(Json::parseToJsonElement) == messages
+    }.take(2).toList()
+    if (candidates.size > 1) throw PhoneToolException(
+        NOT_DRAWN + "More than one pending tool call has these screen arguments. Give each screen its own surface ID.",
+    )
+    return candidates.singleOrNull()?.id
+}

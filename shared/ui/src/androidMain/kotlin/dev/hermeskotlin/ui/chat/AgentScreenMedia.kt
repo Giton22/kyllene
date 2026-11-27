@@ -73,7 +73,7 @@ internal fun isWebUrl(url: String): Boolean = Uri.parse(url.trim()).scheme?.lowe
  * picked shouldn't end the whole screen.
  */
 internal val ScreenImages = A2uiImageRenderer { url, description, scale, modifier, _ ->
-    if (!isWebUrl(url)) {
+    if (!LocalAgentScreenLoadsRemoteImages.current || !isWebUrl(url)) {
         Missing(stringResource(Res.string.android_media_picture_not_shown), modifier)
     } else {
         SubcomposeAsyncImage(

@@ -20,6 +20,30 @@ class AgentScreensTest {
     private fun screen(vararg surfaces: String) = AgentScreen(listOf("{}"), surfaces.toSet(), wait = true)
 
     @Test
+    fun aGatewayCardOnlyAnswersItsOwnRequestAfterDrawing() = runTest {
+        val screens = AgentScreens()
+        var ownsChat = true
+        val card = screen("form")
+        val call = async { screens.awaitGatewayCard(card, card, "gateway-chat", "request-1") { ownsChat } }
+        runCurrent()
+        val result = JsonPrimitive("submitted")
+        assertEquals(card, screens.gatewayCards.value.single().screen)
+        assertFalse(screens.answer("gateway-chat", "form", result))
+        assertFalse(screens.answer("gateway-chat", "form", result, "request-1"))
+        screens.validated("gateway-chat", setOf("form"), "request-1")
+        screens.shown("gateway-chat", setOf("form"), "request-1")
+        assertFalse(screens.answer("another-chat", "form", result, "request-1"))
+        assertFalse(screens.answer("gateway-chat", "form", result, "older-request"))
+        ownsChat = false
+        assertFalse(screens.answer("gateway-chat", "form", result, "request-1"))
+        ownsChat = true
+        assertTrue(screens.answer("gateway-chat", "form", result, "request-1"))
+        assertEquals(result, call.await())
+        assertFalse(screens.gatewayCards.value.single().call.takesTaps)
+        assertFalse(screens.answer("gateway-chat", "form", result, "request-1"))
+    }
+
+    @Test
     fun aTapAnswersTheCallWaitingOnItsSurface() = runTest {
         val screens = AgentScreens()
         val call = async { screens.await(screen("pick"), "chat-a") }

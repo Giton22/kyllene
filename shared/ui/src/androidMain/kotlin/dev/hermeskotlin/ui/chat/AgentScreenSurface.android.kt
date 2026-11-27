@@ -140,6 +140,12 @@ internal actual fun AgentScreenSurface(
         if (live) fail(surface, message)
     }
     val surfaces by drawn.processor.activeSurfaces.collectAsStateWithLifecycle()
+    val closed = remember(screen) { closedSurfaces(screen) }
+    val rendered = surfaces.mapTo(HashSet()) { it.id } + closed
+    val notifyRendered by rememberUpdatedState(onRendered)
+    LaunchedEffect(rendered, error, validateOnly) {
+        if (error == null && rendered.containsAll(screen.surfaceIds)) notifyRendered(screen.surfaceIds)
+    }
     val accents = remember(screen) { primaryColors(screen) }
     val textColor = Theme[colors][text]
     MaterialTheme(colorScheme = materialColors(), shapes = materialShapes(), typography = materialType()) {
@@ -276,11 +282,7 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
         }
     }
     // A screen the messages close at the end has nothing left to show.
-    val closed = screen.messages.mapNotNullTo(HashSet()) { message ->
-        (runCatching { HermesJson.parseToJsonElement(message) }.getOrNull() as? JsonObject)
-            ?.let { it["deleteSurface"] as? JsonObject }?.let { (it["surfaceId"] as? JsonPrimitive)?.contentOrNull }
-    }
-    val shown = screen.surfaceIds - closed
+    val shown = screen.surfaceIds - closedSurfaces(screen)
     // What the processing throws is a screen it can't draw, said to the agent, not a crash of the tool.
     return try {
         drawsWithoutError(context, screen, shown)
@@ -290,6 +292,12 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
         "The screen couldn't be drawn: ${e.message ?: e::class.simpleName}"
     }
 }
+
+private fun closedSurfaces(screen: AgentScreen): Set<String> =
+    screen.messages.mapNotNullTo(HashSet()) { message ->
+        (runCatching { HermesJson.parseToJsonElement(message) }.getOrNull() as? JsonObject)
+            ?.let { it["deleteSurface"] as? JsonObject }?.let { (it["surfaceId"] as? JsonPrimitive)?.contentOrNull }
+    }
 
 private suspend fun drawsWithoutError(context: Context, screen: AgentScreen, shown: Set<String>): String? =
     coroutineScope {

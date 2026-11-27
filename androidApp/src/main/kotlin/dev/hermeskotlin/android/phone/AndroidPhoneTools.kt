@@ -9,10 +9,13 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
 import dev.hermeskotlin.android.notify.ChatNotifications
+import dev.hermeskotlin.core.chat.ChatHost
+import dev.hermeskotlin.core.connection.GatewayConnection
 import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.PhoneTool
 import dev.hermeskotlin.core.phone.PhoneToolException
 import dev.hermeskotlin.core.phone.PhoneToolRunner
+import dev.hermeskotlin.core.rpc.JsonRpcClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
@@ -28,6 +31,8 @@ class AndroidPhoneTools(
     chats: ChatTargets,
     notifications: ChatNotifications,
     screens: AgentScreens,
+    host: ChatHost,
+    connection: GatewayConnection,
 ) : PhoneToolRunner {
 
     private val sound = SoundTool(context, confirmations)
@@ -41,7 +46,11 @@ class AndroidPhoneTools(
     private val contacts = ContactsTool(context)
     private val health = HealthTool(context)
     private val callMe = CallMeTool(notifications, chats)
-    private val showUi = ShowUiTool(context, screens, chats)
+    private val showUi = ShowUiTool(context, screens, chats, host, connection)
+
+    override suspend fun run(tool: PhoneTool, args: JsonObject, session: String, origin: JsonRpcClient?): JsonElement =
+        if (tool == PhoneTool.ShowUi) withContext(Dispatchers.Main.immediate) { showUi.run(args, session, origin) }
+        else run(tool, args, session)
 
     override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement = withContext(Dispatchers.IO) {
         when (tool) {
@@ -58,7 +67,7 @@ class AndroidPhoneTools(
             PhoneTool.Contacts -> contacts.run(args)
             PhoneTool.Health -> health.run(args)
             PhoneTool.CallMe -> callMe.run(args, session)
-            PhoneTool.ShowUi -> showUi.run(args, session)
+            PhoneTool.ShowUi -> throw PhoneToolException(AgentScreens.NOT_SHOWN)
         }
     }
 

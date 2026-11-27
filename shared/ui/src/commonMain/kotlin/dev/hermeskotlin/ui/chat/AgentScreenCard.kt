@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -34,6 +35,7 @@ import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.AgentScreens.DesktopStage
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
+import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.radii
@@ -42,6 +44,7 @@ import dev.hermeskotlin.designsystem.stroke
 import dev.hermeskotlin.designsystem.surface
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
+import dev.hermeskotlin.designsystem.warningSoft
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -68,6 +71,7 @@ internal class AgentScreenContext(
     val onDrawn: (chat: String?, screen: AgentScreen) -> Unit = { _, _ -> },
     val took: (chat: String?, screen: AgentScreen) -> Boolean = { _, _ -> true },
     val registry: AgentScreens? = null,
+    val gatewayCards: List<AgentScreens.GatewayCard> = emptyList(),
     private val desktopCalls: List<AgentScreens.DesktopCall> = emptyList(),
 ) {
     fun desktopCall(chat: String?, id: String) = desktopCalls.find { it.chat == chat && it.id == id }
@@ -79,6 +83,9 @@ internal class AgentScreenContext(
 
 internal val LocalAgentScreens = compositionLocalOf { AgentScreenContext.None }
 
+/** A standalone gateway card does not fetch images merely because the request arrived. */
+internal val LocalAgentScreenLoadsRemoteImages = compositionLocalOf { true }
+
 @Composable
 internal fun rememberAgentScreenContext(): AgentScreenContext {
     val koin = getKoin()
@@ -86,7 +93,8 @@ internal fun rememberAgentScreenContext(): AgentScreenContext {
     val liveScreens by agentScreens.live.collectAsStateWithLifecycle()
     val screensGot by agentScreens.got.collectAsStateWithLifecycle()
     val desktopCalls by agentScreens.desktop.collectAsStateWithLifecycle()
-    return remember(liveScreens, screensGot, desktopCalls) {
+    val gatewayCards by agentScreens.gatewayCards.collectAsStateWithLifecycle()
+    return remember(liveScreens, screensGot, desktopCalls, gatewayCards) {
         AgentScreenContext(
             liveScreens,
             onShown = { chat, ids -> agentScreens.shown(chat, ids) },
@@ -97,6 +105,7 @@ internal fun rememberAgentScreenContext(): AgentScreenContext {
             took = { chat, screen -> AgentScreens.took(screen, chat, screensGot) },
             registry = agentScreens,
             desktopCalls = desktopCalls,
+            gatewayCards = gatewayCards,
         )
     }
 }
@@ -275,6 +284,54 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
                 style = Theme[typography][caption],
                 color = if (live || replies) Theme[colors][accentText] else Theme[colors][textTertiary],
                 modifier = Modifier.padding(start = 4.dp),
+            )
+        }
+    }
+}
+
+/** A live, request-scoped card whose provenance is displayed by Kyllene outside the remote surface. */
+@Composable
+internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
+    val registry = LocalAgentScreens.current.registry ?: return
+    if (!agentScreenRendererAvailable()) return
+    val (call, screen) = card
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val state by lifecycle.currentStateAsState()
+    val minimum = if (isDesktop) Lifecycle.State.STARTED else Lifecycle.State.RESUMED
+    val validating = call.stage == DesktopStage.Validating
+    var rendered by remember(call.id, validating) { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(call.stage, rendered, state) {
+        if (!state.isAtLeast(minimum)) return@LaunchedEffect
+        when (call.stage) {
+            DesktopStage.Validating -> registry.validated(call.chat, rendered, call.id)
+            DesktopStage.Showing -> registry.shown(call.chat, rendered, call.id)
+            DesktopStage.Ready -> Unit
+        }
+    }
+
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(
+            Modifier.fillMaxWidth().background(Theme[colors][warningSoft], shape).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(stringResource(Res.string.chat_gateway_screen_title), style = Theme[typography][bodySmall])
+            Text(stringResource(Res.string.chat_gateway_screen_notice), style = Theme[typography][caption])
+        }
+        CompositionLocalProvider(LocalAgentScreenLoadsRemoteImages provides false) {
+            AgentScreenSurface(
+                key = call.id,
+                screen = screen,
+                live = true,
+                takesTaps = call.takesTaps && state.isAtLeast(minimum),
+                onAnswer = { surface, result ->
+                    if (lifecycle.currentState.isAtLeast(minimum)) registry.answer(call.chat, surface, result, call.id)
+                },
+                onFail = { surface, message -> registry.fail(call.chat, surface, message, call.id) },
+                onRendered = { rendered = it },
+                validateOnly = validating,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).clip(shape)
+                    .background(Theme[colors][surface]).border(1.dp, Theme[colors][stroke], shape).padding(12.dp),
             )
         }
     }

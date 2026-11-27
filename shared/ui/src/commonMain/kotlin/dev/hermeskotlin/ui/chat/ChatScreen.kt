@@ -25,7 +25,9 @@ import dev.hermeskotlin.ui.windowControlsHeight
 import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
+import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.desktopAgentScreenChat
+import dev.hermeskotlin.core.phone.gatewayAgentScreenChat
 import dev.hermeskotlin.core.bots.MentionQuery
 import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.core.chat.PathRefKind
@@ -618,6 +620,9 @@ fun ChatScreen(
         agentScreenChat = state.storedSessionId?.let {
             if (isDesktop) desktopAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it) else it
         },
+        gatewayScreenChat = state.storedSessionId?.takeIf { ownsTranscript && screenShown && connected }?.let {
+            gatewayAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it)
+        },
         savedViewport = { viewModel.viewportFor(conversationKey, target) },
         onSaveViewport = viewModel::saveViewport,
         picker = picker,
@@ -788,6 +793,7 @@ internal fun ChatView(
     /** Isolates the transcript's scroll state across gateways, profiles and chats. */
     conversationKey: Any? = null,
     agentScreenChat: String? = state.storedSessionId,
+    gatewayScreenChat: String? = null,
     /** Where the reader was in this chat's list when it last left the screen, read as the list comes back. */
     savedViewport: () -> TranscriptViewport? = { null },
     onSaveViewport: ((TranscriptViewport) -> Unit)? = null,
@@ -1125,7 +1131,10 @@ internal fun ChatView(
                             Modifier.fillMaxSize().then(if (controlHaze != null) Modifier.hazeSource(controlHaze, zIndex = -1f) else Modifier),
                         )
                     }
-                    if (state.historyLoaded && state.messages.isNotEmpty()) {
+                    val gatewayCards = LocalAgentScreens.current.gatewayCards.filter {
+                        it.call.chat == gatewayScreenChat && it.isCurrent()
+                    }
+                    if (state.historyLoaded && (state.messages.isNotEmpty() || gatewayCards.isNotEmpty())) {
                         CompositionLocalProvider(
                             LocalMediaLoader provides actions::loadMedia,
                             LocalWidgetFiles provides widgetFiles,
@@ -1176,6 +1185,7 @@ internal fun ChatView(
                                     // The voice chat and dictation have the speaker and the microphone.
                                     canReadAloud = hasSpeechPlayback && !voiceOn && !dictation.active,
                                     found = found,
+                                    gatewayCards = gatewayCards,
                                 )
                             }
                         }
@@ -2011,6 +2021,7 @@ private fun Messages(
     canReadAloud: Boolean = true,
     /** The message Find in chat is on, by its key, marked with an outline. */
     found: String? = null,
+    gatewayCards: List<AgentScreens.GatewayCard> = emptyList(),
 ) {
     var confirm by remember { mutableStateOf<Pair<MessageChange, String>?>(null) }
     val lastPrompt = messages.lastOrNull { it is ChatMessage.User }?.key
@@ -2187,7 +2198,8 @@ private fun Messages(
         positioned = true
     }
     val readLatest by rememberUpdatedState(onReadLatest)
-    val renderedEnd by rememberUpdatedState(messages.size to newest?.key)
+    val endKey = gatewayCards.lastOrNull()?.let { "gateway-card:${it.call.id}" } ?: newest?.key
+    val renderedEnd by rememberUpdatedState((messages.size + gatewayCards.size) to endKey)
     // Asked again whenever the messages change, not just the tail: a page loaded above, or a row redrawn, can turn
     // down an ask made while the rendered list and the chat's differed for a frame.
     LaunchedEffect(listState, positioned, onReadLatest != null, messages) {
@@ -2325,6 +2337,9 @@ private fun Messages(
                     }
                     }
                 }
+            }
+            itemsIndexed(gatewayCards, key = { _, card -> "gateway-card:${card.call.id}" }) { _, card ->
+                GatewayAgentScreenCard(card)
             }
         }
         // Clear of the composer floating over the chat's end. Any press on it moves the list, even a click on its track.
