@@ -321,7 +321,7 @@ class HistoryToMessagesTest {
                 ChatMessage.Assistant(
                     "row-2",
                     text = "There is one file.",
-                    tools = listOf(ToolActivity("c-terminal", "terminal", output = "a.txt")),
+                    tools = listOf(ToolActivity("c-terminal", "terminal", output = "a.txt", completed = true)),
                     reactionRowId = 4,
                 ),
             ),

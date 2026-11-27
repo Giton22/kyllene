@@ -21,6 +21,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.Instant
 
 /** Picking the event stream up after a drop (`session.events.since`) and reading the transcript a page at a time. */
 class ChatSessionResumeTest {
@@ -248,6 +250,29 @@ class ChatSessionResumeTest {
     }
 
     @Test
+    fun replayedToolStartsKeepTheirOrderWithoutUsingReconnectTime() = runTest {
+        answer = { _, method, _ ->
+            when (method) {
+                "session.events.since" -> since(
+                    """{"type":"tool.start","session_id":"rt1","seq":4,"payload":{"tool_id":"replayed","name":"terminal"}}""",
+                    """{"type":"tool.complete","session_id":"rt1","seq":5,"payload":{"tool_id":"replayed","summary":"done"}}""",
+                    latest = 5,
+                )
+                else -> "{}"
+            }
+        }
+        val (chat, transports) = droppedMidTurn(backgroundScope)
+        chat.state.first { it.reply()?.tools?.singleOrNull()?.completed == true }
+        val socket = transports.last()
+        socket.push(event("tool.start", 6, """{"tool_id":"live","name":"read_file"}"""))
+
+        val tools = chat.state.first { it.reply()?.tools?.size == 2 }.reply()!!.tools
+        assertEquals(listOf("replayed", "live"), tools.map { it.id })
+        assertEquals(null, tools.first().startedAt)
+        assertTrue(tools.last().startedAt != null)
+    }
+
+    @Test
     fun aTurnThatEndedWhileAwayShowsItsAnswerOnce() = runTest {
         // Opened mid-turn; the link drops, the turn ends meanwhile, and the gateway can't replay what was missed.
         transcript = savedFirstStep()
@@ -411,7 +436,7 @@ class ChatSessionResumeTest {
         val live = ChatMessage.Assistant(
             "live-0",
             text = "Running it. First I need the address.",
-            tools = listOf(savedTool.copy(running = true, output = null)),
+            tools = listOf(savedTool.copy(running = true, output = null, completed = false, startedAt = 104.0)),
             streaming = true,
         )
         val tool = ((saved + live).withSavedStepsInLiveReply(100.0, "Running it.", turnReplyKey = "live-0").last() as ChatMessage.Assistant)
@@ -419,6 +444,8 @@ class ChatSessionResumeTest {
 
         assertFalse(tool.running)
         assertEquals(savedTool.output, tool.output)
+        assertTrue(tool.completed)
+        assertEquals(104.0, tool.startedAt)
     }
 
     @Test
@@ -430,7 +457,7 @@ class ChatSessionResumeTest {
         val live = ChatMessage.Assistant(
             "live-0",
             text = "Running it. First I need the address.",
-            tools = listOf(savedTool.copy(running = true)),
+            tools = listOf(savedTool.copy(running = true, completed = false)),
             streaming = true,
         )
         val tool = ((saved + live).withSavedStepsInLiveReply(100.0, "Running it.", turnReplyKey = "live-0").last() as ChatMessage.Assistant)
@@ -448,14 +475,14 @@ class ChatSessionResumeTest {
         val live = ChatMessage.Assistant(
             "live-0",
             text = "Running it. First I need the address.",
-            tools = listOf(savedTool.copy(running = false, durationSeconds = 1.5)),
+            tools = listOf(savedTool.copy(running = false, completed = true)),
             streaming = true,
         )
         val tool = ((saved + live).withSavedStepsInLiveReply(100.0, "Running it.", turnReplyKey = "live-0").last() as ChatMessage.Assistant)
             .tools.single()
 
         assertFalse(tool.running, "a call that ended ran again")
-        assertEquals(1.5, tool.durationSeconds)
+        assertTrue(tool.completed, "an empty completion was lost")
     }
 
     @Test
@@ -710,13 +737,13 @@ class ChatSessionResumeTest {
     }
 
     /** A chat attached to rt1 with a turn streaming "Hel" (seqs 1-3) on a link that stays up. */
-    private suspend fun streamingHel(scope: CoroutineScope): Pair<ChatSession, FakeTransport> {
+    private suspend fun streamingHel(scope: CoroutineScope, clock: Clock = Clock.System): Pair<ChatSession, FakeTransport> {
         val base = answer
         answer = { transport, method, params ->
             if (method == "session.resume") """{"session_id":"rt1","running":true}""" else base(transport, method, params)
         }
         val (connection, transports) = connect(scope)
-        val chat = ChatSession(url, "stored-1", "Chat", connection, SessionsApi(scope.client()), scope)
+        val chat = ChatSession(url, "stored-1", "Chat", connection, SessionsApi(scope.client()), scope, clock = clock)
         chat.start()
         chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
         val socket = transports.last()
@@ -725,6 +752,32 @@ class ChatSessionResumeTest {
         socket.push(delta(3, "l"))
         chat.state.first { it.reply()?.text == "Hel" }
         return chat to socket
+    }
+
+    @Test
+    fun toolsHeldBehindAGapUseTheirOriginalLiveReceiptTime() = runTest {
+        var now = 100L
+        val clock = object : Clock { override fun now() = Instant.fromEpochSeconds(now) }
+        answer = { _, method, _ -> if (method == "session.events.since") null else "{}" }
+        val (chat, socket) = streamingHel(backgroundScope, clock)
+        val first = """{"tool_id":"first","name":"terminal"}"""
+        socket.push(event("tool.start", 5, first))
+        val ask = socket.awaitSent { it.isCall("session.events.since") }
+
+        now = 103
+        socket.push(event("tool.start", 6, """{"tool_id":"second","name":"read_file"}"""))
+        testScheduler.runCurrent()
+        now = 200
+        val replay = since(
+            replayed(4, "lo"),
+            """{"type":"tool.start","session_id":"rt1","seq":5,"payload":$first}""",
+            latest = 5,
+        )
+        socket.push("""{"jsonrpc":"2.0","id":${ask["id"]},"result":$replay}""")
+
+        val tools = chat.state.first { it.reply()?.tools?.size == 2 }.reply()!!.tools
+        assertEquals(listOf("first", "second"), tools.map { it.id })
+        assertEquals(listOf(100.0, 103.0), tools.map { it.startedAt })
     }
 
     @Test

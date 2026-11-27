@@ -679,6 +679,7 @@ fun ChatScreen(
         keysEnabled = keysEnabled && !dialogOpen,
         attachmentPicker = attachmentPicker.takeIf { isDesktop },
         imagePaste = imagePaste,
+        onOpenToolDetails = { if (docked) previewing = null },
         rail = railFile?.let { file ->
             {
                 FileViewer(file, onDismiss = { previewing = null }, load = viewModel::previewFile, download = viewModel::downloadFile, docked = true)
@@ -855,7 +856,32 @@ internal fun ChatView(
     imagePaste: Modifier = Modifier,
     /** A panel at the right, beside the conversation: the desktop's file rail. */
     rail: (@Composable () -> Unit)? = null,
+    onOpenToolDetails: () -> Unit = {},
 ) {
+    val density = LocalDensity.current
+    var chatPaneWidth by remember { mutableStateOf(0.dp) }
+    val canDockTools = isDesktop
+    var toolSelection by rememberSaveable(conversationKey) { mutableStateOf<Pair<String, String>?>(null) }
+    val selectedTool = toolSelection
+    val toolReplyKey = selectedTool?.first
+    val showToolActivity = LocalAppSettings.current.showToolActivity
+    val inspectedTools = remember(toolReplyKey, state.messages, showToolActivity) {
+        toolReplyKey?.takeIf { showToolActivity }?.let { replyKey ->
+            state.messages.filterIsInstance<ChatMessage.Assistant>().firstOrNull { it.key == replyKey }
+                ?.tools?.filter { it.name != MESSAGE_AGENT_TOOL }?.takeIf { it.isNotEmpty() }
+        }
+    }
+    // Opening a different inspector or losing the owning reply ends this selection.
+    LaunchedEffect(rail != null, inspectedTools != null) {
+        if (rail != null || inspectedTools == null) toolSelection = null
+    }
+    val showToolDetails = inspectedTools != null && rail == null
+    val toolRailWidth = (chatPaneWidth * 0.44f).coerceIn(200.dp, 520.dp).coerceAtMost(chatPaneWidth * 0.62f)
+    val railWidth = when {
+        showToolDetails && canDockTools -> toolRailWidth
+        rail != null -> RAIL_WIDTH
+        else -> 0.dp
+    }
     val canAttach = attachmentPicker != null && connected && attachments.size < OutgoingAttachment.MAX_COUNT
     var dropping by remember { mutableStateOf(false) }
     // A chat that stops taking files mid-drag takes its drop target away, which then says nothing more.
@@ -863,6 +889,7 @@ internal fun ChatView(
     Box(
         Modifier
             .fillMaxSize()
+            .then(if (isDesktop) Modifier.onSizeChanged { chatPaneWidth = with(density) { it.width.toDp() } } else Modifier)
             .background(Theme[colors][background])
             .then(if (wallpaper == null) Modifier.halo() else Modifier)
             .then(if (canAttach) Modifier.fileDrop(onHover = { dropping = it }) { attachmentPicker?.attachFiles(it) } else Modifier),
@@ -892,20 +919,45 @@ internal fun ChatView(
             val key = readAloud.key ?: return@LaunchedEffect
             if (state.historyLoaded && state.messages.none { it.key == key }) actions.stopReading()
         }
+        val composerFocus = remember { FocusRequester() }
+        var focusComment by remember { mutableStateOf<Long?>(null) }
+        val composerShown = state.inputRequests.isEmpty() && voiceChat.phase == VoicePhase.Off
+        val commentHost = remember(comments, actions, composerShown) {
+            if (!composerShown) return@remember null
+            object : CommentHost {
+                override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
+                    when (action) {
+                        SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
+                        SelectionAction.Explain -> actions.explain(source, anchor)
+                        SelectionAction.AskAside -> {
+                            actions.askAside(source, anchor)
+                            composerFocus.requestFocus()
+                        }
+                    }
+                }
+                override fun highlights(messageKey: String) =
+                    comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
+            }
+        }
         // The rail takes the right of the screen; the conversation centres in what's left.
-        if (rail != null) {
+        if (rail != null || showToolDetails) {
             Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .width(RAIL_WIDTH)
-                    .fillMaxHeight()
-                    .background(Theme[colors][background])
-                    .border(1.dp, Theme[colors][stroke]),
-            ) { rail() }
+                Modifier.align(Alignment.TopEnd).width(railWidth).fillMaxHeight()
+                    .background(Theme[colors][background]).border(1.dp, Theme[colors][stroke]),
+            ) {
+                if (rail != null) rail()
+                else if (inspectedTools != null && selectedTool != null) key(toolReplyKey) {
+                    CompositionLocalProvider(LocalCommentHost provides commentHost) {
+                        ToolDetailsViewer(inspectedTools, selectedTool.first, selectedTool.second, docked = canDockTools) {
+                            toolSelection = null
+                        }
+                    }
+                }
+            }
         }
         Column(
             Modifier
-                .padding(end = if (rail != null) RAIL_WIDTH else 0.dp)
+                .padding(end = railWidth)
                 // A desktop window's chat takes its whole width, so the bar's buttons sit at its edges and the
                 // scrollbar and the wheel work at the window's side; the reading column inside keeps to READING_WIDTH.
                 .then(if (isDesktop) Modifier else Modifier.widthIn(max = READING_WIDTH))
@@ -952,7 +1004,6 @@ internal fun ChatView(
             val composerFold = remember { ComposerFold() }
             // Ctrl+F: the matches for what's typed, from the newest back, each brought on screen and marked.
             var findOpen by remember { mutableStateOf(false) }
-            val composerFocus = remember { FocusRequester() }
             val focusHeld = LocalFocusHeld.current
             // Closing the find bar hands the keyboard back to the composer rather than to nothing.
             var findClosed by remember { mutableStateOf(0) }
@@ -1004,7 +1055,6 @@ internal fun ChatView(
             val hazeState = rememberHazeState()
             val controlHaze = if (isDesktop) null else rememberHazeState()
             // Comments wait in the composer, so the selection menus offer them only while it shows.
-            var focusComment by remember { mutableStateOf<Long?>(null) }
             // Type on the voice screen ends the call; the composer takes the keyboard once it's back.
             // Once the call is over the wish is spent either way: a question waiting in the composer's place
             // mustn't hand the keyboard over minutes later when it's answered.
@@ -1020,7 +1070,7 @@ internal fun ChatView(
             }
             val shortcutScope = rememberCoroutineScope()
             // The desktop's keys for the chat; a voice chat over it has the screen.
-            ShortcutHandler(enabled = keysEnabled && !voiceFull) { shortcut ->
+            ShortcutHandler(enabled = keysEnabled && !voiceFull && !(showToolDetails && !canDockTools)) { shortcut ->
                 when (shortcut) {
                     Shortcut.FocusComposer -> composerShown.also { if (it) composerFocus.requestFocus() }
                     Shortcut.FindInChat -> true.also {
@@ -1088,24 +1138,6 @@ internal fun ChatView(
             }
             // A new loader each time the link comes back, so cards that failed offline try again; good ones come from the cache.
             val linkPreviewLoader = remember<suspend (String) -> LinkPreview?>(actions, connected) { { url -> actions.loadLinkPreview(url) } }
-            val commentHost = remember(comments, actions, composerShown) {
-                if (!composerShown) return@remember null
-                object : CommentHost {
-                    override fun onSelection(action: SelectionAction, source: CommentSource, anchor: SelectionAnchor) {
-                        when (action) {
-                            SelectionAction.Comment -> focusComment = actions.addComment(source, anchor)
-                            SelectionAction.Explain -> actions.explain(source, anchor)
-                            SelectionAction.AskAside -> {
-                                actions.askAside(source, anchor)
-                                composerFocus.requestFocus()
-                            }
-                        }
-                    }
-
-                    override fun highlights(messageKey: String) =
-                        comments.filter { it.source.messageKey == messageKey }.flatMap { it.highlights }
-                }
-            }
             Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { paneHeight = it.height; paneWidth = it.width }) {
                 Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
                     if (wallpaper != null) {
@@ -1136,6 +1168,10 @@ internal fun ChatView(
                             },
                             LocalAgentScreenSend provides actions::sendPrompt,
                             LocalCommentHost provides commentHost,
+                            LocalOpenToolDetails provides { replyKey, toolId ->
+                                onOpenToolDetails()
+                                toolSelection = replyKey to toolId
+                            },
                         ) {
                             key(conversationKey) {
                                 Messages(
@@ -3106,7 +3142,7 @@ internal fun AssistantReply(
         message.commentary.forEach { update ->
             MarkdownText(remember(update) { linkFileUris(update) })
         }
-        // While the turn runs its finished steps are listed as they land; once it ends they fold into the pill.
+        // While the turn runs its finished steps are listed as they land; once it ends they fold into the timeline.
         if (showTools) if (message.streaming) LiveSteps(listedTools, message.key) else Tools(listedTools, message.key)
         if (generated.isNotEmpty()) ReplyMediaList(remember(generated) { generated.map { it.asMedia() } })
         // Shown whatever the tool-activity setting: the work happens out of sight, in other agents.
@@ -3750,184 +3786,6 @@ internal fun Reasoning(text: String, streaming: Boolean) {
         // On the desktop it's text to select and copy like the reply's, with the same right-click menu.
         if (isDesktop) PlatformCommentableSelection(onAction = null, content = body) else body()
     }
-}
-
-/**
- * The tools the reply used, folded; the one running now is named above the composer instead. Opened, it stays open
- * when the activity is made again, as on unfolding a foldable.
- */
-@Composable
-internal fun Tools(tools: List<ToolActivity>, messageKey: String) {
-    var expanded by rememberSaveable(messageKey) { mutableStateOf(false) }
-    val icons = remember(tools) { tools.map { toolIcon(it.name) }.distinct().take(3) }
-    val (ranWords, took) = workedLabel(tools)
-    val ran = ranWords.text()
-    val expandedState = stringResource(if (expanded) Res.string.chat_expanded else Res.string.chat_collapsed)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // A pill: up to three of the kinds of tool it used, overlapping, then how many ran and for how long.
-        // It's drawn 36dp tall, but the full touch height around it takes the tap.
-        val pill = CircleShape
-        val interaction = remember { MutableInteractionSource() }
-        Box(
-            Modifier
-                .heightIn(min = MinTouchTarget)
-                .handCursor()
-                .clickable(interaction, indication = null) { expanded = !expanded }
-                .semantics {
-                    contentDescription = listOfNotNull(ran, took).joinToString(", ")
-                    stateDescription = expandedState
-                },
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            Row(
-                Modifier
-                    .clearAndSetSemantics {}
-                    .heightIn(min = 36.dp)
-                    .clip(pill)
-                    .background(Theme[colors][surface], pill)
-                    .border(1.dp, Theme[colors][stroke], pill)
-                    .indication(interaction, rememberHoverIndication(Theme[colors][textSecondary]))
-                    .padding(start = 6.dp, end = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy((-6).dp)) { icons.forEach { ToolKindIcon(it) } }
-                Text(ran, style = Theme[typography][caption], color = Theme[colors][textSecondary])
-                took?.let { Text("· $it", style = Theme[typography][caption], color = Theme[colors][textMuted]) }
-                UnstyledIcon(
-                    if (expanded) Lucide.ChevronDown else Lucide.ChevronRight,
-                    contentDescription = null,
-                    tint = Theme[colors][textMuted],
-                    modifier = Modifier.size(13.dp),
-                )
-            }
-        }
-        if (expanded) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Theme[colors][stroke], RoundedCornerShape(Theme[radii][radiusMedium]))
-                    .background(Theme[colors][surface], RoundedCornerShape(Theme[radii][radiusMedium]))
-                    .padding(12.dp),
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Keyed, so a row opened before the activity was made again is restored by its tool, not its place.
-                    tools.forEach { key(it.id) { ToolRow(it, messageKey) } }
-                }
-            }
-        }
-    }
-}
-
-/**
- * A running reply's finished steps, newest last: a check (or a cross) in a soft circle, what was done, and
- * how long it took. The step in hand is on the live task card instead. Only the last few show. One opened stays
- * open when the activity is made again, as on unfolding a foldable.
- */
-@Composable
-internal fun LiveSteps(tools: List<ToolActivity>, messageKey: String) {
-    val done = tools.filterNot { it.running }
-    if (done.isEmpty()) return
-    val shown = done.takeLast(LIVE_STEPS_SHOWN)
-    Column(Modifier.padding(start = 2.dp)) {
-        if (done.size > shown.size) {
-            val earlier = done.size - shown.size
-            Text(
-                pluralStringResource(Res.plurals.chat_earlier_steps, earlier, earlier),
-                style = Theme[typography][caption],
-                color = Theme[colors][textMuted],
-                modifier = Modifier.padding(start = 30.dp, bottom = 4.dp),
-            )
-        }
-        shown.forEach { key(it.id) { LiveStepRow(it, messageKey) } }
-    }
-}
-
-/** A finished step; tapped, it opens to what the tool was given and gave back, as in the pill's list. */
-@Composable
-private fun LiveStepRow(tool: ToolActivity, messageKey: String) {
-    val step = remember(tool) { toolDone(tool) }
-    var open by rememberSaveable(tool.id) { mutableStateOf(false) }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 36.dp)
-            .clip(RoundedCornerShape(Theme[radii][radiusSmall]))
-            .handCursor()
-            .clickable(onClickLabel = stringResource(if (open) Res.string.chat_hide_details else Res.string.chat_show_details)) { open = !open },
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(20.dp).background(Theme[colors][if (tool.failed) dangerSoft else successSoft], CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            UnstyledIcon(
-                if (tool.failed) Lucide.X else Lucide.Check,
-                contentDescription = if (tool.failed) stringResource(Res.string.chat_tool_failed) else null,
-                tint = Theme[colors][if (tool.failed) danger else success],
-                modifier = Modifier.size(11.dp),
-            )
-        }
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(step.title.text(), style = Theme[typography][bodySmall], color = Theme[colors][textTertiary], maxLines = 1)
-            step.detail?.let {
-                Text(
-                    it,
-                    style = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily),
-                    color = Theme[colors][textSecondary],
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .background(Theme[colors][surface], RoundedCornerShape(Theme[radii][radiusXSmall]))
-                        .padding(horizontal = 6.dp, vertical = 1.dp),
-                )
-            }
-        }
-        // A scan flagged its output: said on the row, so it's seen while Stop is still worth pressing.
-        if (tool.risk != null) {
-            UnstyledIcon(Lucide.ShieldAlert, contentDescription = stringResource(Res.string.chat_tool_suspicious), tint = Theme[colors][warning], modifier = Modifier.size(14.dp))
-        }
-        tool.durationSeconds?.let { Text(formatDuration(it), style = Theme[typography][caption], color = Theme[colors][textMuted]) }
-    }
-    AnimatedVisibility(visible = open) {
-        Box(
-            Modifier
-                .padding(start = 30.dp, top = 2.dp, bottom = 6.dp)
-                .fillMaxWidth()
-                .border(1.dp, Theme[colors][stroke], RoundedCornerShape(Theme[radii][radiusMedium]))
-                .background(Theme[colors][surface], RoundedCornerShape(Theme[radii][radiusMedium]))
-                .padding(12.dp),
-        ) { ToolRow(tool, messageKey) }
-    }
-}
-
-private const val LIVE_STEPS_SHOWN = 4
-
-/** One kind of tool in the pill: its icon in a small circle, ringed in the pill's fill so the circles overlap cleanly. */
-@Composable
-private fun ToolKindIcon(icon: ImageVector) {
-    Box(
-        Modifier
-            .size(24.dp)
-            .border(2.dp, Theme[colors][surface], CircleShape)
-            .padding(1.dp)
-            .background(Theme[colors][surface3], CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        UnstyledIcon(icon, contentDescription = null, tint = Theme[colors][textTertiary], modifier = Modifier.size(11.dp))
-    }
-}
-
-/**
- * "Ran 3 tools" and the time they took between them ("42s"), for the reply's tool pill; no time when none
- * was timed. It's the tools' own time added up, not the turn's: calls run side by side each count.
- */
-internal fun workedLabel(tools: List<ToolActivity>): Pair<Words, String?> {
-    val timed = tools.mapNotNull { it.durationSeconds }
-    val ran = Words.Count(Res.plurals.chat_tools_ran, tools.size)
-    return ran to timed.takeIf { it.isNotEmpty() }?.let { formatDuration(it.sum()) }
 }
 
 /** A tool's kind, as a small icon. */

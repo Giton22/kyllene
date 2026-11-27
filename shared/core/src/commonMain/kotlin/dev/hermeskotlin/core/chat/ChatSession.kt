@@ -179,8 +179,10 @@ class ChatSession(
     private var seqRuntime: String? = null
     private var seqEpoch: String? = null
 
+    private data class ReceivedEvent(val event: GatewayEvent, val toolStartedAt: Double?)
+
     /** Live events held back while the gap before them is filled; null when nothing is being caught up. */
-    private var held: MutableList<GatewayEvent>? = null
+    private var held: MutableList<ReceivedEvent>? = null
 
     /** A `session.replay_gap` waits for its `session.resume`; gaps that come before that starts need no second one. */
     private var gapResumePending = false
@@ -191,7 +193,7 @@ class ChatSession(
      * them). Null when none is being taken up.
      */
     private var gapRuntime: String? = null
-    private var gapHeld: MutableList<GatewayEvent>? = null
+    private var gapHeld: MutableList<ReceivedEvent>? = null
 
     /** Counts `session.replay_gap`s: a catch-up begun before one has nothing left to apply. */
     private var streamGeneration = 0
@@ -2532,17 +2534,18 @@ class ChatSession(
 
     private suspend fun followEvents() {
         connection.events.collect { event ->
+            val received = ReceivedEvent(event, if (event.type == "tool.start") nowSeconds() else null)
             val runtimeId = _state.value.runtimeSessionId ?: run {
                 // Taken up again after a gap: the new subscription's frames, a gap among them too, wait for the resume.
                 val kept = event.sessionId != null && streamMutex.withLock {
-                    gapHeld?.takeIf { event.sessionId == gapRuntime }?.add(event) == true
+                    gapHeld?.takeIf { event.sessionId == gapRuntime }?.add(received) == true
                 }
                 // Or the resume got in since: the frame goes on as any other.
                 if (kept) null else _state.value.runtimeSessionId
             } ?: return@collect
             if (event.sessionId != runtimeId) return@collect
             if (event.type == REPLAY_GAP && resumeAfterGap(runtimeId)) return@collect
-            streamMutex.withLock { deliver(event) }
+            streamMutex.withLock { deliver(received) }
         }
     }
 
@@ -2571,7 +2574,7 @@ class ChatSession(
      * wait for it in [gapHeld], then go through in order; a gap among them takes another resume.
      */
     private suspend fun reattachAfterGap(client: JsonRpcClient, runtimeId: String) {
-        val waiting = mutableListOf<GatewayEvent>()
+        val waiting = mutableListOf<ReceivedEvent>()
         streamMutex.withLock {
             gapResumePending = false
             streamGeneration++
@@ -2586,7 +2589,7 @@ class ChatSession(
             gapHeld = null
             gapRuntime = null
             if (!attached) return
-            if (waiting.none { it.type == REPLAY_GAP }) {
+            if (waiting.none { it.event.type == REPLAY_GAP }) {
                 waiting.forEach(::deliver)
                 return
             }
@@ -2624,13 +2627,14 @@ class ChatSession(
      * Applies a live event in order: one already applied (replayed, or sent twice) is skipped, and one past a gap
      * waits, with those after it, while [catchUp] fills the gap. Called under [streamMutex].
      */
-    private fun deliver(event: GatewayEvent) {
+    private fun deliver(received: ReceivedEvent) {
+        val event = received.event
         gapHeld?.let {
-            it += event
+            it += received
             return
         }
         held?.let {
-            it += event
+            it += received
             return
         }
         val seq = event.seq
@@ -2648,14 +2652,14 @@ class ChatSession(
         if (seq != null && last != null) {
             if (seq <= last) return
             if (seq > last + 1) {
-                held = mutableListOf(event)
+                held = mutableListOf(received)
                 val client = connectedClient()
                 val runtimeId = _state.value.runtimeSessionId
                 if (client != null && runtimeId != null) scope.launch { catchUp(client, runtimeId) } else held = null
                 return
             }
         }
-        apply(event)
+        apply(event, received.toolStartedAt)
     }
 
     /**
@@ -2697,7 +2701,10 @@ class ChatSession(
                 return
             }
             if (missed != null) {
-                missed.forEach(::apply)
+                val observedStarts = held.orEmpty()
+                    .filter { it.toolStartedAt != null && it.event.seq != null }
+                    .associate { it.event.seq to it.toolStartedAt }
+                missed.forEach { apply(it, observedStarts[it.seq]) }
             } else if (!keep) {
                 lastSeq = null
                 val streamed = inflightText
@@ -2721,7 +2728,7 @@ class ChatSession(
         }
     }
 
-    private fun apply(event: GatewayEvent) {
+    private fun apply(event: GatewayEvent, toolStartedAt: Double?) {
         event.seq?.let { lastSeq = it }
         // The session authority stamps a turn's events with its generation beside the payload; a few payloads carry it
         // too. Only ever forward, as Desktop keeps it: a replayed or late event of an older turn must not rewind it.
@@ -2743,7 +2750,7 @@ class ChatSession(
             turnStartedAt = null
             turnReplyKey = null
         }
-        _state.update { it.reduce(event, now) }
+        _state.update { it.reduce(event, now, toolStartedAt) }
         when (event.type) {
             // Timed here, not on screen, so it ends on time even while the chat isn't showing. A notice that
             // replaced this one by the time it runs out has its own timer.
@@ -2828,7 +2835,7 @@ class ChatSession(
                 rowsSessionId = saved.rowsSessionId
                 olderSkew = 0
                 // Earlier pages can't be read until the gateway can, which brings this copy up to date first.
-                showRows(risks?.all().orEmpty(), older = false, savedCopyAt = saved.savedAt)
+                showRows(risks?.all().orEmpty(), older = false, savedCopyAt = saved.savedAt, cachedTimings = saved.toolTimings)
             }
         }
         val result = sessions.messages(gateway, id, limit = HISTORY_PAGE, profile = profile)
@@ -2872,8 +2879,13 @@ class ChatSession(
         }
     }
 
-    /** The last saved copy's row count, newest row ID and user reactions. */
-    private var savedCopyKey: Triple<Int, Long?, List<Pair<Long?, String>>>? = null
+    private data class SavedCopyKey(
+        val rowCount: Int,
+        val newestRow: Long?,
+        val reactions: List<Pair<Long?, String>>,
+        val toolTimings: Map<String, ToolTiming>,
+    )
+    private var savedCopyKey: SavedCopyKey? = null
     private var saveJob: Job? = null
     private val savedCopyRefreshMutex = Mutex()
 
@@ -2881,11 +2893,14 @@ class ChatSession(
     private fun saveCopy(id: String, saved: List<SessionMessage>, savedSessionId: String?) {
         val cache = cache ?: return
         val reactions = saved.mapNotNull { row -> row.userReaction?.let { row.id to it } }
-        val key = Triple(saved.size, saved.lastOrNull()?.id, reactions)
+        val ids = saved.asSequence().filter { it.role == "tool" }.mapNotNull { it.toolCallId }
+            .groupingBy { it }.eachCount().filterValues { it == 1 }.keys
+        val timing = _state.value.messages.observedToolTimings().filterKeys { it in ids }
+        val key = SavedCopyKey(saved.size, saved.lastOrNull()?.id, reactions, timing)
         if (key == savedCopyKey) return
         savedCopyKey = key
         saveJob?.cancel()
-        saveJob = scope.launch { cache.saveTranscript(gateway, profile, id, saved, savedSessionId) }
+        saveJob = scope.launch { cache.saveTranscript(gateway, profile, id, saved, savedSessionId, timing) }
     }
 
     /**
@@ -2964,8 +2979,8 @@ class ChatSession(
                     val stored = state.messages.takeWhile { it.key in shownBefore }.size
                     state.copy(
                         // The live reply took in the turn's saved steps, which this page brings again.
-                        messages = (historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged) + state.messages.drop(stored))
-                            .withSavedStepsFolded(),
+                        messages = (historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged)
+                            .withToolTimings(state.messages.observedToolTimings()) + state.messages.drop(stored)).withSavedStepsFolded(),
                         olderMessages = full,
                     )
                 }
@@ -2980,7 +2995,13 @@ class ChatSession(
      * Shows the loaded [rows] in place of the stored messages, keeping what they can't hold yet. [savedCopyAt]: they're
      * the copy saved on this device then, not the gateway's. [relaid]: the same rows again, now that the turn's start is known.
      */
-    private fun showRows(flagged: Map<String, ToolRisk>, older: Boolean, savedCopyAt: Long? = null, relaid: Boolean = false) = _state.update { state ->
+    private fun showRows(
+        flagged: Map<String, ToolRisk>,
+        older: Boolean,
+        savedCopyAt: Long? = null,
+        relaid: Boolean = false,
+        cachedTimings: Map<String, ToolTiming> = emptyMap(),
+    ) = _state.update { state ->
         // Read again on each try of the update, so the one that lands says what the rows were laid out with.
         val startedAt = turnStartedAt.also { rowsLaidOutFor = it }
         // Keep a reply that is streaming right now; the stored rows don't have it yet. Nor do they
@@ -2993,6 +3014,7 @@ class ChatSession(
         }
         // The running turn's saved steps apart from the reply before them, to fold into its live reply below.
         val stored = historyToMessages(rows, rowsSessionId, startedAt).withRisks(flagged)
+            .withToolTimings(cachedTimings + state.messages.observedToolTimings())
         // A prompt sent without a reply that the transcript now has arrived after all.
         val storedPrompts = stored.mapNotNull { (it as? ChatMessage.User)?.text }
         // Only the gateway's transcript says a prompt arrived; the saved copy is from before it.
@@ -3489,9 +3511,9 @@ internal fun List<ChatMessage>.withSavedStepsInLiveReply(
             when {
                 shown == null -> tool
                 // The saved call has its result row (empty ones included): its end, missed while the link was down.
-                shown.running && !tool.running -> tool
-                // An end the live copy got itself carries its time or summary; one folded from older rows has neither.
-                tool.running && !shown.running && shown.output == null && shown.durationSeconds == null && shown.summary == null -> tool
+                !shown.completed && tool.completed -> tool.copy(startedAt = shown.startedAt)
+                // The live copy can look stopped if it was folded before the turn start was known.
+                tool.running && !shown.running && !shown.completed -> tool.copy(startedAt = shown.startedAt)
                 else -> shown
             }
         } +
@@ -3632,6 +3654,34 @@ internal fun ChatState.sealReplyBefore(key: String): ChatState {
         messages = messages.toMutableList().apply { set(open, reply.copy(streaming = false)) },
         correctedReplyKey = reply.key,
     )
+}
+
+private fun List<ChatMessage>.observedToolTimings(): Map<String, ToolTiming> =
+    filterIsInstance<ChatMessage.Assistant>().flatMap { it.tools }.groupBy { it.id }
+        .mapNotNull { (id, calls) ->
+            // The open reply and the transcript can briefly show the same tool during a refresh.
+            val observed = calls.mapNotNull { tool ->
+                val start = tool.startedAt?.takeIf { it.isFinite() }
+                val duration = tool.durationSeconds?.takeIf { it.isFinite() && it >= 0 }
+                if (start == null && duration == null) null else ToolTiming(start, duration)
+            }.distinct().singleOrNull()
+            observed?.let { id to it }
+        }.toMap()
+
+/** Gateway history has results and order, but no per-call timing. Reused ids are ambiguous. */
+private fun List<ChatMessage>.withToolTimings(timings: Map<String, ToolTiming>): List<ChatMessage> {
+    if (timings.isEmpty()) return this
+    val idCounts = filterIsInstance<ChatMessage.Assistant>().flatMap { it.tools }.groupingBy { it.id }.eachCount()
+    return map { message ->
+        if (message !is ChatMessage.Assistant || message.tools.none { it.id in timings }) message
+        else message.copy(tools = message.tools.map { tool ->
+            val timing = timings[tool.id]?.takeIf { idCounts[tool.id] == 1 }
+            if (timing == null) tool else tool.copy(
+                startedAt = tool.startedAt ?: timing.startedAt,
+                durationSeconds = tool.durationSeconds ?: timing.durationSeconds,
+            )
+        })
+    }
 }
 
 /**

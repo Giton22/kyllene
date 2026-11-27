@@ -2,6 +2,10 @@ package dev.hermeskotlin.core.chat
 
 import kotlinx.serialization.Serializable
 
+/** Live timing a device observed for one tool call, optionally kept in its sealed transcript copy. */
+@Serializable
+data class ToolTiming(val startedAt: Double? = null, val durationSeconds: Double? = null)
+
 /** One tool call inside an assistant reply. [running] until `tool.complete` arrives. */
 data class ToolActivity(
     val id: String,
@@ -29,6 +33,10 @@ data class ToolActivity(
     val generatedImage: GeneratedImage? = null,
     /** For `phone_show_ui`: the screen the agent drew in the chat. */
     val agentScreen: AgentScreen? = null,
+    /** Client receipt time for an observed live start. */
+    val startedAt: Double? = null,
+    /** A completion event or a saved result confirms that the tool ended. */
+    val completed: Boolean = false,
 )
 
 /** Why a tool's output was flagged (`tool.output_risk`): the scanner's finding ids. Advisory; nothing was blocked. */
