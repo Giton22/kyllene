@@ -548,14 +548,28 @@ class ChatViewModel(
                 }
         }
         viewModelScope.launch {
-            // Its turn took the queued prompt before the edit went (or a stop dropped it): it went as it was. What
-            // was typed for it stays in the composer, to send as a message of its own or drop, and the screen says so.
+            // Its turn took the queued prompt before the edit went: it went as it was. What was typed for it stays in
+            // the composer, to send as a message of its own or drop, and the screen says so. One a stop dropped never
+            // ran: the edit just ends, and the stop gives its text back.
             combine(state, _editing, _editingQueued) { chat, key, queued ->
-                key?.takeIf { queued }?.let { k -> chat.messages.none { it.key == k && it is ChatMessage.User && it.queued } }
+                key?.takeIf { queued }?.let { k ->
+                    val prompt = chat.messages.firstOrNull { it.key == k } as? ChatMessage.User
+                    when {
+                        prompt == null -> QueuedEditWatch.Gone
+                        !prompt.queued -> QueuedEditWatch.Started
+                        else -> QueuedEditWatch.Waiting
+                    }
+                }
             }
                 .filterNotNull()
                 .distinctUntilChanged()
-                .collect { left -> if (left) queuedEditOvertaken() }
+                .collect { watch ->
+                    when (watch) {
+                        QueuedEditWatch.Started -> queuedEditOvertaken()
+                        QueuedEditWatch.Gone -> editGone()
+                        QueuedEditWatch.Waiting -> Unit
+                    }
+                }
         }
         viewModelScope.launch {
             snapshotFlow { composer.text.toString() }
@@ -1445,6 +1459,9 @@ class ChatViewModel(
         typedBeforeEdit = ""
     }
 
+    /** Where the queued prompt being edited is now. */
+    private enum class QueuedEditWatch { Waiting, Started, Gone }
+
     /**
      * The queued prompt being edited left the queue first: its turn started with the text it had. The edit stays in
      * the composer, ahead of what it put aside, to send as a message of its own or drop; it isn't sent by itself.
@@ -1473,7 +1490,8 @@ class ChatViewModel(
         cancelEdit()
         viewModelScope.launch {
             val outcome = chat.replaceQueued(key, outgoing)
-            if (outcome == QueuedEditOutcome.Replaced) return@launch
+            // Answered once another chat is open: its composer, comments and edit aren't this one's to change.
+            if (outcome == QueuedEditOutcome.Replaced || session.value !== chat) return@launch
             _comments.update { comments + it }
             if (outcome == QueuedEditOutcome.Failed && state.value.canEditQueued(key)) {
                 typedBeforeEdit = composer.text.toString()

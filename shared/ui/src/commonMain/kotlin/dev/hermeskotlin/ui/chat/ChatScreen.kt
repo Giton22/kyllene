@@ -1157,7 +1157,7 @@ internal fun ChatView(
                                     // A saved copy may lack what changed since; edits wait for the gateway's transcript.
                                     canChange = state.canChangeChat(connected && state.savedCopyAt == null),
                                     editing = editing,
-                                    replaceable = state.replaceableAdmissions,
+                                    replaceable = state.replaceableAdmissions - state.replacingAdmissions,
                                     readUpTo = readUpTo,
                                     onReadLatest = onReadLatest,
                                     reading = readAloud.key,

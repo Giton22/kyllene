@@ -260,6 +260,8 @@ data class ChatState(
      * of its latest `session.info` or `session.resume`. An owner older than that verb lists none, so none is editable.
      */
     val replaceableAdmissions: Set<String> = emptySet(),
+    /** The queued admissions whose `prompt.replace_queued` is on its way: not offered for another edit meanwhile. */
+    val replacingAdmissions: Set<String> = emptySet(),
     /** The session's goal, loop and heartbeat, null when it has none (`session.control.update`). */
     val control: SessionControl? = null,
     /** Where the running reply's current response (the text after its last tool) begins; null when unknown. */

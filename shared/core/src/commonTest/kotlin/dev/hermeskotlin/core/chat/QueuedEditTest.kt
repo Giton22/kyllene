@@ -7,6 +7,7 @@ import dev.hermeskotlin.core.rpc.event
 import dev.hermeskotlin.core.rpc.json
 import dev.hermeskotlin.core.sessions.SessionsApi
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -266,6 +267,79 @@ class QueuedEditTest {
         assertEquals(first.text("submission_id"), retry.text("submission_id"))
         assertEquals("adm-3", queuedPrompt(chat).admissionId)
         assertEquals("edited", queuedPrompt(chat).text)
+    }
+
+    /** The gateway's completion for [admission], cancelled before it ran (`_settle_cancelled`): its id, no generation. */
+    private fun settlement(admission: String) =
+        """{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"stored-1",""" +
+            """"authority_epoch":1,"admission_id":"$admission","payload":{"text":"","content":"","admission_id":"$admission","outcome":"cancelled"}}}"""
+
+    @Test
+    fun anEditTheGatewayTookWithoutAnsweringStillShowsAndStarts() = runTest(timeout = 5.seconds) {
+        // The edit landed (adm-2 cancelled, adm-3 admitted at the tail) but its answer was lost on the way back.
+        val chat = queuedChat(backgroundScope, authority = true, replace = { null })
+        publishPending(chat, """["steer","replace"]""")
+        val key = queuedPrompt(chat).key
+
+        assertEquals(QueuedEditOutcome.Failed, chat.replaceQueued(key, "edited"))
+        gateway.socket.push(settlement("adm-2"))
+        chat.state.first { (it.messages.first { m -> m.key == key } as ChatMessage.User).text == "edited" }
+
+        // The running turn ends and the gateway starts the edit, an admission this phone never heard named.
+        gateway.socket.push(event("message.complete", "stored-1", """{"status":"complete"}"""))
+        gateway.socket.push(
+            """{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"stored-1",""" +
+                """"execution_generation":3,"admission_id":"adm-3","payload":{}}}""",
+        )
+        chat.state.first { s -> s.messages.none { it is ChatMessage.User && it.queued } }
+        assertEquals("edited", (chat.state.value.messages.first { it.key == key } as ChatMessage.User).text)
+    }
+
+    @Test
+    fun anEditSettledBeforeItsLostAnswerCountsAsMade() = runTest(timeout = 5.seconds) {
+        val chat = queuedChat(backgroundScope, authority = true, replace = { call ->
+            // The old admission's completion goes out before the answer, which is then lost.
+            gateway.socket.push(settlement("adm-2"))
+            null
+        })
+        publishPending(chat, """["steer","replace"]""")
+        val key = queuedPrompt(chat).key
+
+        assertEquals(QueuedEditOutcome.Replaced, chat.replaceQueued(key, "edited"))
+
+        val prompt = chat.state.value.messages.first { it.key == key } as ChatMessage.User
+        assertEquals("edited", prompt.text)
+        assertTrue(prompt.queued)
+        assertEquals(null, chat.state.value.error)
+    }
+
+    @Test
+    fun aQueuedPromptIsNotOfferedForEditWhileItsEditIsOnTheWay() = runTest(timeout = 5.seconds) {
+        val answers = kotlinx.coroutines.CompletableDeferred<FakeGateway.Call>()
+        val chat = queuedChat(backgroundScope, authority = true, replace = { call -> answers.complete(call); null })
+        publishPending(chat, """["steer","replace"]""")
+        val key = queuedPrompt(chat).key
+
+        val edit = backgroundScope.async { chat.replaceQueued(key, "edited") }
+        answers.await()
+
+        assertFalse(chat.state.value.canEditQueued(key))
+        // A `session.info` published meanwhile still lists the old admission; it stays not offered.
+        publishPending(chat, """["steer","replace"]""")
+        assertFalse(chat.state.value.canEditQueued(key))
+        edit.cancel()
+    }
+
+    @Test
+    fun anEditOfAPromptAStopDroppedSaysSoNotThatItStarted() = runTest(timeout = 5.seconds) {
+        val chat = queuedChat(backgroundScope, authority = true)
+        publishPending(chat, """["steer","replace"]""")
+        val key = queuedPrompt(chat).key
+        chat.interrupt()
+
+        assertEquals(QueuedEditOutcome.Failed, chat.replaceQueued(key, "edited"))
+
+        assertFalse(chat.state.value.error!!.contains("started"))
     }
 
     @Test

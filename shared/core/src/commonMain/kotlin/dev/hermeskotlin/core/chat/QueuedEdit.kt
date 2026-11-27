@@ -37,7 +37,7 @@ fun ChatState.canEditQueued(key: String): Boolean {
     val admission = prompt.admissionId ?: return false
     // What it shows must be what went out: a prompt with files, or one shown as something else, isn't plain text.
     return prompt.queued && !prompt.pending && prompt.check == null && prompt.sentText != null &&
-        prompt.sentText == prompt.text && admission in replaceableAdmissions
+        prompt.sentText == prompt.text && admission in replaceableAdmissions && admission !in replacingAdmissions
 }
 
 /**
@@ -62,18 +62,19 @@ internal fun ChatState.withPendingAdmissions(pending: JsonElement?): ChatState =
  * Queued prompt [key] after the gateway admitted its edit, which [replaced] the prompt's admission, as [admission]
  * (sent as [submission]): the new text, and, like the gateway, at the back of the queue. One whose turn already began
  * isn't waiting any more. A prompt that no longer holds [replaced] (another chat's, after a switch) is left alone.
+ * A null [admission] is an edit whose answer was lost: its new id is unknown, so its turn's start releases it in order.
  */
 internal fun ChatState.withQueuedEdit(
     key: String,
     replaced: String,
     text: String,
-    admission: String,
+    admission: String?,
     submission: String,
 ): ChatState {
     val index = messages.indexOfFirst { it.key == key }
     val prompt = messages.getOrNull(index) as? ChatMessage.User ?: return this
     if (prompt.admissionId != replaced) return this
-    val started = admission in startedAdmissions
+    val started = admission != null && admission in startedAdmissions
     val edited = prompt.copy(text = text, sentText = text, admissionId = admission, submissionId = submission, queued = !started)
     val rest = messages.toMutableList().apply { removeAt(index) }
     // The back of the queue: after the last prompt still waiting, or where it was if it's the only one.

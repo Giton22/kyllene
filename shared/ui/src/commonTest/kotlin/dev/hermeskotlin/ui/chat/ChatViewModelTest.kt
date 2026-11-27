@@ -134,7 +134,15 @@ class ChatViewModelTest {
             val call = Json.parseToJsonElement(text).jsonObject
             val id = call["id"] ?: return
             val method = call["method"]?.jsonPrimitive?.content.orEmpty()
-            inbound.send("""{"jsonrpc":"2.0","id":$id,"result":${answer(method) ?: "{}"}}""")
+            val result = answer(method)
+            // Held: the test answers it later by its id, with [push].
+            if (result == HOLD) return
+            inbound.send("""{"jsonrpc":"2.0","id":$id,"result":${result ?: "{}"}}""")
+        }
+
+        companion object {
+            /** What [answer] gives for a call the gateway doesn't answer yet. */
+            const val HOLD = "hold"
         }
 
         override suspend fun close(code: Short, reason: String) {
@@ -982,12 +990,14 @@ class ChatViewModelTest {
      * Chat `s1` open on the session authority with a turn running and "second" queued behind it as `adm-2`, which the
      * gateway offers to replace; `prompt.replace_queued` admits the edit as `adm-3`.
      */
-    private suspend fun queuedChat(): ChatViewModel {
+    private suspend fun queuedChat(
+        replace: String = """{"admission_id":"adm-3","status":"queued","sequence":3,"outcome":null,"authority_epoch":1}""",
+    ): ChatViewModel {
         val (vm, _) = viewModel(authority = true, answer = { method ->
             when (method) {
                 "session.resume" -> """{"session_id":"s1","running":true,"revision":1,"execution_generation":2}"""
                 "prompt.submit" -> """{"status":"queued","admission_id":"adm-2","execution_generation":2}"""
-                "prompt.replace_queued" -> """{"admission_id":"adm-3","status":"queued","sequence":3,"outcome":null,"authority_epoch":1}"""
+                "prompt.replace_queued" -> replace
                 else -> null
             }
         })
@@ -1092,5 +1102,41 @@ class ChatViewModelTest {
 
         assertNull(vm.editing.value)
         assertEquals("", vm.composer.text.toString())
+    }
+
+    @Test
+    fun aQueuedEditsLateRefusalAfterAChatSwitchLeavesTheNewChatAlone() = runTest(dispatcher) {
+        val vm = queuedChat(replace = ReadyGateway.HOLD)
+        val key = vm.queuedKey()
+        vm.startQueuedEdit(key)
+        vm.composer.setTextAndPlaceCursorAtEnd("second, edited")
+        vm.send(null)
+        val call = sent.map { Json.parseToJsonElement(it).jsonObject }.last { it["method"]?.jsonPrimitive?.content == "prompt.replace_queued" }
+
+        vm.open(ChatTarget(gateway, "s2", "Other"))
+        runCurrent()
+        // Its turn took it first; the answer comes once another chat is open.
+        socket!!.push("""{"jsonrpc":"2.0","id":${call["id"]},"error":{"code":4001,"message":"admission_started","data":{"reason":"admission_started"}}}""")
+        runCurrent()
+
+        assertNull(vm.editing.value)
+        assertTrue("second, edited" !in vm.composer.text.toString())
+    }
+
+    @Test
+    fun aStopWhileEditingAQueuedPromptDoesNotSayItsTurnStarted() = runTest(dispatcher) {
+        val vm = queuedChat()
+        val key = vm.queuedKey()
+        vm.startQueuedEdit(key)
+        vm.composer.setTextAndPlaceCursorAtEnd("second, edited")
+
+        vm.interrupt()
+        vm.state.first { s -> s.messages.none { it.key == key } }
+        runCurrent()
+
+        assertNull(vm.editing.value)
+        assertTrue(vm.attachmentError.value != ComposerNotice.QueuedEditOvertaken)
+        // Nothing typed is lost: the edit stays, and the stop gives back the prompt it dropped.
+        assertTrue("second, edited" in vm.composer.text.toString())
     }
 }
