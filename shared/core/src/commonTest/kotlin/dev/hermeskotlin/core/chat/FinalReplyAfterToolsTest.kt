@@ -403,6 +403,67 @@ class FinalReplyAfterToolsTest {
     }
 
     @Test
+    fun anInterimAfterAStreamedFinalWithNoKnownStartDoesntDoubleIt() {
+        val state = start.apply(event("message.start", "{}"), *tool("c1", "terminal"))
+            .withInflight("$before\n\n")
+            .apply(
+                event("message.delta", """{"text":"$final"}"""),
+                event("message.interim", """{"text":"Note: logged too.","already_streamed":false}"""),
+                event("message.complete", """{"text":"$final","status":"complete"}"""),
+            )
+        assertEquals(1, state.replyText().count(final), state.replyText())
+    }
+
+    @Test
+    fun aPreviewedFinalSealedByASteerOpensNoSecondCopy() {
+        val parts = start.apply(
+            event("message.start", "{}"),
+            *tool("c2", "terminal"),
+            event("message.interim", """{"text":"$final","already_streamed":false}"""),
+        ).let { it.copy(messages = it.messages + ChatMessage.User("s", "and log it")) }.sealReplyBefore("s")
+            .apply(event("message.complete", """{"text":"$final","status":"complete","response_previewed":true}"""))
+            .messages.filterIsInstance<ChatMessage.Assistant>()
+        assertEquals(1, parts.size, parts.map { it.text }.toString())
+    }
+
+    @Test
+    fun aPartlyStreamedFinalOfSeveralParagraphsWithNoKnownStartShowsOnce() {
+        val state = ChatState(messages = listOf(ChatMessage.User("u", "go")))
+            .withInflight("Earlier.\n\nP1 para.\n\nP2 para.")
+            .apply(event("message.complete", """{"text":"P1 para.\n\nP2 para.\n\nP3 para.","status":"complete"}"""))
+        assertEquals("Earlier.\n\nP1 para.\n\nP2 para.\n\nP3 para.", state.replyText())
+    }
+
+    @Test
+    fun aSteerThenAnInterimKeepsTheCarriedStart() {
+        val parts = twoSegments(event("message.delta", """{"text":"\n\nDone: the fi"}"""))
+            .let { it.copy(messages = it.messages + ChatMessage.User("s", "and log it")) }.sealReplyBefore("s")
+            .apply(
+                event("message.interim", """{"text":"Logging it too.","already_streamed":false}"""),
+                event("message.complete", """{"text":"$final","status":"complete"}"""),
+            ).messages.filterIsInstance<ChatMessage.Assistant>()
+        assertEquals(0, parts.last().text.count("Done: the fi"), parts.last().text)
+        assertTrue("le is saved." in parts.last().text, parts.last().text)
+    }
+
+    @Test
+    fun anUnflaggedFinalEqualToTheSegmentBeforeTheLastToolStillShows() {
+        val state = twoSegments(event("message.complete", """{"text":"$middle","status":"complete"}"""))
+        assertEquals("$before\n\n$middle\n\n$middle", state.replyText())
+    }
+
+    @Test
+    fun aFilledInFinalIsItsOwnParagraphAfterAListItem() {
+        val state = start.apply(
+            event("message.start", "{}"),
+            event("message.delta", """{"text":"- checked the file\n"}"""),
+            *tool("c1", "terminal"),
+            event("message.complete", """{"text":"Done.","status":"complete"}"""),
+        )
+        assertEquals("- checked the file\n\nDone.", state.replyText())
+    }
+
+    @Test
     fun aSteerBeforeTheFinalShowsTheWholeFinalBelow() {
         val parts = steeredMidFinal(0)
         assertEquals(2, parts.size)

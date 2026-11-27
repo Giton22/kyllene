@@ -38,8 +38,8 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
             if (payload.boolean("already_streamed") == true) {
                 this
             } else {
-                val atResponseStart = currentResponse()?.isBlank() != false
-                appendText(payload.string("text")?.let { "$it\n\n" }).let { if (atResponseStart) it.markResponseStart() else it }
+                val atResponseStart = atResponseStart()
+                appendText(payload.string("text")?.let { "$it\n\n" }).let { if (atResponseStart) it.markResponseStart(afterTool = false) else it }
             }
         "reasoning.delta", "reasoning.available" -> payload.string("text")?.let { chunk ->
             withOpenReply { it.copy(reasoning = it.reasoning + chunk) }
@@ -61,7 +61,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
             ).let { if (it.name == DELEGATE_TOOL) it.copy(tasks = delegatedTasks(payload?.get("args"), null)) else it }
             withOpenReply { reply -> reply.copy(tools = reply.tools.filterNot { it.id == id } + tool) }
                 .copy(running = true, thinkingFrame = null)
-                .markResponseStart()
+                .markResponseStart(afterTool = true)
         }
         // The model is still writing the call's arguments; say what's coming.
         "tool.generating" -> payload.string("name")?.let { copy(thinkingFrame = "preparing $it…") } ?: this
@@ -230,11 +230,16 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
     // After a correction, the part above it was already shown and the final text repeats it.
     val shown = (messages.find { it.key == correctedReplyKey } as? ChatMessage.Assistant)?.text?.takeIf { it.isNotBlank() }
     val openKey = (messages.getOrNull(messages.openReplyIndex()) as? ChatMessage.Assistant)?.key ?: "live-$keySeq"
+    val finalShown = payload.boolean("response_previewed") == true || payload.boolean("response_reused") == true
     val finalText = payload.string("text").orEmpty().let { text ->
         if (shown != null && text.startsWith(shown)) text.removePrefix(shown).trim() else text
     }.let { text ->
         // A completed turn's final is its last response, whose start may be in the part above a correction.
         if (outcome == TurnOutcome.Complete) text.withoutCarried(carriedResponse(openKey)) else text
+    }.let { text ->
+        // One the gateway says already showed, in the part above a correction, isn't shown again below it.
+        val sealed = shown?.collapsedSpaces()
+        if (outcome == TurnOutcome.Complete && finalShown && sealed != null && text.isNotBlank() && text.collapsedSpaces() in sealed) "" else text
     }
     val finalReasoning = payload.string("reasoning").orEmpty().takeIf { correctedReplyKey == null }.orEmpty()
     val finalUsage = SessionUsage.parse(payload?.get("usage") as? JsonObject)
@@ -250,7 +255,8 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
                 text = base.text,
                 final = finalText,
                 start = responseStart?.takeIf { it.replyKey == base.key }?.offset,
-                shown = payload.boolean("response_previewed") == true || payload.boolean("response_reused") == true,
+                besideFrom = responseStart?.takeIf { it.replyKey == base.key }?.toolOffset,
+                shown = finalShown,
                 transformed = payload.boolean("response_transformed") == true,
             )
         } else {
@@ -313,16 +319,24 @@ private fun ChatState.endTurn(messages: List<ChatMessage>, finalUsage: SessionUs
  * The open reply's text from here on is a new response: a tool was called, or text beside the calls was added whole.
  * Every delta after it, until the next one, is the same response, which `message.complete` sends again.
  */
-private fun ChatState.markResponseStart(): ChatState {
+private fun ChatState.markResponseStart(afterTool: Boolean): ChatState {
     val reply = messages.getOrNull(messages.openReplyIndex()) as? ChatMessage.Assistant ?: return this
-    return copy(responseStart = ResponseStart(reply.key, reply.text.length))
+    val same = responseStart?.takeIf { it.replyKey == reply.key }
+    // After a tool the response is new; text beside the calls stays part of the one a steer may have split.
+    return copy(
+        responseStart = if (afterTool) {
+            ResponseStart(reply.key, reply.text.length, toolOffset = reply.text.length)
+        } else {
+            ResponseStart(reply.key, reply.text.length, carried = same?.carried.orEmpty(), toolOffset = same?.toolOffset ?: 0)
+        },
+    )
 }
 
-/** The open reply's text since [ChatState.responseStart]; null when that isn't known. */
-private fun ChatState.currentResponse(): String? {
-    val reply = messages.getOrNull(messages.openReplyIndex()) as? ChatMessage.Assistant ?: return null
-    val start = responseStart?.takeIf { it.replyKey == reply.key } ?: return null
-    return reply.text.substring(start.offset.coerceIn(0, reply.text.length))
+/** Whether the open reply has none of the current response yet; with no known start, whether it has no text. */
+private fun ChatState.atResponseStart(): Boolean {
+    val reply = messages.getOrNull(messages.openReplyIndex()) as? ChatMessage.Assistant ?: return true
+    val start = responseStart?.takeIf { it.replyKey == reply.key } ?: return reply.text.isBlank()
+    return reply.text.substring(start.offset.coerceIn(0, reply.text.length)).isBlank()
 }
 
 /**
@@ -351,9 +365,17 @@ private fun String.withoutCarried(carried: String): String {
  * the replay couldn't fill, a plugin that held the stream) don't cost the answer. [start] is where that response
  * begins in [text] ([ChatState.responseStart]), null when unknown (a reply rebuilt from the gateway's copy).
  * [shown]: the gateway says the response already showed (`response_previewed`, `response_reused`). [transformed]: a
- * plugin rewrote it after it streamed (`response_transformed`), so it replaces what did.
+ * plugin rewrote it after it streamed (`response_transformed`), so it replaces what did. [besideFrom]: where the text
+ * after the last tool begins ([ResponseStart.toolOffset]); text added whole beside the calls since may be the final.
  */
-internal fun withFinalResponse(text: String, final: String, start: Int?, shown: Boolean, transformed: Boolean): String {
+internal fun withFinalResponse(
+    text: String,
+    final: String,
+    start: Int?,
+    shown: Boolean,
+    transformed: Boolean,
+    besideFrom: Int? = null,
+): String {
     if (final.isBlank()) return text
     if (text.isBlank()) return final
     val at = start?.coerceIn(0, text.length)
@@ -369,7 +391,8 @@ internal fun withFinalResponse(text: String, final: String, start: Int?, shown: 
     val streamed = current.collapsedSpaces()
     // It streamed (spacing aside), or came whole as text beside the calls (a paragraph of its own), or was sent twice.
     // Delivery may also have dropped a trailing silence marker that streamed (Bot Mode).
-    if (streamed.endsWith(wanted) || head.endsWithParagraph(wanted) || (streamed.startsWith(wanted) && !transformed)) {
+    val beside = head.substring((besideFrom ?: 0).coerceIn(0, head.length))
+    if (streamed.endsWith(wanted) || beside.endsWithParagraph(wanted) || (streamed.startsWith(wanted) && !transformed)) {
         return text
     }
     if (shown && text.collapsedSpaces().contains(wanted)) return text
@@ -385,13 +408,11 @@ internal fun withFinalResponse(text: String, final: String, start: Int?, shown: 
         if (streamed.contains(wanted)) return text
         return "${text.trimEnd()}\n\n$response"
     }
-    // Where it begins isn't known, so it goes last; a start of it that streamed there gives way to it whole.
-    if (response.startsWithIgnoringSpaces(text)) return response
+    // Where it begins isn't known, so it goes last; the paragraphs at the end that are a start of it give way to it.
+    val from = text.paragraphStarts().firstOrNull { text.substring(it).isStreamedPartOf(response) }
+    if (from != null) return afterSegments(text.substring(0, from), "", response)
     if (text.collapsedSpaces().contains(wanted)) return text
-    val paragraph = text.paragraphStarts().last()
-    val tail = text.substring(paragraph)
-    return if (paragraph > 0 && tail.isNotBlank() && response.startsWithIgnoringSpaces(tail)) text.substring(0, paragraph) + response
-    else "${text.trimEnd()}\n\n$response"
+    return "${text.trimEnd()}\n\n$response"
 }
 
 /** Where each paragraph of this begins (past its leading whitespace), first to last; the first is always there. */
@@ -444,11 +465,17 @@ private fun String.afterPrefixIgnoringSpaces(prefix: String): String? {
 private val PARAGRAPH = Regex("""\r?\n[ \t]*\r?\n\s*""")
 
 /** [response] after the reply's earlier segments, a blank line apart unless the text before already breaks. */
-private fun afterSegments(head: String, lead: String, response: String): String = when {
-    head.isBlank() -> response
-    '\n' in lead || head.endsWith('\n') -> head + lead + response
-    else -> "${head.trimEnd()}\n\n$response"
+private fun afterSegments(head: String, lead: String, response: String): String {
+    val before = head + lead
+    return when {
+        head.isBlank() -> response
+        // A single line break isn't a paragraph in Markdown (after a list item it would join it).
+        PARAGRAPH_END.containsMatchIn(before) -> before + response
+        else -> "${before.trimEnd()}\n\n$response"
+    }
 }
+
+private val PARAGRAPH_END = Regex("""\r?\n[ \t]*\r?\n[ \t]*$""")
 
 private fun String.collapsedSpaces(): String = WHITESPACE.replace(this, " ").trim()
 

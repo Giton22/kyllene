@@ -188,8 +188,10 @@ sealed interface Attachment {
  * The live reply [replyKey]'s text from [offset] on is the response the model is writing now, the one after its last
  * tool. `message.complete` sends that response again as its `text`, which fills in what didn't stream. [carried] is
  * the start of that response that went into the reply a correction sealed above it, so it isn't shown twice.
+ * [toolOffset] is where the text after the last tool begins, so text added whole beside the calls since (which the
+ * final may repeat) is told from the segments before that tool.
  */
-data class ResponseStart(val replyKey: String, val offset: Int, val carried: String = "")
+data class ResponseStart(val replyKey: String, val offset: Int, val carried: String = "", val toolOffset: Int = 0)
 
 data class ChatState(
     /** The durable `sessions` row id; null for a new chat until `session.create` answers. */
