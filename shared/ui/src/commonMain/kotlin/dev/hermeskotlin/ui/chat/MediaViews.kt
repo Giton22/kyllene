@@ -47,7 +47,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
@@ -179,10 +182,11 @@ private fun ReplyImage(item: ReplyMedia) {
         contentAlignment = Alignment.Center,
     ) {
         when {
-            bitmap != null -> Image(
+            bitmap != null -> AttachmentImage(
+                bytes = checkNotNull(bytes),
+                maxEdge = INLINE_EDGE,
                 bitmap = bitmap,
                 contentDescription = item.name,
-                contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)).heightIn(max = 480.dp),
             )
             failed || decoded?.decoding == false -> Row(
@@ -308,10 +312,11 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
             val decoded = bytes?.let { rememberDecodedImage(it, maxEdge = VIEWER_EDGE) }
             val bitmap = decoded?.bitmap
             if (bitmap != null) {
-                Image(
+                AttachmentImage(
+                    bytes = checkNotNull(bytes),
+                    maxEdge = VIEWER_EDGE,
                     bitmap = bitmap,
                     contentDescription = image.name,
-                    contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
@@ -383,6 +388,21 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
         }
     }
 }
+
+@Composable
+private fun AttachmentImage(
+    bytes: ByteArray,
+    maxEdge: Int,
+    bitmap: ImageBitmap,
+    contentDescription: String,
+    modifier: Modifier,
+) {
+    val painter = rememberGifPainter(bytes, maxEdge) ?: remember(bitmap) { BitmapPainter(bitmap) }
+    Image(painter, contentDescription, modifier, contentScale = ContentScale.Fit)
+}
+
+@Composable
+internal expect fun rememberGifPainter(bytes: ByteArray, maxEdge: Int): Painter?
 
 /** History and replies don't always carry an extension ("Image"); sniff one so other apps open the file. */
 private fun String.withImageExtension(bytes: ByteArray): String {
