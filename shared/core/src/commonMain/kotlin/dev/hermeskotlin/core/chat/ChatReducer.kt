@@ -30,8 +30,12 @@ private fun ChatState.retireCompactionDone(type: String, payload: JsonObject?): 
         "reasoning.delta", "reasoning.available", "message.delta", "message.interim", "tool.start", "tool.generating", "message.start" -> true
         else -> false
     }
-    return if (movesOn) copy(status = null, statusKind = null) else this
+    return if (movesOn) withoutCompactionDone() else this
 }
+
+/** Drops a `compacted` line, for when the turn is known to have gone on past it (a resume that can't replay what was missed). */
+internal fun ChatState.withoutCompactionDone(): ChatState =
+    if (statusKind == COMPACTED_KIND) copy(status = null, statusKind = null) else this
 
 private fun ChatState.fold(event: GatewayEvent, payload: JsonObject?, now: Double?): ChatState {
     return when (event.type) {

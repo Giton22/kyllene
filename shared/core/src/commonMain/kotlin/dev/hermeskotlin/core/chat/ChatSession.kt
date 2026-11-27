@@ -3152,6 +3152,8 @@ class ChatSession(
                 .let { if (it.title.isNullOrBlank()) it.copy(title = (result["info"] as? JsonObject).string("title")?.takeIf(String::isNotBlank)) else it }
                 // Nothing runs, so the agent is built; its clear may have gone while this phone was away.
                 .let { if (running || resumable) it else it.withoutAgentNotices() }
+                // Not picked up, so what the turn did since the compaction is lost: its "complete" line is out of date.
+                .let { if (resumable) it else it.withoutCompactionDone() }
         }
         // Named by the try of the update that landed, not by one that lost to another change.
         if (running && !resumable) turnReplyKey = replyKey

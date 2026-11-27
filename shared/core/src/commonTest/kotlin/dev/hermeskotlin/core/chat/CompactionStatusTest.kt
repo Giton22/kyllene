@@ -207,6 +207,29 @@ class CompactionStatusTest {
         assertNull(thinking.status, "the live chat shows '${thinking.status}' after /compress")
     }
 
+    @Test
+    fun aReconnectThatCannotPickTheTurnUpDropsTheCompletedStatus() = runTest {
+        // No seqs, so the resume can't replay what the turn did while the link was down.
+        val gateway = FakeGateway(backgroundScope, reconnects = true).apply {
+            answer = { call ->
+                if (call.method == "session.resume") """{"session_id":"${if (sockets.size > 1) "rt2" else "rt1"}","running":true}""" else "{}"
+            }
+            http = { json("""{"session_id":"stored-1","messages":[{"id":1,"role":"user","content":"hello"}]}""") }
+            start()
+        }
+        val chat = ChatSession(FakeGateway.URL, "stored-1", "Greeting", gateway.connection, SessionsApi(gateway.client), backgroundScope)
+        chat.start()
+        chat.state.first { it.runtimeSessionId == "rt1" && it.historyLoaded }
+        val first = gateway.socket
+        first.push(event("status.update", sessionId = "rt1", payload = """{"kind":"compacted","text":"$COMPACTED"}"""))
+        chat.state.first { it.status == COMPACTED }
+
+        first.serverClose(1006)
+        val back = chat.state.first { it.runtimeSessionId == "rt2" }
+        assertEquals(true, back.running)
+        assertNull(back.status, "the reconnected chat still shows '${back.status}'")
+    }
+
     private fun manualCompress() = listOf(
         event("status.update", """{"kind":"compressing","text":"⠋ compressing 40 messages (~12k tok)…"}"""),
         compacting,
