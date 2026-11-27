@@ -53,4 +53,15 @@
     <string name="push_replay_unavailable">A Kyllene nem tudta megnyitni a push újrajátszási állapotát. A meglévő adatok megmaradtak; újrapróbálkozás előtt állíts vissza egy biztosan működő biztonsági másolatot.</string>
     <string name="push_notice_failed">A Kyllene nem tudott megjeleníteni egy push értesítést.</string>
     <string name="push_inbox_write_failed">A Kyllene nem tudta menteni az ütemezett futást a beérkezett üzenetek közé. Újra megpróbálja.</string>
+
+    <!-- Desktop startup. -->
+    <string name="startup_at_login">Indítás bejelentkezéskor</string>
+    <string name="startup_not_approved">Az automatikus indítási kérés nem lett jóváhagyva.</string>
+    <string name="startup_not_applied">Az asztali környezet nem alkalmazta az automatikus indítás módosítását.</string>
+    <string name="startup_shows_window">Az automatikus indítás ablakot fog megjeleníteni.</string>
+    <string name="startup_not_saved">Az asztali környezet frissítette az automatikus indítást; az alkalmazás beállítása nem lett mentve.</string>
+    <string name="startup_incomplete">Az automatikus indítási kérés nem fejeződött be.</string>
+    <string name="startup_no_answer">Az asztali környezet nem válaszolt az automatikus indítási kérésre.</string>
+    <string name="startup_enable_reason">A Kyllene indítása a tálcán bejelentkezéskor.</string>
+    <string name="startup_disable_reason">A Kyllene automatikus indításának leállítása bejelentkezéskor.</string>
 </resources>

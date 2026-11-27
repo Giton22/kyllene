@@ -53,4 +53,15 @@
     <string name="push_replay_unavailable">Kyllene 无法打开其推送重放状态。现有数据已保留；请先恢复已知正常的备份，然后重试。</string>
     <string name="push_notice_failed">Kyllene 无法显示推送通知。</string>
     <string name="push_inbox_write_failed">Kyllene 无法将计划任务的运行结果保存到收件箱，将重试。</string>
+
+    <!-- Desktop startup. -->
+    <string name="startup_at_login">登录时启动</string>
+    <string name="startup_not_approved">启动请求未获批准。</string>
+    <string name="startup_not_applied">桌面未应用启动设置更改。</string>
+    <string name="startup_shows_window">启动时将显示窗口。</string>
+    <string name="startup_not_saved">桌面已更新启动设置，但未保存应用偏好设置。</string>
+    <string name="startup_incomplete">启动请求未完成。</string>
+    <string name="startup_no_answer">桌面未响应启动请求。</string>
+    <string name="startup_enable_reason">登录时将 Kyllene 启动到系统托盘。</string>
+    <string name="startup_disable_reason">登录时不再自动启动 Kyllene。</string>
 </resources>
