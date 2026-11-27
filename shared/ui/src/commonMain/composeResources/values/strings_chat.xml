@@ -317,6 +317,10 @@
 
     <!-- Approvals, questions and secrets the agent asks for -->
     <string name="chat_requests_more">+%1$d more</string>
+    <string name="chat_request_minimize">Minimize</string>
+    <string name="chat_request_restore">Expand</string>
+    <string name="chat_request_pill_approval">Approval needed</string>
+    <string name="chat_request_pill_question">Question waiting</string>
     <string name="chat_stop_task_button">Stop task</string>
     <string name="chat_approval_title">Allow this command?</string>
     <string name="chat_approval_tool">Hermes wants to run this with %1$s.</string>

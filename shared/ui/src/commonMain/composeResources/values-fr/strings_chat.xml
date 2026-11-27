@@ -293,6 +293,10 @@
     <string name="chat_usage_account">Compte</string>
 
     <string name="chat_requests_more">+%1$d de plus</string>
+    <string name="chat_request_minimize">Réduire</string>
+    <string name="chat_request_restore">Développer</string>
+    <string name="chat_request_pill_approval">Autorisation requise</string>
+    <string name="chat_request_pill_question">Question en attente</string>
     <string name="chat_stop_task_button">Arrêter la tâche</string>
     <string name="chat_approval_title">Autoriser cette commande ?</string>
     <string name="chat_approval_tool">Hermes veut l’exécuter avec %1$s.</string>

@@ -160,6 +160,7 @@ uses. The protocol itself is described in [hermes-protocol-research.md](hermes-p
 - [x] **Approval** panel for dangerous commands, with choices `once`, `session`, `always` (confirmed first), `deny` filtered by the gateway's `choices` / `allow_session`, `allow_permanent` and `smart_denied`. The command wraps, with "Show full command" and "Copy command"; each permission says where and how long it applies, the broader ones in their own section; taps are ignored for a moment after it appears; and the panel keeps a Stop for the running task
 - [x] Requests withdrawn or answered elsewhere (`request.cancel`, turn end) and restored after reconnect (`open_requests`)
 - [x] **Clarify**: single or batch questions, choices, multi-select and free text
+- [x] Approval and question cards minimize to a pill (the down arrow in the corner) to read the chat behind them; the pill says what waits and brings the card back with what was picked and typed; a new request opens the card again (#559)
 - [x] **Sudo** password prompt (masked)
 - [x] **Secret** env-var prompt (masked)
 - [x] Desktop-only requests (`preview.*`, `terminal.read`, `window.read`, `tour`) are left unanswered for another client: an error reply would settle them for every client
