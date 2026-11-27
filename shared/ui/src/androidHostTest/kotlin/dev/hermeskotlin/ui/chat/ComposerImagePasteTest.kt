@@ -87,6 +87,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalTestApi::class)
@@ -161,12 +162,17 @@ class ComposerImagePasteTest {
         composeRule.onNodeWithText("Hermes · fixture.example").assertExists()
         composeRule.onNodeWithText("Hermes on fixture.example · default profile").assertExists()
 
+        val owner = composeRule.runOnIdle { assertNotNull(viewModel.transcript.value.owner) }
+
         runBlocking { gateways.rename(gateway.url, "Homelab") }
 
         composeRule.onNodeWithText("Hermes · Homelab").assertExists()
         composeRule.onNodeWithText("Hermes on Homelab · default profile").assertExists()
         composeRule.onNodeWithText("Paste test").assertExists()
-        composeRule.runOnIdle { assertEquals("Keep this draft", viewModel.composer.text.toString()) }
+        composeRule.runOnIdle {
+            assertSame(owner, viewModel.transcript.value.owner)
+            assertEquals("Keep this draft", viewModel.composer.text.toString())
+        }
         assertEquals(1, socket.methods.count { it == "session.resume" })
     }
 
