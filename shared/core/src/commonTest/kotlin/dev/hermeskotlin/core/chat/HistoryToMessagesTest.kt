@@ -175,7 +175,9 @@ class HistoryToMessagesTest {
         // As v0.23.4 stores them: the list folded into the last real user row, which can be the restated request.
         val taskList = "[Your active task list was preserved across context compression]\n" +
             "- [>] 1. Draft the release notes (in_progress)\n- [ ] 2. Check the backup (pending)"
-        val reload = "[Skills pruned during compression — reload before acting on these tasks]\n- writer"
+        // agent/conversation_compression.py `_pruned_skill_reload_notice`, after the list.
+        val reload = "[Skills pruned during compression — reload before acting on these tasks]\nThe task list above " +
+            "crossed the compression boundary verbatim, but the skill instructions that governed it were pruned."
         val pasted = "Why does this show?\n[Your active task list was preserved across context compression]\n- x"
         val restated = SessionMessage(id = 3, role = "user", content = JsonPrimitive(
             "[STILL IN PROGRESS — this is the active request, restated after the compaction boundary because it was " +
