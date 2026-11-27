@@ -81,7 +81,7 @@ data class BotsUiState(
     val loading: Boolean = true,
     /** The roster itself failed to load: the gateway's words for why, empty when it gave none. */
     val error: String? = null,
-    /** The gateway predates Bot Mode's roster call. */
+    /** The gateway doesn't serve Bot Mode's roster call (`profiles.list`). */
     val unsupported: Boolean = false,
     /** Bots whose chat has something the user hasn't seen. */
     val unread: Set<String> = emptySet(),

@@ -34,8 +34,8 @@ import kotlin.time.Clock
 /** A file put on the gateway for an attachment: attach it by [path], then remove [folder]. */
 data class StagedUpload(val path: String, val folder: String)
 
-/** An upload that failed, or a gateway that has no upload ([unsupported]); [message] says which, for the user. */
-class AttachmentUploadException(message: String, val unsupported: Boolean = false) : Exception(message)
+/** An upload that failed; [message] says why, for the user. */
+class AttachmentUploadException(message: String) : Exception(message)
 
 @Serializable
 private data class FilesListing(val path: String = "")
@@ -55,8 +55,7 @@ private data class UploadReply(val path: String = "")
 
 /**
  * Puts a file too large for one WebSocket message on the gateway over HTTP, for `file.attach` to take
- * by its path (`POST /api/files/upload-stream`, hermes_cli/web_routers/files.py,
- * on every gateway since v2026.7.1, up to 100 MiB). It goes in a folder of its own under the managed
+ * by its path (`POST /api/files/upload-stream`, hermes_cli/web_routers/files.py, up to 100 MiB). It goes in a folder of its own under the managed
  * files' default folder (`GET /api/files`: the gateway user's home, or the locked root), under its own
  * name, which is the name `file.attach` gives its copy; [discard] removes the folder once it's attached.
  *
@@ -76,7 +75,7 @@ class AttachmentUploads(private val client: HttpClient, private val clock: Clock
         attachment: OutgoingAttachment,
         onProgress: (sent: Long) -> Unit = {},
     ): StagedUpload {
-        val home = home(gateway, attachment)
+        val home = home(gateway)
         val separator = if ('/' !in home && '\\' in home) "\\" else "/"
         val uploads = home.trimEnd('/', '\\') + separator + UPLOADS_FOLDER
         prune(gateway, uploads)
@@ -100,9 +99,6 @@ class AttachmentUploads(private val client: HttpClient, private val clock: Clock
             throw e
         }
         if (result is ApiResult.Success) return StagedUpload(result.value, folder)
-        if (result is ApiResult.Failed && (result.status == 404 || result.status == 405)) {
-            throw AttachmentUploadException(tooLargeHere(attachment), unsupported = true)
-        }
         // A reply lost after the file was written leaves it there; nothing will attach it now.
         withContext(NonCancellable) { removeFolder(gateway, folder) }
         // The file itself failing (unreadable, or changed) says more than the request it broke off.
@@ -129,7 +125,7 @@ class AttachmentUploads(private val client: HttpClient, private val clock: Clock
     }
 
     /** The managed files' default folder, asked once per gateway. */
-    private suspend fun home(gateway: GatewayUrl, attachment: OutgoingAttachment): String {
+    private suspend fun home(gateway: GatewayUrl): String {
         val key = gateway.toString()
         lock.withLock { homes[key] }?.let { return it }
         val home = when (val result = apiCall { client.get(gateway.resolve("api/files")) }) {
@@ -138,15 +134,10 @@ class AttachmentUploads(private val client: HttpClient, private val clock: Clock
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                // Not JSON: a gateway from before the managed files, whose web app answers any path.
-                throw AttachmentUploadException(tooLargeHere(attachment), unsupported = true)
+                // Not JSON: something in front of the gateway answered with a page of its own.
+                throw AttachmentUploadException("Couldn't read the gateway's files. Check that the proxy forwards /api/files.")
             }.takeIf { it.isNotBlank() }
-            // A gateway from before v2026.7.1 has no managed files, so no upload either.
-            is ApiResult.Failed -> if (result.status == 404 || result.status == 405) {
-                throw AttachmentUploadException(tooLargeHere(attachment), unsupported = true)
-            } else {
-                throw AttachmentUploadException("Couldn't reach the gateway's files: ${result.message}")
-            }
+            is ApiResult.Failed -> throw AttachmentUploadException("Couldn't reach the gateway's files: ${result.message}")
             else -> throw AttachmentUploadException("Couldn't reach the gateway's files. ${result.errorMessage}")
         } ?: throw AttachmentUploadException("The gateway didn't say where files go.")
         lock.withLock { homes[key] = home }
@@ -181,11 +172,6 @@ class AttachmentUploads(private val client: HttpClient, private val clock: Clock
 
         /** How long an upload a chat uses in place is kept: a week, as the gateway keeps its own. */
         const val RETENTION_SECONDS = 7L * 24 * 60 * 60
-
-        /** What a gateway without the upload says about a file past [OutgoingAttachment.MAX_INLINE_BYTES]. */
-        fun tooLargeHere(attachment: OutgoingAttachment): String =
-            "${attachment.name} is larger than ${OutgoingAttachment.MAX_INLINE_SIZE}, the most this gateway takes. " +
-                "Update Hermes to send files up to ${OutgoingAttachment.MAX_SIZE}."
 
         /**
          * [name] as one path segment the gateway finds again: no folders, no `..`, nothing its path checks

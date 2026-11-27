@@ -168,7 +168,6 @@
     <string name="sessions_delete_project_detail">“%1$s”将从网关中删除。它的对话会保留，并重新按文件夹分组。</string>
     <string name="sessions_not_connected">未连接。</string>
     <string name="sessions_cant_make_folders">此版本无法创建文件夹。</string>
-    <string name="sessions_gateway_cant_change_projects">此网关无法更改项目。</string>
     <string name="sessions_project_change_failed">无法更改项目。</string>
 
     <!-- Account and profiles -->

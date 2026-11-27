@@ -128,6 +128,8 @@ private fun StageRow(title: String, result: StageResult?, checking: Boolean, pen
             // What went wrong and what to do can be selected and copied on a desktop, for a bug report.
             CopyableOnDesktop { Text(detail, style = Theme[typography][bodySmall], color = Theme[colors][textSecondary]) }
             if (result is StageResult.Failed) FixHint(checkNoteText(result.fix))
+            // A passed stage can still need something done, such as a Hermes older than Kyllene supports.
+            (result as? StageResult.Passed)?.warning?.let { FixHint(checkNoteText(it)) }
         }
     }
 }
@@ -239,7 +241,8 @@ internal fun checkNoteText(note: CheckNote): String {
         CheckNote.Kind.FixWaitAMinute -> Res.string.check_fix_wait_a_minute
         CheckNote.Kind.FixSignInOrUpdate -> Res.string.check_fix_sign_in_or_update
         CheckNote.Kind.FixUpdateHermesTryAgain -> Res.string.check_fix_update_hermes_try_again
-        CheckNote.Kind.FixUpdateHermes -> Res.string.check_fix_update_hermes
+        CheckNote.Kind.FixUpdateHermes -> Res.string.hermes_unsupported_version
+        CheckNote.Kind.FixProxyForwardsWs -> Res.string.check_fix_proxy_forwards_ws
         CheckNote.Kind.FixAgentRunning -> Res.string.check_fix_agent_running
         CheckNote.Kind.FixExactAddress -> Res.string.check_fix_exact_address
         CheckNote.Kind.FixAccessTokenOrProxy -> Res.string.check_fix_access_token_or_proxy

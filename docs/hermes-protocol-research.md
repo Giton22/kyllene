@@ -1,11 +1,14 @@
 # Hermes backend protocol — research notes
 
-Source: `NousResearch/hermes-agent` @ `bfb30051` (2026-10-02). Paths below are relative to that repo.
+Source: `NousResearch/hermes-agent`, tags `v0.22.0` to `v0.23.4`. Paths below are relative to that repo.
 
-**Target version:** the app is developed against the latest release, **v0.21.5** (tag `v2026.9.24`), which is
-what the test gateway runs. Auth routes (`/auth/password-login`, `/api/auth/ws-ticket`, `/auth/native/*`) and the
-WS subprotocols are identical between that tag and `main`; `tui_gateway/ws.py`, `web_server_chat.py` and the
-OpenRPC contract differ, so take JSON-RPC shapes from the tag, not `main`.
+**Supported versions:** Kyllene supports **Hermes Agent v0.22.0 to v0.23.4** (0.22.x and 0.23.x). Take JSON-RPC
+shapes from those tags, not from `main`. On an older gateway the app still connects, and the connection check,
+the Connect screen and Settings say to run `hermes update`. It reads the version from `/api/status` `version`
+(the leading `major.minor.patch`). It never uses `release_date`, which is `2026.9.24` on every one of these tags.
+
+Fall back only for versions inside that window, and for legacy versus session authority (section 3). Don't keep
+fallbacks for gateways older than v0.22.0.
 
 Hermes exposes **two** client-facing servers. They are separate processes.
 
@@ -15,7 +18,7 @@ Hermes exposes **two** client-facing servers. They are separate processes.
 | Who uses it | Official Desktop app ("Remote gateway"), dashboard `/chat` | Open WebUI, OpenAI-compatible tools, iOS companion apps |
 | Transport | REST + **JSON-RPC over WebSocket `/api/ws`** | REST + SSE |
 | Auth | Password login / OAuth (cookies) or native PKCE (bearer) → WS ticket | Static `Authorization: Bearer <API_SERVER_KEY>` |
-| Surface | ~250 RPC methods, 75 events, 13 server→client requests | ~45 REST routes |
+| Surface | 265 RPC methods, 79 events, 16 server→client requests (v0.23.4) | ~45 REST routes |
 | Code | `hermes_cli/web_server*.py`, `hermes_cli/dashboard_auth/`, `tui_gateway/` | `gateway/platforms/api_server*.py` |
 | Spec | **`apps/shared/src/gateway-contract.openrpc.json`** (generated, machine-readable) | `website/docs/user-guide/features/api-server.md` (partial) |
 
@@ -67,10 +70,11 @@ hermes dashboard --host 0.0.0.0 --port 9119 --no-open   # + username/password pr
     JSON-RPC response carrying the same id.
 - Handshake: server sends `gateway.ready` → client sends `client.capabilities {server_requests: true}`
   (otherwise server requests fail fast).
-- Clients ping ~every 15 s (`ping`).
+- `gateway.ready` always carries `heartbeat: true`. Clients send `gateway.ping` about every 15 s. `tui_gateway/ws.py`
+  answers it in the read loop, so a ping still gets an answer while a handler blocks.
 - Reconnect: `session.resume` / `session.events.since` replay events and re-send still-open requests.
 
-### RPC surface (from OpenRPC; 251 methods)
+### RPC surface (v0.23.4: 265 methods in `tui_gateway/contracts`; v0.22.0: 257)
 MVP-relevant:
 - `session.create | list | resume | history | title | interrupt | steer | delete | archive | branch | usage | status | most_recent | close`
 - `prompt.submit {session_id, text, ...}` (+ `prompt.background`, `prompt.btw`)
@@ -80,7 +84,7 @@ MVP-relevant:
 Later: `cron.manage`, `skills.manage`, `tools.*`, `toolsets.list`, `mcp.*`, `voice.*`, `subagent.*`,
 `process.*`, `rollback.*`, `projects.*`, `insights.get`, `usage.bars`, `vault.*`, `connectors.*`.
 
-Events (75), MVP-relevant: `message.start | delta | interim | complete`, `reasoning.delta`,
+Events (79 on v0.23.4), MVP-relevant: `message.start | delta | interim | complete`, `reasoning.delta`,
 `thinking.delta`, `reasoning.available`, `tool.start | generating | complete | output_risk`,
 `approval.cancelled`, `request.cancel`, `session.info | title | usage`, `sessions.changed`,
 `status.update`, `notice`, `error`, `todo.updated`, `subagent.*`, `notification.show | clear`.
@@ -105,6 +109,50 @@ that are already in the live text.
 hand-writing ~1 MB of contract. Regenerate when bumping supported Hermes version.
 
 ---
+
+## 1b. Session authority (gateway-hosted dashboard)
+
+When `hermes gateway` hosts the dashboard itself (the Webapp listener, `gateway/run_api.py`), `/api/ws` goes to
+`gateway.session_controls.AuthorityConnection` instead of the `tui_gateway` dispatch. `gateway.ready` then carries
+`session_authority: true`. Plain `hermes dashboard` has no authority, so it always takes the legacy path.
+
+| Tag | Session authority | Canonical methods | Methods in its handler table (plus `groups.*`) |
+|---|---|---|---|
+| v0.22.0 | no | none | none |
+| v0.22.1 | yes | 41 | 84 |
+| v0.22.2 | no | none | none |
+| v0.22.3 to v0.22.4 | yes | 48 | 102 |
+| v0.22.5 to v0.22.6 | yes | 48 | 104 |
+| v0.22.7 | yes | 48 | 105 |
+| v0.23.0 | yes | 49 | 107 |
+| v0.23.1 | yes | 53 | 111 |
+| v0.23.2 | yes | 54 | 115 |
+| v0.23.3 to v0.23.4 | yes | 54 | 116 |
+
+- Requests are checked against `tui_gateway/contracts/canonical_sessions.py`, a closed set of keys: an unknown key
+  is `4001 invalid_params`.
+- A method that isn't in the handler table goes to the legacy dispatch instead (`tui_gateway/ws.py`
+  `_dispatch_request`, `tui_gateway/ws_legacy_fallback.py`), for an interactive grant, unless it is in the
+  `session.`, `prompt.` or `message.` namespaces (outside the allowed list) or process-global. So `projects.*`,
+  `pet.*`, `profiles.get_asset` and `profiles.describe` are served on every authority tag. What is still refused
+  answers `-32601` with `data.reason: "unknown_method"`, and clients use that code for fallbacks: on v0.23.4,
+  `agents.list` and `session.activate`, `archive`, `branch`, `branch_stored`, `branch_whole`, `close`, `compress`,
+  `cwd.set`, `delete`, `set_hidden`, `status`, `title`, `undo`, `usage` and `workspace.move`. On v0.22.1 it also
+  covers `session.control` (only `session.control.read` is served), `session.history` and `message.react`.
+  `session.account_usage` arrives in v0.23.2.
+- Where a remote client reaches it: v0.22.1 to v0.22.5 have no remote listener. The gateway API binds
+  `127.0.0.1` on a random port, reached with a control-socket ticket (the desktop app's path). The Webapp listener
+  (`gateway/webapp_listener.py`, `webapp.enabled`, `webapp.host`, `webapp.port` in `config.yaml`) exists from
+  v0.22.6.
+- `runtime.describe` `capabilities`:
+  - v0.22.1 to v0.22.5: `durable-admission-v1`, `event-replay-v1`, `local-cli-create-v1`, `acp-editor-policy-v1`,
+    `acp-session-mcp-v1`
+  - v0.22.6 to v0.23.0: those, and `clarify-batch-v1`
+  - v0.23.1: those, and `plugin-rpc-v1`, `session-client-v1`, `session-transcript-v1`, `session-list-picker-v1`
+  - v0.23.2 to v0.23.3: those, and `session-list-cursor-v1`
+  - v0.23.4: those, and `client-identity-v1`, `client-activity-v1`
+- `groups.attachment.upload` is in the legacy dispatch only from v0.22.6. The authority serves it on every tag it
+  exists on.
 
 ## 2. Gateway API server (later / "lite" mode)
 

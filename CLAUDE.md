@@ -41,7 +41,8 @@ and issues already in `androidApp/lint-baseline.xml`.
 ### Tests
 
 - The rules in "Tests" in CONTRIBUTING.md hold. Gateway code is tested with `MockEngine` for REST and `FakeTransport`
-  (as in `ChatSessionTest`) for JSON-RPC, including the fallback for older gateways.
+  (as in `ChatSessionTest`) for JSON-RPC, including any fallback, which is only for versions in the supported window
+  (Hermes Agent v0.22.0 to v0.23.4) and for legacy vs session authority.
 
 ### Public repo
 

@@ -1044,7 +1044,7 @@ class ChatSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // "Not a quick/plugin/skill command" only means the fallback had nothing either; the worker's
+            // "Not a quick/plugin/bundle/skill command" only means the fallback had nothing either; the worker's
             // failure (a timeout, a crash) is the one worth showing.
             val routingNoise = NOT_DISPATCHABLE.containsMatchIn(e.message.orEmpty())
             val shown = if (routingNoise && execError != null) execError else e
@@ -1276,12 +1276,6 @@ class ChatSession(
         liveRuntimeId(client) ?: if (rowExists) ensureAttached(client) else null
 
     /**
-     * The link on which `session.control.read` came back "no such method": that gateway predates it, so
-     * don't ask it again. A new link may be to an updated gateway, so it asks once more.
-     */
-    private var controlUnsupportedOn: JsonRpcClient? = null
-
-    /**
      * The session-authority link whose `session.control` came back "no such method" (Hermes v0.22.1 serves only
      * `.read` there): a button runs as its typed command instead, as v0.22.3's own `session.control` does. A new
      * link may be to an updated gateway, so it asks once more.
@@ -1314,13 +1308,12 @@ class ChatSession(
 
     /**
      * Reads the session's goal, loop and heartbeat once (`session.control.read`), since `session.resume`
-     * doesn't carry them; later changes arrive as `session.control.update` events. Best effort: a gateway
-     * that doesn't know the method hides the feature, and any other failure leaves the state as it is.
+     * doesn't carry them; later changes arrive as `session.control.update` events. Best effort: a failure
+     * leaves the state as it is.
      * Returns whether the gateway answered; an answer older than an update or read that came in meanwhile yields to it.
      */
     suspend fun refreshControl(): Boolean {
         val client = connectedClient() ?: return false
-        if (client === controlUnsupportedOn) return false
         val runtimeId = liveRuntimeId(client) ?: return false
         // An update that lands while the read is out is newer than the read's answer, so the answer yields to it, as it
         // does to a later read's answer: reads after a turn's end and after the judge's status can overlap.
@@ -1330,9 +1323,6 @@ class ChatSession(
             client.request("session.control.read", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
         } catch (e: CancellationException) {
             throw e
-        } catch (e: RpcException) {
-            if (e.code == METHOD_NOT_FOUND) controlUnsupportedOn = client
-            return false
         } catch (_: Exception) {
             return false
         }
@@ -1347,7 +1337,7 @@ class ChatSession(
     /**
      * Reads the session's reasoning effort once (`config.get reasoning`), since `session.create` and a
      * lazy `session.resume` leave `reasoning_effort` out of `info`; later changes arrive as `session.info`
-     * events. Best effort: an older gateway or any failure leaves the state as it is.
+     * events. Best effort: a failure leaves the state as it is.
      * Before a cold resume's agent is built, the gateway answers with the profile's level even when the
      * chat kept its own; the build's `session.info` corrects that a few seconds later.
      */
@@ -1627,55 +1617,28 @@ class ChatSession(
      * `/bg <prompt>`: a fresh agent runs [prompt] in its own session beside this chat (`prompt.background`),
      * as the TUI and Desktop do. The reply arrives later as `background.complete` and fills in the card.
      * Through `slash.exec` the slash worker would print it after its output was already collected, so it
-     * never reached the chat (hermes-agent #97635). A gateway without the method still gets that path, and the
-     * answer is read from the task's own stored session instead.
+     * never reached the chat (hermes-agent #97635).
      */
     suspend fun runInBackground(prompt: String) {
         if (prompt.isBlank()) {
             showCommandOutput("/bg", "Usage: /bg <prompt>. A separate agent runs it in the background, and its answer shows up here.")
             return
         }
-        startSideTask("/bg", "prompt.background", prompt.trim(), "Couldn't start the background task.") { client, runtimeId, key ->
-            val reply = client.request(
-                "slash.exec",
-                buildJsonObject {
-                    put("session_id", runtimeId)
-                    put("command", "bg ${prompt.trim()}")
-                },
-                timeoutMs = COMMAND_TIMEOUT_MS,
-            ) as? JsonObject
-            val output = (SlashResult.parse(reply) as? SlashResult.Output)?.text.orEmpty().replace(ANSI_ESCAPE, "").trim()
-            // The worker prints the task's id; its stored session holds the answer.
-            val taskId = WORKER_TASK_ID.find(output)?.value
-            if (taskId == null) finishCommand(key, output.ifEmpty { "Started in the background." })
-            taskId
-        }
+        startSideTask("/bg", "prompt.background", prompt.trim(), "Couldn't start the background task.")
     }
 
     /**
      * Starts a side agent through [method] under a running card for [command]. Its answer comes back as an
      * event with the returned `task_id`, which the reducer matches to the card; a `/bg` answer is also read
      * from the task's stored session ([followBackgroundTask]), since the event is lost after a reconnect.
-     * A gateway without [method] runs [fallback] instead, which returns the task's id, or null when it
-     * finished the card itself.
      */
-    private suspend fun startSideTask(
-        command: String,
-        method: String,
-        text: String,
-        failure: String,
-        fallback: (suspend (client: JsonRpcClient, runtimeId: String, key: String) -> String?)? = null,
-    ) {
+    private suspend fun startSideTask(command: String, method: String, text: String, failure: String) {
         val key = addCommand("$command $text")
         val client = connectedClient() ?: return finishCommand(key, NOT_CONNECTED, failed = true)
         try {
             val runtimeId = ensureAttached(client)
-            val taskId = try {
-                (client.request(method, buildJsonObject { put("session_id", runtimeId); put("text", text) }) as? JsonObject).string("task_id")
-            } catch (e: RpcException) {
-                if (fallback == null || e.code != METHOD_NOT_FOUND) throw e
-                fallback(client, runtimeId, key) ?: return
-            }
+            val taskId = (client.request(method, buildJsonObject { put("session_id", runtimeId); put("text", text) }) as? JsonObject)
+                .string("task_id")
             _state.update { state ->
                 state.copy(messages = state.messages.map { if (it is ChatMessage.Command && it.key == key) it.copy(taskId = taskId) else it })
             }
@@ -1690,8 +1653,7 @@ class ChatSession(
     /**
      * Fills the running `/bg` card for [taskId] from the task's own stored session (the agent runs under
      * that id) once its last row is the final answer. `background.complete` usually gets there first; this
-     * covers the event going to a runtime this chat no longer holds (a reconnect, another chat open meanwhile)
-     * and gateways that only run `/bg` on the slash worker.
+     * covers the event going to a runtime this chat no longer holds (a reconnect, another chat open meanwhile).
      */
     private suspend fun followBackgroundTask(taskId: String) {
         repeat(BACKGROUND_POLLS) {
@@ -1902,13 +1864,7 @@ class ChatSession(
                     put("session_id", runtimeId)
                     keep?.let { put("count", it) }
                 }
-                try {
-                    client.request(if (keep == null) "session.branch_whole" else "session.branch", params) as? JsonObject
-                } catch (e: RpcException) {
-                    // Gateways older than branch_whole only have session.branch.
-                    if (e.code != METHOD_NOT_FOUND) throw e
-                    client.request("session.branch", params) as? JsonObject
-                }
+                client.request(if (keep == null) "session.branch_whole" else "session.branch", params) as? JsonObject
             }
             // The session authority names the new chat `branched_session_id` and leaves its title to the chat list.
             val stored = result.string("stored_session_id") ?: result.string("branched_session_id")
@@ -2108,8 +2064,8 @@ class ChatSession(
     /**
      * Slips [text] into the running turn with `session.steer`: the agent reads it after its current tool
      * call, without stopping. With nothing running, or when the gateway turns it down (`rejected`), it goes
-     * as the next prompt instead; a gateway that can't steer (no such method, or an agent without it) gets a
-     * plain prompt, which its busy mode folds in as before.
+     * as the next prompt instead; an agent that can't steer gets a plain prompt, which the gateway's busy mode
+     * folds in as before.
      *
      * On the session authority, a refusal that came before any agent saw the text (the turn it was meant for
      * ended) sends it as the next prompt too. A `rejected` the agent may already have read isn't sent again.
@@ -2134,7 +2090,7 @@ class ChatSession(
             throw e
         } catch (e: RpcException) {
             removeMessage(key)
-            if (e.code in STEER_UNSUPPORTED) return submit(trimmed)
+            if (e.code == STEER_UNSUPPORTED) return submit(trimmed)
             // Refused before any agent saw it: the turn it was meant for is gone, or can't take a steer. It runs next.
             if (client.sessionAuthority && e.reason in UNDELIVERED_STEER_REFUSALS) return submit(trimmed, queue = true)
             _state.update { it.copy(error = e.message.ifBlank { "Couldn't steer the reply." }) }
@@ -2323,19 +2279,14 @@ class ChatSession(
         }
     }
 
-    /** The link on which `subagent.list` came back "no such method": that gateway only sends subagent events. */
-    private var rosterUnsupportedOn: JsonRpcClient? = null
-
     /**
-     * The subagents running now: the gateway's roster says which, with the activity this chat has seen. A gateway
-     * without `subagent.list` leaves it to the events. Null when the chat isn't attached or the answer didn't come.
+     * The subagents running now: the gateway's roster says which, with the activity this chat has seen. Null when
+     * the chat isn't attached or the answer didn't come.
      */
     suspend fun activeSubagents(): List<SubagentRow>? {
         val client = connectedClient() ?: return null
         val runtimeId = liveRuntimeId(client) ?: return null
-        if (client === rosterUnsupportedOn) return _state.value.activeSubagentRows(null)
-        val snapshots = subagentSnapshots(client, runtimeId)
-        if (snapshots == null && client !== rosterUnsupportedOn) return null
+        val snapshots = subagentSnapshots(client, runtimeId) ?: return null
         return _state.value.activeSubagentRows(snapshots)
     }
 
@@ -2350,9 +2301,7 @@ class ChatSession(
             client.request("subagent.list", buildJsonObject { put("session_id", runtimeId) }) as? JsonObject
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            // Older gateways may only supply subagent events.
-            if (e is RpcException && e.code == METHOD_NOT_FOUND) rosterUnsupportedOn = client
+        } catch (_: Exception) {
             null
         }
         if (connectedClient() !== client || liveRuntimeId(client) != runtimeId) return null
@@ -2692,7 +2641,7 @@ class ChatSession(
 
     /**
      * Fills the gap after [lastSeq] from the gateway's event ring (`session.events.since`), then lets the held live
-     * events through. When the ring can't fill it (an older gateway, too long away, a restarted gateway) the chat
+     * events through. When the ring can't fill it (too long away, a restarted gateway) the chat
      * reloads the transcript and takes the running reply as the gateway has it, as it did before replay existed.
      */
     private suspend fun catchUp(client: JsonRpcClient, runtimeId: String, foreground: Boolean = false) {
@@ -2713,7 +2662,7 @@ class ChatSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            null // method missing on an older gateway, or the link went again
+            null // the ring couldn't answer, or the link went again
         }
         // Back in sight mid-turn with no replay: the running reply and the gateway's copy of it are from before the
         // app went away, so neither is laid over a fresh transcript. The turn goes on from what shows, as before.
@@ -3331,8 +3280,8 @@ class ChatSession(
         const val STEER_MAYBE_DELIVERED =
             "Hermes may have read your steer, so it wasn't sent again. Check the reply before you send it again."
 
-        /** `session.steer` errors for a gateway that can't steer: no such method, or an agent without `steer()`. */
-        val STEER_UNSUPPORTED = setOf(METHOD_NOT_FOUND, 4010)
+        /** `session.steer`'s error for an agent without `steer()` (tui_gateway/methods_session_interrupt.py). */
+        const val STEER_UNSUPPORTED = 4010
 
         /** How long Stop & send waits for the stopped turn's `message.complete` before queueing behind it. */
         const val STOP_SETTLE_TIMEOUT_MS = 10_000L
@@ -3377,7 +3326,7 @@ class ChatSession(
 
         val ANSI_ESCAPE = Regex("""\u001B\[[0-9;?]*[ -/]*[@-~]""")
 
-        /** JSON-RPC "method not found": the gateway predates a call. */
+        /** JSON-RPC "method not found": a call this gateway, or its mode (legacy or session authority), doesn't serve. */
         const val METHOD_NOT_FOUND = -32601
 
         /** `session.mutate` refusals for a stale `expected_revision` or `expected_generation`; they carry the current ones. */
@@ -3416,17 +3365,14 @@ class ChatSession(
         /** Compressing calls the model to summarize; a long chat takes a while. */
         const val COMPRESS_TIMEOUT_MS = 180_000L
 
-        /** `command.dispatch`'s "not a quick/plugin/bundle/skill command" (older gateways lack "bundle/"). */
-        val NOT_DISPATCHABLE = Regex("""not a quick/plugin/(?:bundle/)?skill command""", RegexOption.IGNORE_CASE)
+        /** `command.dispatch`'s "not a quick/plugin/bundle/skill command" (tui_gateway/methods_tools.py). */
+        val NOT_DISPATCHABLE = Regex("""not a quick/plugin/bundle/skill command""", RegexOption.IGNORE_CASE)
 
         /** How often a running `/bg` card looks for its answer in the task's stored session, and for how long (an hour). */
         const val BACKGROUND_POLL_MS = 15_000L
         const val BACKGROUND_POLLS = 240
 
         const val BACKGROUND_NO_ANSWER = "No answer yet. When it's done, it's in its own chat in the list."
-
-        /** The id the slash worker's `/bg` prints (`bg_<HHMMSS>_<hex>`), which its stored session is filed under. */
-        val WORKER_TASK_ID = Regex("""\bbg_\d{6}_[0-9a-f]{6}\b""")
     }
 }
 

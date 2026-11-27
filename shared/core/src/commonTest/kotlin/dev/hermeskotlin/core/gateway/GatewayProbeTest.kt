@@ -62,6 +62,36 @@ class GatewayProbeTest {
     }
 
     @Test
+    fun aHermesOlderThanSupportedIsReachableButWarned() = runTest {
+        for (version in listOf("0.21.5", "0.21.7+abc")) {
+            val engine = MockEngine { respond("""{"version":"$version","release_date":"2026.9.24"}""", HttpStatusCode.OK, json) }
+            val result = assertIs<ProbeResult.Reachable>(probeWith(engine).probe(url), version)
+            assertTrue(result.unsupportedVersion, version)
+        }
+    }
+
+    @Test
+    fun aSupportedOrUnreadableVersionIsntWarned() = runTest {
+        // Only `version` counts: `release_date` stays at 2026.9.24 on every release.
+        for (version in listOf("0.22.0", "0.23.4", "0.23.4+abc", "1.0.0", "unknown", "garbage", "0.22", "")) {
+            val engine = MockEngine { respond("""{"version":"$version","release_date":"2026.9.24"}""", HttpStatusCode.OK, json) }
+            val result = assertIs<ProbeResult.Reachable>(probeWith(engine).probe(url), version)
+            assertFalse(result.unsupportedVersion, version)
+        }
+    }
+
+    @Test
+    fun versionsCompareByTheirLeadingRelease() {
+        assertEquals(HermesVersion(0, 23, 4), HermesVersion.parse("0.23.4+abc"))
+        assertEquals(HermesVersion(0, 22, 10), HermesVersion.parse(" 0.22.10.dev3 "))
+        assertEquals(null, HermesVersion.parse("unknown"))
+        assertEquals(null, HermesVersion.parse("v0.23.4"))
+        assertEquals(null, HermesVersion.parse("99999999999.0.0"))
+        assertTrue(HermesVersion(0, 21, 99) < HermesVersion.OLDEST_SUPPORTED)
+        assertFalse(HermesVersion(0, 22, 0) < HermesVersion.OLDEST_SUPPORTED)
+    }
+
+    @Test
     fun nonHermesResponse() = runTest {
         val engine = MockEngine { respond("<html>nginx</html>", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/html")) }
         assertIs<ProbeResult.NotHermes>(probeWith(engine).probe(url))

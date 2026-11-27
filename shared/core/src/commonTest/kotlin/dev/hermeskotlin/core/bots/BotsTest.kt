@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 
 class BotsTest {
 
-    // Trimmed from a live v0.21.5 reply: Desktop wrote a look for test2 only.
+    // A `profiles.list` reply (the same shape on v0.22.0 to v0.23.4), trimmed: Desktop wrote a look for test2 only.
     private val reply = HermesJson.parseToJsonElement(
         """{"profiles":[
           {"name":"default","path":"/opt/data","is_default":true,"model":"m","provider":"p","description":"","display_name":"",

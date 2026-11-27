@@ -76,10 +76,10 @@ class SignInViewModelTest {
                     HttpStatusCode.OK, json,
                 )
                 request.url.host == sso.gatewayUrl.host -> respond(
-                    """{"version":"0.21.5","auth_required":true,"auth_providers":["self-hosted"],"auth_flows":["cookie","native_pkce"]}""",
+                    """{"version":"0.23.4","auth_required":true,"auth_providers":["self-hosted"],"auth_flows":["cookie","native_pkce"]}""",
                     HttpStatusCode.OK, json,
                 )
-                else -> respond("""{"version":"0.21.5","auth_required":true,"auth_providers":["basic"]}""", HttpStatusCode.OK, json)
+                else -> respond("""{"version":"0.23.4","auth_required":true,"auth_providers":["basic"]}""", HttpStatusCode.OK, json)
             }
         }
         val client = createHttpClient(MockEngine(config), cookies, bearer = tokens)

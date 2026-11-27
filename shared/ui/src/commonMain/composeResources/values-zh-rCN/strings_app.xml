@@ -343,7 +343,8 @@
     <string name="check_fix_wait_a_minute">请等一分钟再试。</string>
     <string name="check_fix_sign_in_or_update">请重新登录；如果仍然失败，请更新 Hermes。</string>
     <string name="check_fix_update_hermes_try_again">请更新 Hermes 后再试。</string>
-    <string name="check_fix_update_hermes">请在服务器上更新 Hermes。</string>
+    <string name="hermes_unsupported_version">Kyllene 需要 Hermes Agent 0.22 或更高版本。请运行 `hermes update`。</string>
+    <string name="check_fix_proxy_forwards_ws">请检查代理是否转发 /api/ws。</string>
     <string name="check_fix_agent_running">检查服务器上的代理网关是否在运行。如果在代理之后，请放行 /api/ws 上的 WebSocket 升级。</string>
     <string name="check_fix_exact_address">请使用控制台配置的确切地址，并检查内嵌对话是否已开启。</string>
     <string name="check_fix_access_token_or_proxy">如果在 Cloudflare Access 之后，请为此网关添加服务令牌。否则请检查代理是否转发 /api/ws。</string>

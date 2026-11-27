@@ -145,6 +145,7 @@ import com.composeunstyled.Text
 import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.designsystem.rememberHoverIndication
+import dev.hermeskotlin.core.gateway.HermesVersion
 import dev.hermeskotlin.core.gateway.SavedGateway
 import dev.hermeskotlin.core.bots.Bot
 import dev.hermeskotlin.core.phone.enabledPhoneTools
@@ -194,6 +195,7 @@ import dev.hermeskotlin.designsystem.text
 import dev.hermeskotlin.designsystem.textMuted
 import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
+import dev.hermeskotlin.designsystem.warning
 import dev.hermeskotlin.designsystem.title
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.bots.BotFaces
@@ -957,6 +959,7 @@ internal fun SettingsView(
                         stringResource(Res.string.settings_gateway),
                         info.version?.let { stringResource(Res.string.settings_hermes_version, it) }
                             ?: stringResource(Res.string.common_checking),
+                        alert = if (HermesVersion.isUnsupported(info.version)) stringResource(Res.string.hermes_unsupported_version) else null,
                     )
                     Divider()
                     val uriHandler = LocalUriHandler.current
@@ -1605,13 +1608,15 @@ private fun accentName(palette: AccentPalette): String {
 }
 
 
+/** A setting that only shows a [value]; [alert], when set, says under it what needs doing. */
 @Composable
-internal fun InfoRow(title: String, value: String) {
+internal fun InfoRow(title: String, value: String, alert: String? = null) {
     if (!settingShown(title, value)) return
     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(title, style = Theme[typography][body], color = Theme[colors][text])
         // A desktop's mouse can select and copy it (a version, an address), as a desktop's About panel allows.
         CopyableOnDesktop { Text(value, style = Theme[typography][bodySmall], color = Theme[colors][textTertiary], maxLines = 2, overflow = TextOverflow.Ellipsis) }
+        if (alert != null) CopyableOnDesktop { Text(alert, style = Theme[typography][bodySmall], color = Theme[colors][warning]) }
     }
 }
 

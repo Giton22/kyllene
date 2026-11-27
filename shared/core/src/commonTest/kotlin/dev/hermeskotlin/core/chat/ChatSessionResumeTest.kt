@@ -255,7 +255,7 @@ class ChatSessionResumeTest {
         answer = { _, method, _ ->
             when (method) {
                 "session.resume" -> if (resumes++ == 0) midTurn("Running it. First I need the address.") else """{"session_id":"rt2","running":false}"""
-                "session.events.since" -> "error:-32601"
+                "session.events.since" -> since(latest = 99, truncated = true)
                 else -> "{}"
             }
         }
@@ -573,8 +573,8 @@ class ChatSessionResumeTest {
     }
 
     @Test
-    fun aGatewayWithoutReplayReloadsAsBefore() = runTest {
-        answer = { _, method, _ -> if (method == "session.events.since") "error:-32601" else "{}" }
+    fun aGapTheRingCantFillReloadsAsBefore() = runTest {
+        answer = { _, method, _ -> if (method == "session.events.since") since(latest = 99, truncated = true) else "{}" }
         val (chat, _) = droppedMidTurn(
             backgroundScope,
             resume = """{"session_id":"rt1","running":true,"inflight":{"assistant":"Hello"}}""",
@@ -590,7 +590,7 @@ class ChatSessionResumeTest {
             """{"id":4,"role":"assistant","content":"Hello","timestamp":105,""" +
                 """"tool_calls":[{"id":"t1","type":"function","function":{"name":"terminal","arguments":"{}"}}]}""",
         )
-        answer = { _, method, _ -> if (method == "session.events.since") "error:-32601" else "{}" }
+        answer = { _, method, _ -> if (method == "session.events.since") since(latest = 99, truncated = true) else "{}" }
         val (chat, _) = droppedMidTurn(
             backgroundScope,
             resume = """{"session_id":"rt1","running":true,"turn_started_at":100,"inflight":{"assistant":"Hello wor"}}""",
@@ -768,8 +768,8 @@ class ChatSessionResumeTest {
     }
 
     @Test
-    fun comingBackInSightMidTurnOnAGatewayWithoutReplayKeepsTheReply() = runTest {
-        answer = { _, method, _ -> if (method == "session.events.since") "error:-32601" else "{}" }
+    fun comingBackInSightMidTurnWithoutAReplayKeepsTheReply() = runTest {
+        answer = { _, method, _ -> if (method == "session.events.since") since(latest = 99, truncated = true) else "{}" }
         val (chat, socket) = streamingHel(backgroundScope)
         // The turn starting read the transcript again; that read is done before counting.
         testScheduler.runCurrent()

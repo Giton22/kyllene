@@ -52,15 +52,12 @@ class OutgoingAttachment(
 
         /**
          * The most one file can be: what the gateway's upload takes (`_MANAGED_FILE_MAX_BYTES`, 100 MiB) in
-         * millions of bytes. On a gateway without the upload, [MAX_INLINE_BYTES].
+         * millions of bytes.
          */
         const val MAX_BYTES = 100_000_000
 
         /** [MAX_BYTES] as the app says it, in megabytes of a million bytes like the system's file sizes. */
         val MAX_SIZE = megabytes(MAX_BYTES.toLong())
-
-        /** [MAX_INLINE_BYTES] as the app says it. */
-        val MAX_INLINE_SIZE = megabytes(MAX_INLINE_BYTES.toLong())
 
         /** Per prompt, like a sensible composer tray. */
         const val MAX_COUNT = 10
