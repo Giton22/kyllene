@@ -1996,11 +1996,17 @@ class ChatSession(
     private fun withHiddenRows(visible: Int, rows: List<SessionMessage> = this.rows): Int {
         var seen = 0
         var counted = 0
+        var afterReply = false
         for (row in rows) {
-            if (seen == visible) break
             if (!row.countsInBranch) continue
+            // A user row the chat leaves out (a compaction reminder, say) is hidden too, and a reply's next step,
+            // with nothing shown between, adds to that reply: only a shown row that starts a message ends the count.
+            val shown = !row.isHidden && !(row.role == "user" && TranscriptRows.leavesOut(row))
+            val starts = shown && (row.role == "user" || !afterReply)
+            if (starts && seen == visible) break
             counted++
-            if (!row.isHidden) seen++
+            if (starts) seen++
+            if (shown) afterReply = row.role == "assistant"
         }
         return counted + (visible - seen)
     }

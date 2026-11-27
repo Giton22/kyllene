@@ -2688,6 +2688,24 @@ class ChatSessionTest {
     }
 
     @Test
+    fun branchingCountsACompactionReminderTheChatLeavesOut() = runTest {
+        history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"one"},{"id":2,"role":"assistant","content":"First"},
+            {"id":3,"role":"user","content":"[Your active task list was preserved across context compression]\n- [>] 1. Draft (in_progress)"},
+            {"id":4,"role":"assistant","content":"Drafted"},
+            {"id":5,"role":"user","content":"two"},{"id":6,"role":"assistant","content":"Second"}]}"""
+        val (chat, transport) = resumedChat(
+            backgroundScope,
+            mapOf("session.branch" to """{"session_id":"rt2","stored_session_id":"stored-2","title":"Greeting #2"}"""),
+        )
+        assertEquals(listOf("one", "First\n\nDrafted", "two", "Second"), chat.state.value.messages.map { it.textOf() })
+
+        // Up to "First": two shown, four stored with the task list and the step that adds to "First".
+        assertEquals("stored-2" to "Greeting #2", chat.branch(2))
+        assertEquals("4", transport.sent.value.first { it.isCall("session.branch") }.param("count"))
+    }
+
+    @Test
     fun branchingFromAReplyKeepsEveryStepOfIt() = runTest {
         history = """{"session_id":"stored-1","messages":[
             {"id":1,"role":"user","content":"Keep replies short.","display_kind":"hidden"},
