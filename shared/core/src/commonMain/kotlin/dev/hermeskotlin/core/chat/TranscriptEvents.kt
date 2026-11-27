@@ -65,15 +65,32 @@ object TranscriptRows {
      * `display_metadata`, which tells a scheduled job's message apart from the wakes that share its kind.
      */
     fun isNoise(row: String, displayKind: String?, displayMetadata: JsonElement? = null): Boolean =
-        (displayKind == "internal_notification" && routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
-            row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
+        (displayKind == "internal_notification" &&
+            AgentMessage.parse(row, requireEnvelope = true) == null &&
+            routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
+            row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row) ||
+            (row.substringBefore('\n').trimEnd('\r') in COMPACTION_REMINDER_HEADERS &&
+                (displayKind != "internal_notification" || scheduledResult(row, displayMetadata) == null))
+
+    fun restatedRequest(row: String): String? {
+        if (row.substringBefore('\n').trimEnd('\r') != INFLIGHT_REQUEST_HEADER) return null
+        return row.substringAfter('\n', "").trim().takeIf { it.isNotEmpty() }
+    }
+
+    internal fun carriesRestatedRequest(text: String): Boolean {
+        val trimmed = text.trimStart()
+        return compactionPrefix(trimmed) != null && restatedRequest(trimmed.substringAfter(SUMMARY_END, "").trimStart()) != null
+    }
+
+    private fun compactionPrefix(text: String): String? =
+        listOf(SUMMARY_INTRO, LEGACY_SUMMARY_PREFIX).firstOrNull(text::startsWith)
 
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
     fun compaction(text: String): TranscriptEvent.Compaction? {
         // The whole introduction every shipped prefix shares, as the gateway matches it (hermes_state_common.py),
         // so a prompt that merely starts with the bracketed label stays a prompt.
         val trimmed = text.trim()
-        val prefix = listOf(SUMMARY_INTRO, LEGACY_SUMMARY_PREFIX).firstOrNull(trimmed::startsWith) ?: return null
+        val prefix = compactionPrefix(trimmed) ?: return null
         // A legacy carrier can hold a real ask after the summary. Without a display projection,
         // leave that whole row visible rather than hide the ask and its prompt actions.
         if (trimmed.substringAfter(SUMMARY_END, "").isNotBlank()) return null
@@ -94,7 +111,8 @@ object TranscriptRows {
         displayMetadata: JsonElement? = null,
     ): List<TranscriptEvent>? {
         val row = text.trim()
-        AgentMessage.parse(row)?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body)) }
+        AgentMessage.parse(row, requireEnvelope = displayKind == "internal_notification")
+            ?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body)) }
         routine(row)?.let { return listOf(it) }
         if (displayKind == "internal_notification") scheduledResult(row, displayMetadata)?.let { return listOf(it) }
         if (displayKind == "process_complete" || displayKind == "async_delegation_complete" || PROCESS.matches(row)) {
@@ -233,6 +251,13 @@ object TranscriptRows {
     private const val PREFIX_END = "may reflect work described here — avoid repeating it:"
     private const val LEGACY_SUMMARY_PREFIX = "[CONTEXT SUMMARY]:"
     private const val SUMMARY_END = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
+    private const val INFLIGHT_REQUEST_HEADER =
+        "[STILL IN PROGRESS — this is the active request, restated after the " +
+            "compaction boundary because it was not finished yet. Continue it; do not start over.]"
+    private val COMPACTION_REMINDER_HEADERS = setOf(
+        INFLIGHT_REQUEST_HEADER,
+        "[Your active task list was preserved across context compression]",
+    )
     private val HEARTBEAT = Regex("""^\[Background process \S+ heartbeat #\d+ """)
     private val PROCESS = Regex("""^\[IMPORTANT: (?:Background process|\d+ background processes) [\s\S]*]$""")
     private val BATCH_SPLIT = Regex("""\n\n(?=\[IMPORTANT: )""")

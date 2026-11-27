@@ -143,6 +143,7 @@ sealed interface ChatMessage {
         val timestamp: Double? = null,
         val reactionRowId: Long? = null,
         val userReaction: String? = null,
+        val commentary: List<String> = emptyList(),
     ) : ChatMessage
 
     /**

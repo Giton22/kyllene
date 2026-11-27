@@ -47,6 +47,14 @@ class UnreadDividerTest {
     }
 
     @Test
+    fun anEmptyStreamingReplyGetsTheLineBeforeItsFirstWords() {
+        val reply = ChatMessage.Assistant("live", streaming = true, reasoning = "working")
+        assertEquals("live", firstUnreadKey(listOf(reply), readUpTo = 105.0))
+        assertEquals("live", unreadLineKey(listOf(reply.copy(text = "Ready.")), "live", readUpTo = 105.0))
+        assertNull(unreadLineKey(listOf(reply.copy(streaming = false, text = "[SILENT]")), "live", readUpTo = 105.0))
+    }
+
+    @Test
     fun olderPagesLoadWhileEverythingLoadedIsStillNew() {
         val allNew = listOf(prompt("p9", 900.0), reply("r9", 910.0))
 
@@ -73,6 +81,21 @@ class UnreadDividerTest {
         val messages = listOf(prompt("p1", 100.0), reply("r1", 110.0), fromBot("b1", 200.0), reply("r2", 210.0))
 
         assertEquals("b1", firstUnreadKey(messages, readUpTo = 150.0))
+    }
+
+    @Test
+    fun aToolsOnlyTurnDoesNotGetTheNewMessagesLine() {
+        val messages = listOf(ChatMessage.Assistant("silent", timestamp = 200.0, reasoning = "working"))
+        assertNull(firstUnreadKey(messages, readUpTo = 100.0))
+    }
+
+    @Test
+    fun theLineStartsAtSavedProgressBeforeTheNextAnswer() {
+        val progress = ChatMessage.Assistant("progress", timestamp = 200.0, commentary = listOf("Checking the logs."))
+        val messages = listOf(prompt("p1", 100.0), progress, reply("r2", 210.0))
+
+        assertEquals(UnreadLineStep.Above("progress"), unreadLineStep(messages, 110.0, olderMessages = false, pagesLoaded = 0))
+        assertEquals("r2", firstUnreadKey(messages, 200.0))
     }
 
     @Test

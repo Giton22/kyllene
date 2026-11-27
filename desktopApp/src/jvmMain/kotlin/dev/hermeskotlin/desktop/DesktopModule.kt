@@ -9,6 +9,7 @@ import dev.hermeskotlin.core.push.PushGateway
 import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushRegistration
 import dev.hermeskotlin.core.push.PushSetup
+import dev.hermeskotlin.core.push.linuxPushInbox
 import dev.hermeskotlin.core.push.linuxPushKeys
 import dev.hermeskotlin.core.voice.VoiceKeepAlive
 import dev.hermeskotlin.desktop.web.Jcef
@@ -30,7 +31,7 @@ val desktopModule = module {
         }
     }
     single<PushKeys> { linuxPushKeys(get()) ?: NoPushKeys }
-    single { PushSetup(get(), get(), get(), get(), get(), get(), deviceName = ::computerName) }
+    single { PushSetup(get(), get(), get(), get(), get(), get(), available = linuxPushInbox(get()) != null, deviceName = ::computerName) }
     single { InboxApi(get(), get()) }
     single<PhoneToolRunner> { NoPhoneTools }
     single { PhoneToolsBridge(get(), get(), get(), get(), get(), get(), get(), get(), deviceName = ::computerName) }
@@ -45,7 +46,7 @@ private object NoPushKeys : PushKeys {
     override val deviceId = "desktop"
 
     override fun registration(name: String): PushRegistration =
-        throw UnsupportedOperationException("Notifications aren't in the desktop app yet.")
+        throw UnsupportedOperationException("Notifications anywhere needs secure Linux identity storage.")
 
     override fun pinned(gatewayUrl: String): PushGateway? = null
 

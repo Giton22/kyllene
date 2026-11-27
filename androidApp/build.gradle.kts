@@ -66,6 +66,8 @@ android {
         }
     }
 
+    testOptions.unitTests.isIncludeAndroidResources = true
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -127,4 +129,8 @@ dependencies {
     // The Pebble companion's link to Kyllene's Pebble watchapp (pebbleApp), through the Pebble phone app.
     implementation(libs.pebblekit2.client)
     debugImplementation(libs.compose.ui.tooling)
+    testImplementation(libs.junit4)
+    testImplementation(libs.robolectric)
 }
+
+apply(from = rootProject.file("gradle/robolectric.gradle.kts"))

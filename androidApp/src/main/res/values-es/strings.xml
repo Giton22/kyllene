@@ -64,7 +64,6 @@
     <string name="notification_deny">Denegar</string>
 
     <string name="notification_turn_failed_text">El turno falló.</string>
-    <string name="notification_done">Hecho.</string>
     <string name="notification_finished">Terminado.</string>
     <string name="notification_message_hermes">Escribir a Hermes</string>
     <string name="notification_turn_failed">El turno falló</string>

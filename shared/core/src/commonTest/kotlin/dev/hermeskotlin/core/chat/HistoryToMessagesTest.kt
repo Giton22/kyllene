@@ -100,6 +100,76 @@ class HistoryToMessagesTest {
     }
 
     @Test
+    fun exactCompactionRemindersStayOutOfHistoryAndTheOriginalBotMessageRemains() {
+        val restatement = "[STILL IN PROGRESS — this is the active request, restated after the " +
+            "compaction boundary because it was not finished yet. Continue it; do not start over.]"
+        val taskList = "[Your active task list was preserved across context compression]"
+        val original = "Message from 🤖 Rook (@rook): Please check the backup."
+        val question = "$taskList appears in my chat. What is it?"
+        val mention = "Please explain this header:\n$restatement"
+        val messages = historyToMessages(listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive(original)),
+            SessionMessage(id = 2, role = "user", content = JsonPrimitive("$COMPACTION_PREFIX Notes\n$SUMMARY_END\n$restatement\n$original"),
+                displayContent = JsonPrimitive("$restatement\n$original")),
+            SessionMessage(id = 3, role = "user", content = JsonPrimitive("$taskList\r\n- Check the backup")),
+            SessionMessage(id = 4, role = "user", content = JsonPrimitive(question)),
+            SessionMessage(id = 5, role = "user", content = JsonPrimitive(mention)),
+        ))
+
+        assertEquals(listOf("row-1", "row-4", "row-5"), messages.map { it.key })
+        assertEquals(TranscriptEvent.FromBot("Rook", "rook", "Please check the backup."), assertIs<ChatMessage.Event>(messages[0]).event)
+        assertEquals(listOf(question, mention), messages.filterIsInstance<ChatMessage.User>().map { it.text })
+    }
+
+    @Test
+    fun restatedRuntimeRowsKeepTheirOriginalTreatment() {
+        val bodies = listOf(
+            "[System: wake]",
+            "[Background process proc_1 heartbeat #1 progress]",
+            "[ASYNC DELEGATION COMPLETE — batch_1]\nStatus: completed\n--- RESULT ---\nDone.",
+        )
+        val rows = bodies.mapIndexed { index, body ->
+            SessionMessage(id = index.toLong(), role = "user", content = JsonPrimitive(body))
+        }
+        val replays = rows.map { row ->
+            row.copy(content = JsonPrimitive("[STILL IN PROGRESS — this is the active request, restated after the " +
+                "compaction boundary because it was not finished yet. Continue it; do not start over.]\n${row.text}"))
+        }
+
+        val expected = historyToMessages(rows)
+        assertIs<ChatMessage.Notice>(expected.single())
+        assertEquals(expected, historyToMessages(replays))
+    }
+
+    @Test
+    fun compactionRestatementKeepsTheRequestUntilItsOriginalIsInHistory() {
+        val original = SessionMessage(id = 1, role = "user", content = JsonPrimitive("Check the backup."), messageUid = "original")
+        val restated = JsonPrimitive("[STILL IN PROGRESS — this is the active request, restated after the " +
+            "compaction boundary because it was not finished yet. Continue it; do not start over.]\r\nCheck the backup.")
+        val replays = listOf(
+            original.copy(id = 2, content = restated),
+            original.copy(
+                id = 3,
+                content = JsonPrimitive("$COMPACTION_PREFIX Notes\n$SUMMARY_END\n${restated.content}"),
+                displayContent = restated,
+                messageUid = "carrier",
+                absorbedMessageUids = JsonPrimitive("""["original"]"""),
+            ),
+        )
+        val earlierSameText = original.copy(id = 0, messageUid = "earlier")
+        for (replay in replays) {
+            val onlyCopy = assertIs<ChatMessage.User>(historyToMessages(listOf(replay)).single())
+            assertEquals(original.text, onlyCopy.text)
+            assertEquals(null, onlyCopy.rowId)
+            assertEquals(listOf("row-0", onlyCopy.key), historyToMessages(listOf(earlierSameText, replay)).map { it.key })
+            assertEquals(listOf("row-1"), historyToMessages(listOf(original, replay)).map { it.key })
+            assertEquals(listOf("row-1"), historyToMessages(listOf(original.copy(messageUid = null), replay)).map { it.key })
+        }
+        val carrierWithoutSourceUid = replays.last().copy(absorbedMessageUids = JsonPrimitive("[]"))
+        assertEquals(listOf("row-1"), historyToMessages(listOf(original, carrierWithoutSourceUid)).map { it.key })
+    }
+
+    @Test
     fun regroupingHistoryKeepsContentAndChronologyAsOlderRowsArrive() {
         val text = "| Name | Result |\r\n|---|---|\r\n| scan | ${"word".repeat(200)} |\r\n\r\n```text\r\nready\r\n```"
         val older = SessionMessage(id = 1, role = "user", content = JsonPrimitive("[Cron delivery: Earlier]\n"))
@@ -305,6 +375,68 @@ class HistoryToMessagesTest {
         assertEquals("plain", messages[0].sentText)
         assertEquals(1L, messages[0].rowId)
         assertEquals(null, messages[1].sentText)
+    }
+
+    @Test
+    fun incomingBotMessagesRemainVisibleWhenHermesMarksThemInternal() {
+        val body = "Please review `draft.md`."
+        val rows = listOf(
+            SessionMessage(id = 1, role = "user", content = JsonPrimitive("wake"), displayKind = "internal_notification"),
+            SessionMessage(
+                id = 2,
+                role = "user",
+                content = JsonPrimitive("Message from 🤖 Scribe (@scribe): $body"),
+                displayKind = "internal_notification",
+                timestamp = 200.0,
+            ),
+            SessionMessage(
+                id = 3,
+                role = "user",
+                content = JsonPrimitive("[Message from agent 'scribe'] Done."),
+                displayKind = "internal_notification",
+                timestamp = 210.0,
+            ),
+            SessionMessage(id = 4, role = "user", content = JsonPrimitive("Message from the scheduler: wake"), displayKind = "internal_notification"),
+            SessionMessage(id = 5, role = "user", content = JsonPrimitive("Message from 🤖 Scribe: wake"), displayKind = "internal_notification"),
+            SessionMessage(id = 6, role = "user", content = JsonPrimitive("Message from Scribe (@scribe): wake"), displayKind = "internal_notification"),
+        )
+
+        val messages = historyToMessages(rows).map { assertIs<ChatMessage.Event>(it) }
+        assertEquals(
+            listOf(TranscriptEvent.FromBot("Scribe", "scribe", body), TranscriptEvent.FromBot("scribe", null, "Done.")),
+            messages.map { it.event },
+        )
+        assertEquals(listOf(200.0, 210.0), messages.map { it.timestamp })
+    }
+
+    @Test
+    fun scheduledResultWithPlainSenderTextRemainsARoutine() {
+        val body = "Message from the scheduler: backup complete"
+        val row = SessionMessage(
+            id = 1,
+            role = "user",
+            content = JsonPrimitive(body),
+            displayKind = "internal_notification",
+            displayMetadata = Json.parseToJsonElement("""{"completion_note":[["cron","local","job"]]}"""),
+        )
+
+        val message = assertIs<ChatMessage.Event>(historyToMessages(listOf(row)).single())
+        assertEquals(body, assertIs<TranscriptEvent.Routine>(message.event).body)
+    }
+
+    @Test
+    fun scheduledResultWithCompactionReminderHeaderRemainsARoutine() {
+        val body = "[Your active task list was preserved across context compression]\n- Check the backup"
+        val row = SessionMessage(
+            id = 1,
+            role = "user",
+            content = JsonPrimitive(body),
+            displayKind = "internal_notification",
+            displayMetadata = Json.parseToJsonElement("""{"completion_note":[["cron","local","job"]]}"""),
+        )
+
+        val message = assertIs<ChatMessage.Event>(historyToMessages(listOf(row)).single())
+        assertEquals(body, assertIs<TranscriptEvent.Routine>(message.event).body)
     }
 
     @Test

@@ -27,6 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import dev.hermeskotlin.android.HeraldActivity
 import dev.hermeskotlin.android.R
+import dev.hermeskotlin.core.chat.replyTextOrNull
 import dev.hermeskotlin.core.chat.ApprovalChoice
 import dev.hermeskotlin.core.chat.InputRequest
 import dev.hermeskotlin.core.chat.choicesAway
@@ -610,8 +611,9 @@ class ChatNotifications(
 
     /** A finished turn, with an inline Reply that sends the next prompt to the same chat. */
     fun postReply(storedSessionId: String, title: String?, text: String, failed: Boolean) {
+        if (!failed && text.replyTextOrNull() == null) return
         val preview = text.toPlainText().take(MAX_PREVIEW)
-            .ifBlank { if (failed) str(R.string.notification_turn_failed_text) else str(R.string.notification_done) }
+            .ifBlank { if (failed) str(R.string.notification_turn_failed_text) else return }
         val input = RemoteInput.Builder(NotificationActionReceiver.KEY_TEXT).setLabel(str(R.string.notification_message_hermes)).build()
         val notification = base(CHANNEL_REPLIES, storedSessionId, title)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -641,7 +643,7 @@ class ChatNotifications(
      * conversations and can be prioritised or bubbled like a person's.
      */
     fun postBotMessage(bot: Bot, picture: ByteArray?, storedSessionId: String, text: String, viaPush: Boolean = false) {
-        val preview = text.toPlainText().take(MAX_PREVIEW).ifBlank { return }
+        val preview = text.replyTextOrNull()?.toPlainText()?.take(MAX_PREVIEW)?.takeIf(String::isNotBlank) ?: return
         // One message can arrive both over the gateway socket and through push: the second copy is dropped.
         // The same words twice from one path are two messages (a bot repeating itself) and both notify.
         val now = System.currentTimeMillis()

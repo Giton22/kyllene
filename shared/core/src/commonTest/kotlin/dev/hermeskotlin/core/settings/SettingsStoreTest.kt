@@ -67,6 +67,21 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun opaqueComposerDefaultsOffForExistingSettingsAndPersistsWhenEnabled() = runTest {
+        val disk = InMemoryKeyValueStore()
+        disk.put("settings.v1", """{"theme":"Dark"}""")
+        val settings = SettingsStore(disk, backgroundScope)
+        assertFalse(settings.settings.filterNotNull().first().opaqueComposer)
+
+        settings.update { it.copy(opaqueComposer = true) }
+        advanceUntilIdle()
+
+        val saved = SettingsStore(disk, backgroundScope).settings.filterNotNull().first()
+        assertTrue(saved.opaqueComposer)
+        assertEquals(ThemeMode.Dark, saved.theme)
+    }
+
+    @Test
     fun dictationIsOnUnlessTurnedOff() = runTest {
         val disk = InMemoryKeyValueStore()
         // Settings saved before the option existed keep the mic.
