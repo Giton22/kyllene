@@ -13,6 +13,7 @@ import coil3.decode.DecodeUtils
 import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
 import coil3.gif.isGif
+import coil3.gif.repeatCount
 import coil3.request.ImageRequest
 import coil3.size.Precision
 import okio.Buffer
@@ -32,6 +33,9 @@ internal actual fun rememberGifPicture(bytes: ByteArray, maxEdge: Int): Attachme
                 .size(maxEdge)
                 .precision(Precision.INEXACT)
                 .decoderFactory(if (Build.VERSION.SDK_INT >= 28) AnimatedImageDecoder.Factory() else GifDecoder.Factory())
+                // Coil loops forever by default; a GIF made to play once (no loop block) stops on its last frame.
+                // Android 8's decoder (Movie) can't read the loop count, so there every GIF loops.
+                .repeatCount(AnimatedImageDecoder.ENCODED_LOOP_COUNT)
                 .build()
         }
         // Coil treats animated drawables as non-shareable. Each composed view owns playback,

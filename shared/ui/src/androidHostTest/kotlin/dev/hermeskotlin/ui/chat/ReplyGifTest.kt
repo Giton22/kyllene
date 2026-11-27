@@ -24,6 +24,7 @@ import com.composeunstyled.theme.ColorScheme
 import dev.hermeskotlin.core.chat.ReplyMedia
 import dev.hermeskotlin.designsystem.AccentPalette
 import dev.hermeskotlin.designsystem.hermesTheme
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -103,12 +104,28 @@ class ReplyGifTest {
         }
     }
 
+    @Test
+    fun aGifWithoutALoopPlaysOnceAndStaysOnItsLastFrame() {
+        // The same two frames (0.6 s each) without the NETSCAPE loop block: played once, as a browser does.
+        val gif = Base64.decode("R0lGODlhUAAwAIEAAOAgIAAAAAAAAAAAACH5BAA8AAAALAAAAABQADAAAAhmAAEIHEiwoMGDCBMqXMiwocOHECNKnEixosWLGDNq3Mixo8ePIEOKHEmypMmTKFOqXMmypcuXMGPKnEmzps2bOHPq3Mmzp8+fQIMKHUq0qNGjSJMqXcq0qdOnUKNKnUq1qtWrDAMCACH5BAE8AAEALAAAAABQADAAgSDAIAAAAAAAAAAAAAhmAAEIHEiwoMGDCBMqXMiwocOHECNKnEixosWLGDNq3Mixo8ePIEOKHEmypMmTKFOqXMmypcuXMGPKnEmzps2bOHPq3Mmzp8+fQIMKHUq0qNGjSJMqXcq0qdOnUKNKnUq1qtWrDAMCADs=")
+        showReply(gif)
+        awaitSecondFrame("GIF preview")
+        // A looping copy would be back on its red first frame within 0.6 s.
+        val stop = System.currentTimeMillis() + 2_000
+        while (System.currentTimeMillis() < stop) {
+            assertTrue("went back to the first frame", isGreen("GIF preview"))
+            Thread.sleep(100)
+        }
+    }
+
     private fun awaitSecondFrame(description: String) {
         compose.waitUntilExactlyOneExists(hasContentDescription(description), 5_000)
-        compose.waitUntil(5_000) {
-            val pixels = compose.onNodeWithContentDescription(description).captureToImage().toPixelMap()
-            val center = pixels[pixels.width / 2, pixels.height / 2]
-            center.green > .6f && center.red < .3f
-        }
+        compose.waitUntil(5_000) { isGreen(description) }
+    }
+
+    private fun isGreen(description: String): Boolean {
+        val pixels = compose.onNodeWithContentDescription(description).captureToImage().toPixelMap()
+        val center = pixels[pixels.width / 2, pixels.height / 2]
+        return center.green > .6f && center.red < .3f
     }
 }
