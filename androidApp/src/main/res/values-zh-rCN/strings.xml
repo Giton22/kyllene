@@ -88,6 +88,7 @@
     <string name="phone_allow">允许</string>
     <string name="phone_deny">拒绝</string>
     <string name="phone_question_change">智能体想要更改你的手机设置</string>
+    <string name="phone_unlock_before_approval">批准此操作前，请先解锁手机。</string>
     <string name="phone_list_separator">、</string>
     <string name="phone_sentence">%1$s。</string>
 

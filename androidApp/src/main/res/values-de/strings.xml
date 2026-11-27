@@ -89,6 +89,7 @@
     <string name="phone_allow">Erlauben</string>
     <string name="phone_deny">Ablehnen</string>
     <string name="phone_question_change">Der Agent möchte etwas an deinem Telefon ändern</string>
+    <string name="phone_unlock_before_approval">Entsperre dein Telefon, bevor du diese Aktion bestätigst.</string>
     <string name="phone_list_separator">", "</string>
     <string name="phone_sentence">%1$s.</string>
 

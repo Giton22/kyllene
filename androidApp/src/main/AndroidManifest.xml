@@ -30,7 +30,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- Only if the user also allows location while Herald is closed, from its own row under the Location switch. -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-    <!-- The Calendar phone tool: reads events, and adds or moves one after the user allows it. -->
+    <!-- The Calendar phone tool: reads, adds and moves events according to the tool settings. -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <!-- The Contacts phone tool looks people up by name, number or email; it never writes. -->
@@ -70,7 +70,7 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
-        <!-- The Alarms phone tool checks there's a clock app before it asks the user. -->
+        <!-- The Alarms phone tool checks for a clock app before setting an alarm or timer. -->
         <intent>
             <action android:name="android.intent.action.SET_ALARM" />
         </intent>
@@ -82,7 +82,7 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />
         </intent>
-        <!-- The Open phone tool checks there's a browser, a maps app or a share target before it asks the user. -->
+        <!-- The Open phone tool checks for a browser, maps app or share target before opening it. -->
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />

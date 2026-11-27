@@ -89,6 +89,7 @@
     <string name="phone_allow">Engedélyezés</string>
     <string name="phone_deny">Elutasítás</string>
     <string name="phone_question_change">Az ügynök módosítani szeretné a telefonodat</string>
+    <string name="phone_unlock_before_approval">Oldd fel a telefon zárolását a művelet jóváhagyása előtt.</string>
     <string name="phone_list_separator">", "</string>
     <string name="phone_sentence">%1$s.</string>
 

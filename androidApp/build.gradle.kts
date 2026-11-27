@@ -128,6 +128,12 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     // The Pebble companion's link to Kyllene's Pebble watchapp (pebbleApp), through the Pebble phone app.
     implementation(libs.pebblekit2.client)
+
+    testImplementation(libs.junit4)
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.ktor.client.mock)
     debugImplementation(libs.compose.ui.tooling)
     testImplementation(libs.junit4)
     testImplementation(libs.robolectric)

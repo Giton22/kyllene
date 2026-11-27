@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="phone_intro">让代理使用这台手机：读取它的状态，或在上面做些事。每个工具在你开启前都是关闭的，任何会改变手机的操作都会先询问你：Kyllene 打开时在应用内询问，否则通过通知询问。你关闭的工具会立即从代理那里移除。</string>
+    <string name="phone_intro">工具在你启用前保持关闭。读取数据无需批准。对于支持的操作，你可以关闭批准提示。如果手机已锁定，或 Android 要求你先操作才能打开其他应用，仍需批准。Android 权限仍然有效。关闭工具后，访问权限会立即撤销。</string>
     <string name="phone_install_what">把你在此开启的工具提供给代理，并将它们的调用转到这台手机。</string>
     <string name="phone_let_agent">让代理使用这台手机</string>
     <string name="phone_set_up">在网关上设置</string>
@@ -92,21 +92,21 @@
     <string name="phone_tool_network">网络</string>
     <string name="phone_tool_network_detail">Wi-Fi、移动数据或离线，是否按流量计费，以及 VPN。</string>
     <string name="phone_tool_sound">声音</string>
-    <string name="phone_tool_sound_detail">勿扰模式、铃声模式和音量。更改前会先询问。</string>
+    <string name="phone_tool_sound_detail">查看或调整勿扰模式、铃声和音量。</string>
     <string name="phone_tool_alarms">闹钟和计时器</string>
-    <string name="phone_tool_alarms_detail">经你允许后，在时钟应用中设置一个。</string>
+    <string name="phone_tool_alarms_detail">在时钟应用中设置闹钟和计时器。</string>
     <string name="phone_tool_screen_time">屏幕使用时间</string>
     <string name="phone_tool_screen_time_detail">你用了哪些应用、用了多久、亮屏时间和解锁次数，最多回溯一周。</string>
     <string name="phone_tool_open">打开链接、地图和应用</string>
-    <string name="phone_tool_open_detail">经你允许后，打开链接、地点、应用或分享菜单。</string>
+    <string name="phone_tool_open_detail">打开链接、地点、应用或分享菜单。</string>
     <string name="phone_tool_clipboard">复制到剪贴板</string>
-    <string name="phone_tool_clipboard_detail">经你允许后，把文本放到剪贴板。从不读取其中的内容。</string>
+    <string name="phone_tool_clipboard_detail">将文本复制到剪贴板，不读取已有内容。</string>
     <string name="phone_tool_location">位置</string>
     <string name="phone_tool_location_detail">手机所在位置和最近的地址，精度取决于你的授权。仅在 Kyllene 打开时，除非你也允许在关闭时使用。</string>
     <string name="phone_tool_geofences">监视的地点</string>
-    <string name="phone_tool_geofences_detail">到达或离开某个地点时，会把它的消息发到添加它的对话中。添加或移除前会先询问；需要始终允许精确位置。</string>
+    <string name="phone_tool_geofences_detail">到达或离开监控地点时，将消息发送到添加该地点的对话。需要始终允许访问精确位置。</string>
     <string name="phone_tool_calendar">日历</string>
-    <string name="phone_tool_calendar_detail">某个时间范围内的日程。添加或移动日程前会先询问。</string>
+    <string name="phone_tool_calendar_detail">读取、添加或移动日历事件。</string>
     <string name="phone_tool_contacts">联系人</string>
     <string name="phone_tool_contacts_detail">按姓名、号码或邮箱查找联系人：只读取姓名、号码和邮箱，每次少量。</string>
     <string name="phone_tool_health">健康</string>
@@ -115,4 +115,10 @@
     <string name="phone_tool_show_ui_detail">代理在回复下方绘制一个小界面，包含按钮、选项或表单，并最多等待你点按 5 分钟。仅限 Android。</string>
     <string name="phone_tool_call_me">Hermes 可以给我打电话</string>
     <string name="phone_tool_call_me_detail">当事情等不了，或你让它打给你时（包括来自定时任务），代理会给你打电话。接听后 Hermes 会在通话中告诉你原因。只会打给你。</string>
+    <string name="phone_approval_sound">更改声音设置前需要批准</string>
+    <string name="phone_approval_alarms">设置闹钟前需要批准</string>
+    <string name="phone_approval_open">打开链接、地图和应用前需要批准</string>
+    <string name="phone_approval_clipboard">复制文本前需要批准</string>
+    <string name="phone_approval_geofences">更改监控地点前需要批准</string>
+    <string name="phone_approval_calendar">更改日历事件前需要批准</string>
 </resources>

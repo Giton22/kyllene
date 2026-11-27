@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="phone_intro">Engedd, hogy az ügynök használja ezt a telefont: lássa, hogy áll, vagy tegyen rajta valamit. Minden eszköz ki van kapcsolva, amíg be nem kapcsolod, és minden, ami a telefont módosítja, előbb rákérdez: a Kyllene-ben, ha meg van nyitva, egyébként értesítésben. A kikapcsolt eszközt az ügynök azonnal elveszíti.</string>
+    <string name="phone_intro">Az eszközök kikapcsolva maradnak, amíg be nem kapcsolod őket. Az adatok olvasásához nem kell jóváhagyás. A támogatott műveleteknél kikapcsolhatod a jóváhagyáskérést. Ha a telefon zárolva van, vagy az Android a közreműködésedet kéri egy másik alkalmazás megnyitásához, továbbra is jóvá kell hagynod a műveletet. Az Android engedélyei továbbra is érvényesek. Az eszköz kikapcsolása azonnal megszünteti a hozzáférést.</string>
     <string name="phone_install_what">Felkínálja az ügynöknek az itt bekapcsolt eszközöket, és a hívásaikat erre a telefonra továbbítja.</string>
     <string name="phone_let_agent">Az ügynök használhatja ezt a telefont</string>
     <string name="phone_set_up">Beállítás a Gateway-en</string>
@@ -94,21 +94,21 @@
     <string name="phone_tool_network">Hálózat</string>
     <string name="phone_tool_network_detail">Wi-Fi, mobiladat vagy offline, forgalomkorlátos-e, és van-e VPN.</string>
     <string name="phone_tool_sound">Hang</string>
-    <string name="phone_tool_sound_detail">Ne zavarjanak, a csengési mód és a hangerők. A módosítás előbb rákérdez.</string>
+    <string name="phone_tool_sound_detail">A Ne zavarjanak mód, a csengés és a hangerő lekérdezése vagy módosítása.</string>
     <string name="phone_tool_alarms">Ébresztők és időzítők</string>
-    <string name="phone_tool_alarms_detail">Beállít egyet az óra alkalmazásodban, ha engedélyezed.</string>
+    <string name="phone_tool_alarms_detail">Ébresztők és időzítők beállítása az Óra alkalmazásban.</string>
     <string name="phone_tool_screen_time">Képernyőidő</string>
     <string name="phone_tool_screen_time_detail">Mely alkalmazásokat használtad és mennyi ideig, a bekapcsolt képernyő ideje és a feloldások, legfeljebb egy hétre visszamenőleg.</string>
     <string name="phone_tool_open">Linkek, térképek és alkalmazások megnyitása</string>
-    <string name="phone_tool_open_detail">Megnyit egy linket, egy helyet, egy alkalmazást vagy a megosztási menüt, ha engedélyezed.</string>
+    <string name="phone_tool_open_detail">Hivatkozás, hely, alkalmazás vagy a megosztási menü megnyitása.</string>
     <string name="phone_tool_clipboard">Másolás a vágólapra</string>
-    <string name="phone_tool_clipboard_detail">Szöveget tesz a vágólapra, ha engedélyezed. Soha nem olvassa, mi van rajta.</string>
+    <string name="phone_tool_clipboard_detail">Szöveg másolása a vágólapra a meglévő tartalom olvasása nélkül.</string>
     <string name="phone_tool_location">Hely</string>
     <string name="phone_tool_location_detail">Hol van a telefon és a legközelebbi cím, olyan pontosan, ahogy engedélyezed. Amíg a Kyllene meg van nyitva, hacsak nem engedélyezed bezárt állapotban is.</string>
     <string name="phone_tool_geofences">Figyelt helyek</string>
-    <string name="phone_tool_geofences_detail">Egy helyre érkezve vagy onnan távozva elküldi az üzenetét abba a csevegésbe, ahonnan hozzáadták. Hozzáadás vagy eltávolítás előtt rákérdez; mindig engedélyezett pontos helyadat kell hozzá.</string>
+    <string name="phone_tool_geofences_detail">A figyelt helyre érkezéskor vagy onnan távozáskor üzenetet küld abba a beszélgetésbe, amelyből hozzáadtad. Mindig pontos helyhozzáférést igényel.</string>
     <string name="phone_tool_calendar">Naptár</string>
-    <string name="phone_tool_calendar_detail">Az eseményeid egy időtartamban. Hozzáadás vagy áthelyezés előtt rákérdez.</string>
+    <string name="phone_tool_calendar_detail">Naptáresemények olvasása, hozzáadása vagy áthelyezése.</string>
     <string name="phone_tool_contacts">Névjegyek</string>
     <string name="phone_tool_contacts_detail">Embereket keres név, szám vagy e-mail alapján: csak a nevüket, számukat és e-mail-címüket, egyszerre csak néhányat.</string>
     <string name="phone_tool_health">Egészség</string>
@@ -117,4 +117,10 @@
     <string name="phone_tool_show_ui_detail">Az ügynök egy kis képernyőt rajzol a válasza alá gombokkal, választási lehetőségekkel vagy űrlappal, és legfeljebb 5 percig várja a koppintásodat. Csak Androidon.</string>
     <string name="phone_tool_call_me">A Hermes felhívhat</string>
     <string name="phone_tool_call_me_detail">Az ügynök felhív, ha valami nem várhat, vagy ha megkéred rá, akár egy ütemezett feladatból is. Fogadd, és a Hermes a hívásban elmondja, miért. Csak téged hív.</string>
+    <string name="phone_approval_sound">Jóváhagyás kérése a hangbeállítások módosításához</string>
+    <string name="phone_approval_alarms">Jóváhagyás kérése az ébresztők beállításához</string>
+    <string name="phone_approval_open">Jóváhagyás kérése hivatkozások, térképek és alkalmazások megnyitásához</string>
+    <string name="phone_approval_clipboard">Jóváhagyás kérése szöveg másolásához</string>
+    <string name="phone_approval_geofences">Jóváhagyás kérése a figyelt helyek módosításához</string>
+    <string name="phone_approval_calendar">Jóváhagyás kérése a naptáresemények módosításához</string>
 </resources>

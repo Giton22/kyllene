@@ -2,6 +2,7 @@ package dev.hermeskotlin.android.phone
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -16,8 +17,17 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import dev.hermeskotlin.android.HeraldActivity
 import dev.hermeskotlin.android.R
+import dev.hermeskotlin.core.phone.PhoneTool
 import dev.hermeskotlin.core.phone.PhoneToolException
+import dev.hermeskotlin.core.phone.PhoneToolsBridge
+import dev.hermeskotlin.core.phone.enabledPhoneTools
+import dev.hermeskotlin.core.phone.requiresPhoneToolPermission
+import dev.hermeskotlin.core.settings.SettingsStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
@@ -30,14 +40,8 @@ import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
-/**
- * Asks before a phone tool changes anything: a dialog in Herald while it's open, else a notification, says what
- * the agent wants to do, with Allow and Deny. The notification's Allow opens [PhoneActionActivity], which does it
- * from the tap (Android lets an app start an alarm, a link or the share sheet only from something the user did)
- * and closes. Nothing happens unless allowed; swiping the question away is Deny, and it goes when the agent stops
- * waiting.
- */
-class PhoneConfirmations(private val context: Context) {
+/** Asks before a tool action when approval is enabled or Android requires a user interaction. */
+class PhoneConfirmations(private val context: Context, private val settings: SettingsStore) {
 
     internal class Pending(val action: (Activity) -> Unit, val done: CompletableDeferred<Unit>)
 
@@ -93,14 +97,50 @@ class PhoneConfirmations(private val context: Context) {
         }
     }
 
-    /**
-     * Shows [what] (a sentence: "Set an alarm for 7:00") under the title [titleId] and waits. Runs [action] on the
-     * tap of Allow, from an activity; throws [PhoneToolException] when the user denies, doesn't answer before the
-     * agent stops waiting, or can't be asked. Asked in Herald while it's open ([inApp]), else in a notification; one
-     * that's answered either way, and the notification comes and goes as the user leaves Herald and comes back.
-     */
-    suspend fun confirm(what: String, @StringRes titleId: Int = R.string.phone_question_change, action: (Activity) -> Unit) {
-        val title = text(titleId)
+    /** A permission preference never enables its parent tool. Checked again at the execution boundary. */
+    internal fun checkEnabled(tool: PhoneTool) {
+        if (tool !in settings.settings.value?.enabledPhoneTools().orEmpty()) throw PhoneToolException(PhoneToolsBridge.SWITCHED_OFF)
+    }
+
+    private fun deviceLocked(): Boolean =
+        context.getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true
+
+    /** Direct actions use the worker dispatcher unless they launch an activity. */
+    suspend fun confirm(
+        tool: PhoneTool,
+        what: String,
+        title: String = text(R.string.phone_question_change),
+        needsActivity: Boolean = false,
+        action: (Context) -> Unit,
+    ) = withContext(Dispatchers.Main.immediate) {
+        val caller = currentCoroutineContext()
+        fun requiresApproval(): Boolean =
+            settings.settings.value?.requiresPhoneToolPermission(tool) != false ||
+                deviceLocked() || (needsActivity && !inApp.value)
+
+        fun runAction(from: Context) {
+            caller.ensureActive()
+            checkEnabled(tool)
+            if (deviceLocked()) throw PhoneToolException(text(R.string.phone_unlock_before_approval))
+            action(from)
+        }
+
+        checkEnabled(tool)
+        val dispatcher = if (needsActivity) Dispatchers.Main.immediate else Dispatchers.IO
+        if (!requiresApproval() && withContext(dispatcher) {
+                // The lock or the preference may have changed while this waited for a worker.
+                if (requiresApproval()) false else {
+                    withToolFailure { runAction(context) }
+                    true
+                }
+            }) return@withContext
+
+        checkEnabled(tool)
+        ask(what, title, ::runAction)
+    }
+
+    /** An unanswered or cancelled question never executes; a pending question still needs Allow after opt-out. */
+    private suspend fun ask(what: String, title: String, action: (Activity) -> Unit) {
         val key = "c" + ids.incrementAndGet()
         val pending = Pending(action, CompletableDeferred())
         waiting[key] = pending
@@ -191,7 +231,9 @@ class PhoneConfirmations(private val context: Context) {
             .setDeleteIntent(deny)
             .setTimeoutAfter(ANSWER_MS)
             .addAction(0, text(R.string.phone_deny), deny)
-            .addAction(0, text(R.string.phone_allow), allow)
+            .addAction(NotificationCompat.Action.Builder(0, text(R.string.phone_allow), allow)
+                .setAuthenticationRequired(true)
+                .build())
             .build()
         return runCatching { manager.notify(TAG, id, notification) }.isSuccess
     }
@@ -215,15 +257,27 @@ class PhoneConfirmations(private val context: Context) {
         /** Whether Herald is open and unlocked, so a question is asked there and not in a notification. */
         val inApp = MutableStateFlow(false)
 
+        private inline fun withToolFailure(action: () -> Unit) {
+            try {
+                action()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: PhoneToolException) {
+                throw e
+            } catch (e: Exception) {
+                throw PhoneToolException(e.message ?: "The phone couldn't do it.")
+            }
+        }
+
         /** Allow on question [key], from [activity]; false when nothing waits on it any more. */
         fun allow(key: String, activity: Activity): Boolean {
             val pending = waiting.remove(key) ?: return false
             asking.update { list -> list.filterNot { it.key == key } }
             try {
-                pending.action(activity)
+                withToolFailure { pending.action(activity) }
                 pending.done.complete(Unit)
             } catch (e: Exception) {
-                pending.done.completeExceptionally(PhoneToolException(e.message ?: "The phone couldn't do it."))
+                pending.done.completeExceptionally(e)
             }
             return true
         }

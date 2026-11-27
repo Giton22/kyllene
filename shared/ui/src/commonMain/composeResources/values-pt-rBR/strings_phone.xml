@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="phone_intro">Deixe o agente usar este celular: ver como ele está ou fazer algo nele. Cada ferramenta fica desligada até você ligá-la, e tudo o que muda o celular pergunta antes: no Kyllene enquanto ele está aberto e, se não, por uma notificação. Uma ferramenta que você desliga é tirada do agente na hora.</string>
+    <string name="phone_intro">As ferramentas ficam desativadas até você ativá-las. A leitura não pede aprovação. Você pode desativar o pedido de aprovação para ações compatíveis. Se o celular estiver bloqueado ou o Android exigir sua interação para abrir outro aplicativo, a ação ainda precisará de aprovação. As permissões do Android continuam valendo. Ao desativar uma ferramenta, o acesso é removido imediatamente.</string>
     <string name="phone_install_what">Oferece ao agente as ferramentas que você liga aqui e passa as chamadas delas para este celular.</string>
     <string name="phone_let_agent">Deixar o agente usar este celular</string>
     <string name="phone_set_up">Configurar no Gateway</string>
@@ -94,21 +94,21 @@
     <string name="phone_tool_network">Rede</string>
     <string name="phone_tool_network_detail">Wi-Fi, dados móveis ou sem conexão, se é tarifada e se há VPN.</string>
     <string name="phone_tool_sound">Som</string>
-    <string name="phone_tool_sound_detail">Não perturbe, o toque e os volumes. Uma mudança pergunta antes.</string>
+    <string name="phone_tool_sound_detail">Consultar ou alterar o modo Não perturbe, o toque e o volume.</string>
     <string name="phone_tool_alarms">Alarmes e timers</string>
-    <string name="phone_tool_alarms_detail">Define um no seu app de relógio quando você permite.</string>
+    <string name="phone_tool_alarms_detail">Definir alarmes e temporizadores no app de relógio.</string>
     <string name="phone_tool_screen_time">Tempo de tela</string>
     <string name="phone_tool_screen_time_detail">Quais apps você usou e por quanto tempo, o tempo de tela ligada e os desbloqueios, até uma semana atrás.</string>
     <string name="phone_tool_open">Abrir links, mapas e apps</string>
-    <string name="phone_tool_open_detail">Abre um link, um lugar, um app ou o menu de compartilhar quando você permite.</string>
+    <string name="phone_tool_open_detail">Abrir um link, um lugar, um app ou o menu de compartilhamento.</string>
     <string name="phone_tool_clipboard">Copiar para a área de transferência</string>
-    <string name="phone_tool_clipboard_detail">Coloca texto na sua área de transferência quando você permite. Nunca lê o que está lá.</string>
+    <string name="phone_tool_clipboard_detail">Copiar texto para a área de transferência sem ler o conteúdo existente.</string>
     <string name="phone_tool_location">Localização</string>
     <string name="phone_tool_location_detail">Onde o celular está e o endereço mais próximo, com a precisão que você permitir. Enquanto o Kyllene está aberto, a menos que você permita também com ele fechado.</string>
     <string name="phone_tool_geofences">Lugares monitorados</string>
-    <string name="phone_tool_geofences_detail">Chegar a um lugar ou sair dele envia a mensagem dele para a conversa de onde foi adicionado. Adicionar ou remover um pergunta antes; precisa de localização precisa o tempo todo.</string>
+    <string name="phone_tool_geofences_detail">Ao chegar a um lugar monitorado ou sair dele, envia a mensagem para a conversa em que ele foi adicionado. Requer localização precisa o tempo todo.</string>
     <string name="phone_tool_calendar">Agenda</string>
-    <string name="phone_tool_calendar_detail">Seus eventos num intervalo de tempo. Adicionar ou mover um pergunta antes.</string>
+    <string name="phone_tool_calendar_detail">Ler, adicionar ou mover eventos do calendário.</string>
     <string name="phone_tool_contacts">Contatos</string>
     <string name="phone_tool_contacts_detail">Busca pessoas por nome, número ou e-mail: só os nomes, números e e-mails delas, poucos de cada vez.</string>
     <string name="phone_tool_health">Saúde</string>
@@ -117,4 +117,10 @@
     <string name="phone_tool_show_ui_detail">O agente desenha uma pequena tela abaixo da resposta, com botões, opções ou um formulário, e espera seu toque por até 5 minutos. Só no Android.</string>
     <string name="phone_tool_call_me">O Hermes pode me ligar</string>
     <string name="phone_tool_call_me_detail">O agente liga para você quando algo não pode esperar ou quando você pede, inclusive a partir de uma tarefa agendada. Atenda e o Hermes diz o motivo na chamada. Só liga para você.</string>
+    <string name="phone_approval_sound">Exigir aprovação para mudar os controles de som</string>
+    <string name="phone_approval_alarms">Exigir aprovação para definir alarmes</string>
+    <string name="phone_approval_open">Exigir aprovação para abrir links, mapas e apps</string>
+    <string name="phone_approval_clipboard">Exigir aprovação para copiar texto</string>
+    <string name="phone_approval_geofences">Exigir aprovação para mudar lugares monitorados</string>
+    <string name="phone_approval_calendar">Exigir aprovação para mudar eventos do calendário</string>
 </resources>

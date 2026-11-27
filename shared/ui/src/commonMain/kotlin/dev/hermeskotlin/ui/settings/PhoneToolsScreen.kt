@@ -59,6 +59,7 @@ import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.phone.PhoneTool
 import dev.hermeskotlin.core.phone.PhoneToolUse
+import dev.hermeskotlin.core.phone.hasWriteConfirmation
 import dev.hermeskotlin.core.phone.PhoneToolsStatus
 import dev.hermeskotlin.core.phone.PhoneToolsStatus.State
 import dev.hermeskotlin.core.phone.WatchedPlace
@@ -120,6 +121,7 @@ fun PhoneToolsScreen(onBack: () -> Unit, viewModel: PhoneToolsViewModel = koinVi
             if (on && access.missing(tool) != null) access.request(tool)
         },
         onSetUp = viewModel::setUp,
+        onPermission = viewModel::setPermission,
         phones = phones,
         onMovePhone = viewModel::movePhone,
         onRemovePhone = viewModel::removePhone,
@@ -197,6 +199,7 @@ internal fun PhoneToolsView(
     onQuietFrom: (Int) -> Unit = {},
     onQuietUntil: (Int) -> Unit = {},
     nowMillis: Long = Clock.System.now().toEpochMilliseconds(),
+    onPermission: (PhoneTool, Boolean) -> Unit = { _, _ -> },
 ) {
     var removing by remember { mutableStateOf<KnownPhone?>(null) }
     // Which end of quiet hours is being picked: true for the start.
@@ -287,6 +290,10 @@ internal fun PhoneToolsView(
                             if (more != null) {
                                 Divider()
                                 ActionRow(stringResource(more), Lucide.ShieldCheck) { onAllowOptional(tool) }
+                            }
+                            if (tool.hasWriteConfirmation) {
+                                Divider()
+                                PhoneToolPermissionRow(tool, settings, onPermission)
                             }
                         }
                     }

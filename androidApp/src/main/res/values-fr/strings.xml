@@ -90,6 +90,7 @@
     <string name="phone_allow">Autoriser</string>
     <string name="phone_deny">Refuser</string>
     <string name="phone_question_change">L’agent veut modifier votre téléphone</string>
+    <string name="phone_unlock_before_approval">Déverrouillez votre téléphone avant d’approuver cette action.</string>
     <string name="phone_list_separator">", "</string>
     <string name="phone_sentence">%1$s.</string>
 
