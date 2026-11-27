@@ -3554,14 +3554,34 @@ private fun String.containsJoinedCommentary(update: String): Boolean {
     while (start >= 0) {
         val end = start + update.length
         val startsAtBoundary = startsWith("\n\n", start - 2) ||
-            (start > 0 && this[start - 1] in ".!?" && startsJoinedSentence(start))
+            (start > 0 && this[start - 1] in ".!?" && startsJoinedSentence(start)) ||
+            (startsSpacedSentence(start) && followsSentenceEnd(start))
         val endsAtBoundary = startsWith("\n\n", end) ||
-            (update.last() in ".!?" && startsJoinedSentence(end))
+            (update.last() in ".!?" && (startsJoinedSentence(end) || startsSentenceAfterSpaces(end)))
         if (startsAtBoundary && endsAtBoundary) return true
         start = indexOf(update, start + 1)
     }
     return false
 }
+
+/** Whether a sentence ends just before [at], with spaces or one line break between ("Looking. Checking."). */
+private fun String.followsSentenceEnd(at: Int): Boolean {
+    var i = at - 1
+    var breaks = 0
+    while (i >= 0 && this[i].isWhitespace() && (this[i] != '\n' || ++breaks == 1)) i--
+    return i in 0..<at - 1 && this[i] in ".!?"
+}
+
+/** Whether a sentence starts after [at] past spaces or one line break ("Checking. Done."). */
+private fun String.startsSentenceAfterSpaces(at: Int): Boolean {
+    var i = at
+    var breaks = 0
+    while (i < length && this[i].isWhitespace() && (this[i] != '\n' || ++breaks == 1)) i++
+    return i > at && startsSpacedSentence(i)
+}
+
+// Past a space a dotted suffix can't be meant, so an acronym ("CI is green.") or a number starts a sentence too.
+private fun String.startsSpacedSentence(at: Int): Boolean = getOrNull(at)?.let { it.isUpperCase() || it.isDigit() } == true
 
 // Leave uppercase suffixes such as a dotted ".COM" alone.
 private fun String.startsJoinedSentence(at: Int): Boolean =

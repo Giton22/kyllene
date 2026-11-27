@@ -353,6 +353,11 @@ class ChatSessionResumeTest {
             "Checking.Done." to emptyList(),
             "Earlier.Checking.\n\nDone." to emptyList(),
             "Earlier.Checking.Done." to emptyList(),
+            "Earlier. Checking. Done." to emptyList(),
+            "Earlier.\nChecking.\n\nDone." to emptyList(),
+            "Earlier. Checking. CI is green." to emptyList(),
+            "Earlier. Checking. 3 suites ran." to emptyList(),
+            "e.g. checking. Done." to listOf("Checking."),
             "Checking.com" to listOf("Checking."),
             "Checking.COM" to listOf("Checking."),
             "See https://example.Checking.Com/path" to listOf("Checking."),
@@ -368,6 +373,17 @@ class ChatSessionResumeTest {
             assertEquals(text, reply.text)
             assertEquals(expected, reply.commentary, text)
         }
+    }
+
+    @Test
+    fun savedCommentaryTheStreamAlreadyShowsIsntRepeated() {
+        // The stream had it as reply text (message.interim), spaced and line-ended its own way.
+        val saved = ChatMessage.Assistant("s1", commentary = listOf("Step one.\r\n\r\nStep two.", "Not streamed yet."), timestamp = 101.0)
+        val live = ChatMessage.Assistant("live-0", text = "Looking. Step one.\n\nStep two.\n\nStill going.", streaming = true)
+
+        val reply = (listOf(saved, live).withSavedStepsInLiveReply(100.0, "Looking.", turnReplyKey = "live-0").single()) as ChatMessage.Assistant
+
+        assertEquals(listOf("Not streamed yet."), reply.commentary)
     }
 
     @Test

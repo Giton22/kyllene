@@ -130,6 +130,8 @@ class DesktopUxTest {
         assertEquals(listOf(0, 1), findMatches(messages, " api "))
         assertEquals(emptyList(), findMatches(messages, ""))
         assertEquals(listOf(2), findMatches(messages, "model"))
+        // Saved commentary is shown in the transcript, so it's found there too.
+        assertEquals(listOf(0), findMatches(listOf(ChatMessage.Assistant("a2", commentary = listOf("Checking the logs."))), "logs"))
     }
 
     @Test
