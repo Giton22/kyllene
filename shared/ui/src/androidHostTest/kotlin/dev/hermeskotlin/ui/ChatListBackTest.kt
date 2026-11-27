@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -23,6 +24,8 @@ import dev.hermeskotlin.designsystem.components.rememberSidebarState
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
@@ -51,6 +54,7 @@ class ChatListBackTest {
     val rules: TestRule = RuleChain.outerRule(RegisterHostActivity()).around(composeRule)
 
     private lateinit var sidebar: SidebarState
+    private lateinit var scope: CoroutineScope
 
     /** The home's layout: the list in the sidebar, the chat beside it, Back handled as [Home] does. */
     private fun showHome(
@@ -62,6 +66,7 @@ class ChatListBackTest {
         composeRule.setContent {
             HermesTheme(ColorScheme.Light) {
                 sidebar = rememberSidebarState()
+                scope = rememberCoroutineScope()
                 SidebarLayout(state = sidebar, sidebar = { Text("Chats") }, dockedBreakpoint = docksFrom) {
                     Box(Modifier.fillMaxSize()) { Text("Chat") }
                 }
@@ -143,11 +148,14 @@ class ChatListBackTest {
     @Test
     fun aDockedSidebarKeepsBackAsItWas() {
         showHome(docksFrom = 0.dp)
-        val wasOpen = sidebar.isOpen
+        // Folded away beside the chat, as a closed drawer would be.
+        composeRule.runOnIdle { scope.launch { sidebar.close() } }
+        composeRule.waitForIdle()
+        assertFalse(sidebar.isOpen)
 
         back()
 
-        assertEquals(wasOpen, sidebar.isOpen)
+        assertFalse(sidebar.isOpen)
         assertTrue(composeRule.activity.isFinishing)
     }
 

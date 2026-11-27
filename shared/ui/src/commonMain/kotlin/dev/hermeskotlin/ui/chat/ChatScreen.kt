@@ -1,6 +1,7 @@
 package dev.hermeskotlin.ui.chat
 
 import dev.hermeskotlin.ui.gateways.savedLabel
+import dev.hermeskotlin.ui.PlatformBackHandler
 import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
@@ -596,6 +597,8 @@ fun ChatScreen(
     val modelPillBounds = remember { mutableStateOf<Rect?>(null) }
     val conversationKey = Triple(target.gateway.gatewayUrl, target.profile, target.storedSessionId)
     val editing = viewModel.editing.collectAsStateWithLifecycle().value
+    // On a phone, Back leaves an edit as Esc does on the desktop, before the chat list behind the chat takes it.
+    PlatformBackHandler(enabled = !isDesktop && editing != null) { viewModel.cancelEdit() }
     val imagePaste = if (ownsTranscript && connected && keysEnabled && !dialogOpen && editing == null &&
         attachments.size < OutgoingAttachment.MAX_COUNT
     ) attachmentPicker.imagePasteModifier { read -> viewModel.pasteImages(target, read) } else Modifier
