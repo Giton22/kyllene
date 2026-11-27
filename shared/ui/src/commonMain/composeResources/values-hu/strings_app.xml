@@ -293,6 +293,8 @@
     <string name="signin_with_browser">Bejelentkezés böngészővel</string>
     <string name="signin_waiting_browser">Várakozás a böngészőre…</string>
     <string name="signin_finish_in_browser">Fejezd be a bejelentkezést a megnyílt oldalon. A Kyllene magától visszatér, ha végeztél.</string>
+    <string name="signin_battery_restricted">A Kyllene akkumulátorhasználata Korlátozott, ezért az Android nem engedi, hogy a böngésző visszaadja a bejelentkezést. Engedélyezd a háttérhasználatot, aztán gyere vissza ide.</string>
+    <string name="signin_battery_settings">Akkumulátor-beállítások</string>
     <string name="signin_different_gateway">Másik Gateway használata</string>
     <string name="signin_gateway_chip">Gateway: %1$s</string>
     <string name="signin_or">vagy</string>

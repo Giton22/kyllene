@@ -290,6 +290,8 @@
     <string name="signin_with_browser">用浏览器登录</string>
     <string name="signin_waiting_browser">正在等待浏览器…</string>
     <string name="signin_finish_in_browser">在打开的页面中完成登录。完成后 Kyllene 会自动返回。</string>
+    <string name="signin_battery_restricted">Kyllene 的电池用量设为“受限”，因此 Android 不允许浏览器把登录交回给 Kyllene。请允许后台使用，然后回到这里。</string>
+    <string name="signin_battery_settings">电池设置</string>
     <string name="signin_different_gateway">使用其他网关</string>
     <string name="signin_gateway_chip">网关 %1$s</string>
     <string name="signin_or">或</string>

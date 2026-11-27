@@ -299,6 +299,8 @@
     <string name="signin_with_browser">Sign in with browser</string>
     <string name="signin_waiting_browser">Waiting for the browser…</string>
     <string name="signin_finish_in_browser">Finish signing in on the page that opened. Kyllene comes back by itself when you’re done.</string>
+    <string name="signin_battery_restricted">Battery usage for Kyllene is Restricted, so Android won’t let the browser hand the sign-in back. Allow background use, then come back here.</string>
+    <string name="signin_battery_settings">Battery settings</string>
     <string name="signin_different_gateway">Use a different gateway</string>
     <string name="signin_gateway_chip">Gateway %1$s</string>
     <string name="signin_or">or</string>
