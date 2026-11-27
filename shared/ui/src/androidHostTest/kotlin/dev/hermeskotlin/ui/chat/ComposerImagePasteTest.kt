@@ -159,10 +159,12 @@ class ComposerImagePasteTest {
         val input = showChat()
         composeRule.runOnIdle { assertTrue(input.commitText("Keep this draft", 1)) }
         composeRule.onNodeWithText("Hermes · fixture.example").assertExists()
+        composeRule.onNodeWithText("Hermes on fixture.example · default profile").assertExists()
 
         runBlocking { gateways.rename(gateway.url, "Homelab") }
 
         composeRule.onNodeWithText("Hermes · Homelab").assertExists()
+        composeRule.onNodeWithText("Hermes on Homelab · default profile").assertExists()
         composeRule.onNodeWithText("Paste test").assertExists()
         composeRule.runOnIdle { assertEquals("Keep this draft", viewModel.composer.text.toString()) }
         assertEquals(1, socket.methods.count { it == "session.resume" })
