@@ -2338,7 +2338,7 @@ private fun Messages(
                             if (to != null && !message.streaming) RepliedToFold(to, message.text, reply) else reply()
                         }
                         is ChatMessage.Event -> TranscriptEventRow(message.event)
-                        is ChatMessage.Command -> CommandOutput(message)
+                        is ChatMessage.Command -> CommandOutput(message) { actions.dismissSideCard(message) }
                         is ChatMessage.Notice -> NoticeLine(message)
                     }
                     }
@@ -3436,7 +3436,7 @@ internal const val UNREAD_PAGE_LIMIT = 5
 
 /** A slash command and what it printed: a quiet outlined card in the terminal face, local to this device. */
 @Composable
-private fun CommandOutput(message: ChatMessage.Command) {
+private fun CommandOutput(message: ChatMessage.Command, onDismiss: () -> Unit) {
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
     Column(
         Modifier
@@ -3455,6 +3455,9 @@ private fun CommandOutput(message: ChatMessage.Command) {
                 modifier = Modifier.weight(1f),
             )
             if (message.running) Spinner(Modifier.size(12.dp))
+            if (message.canDismiss) {
+                IconButton(Lucide.X, contentDescription = stringResource(Res.string.chat_dismiss), onClick = onDismiss)
+            }
         }
         if (message.output.isNotEmpty()) {
             val source = remember(message.key, message.command) {

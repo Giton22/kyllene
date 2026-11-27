@@ -73,7 +73,9 @@ class ChatHost(
     private var sessionScope: CoroutineScope? = null
 
     /** Each closed chat's `/btw` and `/bg` cards, by gateway, profile and stored id, to show again when it reopens. */
-    private val sideTasks = mutableMapOf<Triple<GatewayUrl, String?, String>, List<ChatMessage.Command>>()
+    private val sideTasks = mutableMapOf<Triple<GatewayUrl, String?, String>, SideTasks>()
+
+    private data class SideTasks(val cards: List<ChatMessage.Command>, val dismissedIds: Set<String>)
 
     /**
      * The session for [storedSessionId] on [gateway] and [profile]: the open one when it is already that
@@ -93,8 +95,12 @@ class ChatHost(
         this.gateway = gateway
         this.profile = profile
         sessionScope = childScope
-        val cards = storedSessionId?.let { sideTasks.remove(Triple(gateway, profile, it)) }.orEmpty()
-        return ChatSession(gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache, sideTasks = cards, startInstruction = startInstruction, ownerVersion = _ownerVersion.value)
+        val kept = storedSessionId?.let { sideTasks.remove(Triple(gateway, profile, it)) }
+        return ChatSession(
+            gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache,
+            sideTasks = kept?.cards.orEmpty(), startInstruction = startInstruction, ownerVersion = _ownerVersion.value,
+            dismissedSideTaskIds = kept?.dismissedIds.orEmpty(),
+        )
             .also { it.start() }
             .also { _session.value = it }
     }
@@ -114,8 +120,8 @@ class ChatHost(
         // A quick answer can beat the task id onto its card and add a second one; keep the answered card.
         val cards = state.messages.filterIsInstance<ChatMessage.Command>().filter { it.taskId != null }
             .groupBy { it.taskId }.values.map { same -> same.firstOrNull { !it.running } ?: same.first() }
-        if (cards.isEmpty()) return
-        sideTasks[Triple(openGateway, profile, storedId)] = cards
+        if (cards.isEmpty() && state.dismissedSideTaskIds.isEmpty()) return
+        sideTasks[Triple(openGateway, profile, storedId)] = SideTasks(cards, state.dismissedSideTaskIds)
         if (sideTasks.size > KEPT_CHATS) sideTasks.remove(sideTasks.keys.first())
     }
 

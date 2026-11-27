@@ -170,7 +170,10 @@ sealed interface ChatMessage {
         val failed: Boolean = false,
         /** The side task answering a `/btw` or `/bg`, whose `btw.complete` / `background.complete` fills [output] in. */
         val taskId: String? = null,
-    ) : ChatMessage
+    ) : ChatMessage {
+        val canDismiss: Boolean
+            get() = !running && (taskId != null || command.startsWith("/btw ") || command.startsWith("/bg "))
+    }
 }
 
 sealed interface Attachment {
@@ -222,6 +225,7 @@ data class ChatState(
     /** An older page is being read. */
     val loadingOlder: Boolean = false,
     val messages: List<ChatMessage> = emptyList(),
+    internal val dismissedSideTaskIds: Set<String> = emptySet(),
     val attachment: Attachment = Attachment.Detached,
     val replyReactionsSupported: Boolean = true,
     /** A turn is running on the gateway (ours or one started elsewhere). */

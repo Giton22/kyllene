@@ -211,6 +211,7 @@ private fun ChatState.answerSideTask(payload: JsonObject?, command: String): Cha
 
 /** Puts [text] on the card for [taskId], or on a new one under [command]; [asked] is a `/btw`'s question. */
 internal fun ChatState.answerSideTask(taskId: String?, text: String, command: String, failed: Boolean = false, asked: String? = null): ChatState {
+    if (taskId in dismissedSideTaskIds) return this
     val index = messages.indexOfFirst { it is ChatMessage.Command && it.taskId != null && it.taskId == taskId }
     if (index >= 0) {
         val card = messages[index] as ChatMessage.Command

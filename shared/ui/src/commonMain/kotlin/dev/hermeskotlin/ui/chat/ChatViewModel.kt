@@ -1619,6 +1619,11 @@ class ChatViewModel(
         session.value?.dismissNotice(key)
     }
 
+    override fun dismissSideCard(card: ChatMessage.Command) {
+        val chat = session.value ?: return
+        if (chat === host.session.value && chat.ownerVersion == host.ownerVersion.value) chat.dismissSideCard(card)
+    }
+
     override fun skipSpeech() = voice.skipSpeech()
 
     override fun sendVoiceNow() = voice.sendNow()

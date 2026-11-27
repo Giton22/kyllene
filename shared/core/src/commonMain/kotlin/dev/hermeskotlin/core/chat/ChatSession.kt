@@ -91,11 +91,15 @@ class ChatSession(
     private val startInstruction: () -> String? = { null },
     /** The host's account/profile lifetime when this source was created, even if a collector starts later. */
     val ownerVersion: Long = 0,
+    dismissedSideTaskIds: Set<String> = emptySet(),
 ) {
     private fun nowSeconds(): Double = clock.now().toEpochMilliseconds() / 1000.0
 
     private val _state = MutableStateFlow(
-        ChatState(storedSessionId = initialStoredId, title = initialTitle, messages = sideTasks.map(::reopenedSideTask)),
+        ChatState(
+            storedSessionId = initialStoredId, title = initialTitle, messages = sideTasks.map(::reopenedSideTask),
+            dismissedSideTaskIds = dismissedSideTaskIds,
+        ),
     )
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
@@ -1646,7 +1650,13 @@ class ChatSession(
             val taskId = (client.request(method, buildJsonObject { put("session_id", runtimeId); put("text", text) }) as? JsonObject)
                 .string("task_id")
             _state.update { state ->
-                state.copy(messages = state.messages.map { if (it is ChatMessage.Command && it.key == key) it.copy(taskId = taskId) else it })
+                state.copy(messages = state.messages.mapNotNull {
+                    when {
+                        it !is ChatMessage.Command || it.key != key -> it
+                        taskId in state.dismissedSideTaskIds -> null
+                        else -> it.copy(taskId = taskId)
+                    }
+                })
             }
             if (taskId != null && command == "/bg") scope.launch { followBackgroundTask(taskId) }
         } catch (e: CancellationException) {
@@ -2543,6 +2553,15 @@ class ChatSession(
 
     /** Hides a gateway notice on this phone (its ×). The gateway isn't told. */
     fun dismissNotice(key: String) = _state.update { it.withoutNotice(key) }
+
+    fun dismissSideCard(card: ChatMessage.Command) = _state.update { state ->
+        if (!card.canDismiss || state.messages.none { it === card }) return@update state
+        val taskId = card.taskId
+        state.copy(
+            messages = state.messages.filterNot { it === card || (taskId != null && it is ChatMessage.Command && it.taskId == taskId) },
+            dismissedSideTaskIds = if (taskId == null) state.dismissedSideTaskIds else state.dismissedSideTaskIds + taskId,
+        )
+    }
 
     /** Shows a title set elsewhere (a REST rename) without waiting for the gateway to echo it. */
     fun showTitle(title: String?) = _state.update { it.copy(title = title) }
