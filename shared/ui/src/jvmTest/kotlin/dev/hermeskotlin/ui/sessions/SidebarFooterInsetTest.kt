@@ -31,6 +31,7 @@ import dev.hermeskotlin.designsystem.AccentPalette
 import dev.hermeskotlin.designsystem.LocalDesktopLayout
 import dev.hermeskotlin.designsystem.hermesTheme
 import dev.hermeskotlin.ui.bots.BotsUiState
+import dev.hermeskotlin.ui.inbox.Words
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -208,6 +209,17 @@ class SidebarFooterInsetTest {
             val last = bounds("Sample bot 39")
             val footer = footerTop(density)
             assertTrue(last.bottom <= footer + 1, "the last card ends at ${last.bottom}px, under the footer at ${footer}px (density $density)")
+        }
+    }
+
+    /** A failed bot action's notice sits just above the desktop's footer, as it does above the phone's. */
+    @Test
+    fun theBotsNoticeSitsJustAboveTheFooter() {
+        for (density in DENSITIES) sidebar(density, 620) {
+            setContent { Desktop { BotsSidebarSample(bots(3).copy(notice = Words.Raw("Sample notice")), userLabel = "user", nowSeconds = base) } }
+            waitForIdle()
+            val gap = (footerTop(density) - bounds("Sample notice").bottom) / density
+            assertTrue(gap in 0f..16f, "the notice ends ${gap}dp above the footer (density $density)")
         }
     }
 

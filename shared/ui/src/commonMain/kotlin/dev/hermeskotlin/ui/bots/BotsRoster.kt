@@ -366,7 +366,7 @@ fun BotsRoster(
         }
         VerticalScrollbar(list, Modifier.align(Alignment.TopEnd).fillMaxHeight().padding(top = 2.dp, bottom = LocalFooterInset.current, end = 1.dp))
         state.notice?.let { message ->
-            MessageBanner(message.text(), onDismiss = onDismissNotice, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 88.dp))
+            MessageBanner(message.text(), onDismiss = onDismissNotice, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = LocalFooterInset.current - 8.dp))
         }
     }
     StartOverDialog(startOver, onDismiss = { startOver = null }, onConfirm = actions::startFresh)
