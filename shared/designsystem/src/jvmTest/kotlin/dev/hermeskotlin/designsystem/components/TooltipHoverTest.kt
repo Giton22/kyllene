@@ -53,4 +53,30 @@ class TooltipHoverTest {
         mainClock.advanceTimeBy(64)
         label.assertDoesNotExist()
     }
+
+    @Test
+    fun aLabelTooTallForEitherSideStillLeavesTheButtonClear() = runSkikoComposeUiTest(size = Size(360f, 240f), testTimeout = 10.seconds) {
+        val long = List(80) { "word" }.joinToString(" ")
+        setContent {
+            hermesTheme(AccentPalette.Blue)(ColorScheme.Light) {
+                Box(Modifier.fillMaxSize().padding(top = 60.dp), contentAlignment = Alignment.TopCenter) {
+                    Tooltip(long) {
+                        Box(Modifier.size(40.dp).testTag("button"))
+                    }
+                }
+            }
+        }
+
+        val button = onNodeWithTag("button")
+        val buttonBounds = button.fetchSemanticsNode().boundsInWindow
+        mainClock.autoAdvance = false
+        button.performMouseInput { moveTo(center) }
+        mainClock.advanceTimeBy(600)
+        val labelBounds = onNodeWithText(long).fetchSemanticsNode().boundsInWindow
+        assertTrue(labelBounds.height > buttonBounds.top, "The label must be too tall for the room above")
+        assertTrue(labelBounds.top >= buttonBounds.bottom || labelBounds.bottom <= buttonBounds.top, "The tooltip must not cover the hovered button")
+
+        mainClock.advanceTimeBy(500)
+        onNodeWithText(long).assertExists()
+    }
 }

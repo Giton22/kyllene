@@ -68,13 +68,23 @@ actual fun Tooltip(text: String, modifier: Modifier, content: @Composable () -> 
     }
 }
 
-/** Centred under the element, [gap] below it; above it when there's no room beneath; kept inside the window. */
+/**
+ * Centred under the element, [gap] below it; above it when there's no room beneath; kept inside the window across.
+ * Too tall for either side, it goes to the roomier one and the window cuts it off, never over the element, which it
+ * would take the hover from.
+ */
 private class UnderAnchor(private val gap: Int) : PopupPositionProvider {
     override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
         val x = (anchorBounds.center.x - popupContentSize.width / 2).coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
         val under = anchorBounds.bottom + gap
-        val y = if (under + popupContentSize.height <= windowSize.height) under else anchorBounds.top - gap - popupContentSize.height
-        return IntOffset(x, y.coerceAtLeast(0))
+        val over = anchorBounds.top - gap - popupContentSize.height
+        val y = when {
+            under + popupContentSize.height <= windowSize.height -> under
+            over >= 0 -> over
+            windowSize.height - under >= anchorBounds.top -> under
+            else -> over
+        }
+        return IntOffset(x, y)
     }
 }
 
