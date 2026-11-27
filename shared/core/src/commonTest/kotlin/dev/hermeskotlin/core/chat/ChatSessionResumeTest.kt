@@ -687,6 +687,60 @@ class ChatSessionResumeTest {
         assertEquals("2", transports.last().sent.value.first { it.isCall("session.events.since") }.param("last_seen"))
     }
 
+    /**
+     * A chat created here running its own turn: a segment, then a tool, streamed (seqs 1-4). [since] answers
+     * `session.events.since`.
+     */
+    private suspend fun ownTurnPastATool(scope: CoroutineScope, since: String): Pair<ChatSession, FakeTransport> {
+        answer = { _, method, _ ->
+            when (method) {
+                "session.create" -> """{"session_id":"rt1","stored_session_id":"stored-1","info":{}}"""
+                "prompt.submit" -> """{"status":"streaming"}"""
+                "session.events.since" -> since
+                else -> "{}"
+            }
+        }
+        val (connection, transports) = connect(scope)
+        connection.state.first { it is ConnectionState.Connected }
+        val chat = ChatSession(url, null, null, connection, SessionsApi(scope.client()), scope)
+        chat.start()
+        assertTrue(chat.send("hi"))
+        val socket = transports.last()
+        socket.push(event("message.start", 1))
+        socket.push(delta(2, "Looking it up."))
+        socket.push(event("tool.start", 3, """{"tool_id":"t1","name":"terminal","context":"ls"}"""))
+        socket.push(event("tool.complete", 4, """{"tool_id":"t1","name":"terminal","summary":"ok"}"""))
+        chat.state.first { s -> s.messages.any { it is ChatMessage.Assistant && it.tools.any { t -> t.id == "t1" && !t.running } } }
+        return chat to socket
+    }
+
+    @Test
+    fun aFinalWhoseDeltasFellInAGapTheRingCantFillStillShows() = runTest {
+        // The final response's deltas (seqs 5-7) never arrive and can't be replayed; only the turn's end does.
+        val (chat, socket) = ownTurnPastATool(backgroundScope, since(latest = 99, truncated = true))
+
+        socket.push(event("message.complete", 8, """{"text":"Found it.","status":"complete"}"""))
+
+        val done = chat.state.first { !it.running && it.replies("Found it.").isNotEmpty() }
+        val reply = done.replies("Found it.").single()
+        assertEquals("Looking it up.\n\nFound it.", reply.text)
+        assertEquals(listOf("t1"), reply.tools.map { it.id })
+    }
+
+    @Test
+    fun aFinalMissedWhileOutOfSightShowsWhenTheTurnEnds() = runTest {
+        // Back in sight mid-turn, the replay fails, so the reply goes on from what showed; the final never streamed here.
+        val (chat, socket) = ownTurnPastATool(backgroundScope, since(latest = 99, truncated = true))
+
+        chat.resync()
+        socket.awaitSent { it.isCall("session.events.since") }
+        testScheduler.runCurrent()
+        socket.push(event("message.complete", 9, """{"text":"Found it.","status":"complete"}"""))
+
+        val done = chat.state.first { !it.running && it.replies("Found it.").isNotEmpty() }
+        assertEquals("Looking it up.\n\nFound it.", done.replies("Found it.").single().text)
+    }
+
     @Test
     fun aGapInTheLiveStreamIsFilledBeforeWhatFollowsIt() = runTest {
         answer = { _, method, _ ->

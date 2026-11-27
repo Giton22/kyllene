@@ -179,6 +179,42 @@ class ReplayGapTest {
     }
 
     @Test
+    fun aFinalLostInTheGapShowsOnceWhenOurTurnEnds() = runTest(timeout = 5.seconds) {
+        val gw = FakeGateway(backgroundScope, reconnects = false)
+        val authority = gw.authority()
+        authority.running = false
+        val chat = gw.chat(backgroundScope)
+        chat.start()
+        chat.state.first { it.attachment is Attachment.Attached }
+        assertTrue(chat.send("hi"))
+        authority.running = true
+        authority.subscribed = true
+        authority.publish("message.start", "{}")
+        authority.publish("message.delta", """{"text":"Looking it up."}""")
+        authority.publish("message.delta", """{"text":null}""")
+        authority.publish("tool.start", """{"tool_id":"t1","name":"terminal","context":"ls"}""")
+        authority.publish("tool.complete", """{"tool_id":"t1","name":"terminal","summary":"ok"}""")
+        chat.state.first { s -> s.messages.any { it is ChatMessage.Assistant && it.tools.any { t -> t.id == "t1" && !t.running } } }
+
+        // The final response streams into the hole; the turn's end arrives once subscribed again.
+        authority.overflow(replayGap("stored-1", "sess-e1", authority.seq))
+        authority.publish("message.delta", """{"text":"\n\nFound it."}""")
+        assertNotNull(withTimeoutOrNull(30.seconds) { gw.socket.sent.first { list -> list.count { it.isResume() } >= 2 } })
+        chat.state.first { it.attachment is Attachment.Attached && it.running }
+        authority.history = """{"session_id":"stored-1","messages":[
+            {"id":1,"role":"user","content":"hi","timestamp":1},
+            {"id":2,"role":"assistant","content":"Looking it up.","timestamp":2,"tool_calls":[{"id":"t1","type":"function","function":{"name":"terminal","arguments":"{}"}}]},
+            {"id":3,"role":"tool","tool_call_id":"t1","content":"ok","timestamp":2},
+            {"id":4,"role":"assistant","content":"Found it.","timestamp":3}]}"""
+        authority.running = false
+        authority.publish("message.complete", """{"text":"Found it.","status":"complete"}""")
+
+        val done = chat.state.first { s -> !s.running && s.messages.any { it is ChatMessage.Assistant && "Found it." in it.text } }
+        val shown = done.messages.filterIsInstance<ChatMessage.Assistant>().joinToString("\n") { it.text }
+        assertEquals(1, Regex("Found it\\.").findAll(shown).count(), shown)
+    }
+
+    @Test
     fun aTurnThatEndsWhileTheGapResumeReadsTheTranscriptStopsRunning() = runTest(timeout = 5.seconds) {
         val gw = FakeGateway(backgroundScope, reconnects = false)
         val authority = gw.authority()

@@ -32,7 +32,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
         "message.interim" ->
             // Text next to tool calls; when already streamed it is in the text already. The event doesn't say whether
             // it's Codex commentary or a step's own text, so it stays text.
-            if (payload.boolean("already_streamed") == true) this else appendText(payload.string("text")?.let { "$it\n\n" })
+            if (payload.boolean("already_streamed") == true) this else appendText(payload.string("text")?.let { "$it\n\n" }).markResponseStart()
         "reasoning.delta", "reasoning.available" -> payload.string("text")?.let { chunk ->
             withOpenReply { it.copy(reasoning = it.reasoning + chunk) }
         } ?: this
@@ -53,6 +53,7 @@ fun ChatState.reduce(event: GatewayEvent, now: Double? = null): ChatState {
             ).let { if (it.name == DELEGATE_TOOL) it.copy(tasks = delegatedTasks(payload?.get("args"), null)) else it }
             withOpenReply { reply -> reply.copy(tools = reply.tools.filterNot { it.id == id } + tool) }
                 .copy(running = true, thinkingFrame = null)
+                .markResponseStart()
         }
         // The model is still writing the call's arguments; say what's coming.
         "tool.generating" -> payload.string("name")?.let { copy(thinkingFrame = "preparing $it…") } ?: this
@@ -229,9 +230,20 @@ private fun ChatState.complete(payload: JsonObject?, now: Double?): ChatState {
         ?: if (finalText.isBlank() && error == null && warning == null) return endTurn(messages, finalUsage) else messages.size
     val base = messages.getOrNull(index) as? ChatMessage.Assistant ?: ChatMessage.Assistant(key = "live-$keySeq")
     val reply = base.copy(
-        // Prefer what streamed (it includes interim segments); fall back to the final text for
-        // non-streaming providers or when we joined after the deltas.
-        text = base.text.ifBlank { finalText },
+        // What streamed holds every segment, so it stays. A completed turn's final text is its last response, which
+        // fills in what didn't stream (a non-streaming provider, deltas missed). A stopped or failed turn's may be the
+        // whole reply kept so far, so it only stands in for nothing.
+        text = if (outcome == TurnOutcome.Complete) {
+            withFinalResponse(
+                text = base.text,
+                final = finalText,
+                start = responseStart?.takeIf { it.replyKey == base.key }?.offset,
+                shown = payload.boolean("response_previewed") == true || payload.boolean("response_reused") == true,
+                transformed = payload.boolean("response_transformed") == true,
+            )
+        } else {
+            base.text.ifBlank { finalText }
+        },
         reasoning = base.reasoning.ifBlank { finalReasoning },
         tools = base.tools.map { it.copy(running = false) },
         streaming = false,
@@ -279,10 +291,76 @@ private fun ChatState.endTurn(messages: List<ChatMessage>, finalUsage: SessionUs
     thinkingFrame = null,
     messages = messages,
     correctedReplyKey = null,
+    responseStart = null,
     todosLive = false,
     usage = finalUsage ?: usage,
     turnStartUsage = null,
 )
+
+/**
+ * The open reply's text from here on is a new response: a tool was called, or text beside the calls was added whole.
+ * Every delta after it, until the next one, is the same response, which `message.complete` sends again.
+ */
+private fun ChatState.markResponseStart(): ChatState {
+    val reply = messages.getOrNull(messages.openReplyIndex()) as? ChatMessage.Assistant ?: return this
+    return copy(responseStart = ResponseStart(reply.key, reply.text.length))
+}
+
+/**
+ * A completed reply's [text] with its last response, [final] (`message.complete` `text`), in place. Hermes sends the
+ * response after the last tool there (v0.22.0 to v0.23.4 tui_gateway/prompt_turn.py `_turn_outcome`, and the session
+ * authority's settled `response`), and Desktop merges it in as that response, so deltas that never arrived (a gap
+ * the replay couldn't fill, a plugin that held the stream) don't cost the answer. [start] is where that response
+ * begins in [text] ([ChatState.responseStart]), null when unknown (a reply rebuilt from the gateway's copy).
+ * [shown]: the gateway says the response already showed (`response_previewed`, `response_reused`). [transformed]: a
+ * plugin rewrote it after it streamed (`response_transformed`), so it replaces what did.
+ */
+internal fun withFinalResponse(text: String, final: String, start: Int?, shown: Boolean, transformed: Boolean): String {
+    if (final.isBlank()) return text
+    if (text.isBlank()) return final
+    val at = start?.coerceIn(0, text.length)
+    val head = if (at == null) "" else text.substring(0, at)
+    val current = if (at == null) text else text.substring(at)
+    // A final that repeats the earlier segments too carries only what's after them.
+    val response = final.trim().let { whole ->
+        val earlier = head.trim()
+        if (earlier.isNotEmpty() && whole.startsWith(earlier)) whole.removePrefix(earlier).trim() else whole
+    }
+    if (response.isEmpty()) return text
+    val wanted = response.collapsedSpaces()
+    val streamed = current.collapsedSpaces()
+    // It streamed (spacing aside), or came as text beside the calls, or was sent twice. Delivery may also have dropped
+    // a trailing silence marker that streamed (Bot Mode).
+    if (text.collapsedSpaces().endsWith(wanted) || (streamed.startsWith(wanted) && !transformed)) return text
+    if (shown && text.collapsedSpaces().contains(wanted)) return text
+    val lead = current.takeWhile { it.isWhitespace() }
+    return when {
+        // None of it streamed, or only its start.
+        current.isBlank() -> afterSegments(head, "", response)
+        response.startsWith(current.trim()) -> afterSegments(head, lead, response)
+        at != null && transformed -> afterSegments(head, lead, response)
+        // Shown earlier in the reply, which this one can't place.
+        text.collapsedSpaces().contains(wanted) -> text
+        else -> {
+            // Where it begins isn't known, so it goes last; a start of it that streamed there gives way to it whole.
+            val paragraph = text.lastIndexOf("\n\n")
+            val tail = if (paragraph < 0) "" else text.substring(paragraph).trim()
+            if (tail.isNotEmpty() && response.startsWith(tail)) text.substring(0, paragraph) + "\n\n" + response
+            else "${text.trimEnd()}\n\n$response"
+        }
+    }
+}
+
+/** [response] after the reply's earlier segments, a blank line apart unless the text before already breaks. */
+private fun afterSegments(head: String, lead: String, response: String): String = when {
+    head.isBlank() -> response
+    '\n' in lead || head.endsWith('\n') -> head + lead + response
+    else -> "${head.trimEnd()}\n\n$response"
+}
+
+private fun String.collapsedSpaces(): String = WHITESPACE.replace(this, " ").trim()
+
+private val WHITESPACE = Regex("""\s+""")
 
 /** The reply still streaming. Not necessarily last: a prompt queued mid-turn sits after it. */
 private fun List<ChatMessage>.openReplyIndex(): Int = indexOfLast { it is ChatMessage.Assistant && it.streaming }
@@ -336,8 +414,10 @@ private fun ChatState.withOpenReply(change: (ChatMessage.Assistant) -> ChatMessa
     return if (index >= 0) {
         copy(messages = messages.toMutableList().apply { set(index, change(get(index) as ChatMessage.Assistant)) })
     } else {
+        // A reply opened here holds only what arrives from now on: its text is all one response until a tool.
         copy(
             messages = messages + change(ChatMessage.Assistant(key = "live-$keySeq", streaming = true)),
+            responseStart = ResponseStart("live-$keySeq", 0),
             keySeq = keySeq + 1,
         )
     }

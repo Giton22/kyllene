@@ -184,6 +184,12 @@ sealed interface Attachment {
     data class Failed(val message: String) : Attachment
 }
 
+/**
+ * The live reply [replyKey]'s text from [offset] on is the response the model is writing now, the one after its last
+ * tool. `message.complete` sends that response again as its `text`, which fills in what didn't stream.
+ */
+data class ResponseStart(val replyKey: String, val offset: Int)
+
 data class ChatState(
     /** The durable `sessions` row id; null for a new chat until `session.create` answers. */
     val storedSessionId: String? = null,
@@ -248,6 +254,8 @@ data class ChatState(
     val startedAdmissions: List<String> = emptyList(),
     /** The session's goal, loop and heartbeat, null when it has none (`session.control.update`). */
     val control: SessionControl? = null,
+    /** Where the running reply's current response (the text after its last tool) begins; null when unknown. */
+    val responseStart: ResponseStart? = null,
     /** Source of unique keys for messages created on this device. */
     val keySeq: Int = 0,
 ) {
