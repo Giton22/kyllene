@@ -259,6 +259,19 @@ class ChatNotifications(
             .build()
     }
 
+    /**
+     * The ongoing notification of [SignInService] while a sign-in waits for the browser to come back: quiet, and gone
+     * as soon as the sign-in ends. A tap brings Kyllene back, where the sign-in can be cancelled.
+     */
+    fun signIn(): Notification = base(CHANNEL_CONNECTION)
+        .setContentTitle(str(R.string.notification_sign_in_title))
+        .setContentText(str(R.string.notification_sign_in_text))
+        .setOngoing(true)
+        .setAutoCancel(false)
+        .setSilent(true)
+        .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+        .build()
+
     /** The ongoing notification of a voice chat kept up like a call ([VoiceCallService]): back to it, or [end] it. */
     fun voiceCall(end: PendingIntent): Notification = base(CHANNEL_VOICE)
         .setContentTitle(str(R.string.notification_voice_title))
@@ -934,6 +947,7 @@ class ChatNotifications(
         const val EXTRA_INBOX_GATEWAY = "inbox_gateway"
         const val CALL_ID = 9
         const val READ_ALOUD_ID = 10
+        const val SIGN_IN_ID = 11
 
         /** On an Answer's launch intent: the request whose call was answered. */
         const val EXTRA_ANSWERED_CALL = "answered_call"

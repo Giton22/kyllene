@@ -2,6 +2,7 @@ package dev.hermeskotlin.core.di
 
 import dev.hermeskotlin.core.auth.AuthApi
 import dev.hermeskotlin.core.auth.BrowserSignIn
+import dev.hermeskotlin.core.auth.SignInKeepAlive
 import dev.hermeskotlin.core.auth.NativeTokens
 import dev.hermeskotlin.core.auth.PersistentCookiesStorage
 import dev.hermeskotlin.core.auth.WebCookieJar
@@ -93,7 +94,8 @@ val coreModule = module {
         ConnectionCheck(get(), get(), openSocket = { url, ticket -> client.openGatewaySocket(url, ticket) })
     }
     single { AuthApi(get(), get(), get()) }
-    single { BrowserSignIn(get(), get()) }
+    // The Android app holds itself up while the browser is in front; nothing needs to on the desktop.
+    single { BrowserSignIn(get(), get(), getOrNull() ?: SignInKeepAlive.None) }
     single { GatewayRepository(get()) }
     single { SessionsApi(get()) }
     single { CronApi(get()) }

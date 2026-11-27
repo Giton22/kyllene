@@ -394,6 +394,17 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- Keeps the app answering the browser's return to it (on 127.0.0.1) while a sign-in in the browser waits. -->
+        <service
+            android:name=".notify.SignInService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="true">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a loopback listener answering while the user signs in to their self-hosted agent gateway in the browser (RFC 8252 native sign-in); stopped when the sign-in ends." />
+        </service>
+
         <service
             android:name=".notify.ReadAloudService"
             android:exported="false"
