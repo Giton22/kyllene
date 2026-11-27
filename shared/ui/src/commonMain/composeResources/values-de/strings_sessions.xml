@@ -175,7 +175,6 @@
     <string name="sessions_delete_project_detail">„%1$s“ wird vom Gateway entfernt. Seine Chats bleiben und werden wieder nach ihrem Ordner gruppiert.</string>
     <string name="sessions_not_connected">Nicht verbunden.</string>
     <string name="sessions_cant_make_folders">Dieser Build kann keine Ordner anlegen.</string>
-    <string name="sessions_gateway_cant_change_projects">Dieses Gateway kann Projekte nicht ändern.</string>
     <string name="sessions_project_change_failed">Das Projekt konnte nicht geändert werden.</string>
 
     <!-- Account and profiles -->

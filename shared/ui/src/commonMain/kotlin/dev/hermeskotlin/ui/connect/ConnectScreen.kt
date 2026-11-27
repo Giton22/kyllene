@@ -93,6 +93,7 @@ import dev.hermeskotlin.designsystem.text
 import dev.hermeskotlin.designsystem.textMuted
 import dev.hermeskotlin.designsystem.textSecondary
 import dev.hermeskotlin.designsystem.textTertiary
+import dev.hermeskotlin.designsystem.warning
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.ui.components.ScreenHeader
 import dev.hermeskotlin.ui.components.ScreenScaffold
@@ -440,6 +441,10 @@ private fun ResultCard(result: ProbeResult.Reachable) {
                         style = Theme[typography][bodySmall].copy(fontSize = 15.sp, fontWeight = FontWeight.Medium),
                         color = Theme[colors][text],
                     )
+                    // An older Hermes still connects, but parts of the app won't work on it.
+                    if (result.unsupportedVersion) {
+                        Text(stringResource(Res.string.hermes_unsupported_version), style = Theme[typography][bodySmall].copy(fontSize = 12.5.sp), color = Theme[colors][warning])
+                    }
                     if (signInReady) {
                         Text(stringResource(Res.string.connect_tested_next), style = Theme[typography][bodySmall].copy(fontSize = 12.5.sp), color = Theme[colors][textTertiary])
                     }

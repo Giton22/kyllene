@@ -27,7 +27,7 @@ internal class ReplySpeaker(val name: String, val face: Bot, val picture: ByteAr
     override fun hashCode(): Int = name.hashCode() * 31 + face.name.hashCode()
 }
 
-/** The chat's bot, provided by the chat screen; null (no roster, an older gateway) shows the app's mark and "Hermes". */
+/** The chat's bot, provided by the chat screen; null (no roster, or it couldn't be read) shows the app's mark and "Hermes". */
 internal val LocalReplySpeaker = staticCompositionLocalOf<ReplySpeaker?> { null }
 
 /** The speaker's picture, decoded once for every reply that shows it; null draws its shape. */

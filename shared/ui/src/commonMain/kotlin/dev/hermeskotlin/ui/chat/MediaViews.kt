@@ -46,8 +46,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
@@ -163,8 +166,8 @@ private fun ReplyImage(item: ReplyMedia) {
         value = withTimeoutOrNull(20_000) { load(item.source) }
         if (value == null) failed = true
     }
-    val decoded = bytes?.let { rememberDecodedImage(it, maxEdge = INLINE_EDGE) }
-    val bitmap = decoded?.bitmap
+    val picture = bytes?.let { rememberAttachmentPicture(it, maxEdge = INLINE_EDGE) }
+    val painter = picture?.painter
     Box(
         Modifier
             .widthIn(max = 420.dp)
@@ -172,20 +175,24 @@ private fun ReplyImage(item: ReplyMedia) {
             .clip(shape)
             .border(1.dp, Theme[colors][stroke], shape)
             .background(Theme[colors][surface])
-            .handCursor(bitmap != null || failed)
-            .clickable(enabled = bitmap != null || failed) {
-                if (bitmap != null) open(ViewerImage(item.name, source = item.source)) else attempt++
+            .handCursor(painter != null || failed)
+            .clickable(enabled = painter != null || failed) {
+                if (painter != null) open(ViewerImage(item.name, source = item.source)) else attempt++
             },
         contentAlignment = Alignment.Center,
     ) {
         when {
-            bitmap != null -> Image(
-                bitmap = bitmap,
-                contentDescription = item.name,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth().aspectRatio(bitmap.width.toFloat() / bitmap.height.coerceAtLeast(1)).heightIn(max = 480.dp),
-            )
-            failed || decoded?.decoding == false -> Row(
+            painter != null -> {
+                val size = painter.intrinsicSize
+                val ratio = if (size.isSpecified && size.width > 0f && size.height > 0f) size.width / size.height else 1f
+                Image(
+                    painter = painter,
+                    contentDescription = item.name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().aspectRatio(ratio).heightIn(max = 480.dp),
+                )
+            }
+            failed || picture?.decoding == false -> Row(
                 Modifier.padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -305,11 +312,11 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
 
     Dialog(onDismissRequest = onDismiss, properties = fullScreenDialogProperties()) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            val decoded = bytes?.let { rememberDecodedImage(it, maxEdge = VIEWER_EDGE) }
-            val bitmap = decoded?.bitmap
-            if (bitmap != null) {
+            val picture = bytes?.let { rememberAttachmentPicture(it, maxEdge = VIEWER_EDGE) }
+            val painter = picture?.painter
+            if (painter != null) {
                 Image(
-                    bitmap = bitmap,
+                    painter = painter,
                     contentDescription = image.name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
@@ -325,7 +332,7 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
                 )
             } else {
                 Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    val error = failed ?: stringResource(Res.string.chat_picture_show_failed).takeIf { decoded?.decoding == false }
+                    val error = failed ?: stringResource(Res.string.chat_picture_show_failed).takeIf { picture?.decoding == false }
                     if (error != null) {
                         Text(error, style = Theme[typography][bodySmall], color = Color.White, textAlign = TextAlign.Center)
                     } else {
@@ -383,6 +390,19 @@ internal fun ImageViewer(image: ViewerImage, onDismiss: () -> Unit) {
         }
     }
 }
+
+internal class AttachmentPicture(val painter: Painter?, val decoding: Boolean)
+
+@Composable
+private fun rememberAttachmentPicture(bytes: ByteArray, maxEdge: Int): AttachmentPicture {
+    rememberGifPicture(bytes, maxEdge)?.let { return it }
+    val decoded = rememberDecodedImage(bytes, maxEdge)
+    val painter = decoded.bitmap?.let { bitmap -> remember(bitmap) { BitmapPainter(bitmap) } }
+    return AttachmentPicture(painter, decoded.decoding)
+}
+
+@Composable
+internal expect fun rememberGifPicture(bytes: ByteArray, maxEdge: Int): AttachmentPicture?
 
 /** History and replies don't always carry an extension ("Image"); sniff one so other apps open the file. */
 private fun String.withImageExtension(bytes: ByteArray): String {

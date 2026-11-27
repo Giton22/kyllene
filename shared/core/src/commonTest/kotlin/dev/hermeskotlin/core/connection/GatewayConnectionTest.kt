@@ -102,6 +102,18 @@ class GatewayConnectionTest {
     }
 
     @Test
+    fun aMissingChatEndpointPointsAtTheProxy() = runTest {
+        val connection = GatewayConnection(
+            auth(),
+            { _, _ -> throw HandshakeRejectedException(404, IllegalStateException("Expected HTTP 101 response but was '404 Not Found'")) },
+            backgroundScope,
+        )
+        connection.start(url)
+        val failed = assertIs<ConnectionState.Failed>(connection.state.first { it is ConnectionState.Failed })
+        assertEquals("This dashboard has no chat endpoint (/api/ws). Check that the proxy forwards /api/ws.", failed.reason)
+    }
+
+    @Test
     fun handshakeStatusIsParsedFromOkHttpMessage() {
         assertEquals(403, handshakeStatus("Expected HTTP 101 response but was '403 Forbidden'"))
         assertEquals(null, handshakeStatus("Connection reset"))

@@ -143,6 +143,7 @@ sealed interface ChatMessage {
         val timestamp: Double? = null,
         val reactionRowId: Long? = null,
         val userReaction: String? = null,
+        val commentary: List<String> = emptyList(),
     ) : ChatMessage
 
     /**
@@ -182,6 +183,15 @@ sealed interface Attachment {
 
     data class Failed(val message: String) : Attachment
 }
+
+/**
+ * The live reply [replyKey]'s text from [offset] on is the response the model is writing now, the one after its last
+ * tool. `message.complete` sends that response again as its `text`, which fills in what didn't stream. [carried] is
+ * the start of that response that went into the reply a correction sealed above it, so it isn't shown twice.
+ * [toolOffset] is where the text after the last tool begins, so text added whole beside the calls since (which the
+ * final may repeat) is told from the segments before that tool.
+ */
+data class ResponseStart(val replyKey: String, val offset: Int, val carried: String = "", val toolOffset: Int = 0)
 
 data class ChatState(
     /** The durable `sessions` row id; null for a new chat until `session.create` answers. */
@@ -247,6 +257,8 @@ data class ChatState(
     val startedAdmissions: List<String> = emptyList(),
     /** The session's goal, loop and heartbeat, null when it has none (`session.control.update`). */
     val control: SessionControl? = null,
+    /** Where the running reply's current response (the text after its last tool) begins; null when unknown. */
+    val responseStart: ResponseStart? = null,
     /** Source of unique keys for messages created on this device. */
     val keySeq: Int = 0,
 ) {

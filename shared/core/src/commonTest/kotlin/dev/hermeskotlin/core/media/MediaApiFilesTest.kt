@@ -58,18 +58,15 @@ class MediaApiFilesTest {
     }
 
     @Test
-    fun aGatewayWithoutMkdirSaysItCantMakeFolders() = runTest {
-        // An older dashboard's own 404, FastAPI's, a proxy's non-JSON page, and the GET-only catch-all's 405.
-        val replies = listOf(
-            Triple("""{"detail":"No such API endpoint: /api/files/mkdir"}""", HttpStatusCode.NotFound, json),
-            Triple("""{"detail":"Not Found"}""", HttpStatusCode.NotFound, json),
-            Triple("<html>404</html>", HttpStatusCode.NotFound, headersOf(HttpHeaders.ContentType, "text/html")),
-            Triple("""{"detail":"Method Not Allowed"}""", HttpStatusCode.MethodNotAllowed, json),
-        )
-        for ((body, status, headers) in replies) {
-            val api = MediaApi(createHttpClient(MockEngine { respond(body, status, headers) }))
-            assertEquals(MediaApi.NO_MKDIR, assertIs<ApiResult.Failed>(api.makeFolder(url, "/srv/a")).message, body)
-        }
+    fun aFolderTheGatewayCantMakeSaysWhatItSaid() = runTest {
+        val api = MediaApi(createHttpClient(MockEngine {
+            respond("""{"detail":"Not Found"}""", HttpStatusCode.NotFound, json)
+        }))
+
+        val result = assertIs<ApiResult.Failed>(api.makeFolder(url, "/srv/a"))
+
+        assertEquals(404, result.status)
+        assertEquals("Not Found", result.message)
     }
 
     @Test
@@ -95,35 +92,17 @@ class MediaApiFilesTest {
     }
 
     @Test
-    fun aGatewayWithoutFsDownloadFallsBackToManagedFiles() = runTest {
+    fun aProfilesFileIsOnlyAskedForThroughItsBackend() = runTest {
         val paths = mutableListOf<String>()
         val api = MediaApi(createHttpClient(MockEngine { request ->
-            paths += request.url.encodedPath
-            if (request.url.encodedPath == "/api/fs/download") {
-                respond("""{"detail":"Not Found"}""", HttpStatusCode.NotFound, json)
-            } else {
-                respond("bytes", HttpStatusCode.OK)
-            }
-        }))
-
-        val bytes = assertIs<ApiResult.Success<ByteArray>>(api.download(url, "/a.txt")).value
-
-        assertEquals("bytes", bytes.decodeToString())
-        assertEquals(listOf("/api/fs/download", "/api/files/download"), paths)
-    }
-
-    @Test
-    fun aProfilesFileIsntFetchedFromTheHostInstead() = runTest {
-        val paths = mutableListOf<String>()
-        val api = MediaApi(createHttpClient(MockEngine { request ->
-            paths += request.url.encodedPath
+            paths += "${request.url.encodedPath}?${request.url.encodedQuery}"
             respond("""{"detail":"Not Found"}""", HttpStatusCode.NotFound, json)
         }))
 
         val result = assertIs<ApiResult.Failed>(api.download(url, "/a.txt", "rin"))
 
-        assertEquals(MediaApi.NO_PROFILE_DOWNLOAD, result.message)
-        assertEquals(listOf("/api/fs/download"), paths)
+        assertEquals("Not Found", result.message)
+        assertEquals(listOf("/api/fs/download?path=%2Fa.txt&profile=rin"), paths)
     }
 
     @Test

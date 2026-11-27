@@ -315,8 +315,7 @@ class PushApi(private val connection: GatewayConnection) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Older gateways have no profiles API.
-            if (!(e is RpcException && e.code == -32601)) failures += "bot profiles: ${briefError(e.message)}"
+            failures += "bot profiles: ${briefError(e.message)}"
             return ScannedBots(rpc, emptyList(), failures)
         }
         val copies = bots.mapNotNull { bot ->

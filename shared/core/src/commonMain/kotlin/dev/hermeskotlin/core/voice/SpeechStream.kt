@@ -61,7 +61,7 @@ interface SpeechStream {
     suspend fun close()
 }
 
-/** Opens [SpeechStream]s; null when this gateway can't (an older one, or no socket). */
+/** Opens [SpeechStream]s; null when this gateway can't (no ticket, or no socket). */
 fun interface SpeechStreams {
     suspend fun open(url: GatewayUrl, profile: String?): SpeechStream?
 }

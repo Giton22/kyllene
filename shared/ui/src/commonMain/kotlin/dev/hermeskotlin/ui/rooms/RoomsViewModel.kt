@@ -59,7 +59,7 @@ data class RoomsUiState(
     val error: String? = null,
     /**
      * The gateway said it hosts rooms (`groups.capabilities` with `driver`). False until it has said so,
-     * and on an older Hermes or with the driver off, so the section never shows on a guess.
+     * and with the driver off, so the section never shows on a guess.
      */
     val available: Boolean = false,
     val attachmentsSupported: Boolean = false,
@@ -640,7 +640,7 @@ class RoomsViewModel(
             throw e
         } catch (e: RpcException) {
             if (gateway.value != url) return
-            // An older gateway doesn't know `groups.*`: no section. Any other failure keeps what's known.
+            // A gateway that doesn't serve `groups.*`: no section. Any other failure keeps what's known.
             val unsupported = UNKNOWN_METHOD.containsMatchIn(e.message)
             if (unsupported) _opened.update { it?.copy(attachmentsSupported = false) }
             _state.update {

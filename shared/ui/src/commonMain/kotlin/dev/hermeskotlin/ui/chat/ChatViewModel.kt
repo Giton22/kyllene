@@ -337,7 +337,7 @@ class ChatViewModel(
             } else null
             val shared = answer?.value?.lastReadAt?.takeIf { it.isFinite() && it >= 0 }
             if (target != owner) return@launch
-            // Only a clear answer without one (an older gateway, an untracked chat) is left alone; an unknown one is sent.
+            // Only a clear answer without one (an untracked chat) is left alone; an unknown one is sent.
             readTracked = answer == null || shared != null
             readResolved = true
             _readPosition.value = ChatReadPosition(owner, shared?.takeIf { it > 0 } ?: fallback)

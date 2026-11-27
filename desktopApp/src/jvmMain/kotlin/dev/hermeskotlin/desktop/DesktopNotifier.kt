@@ -67,6 +67,8 @@ internal fun noticesFor(
     prefs: AppSettings,
     notified: MutableSet<String>,
     words: NoticeWords,
+    /** The chat when the turn now ending began. */
+    turnStart: ChatState? = previous,
 ): List<DesktopNotice> {
     val notices = mutableListOf<DesktopNotice>()
     val chat = state.title?.takeIf { it.isNotBlank() }
@@ -80,7 +82,7 @@ internal fun noticesFor(
         }
     }
     if (previous?.running == true && !state.running && !focused && prefs.notifyReplies) {
-        val reply = state.newFinishedReply(previous)
+        val reply = state.newFinishedReply(turnStart, previous)
         if (reply != null && reply.outcome != TurnOutcome.Interrupted) {
             val failed = reply.outcome == TurnOutcome.Error
             val text = (if (failed) reply.error ?: reply.text else reply.text).trim()
@@ -134,12 +136,14 @@ class DesktopNotifier(
     private suspend fun follow(session: ChatSession) {
         val notified = mutableSetOf<String>()
         var previous: ChatState? = null
+        var turnStart: ChatState? = null
         val origin = DesktopNoticeOrigin(session) { host.session.value === session && host.ownerVersion.value == session.ownerVersion }
         val words = NoticeWords.load()
         combine(session.state, focused, settings.settings) { state, focused, prefs -> Triple(state, focused, prefs ?: AppSettings()) }
             .collect { (state, focused, prefs) ->
                 changed()
-                noticesFor(previous, state, focused, prefs, notified, words).forEach { post(it.copy(origin = origin)) }
+                if (state.running && previous?.running != true) turnStart = state
+                noticesFor(previous, state, focused, prefs, notified, words, turnStart).forEach { post(it.copy(origin = origin)) }
                 previous = state
             }
     }

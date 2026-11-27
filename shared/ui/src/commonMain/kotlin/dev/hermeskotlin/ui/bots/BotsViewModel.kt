@@ -81,7 +81,7 @@ data class BotsUiState(
     val loading: Boolean = true,
     /** The roster itself failed to load: the gateway's words for why, empty when it gave none. */
     val error: String? = null,
-    /** The gateway predates Bot Mode's roster call. */
+    /** The gateway doesn't serve Bot Mode's roster call (`profiles.list`). */
     val unsupported: Boolean = false,
     /** Bots whose chat has something the user hasn't seen. */
     val unread: Set<String> = emptySet(),
@@ -171,6 +171,10 @@ class BotsViewModel(
 
     /** Bots whose chats the gateway was asked to watch on this connection. */
     private val watched = mutableSetOf<String>()
+
+    /** Roster reads asked for, and the one whose answer shows. */
+    private var rosterReads = 0L
+    private var rosterShown = 0L
 
 
     init {
@@ -526,6 +530,7 @@ class BotsViewModel(
                 is ApiResult.Success -> {
                     chats.forget(bot.name)
                     cache?.forgetProfile(url, bot.name)
+                    dropRosterReadsInFlight()
                     _state.update { it.regroup(it.all.filterNot { b -> b.name == bot.name }).copy(notice = words(Res.string.bots_deleted, bot.label)) }
                     onDeleted()
                 }
@@ -538,10 +543,13 @@ class BotsViewModel(
 
     private fun changeMeta(bot: Bot, key: String, value: JsonElement) {
         // Shown at once; the next roster read brings the gateway's version.
+        dropRosterReadsInFlight()
         _state.update { state -> state.regroup(state.all.map { if (it.name == bot.name) it.withMeta(key, value) else it }) }
         viewModelScope.launch {
             try {
                 api.updateMeta(bot.name, mapOf(key to value))
+                // A read asked while the write was on its way has the roster from before it.
+                dropRosterReadsInFlight()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -553,11 +561,18 @@ class BotsViewModel(
 
     private suspend fun refreshNow() {
         val url = gateway.value ?: return
+        val read = ++rosterReads
         try {
             val roster = api.roster()
             if (gateway.value != url) return
+            // Reads overlap (the poll, an event, an action's own read) and can finish out of order: one asked
+            // before the roster now shown is older than it, e.g. from before a bot was removed. It's dropped
+            // whole, so it can't mark a forgotten chat as known again either.
+            if (read < rosterShown) return
+            rosterShown = read
             chats.note(roster.bots)
             if (gateway.value != url) return
+            if (read < rosterShown) return
             val ordered = roster.bots.forRoster()
             val chatIds = ordered.associate { it.name to it.canonicalSession?.id }
             // Desktop's rooms ride the roster's default row, so they refresh without a call of their own.
@@ -576,11 +591,19 @@ class BotsViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: RpcException) {
+            // An older read that fails, or one from the gateway before a switch, says nothing about the roster on screen.
+            if (read < rosterShown || gateway.value != url) return
             val unsupported = UNKNOWN_METHOD.containsMatchIn(e.message)
             _state.update { it.copy(loading = false, unsupported = unsupported, error = e.message.takeUnless { unsupported }) }
         } catch (e: Exception) {
+            if (read < rosterShown || gateway.value != url) return
             _state.update { it.copy(loading = false, error = e.message.orEmpty()) }
         }
+    }
+
+    /** The roster just changed here (a delete, an edit): a read asked before it would undo it on screen. */
+    private fun dropRosterReadsInFlight() {
+        rosterShown = rosterReads + 1
     }
 
     /** Finds each bot's failing routine, at most once a minute; a failed read keeps what was known. */
@@ -617,9 +640,15 @@ class BotsViewModel(
             val seen = seenStore.seen(url, bot.name).first()
             val looked = maxOf(seen.lastLook(chat.id), seen.lastLook(tip))
             val mayBeUnread = session.messageCount != 0 && seen.isUnread(chat, resolvedId = tip)
+            // A history that can't be read keeps the badge; before one was read here, the activity answers. That
+            // guess isn't kept as read, so the next refresh asks the history again.
+            var guessed = false
             val unread = if (mayBeUnread) {
                 checked[bot.name]?.takeIf { it.session == session && it.readUpTo == looked }?.unread
-                    ?: hasUnreadBotHistory(url, bot.name, tip, looked) ?: return
+                    ?: hasUnreadBotHistory(url, bot.name, tip, looked) {
+                        true.takeUnless { checked[bot.name]?.session?.id == session.id }?.also { guessed = true }
+                    }
+                    ?: return
             } else false
 
             val latest = seenStore.seen(url, bot.name).first()
@@ -628,7 +657,7 @@ class BotsViewModel(
                 if (state.all.none { it.name == bot.name && it.canonicalSession == session }) return@update state
                 state.copy(unread = if (unread) state.unread + bot.name else state.unread - bot.name)
             }
-            if (mayBeUnread) checked[bot.name] = CheckedHistory(session, looked, unread)
+            if (mayBeUnread && !guessed) checked[bot.name] = CheckedHistory(session, looked, unread)
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -638,23 +667,30 @@ class BotsViewModel(
 
     // Roster activity also advances on tool calls. Check the underlying history, including when
     // many silent steps came in after the last readable message.
-    private suspend fun hasUnreadBotHistory(url: GatewayUrl, profile: String, tip: String, looked: Double): Boolean? {
+    private suspend fun hasUnreadBotHistory(
+        url: GatewayUrl,
+        profile: String,
+        tip: String,
+        looked: Double,
+        /** The answer when a page can't be read. */
+        whenUnreadable: () -> Boolean?,
+    ): Boolean? {
         val pageSize = 100
         var offset = 0
         var previous: List<SessionMessage>? = null
         repeat(UNREAD_HISTORY_PAGE_LIMIT) {
             if (gateway.value != url) return null
             val result = sessions.messages(url, tip, limit = pageSize, profile = profile, offset = offset, inlineImages = false)
-            val rows = (result as? ApiResult.Success)?.value?.messages ?: return null
+            val rows = (result as? ApiResult.Success)?.value?.messages ?: return whenUnreadable()
             val firstId = rows.firstOrNull()?.id
             if ((firstId != null && firstId == previous?.firstOrNull()?.id) || rows == previous) return null
             if (rows.hasUnreadBotMessage(looked)) return true
-            val newest = rows.asSequence().mapNotNull { it.timestamp }.maxOrNull()
-            if (rows.size < pageSize || (newest != null && newest <= looked)) return false
+            // Pages go back in time: one that reaches the last look has nothing newer behind it.
+            if (rows.size < pageSize || rows.any { it.timestamp?.let { at -> at <= looked } == true }) return false
             previous = rows
             offset += rows.size
         }
-        // Older pages may still contain a reply. Keep the last known badge when we run out of pages.
+        // A very long run of steps since the last look: older pages may still hold a reply, so it isn't known.
         return null
     }
 

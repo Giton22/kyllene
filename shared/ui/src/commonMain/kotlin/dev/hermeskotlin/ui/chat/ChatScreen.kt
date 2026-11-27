@@ -1,5 +1,6 @@
 package dev.hermeskotlin.ui.chat
 
+import dev.hermeskotlin.ui.gateways.savedLabel
 import dev.hermeskotlin.ui.ReleaseFocusWhenKeyboardPutAway
 import dev.hermeskotlin.ui.enterSends
 import dev.hermeskotlin.ui.Shortcut
@@ -665,7 +666,7 @@ fun ChatScreen(
         onOpenFile = { previewing = it; railShown = true },
         onNotice = { notice = it },
         wallpaper = rememberChatWallpaper(),
-        place = target.gateway.label,
+        place = target.gateway.savedLabel(),
         profile = target.profile,
         // Only while nothing has been sent: a stored chat stays where it began.
         places = greetingPlaces?.takeIf { target.storedSessionId == null && state.storedSessionId == null && target.bot == null },
@@ -2000,7 +2001,9 @@ private fun Messages(
 ) {
     var confirm by remember { mutableStateOf<Pair<MessageChange, String>?>(null) }
     val lastPrompt = messages.lastOrNull { it is ChatMessage.User }?.key
-    val lastReply = messages.lastOrNull { it is ChatMessage.Assistant && it.text.isNotBlank() }?.key
+    val lastReply = messages.lastOrNull {
+        it is ChatMessage.Assistant && (it.text.isNotBlank() || it.commentary.isNotEmpty())
+    }?.key
     val faces = LocalBotFaces.current
     val partners = remember(messages, faces) { messages.map { exchangePartner(it, faces) } }
     // The rewind rules read only the messages.
@@ -2484,20 +2487,21 @@ internal fun List<ChatMessage>.replyMark(): Pair<Int, Int> {
 }
 
 /**
- * The text a reader would scroll down for: a prompt, a reply's answer, a command's output, or a turn having failed
+ * The text a reader would scroll down for: a prompt, a reply's text and commentary, a command's output, or a turn having failed
  * or ended with a warning. A reply's blank space isn't counted: the stream and the stored rows space its steps
  * differently. A failure counts the same whatever it says, as the stored row may word it differently.
  */
 private fun ChatMessage.replyLength(): Int = when (this) {
     is ChatMessage.User -> text.length
     is ChatMessage.Assistant -> text.count { !it.isWhitespace() } +
+        commentary.sumOf { update -> update.count { !it.isWhitespace() } } +
         (if (error != null || outcome == TurnOutcome.Error) 1 else 0) + (if (warning != null) 1 else 0)
     is ChatMessage.Command -> output.length
     is ChatMessage.Event -> if (event is TranscriptEvent.FailedTurn) 1 else 0
     is ChatMessage.Notice -> 0
 }
 
-private fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, mark: Pair<Int, Int>): Boolean {
+internal fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, mark: Pair<Int, Int>): Boolean {
     val oldest = previous.firstOrNull()?.key ?: return false
     val start = indexOfFirst { it.key == oldest }
     // The page can bring the prompt for a partly loaded turn. Compare only the portion we already had.
@@ -2514,6 +2518,12 @@ private fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>, 
  * left the end. It stays new until they are back there, even if a later turn brings the mark back to what it was.
  */
 internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val new: Boolean = false) {
+    /**
+     * An earlier stored row becoming the oldest is an older page loading above, which isn't news by itself. Then
+     * [arrivedWithPage] tells whether reply text came in the same update, from the part that was already loaded
+     * (see [replyArrivedWithPage]). [mark] is kept but not compared: the page can bring the prompt of a turn that was
+     * only partly loaded, which changes the mark without any new reply.
+     */
     fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>, arrivedWithPage: Boolean = false): ReplySeen {
         val arrived = if (oldest.isOlderThan(this.oldest)) arrivedWithPage else mark != this.mark
         return ReplySeen(oldest, mark, new = away && (new || arrived))
@@ -3059,7 +3069,9 @@ internal fun AssistantReply(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val actionable = !message.streaming && text.isNotBlank()
-    val canMenu = isDesktop && actionable
+    val copyText = remember(message.commentary, text) { message.transcriptText(text) }
+    val copyable = !message.streaming && copyText.isNotBlank()
+    val canMenu = isDesktop && copyable
     // A reply of only code or files has nothing to say, in either menu.
     val speakable = remember(text, actionable) { actionable && readAloudText(text).isNotEmpty() }
     // Said by the menu and the icons alike; read here, as the menu is built outside composition.
@@ -3073,9 +3085,9 @@ internal fun AssistantReply(
     if (canMenu) {
         RowContextMenu(contextMenuOpen, onDismiss = { contextMenuOpen = false }) {
             listOfNotNull(
-                RowMenuItem(copyLabel, Lucide.Copy) { scope.launch { clipboard.setClipEntry(plainTextClipEntry(text)) } },
-                onRegenerate?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
-                onBranch?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
+                RowMenuItem(copyLabel, Lucide.Copy) { scope.launch { clipboard.setClipEntry(plainTextClipEntry(copyText)) } },
+                onRegenerate?.takeIf { actionable }?.let { RowMenuItem(regenerateLabel, Lucide.RefreshCw, run = it) },
+                onBranch?.takeIf { actionable }?.let { RowMenuItem(branchLabel, Lucide.GitBranch, run = it) },
                 if (reading) RowMenuItem(if (readingPaused) resumeReadingLabel else pauseReadingLabel, if (readingPaused) Lucide.Play else Lucide.Pause, run = if (readingPaused) onResumeReading else onPauseReading)
                 else null,
                 if (reading) RowMenuItem(stopReadingLabel, Lucide.Square, run = onStopReading)
@@ -3092,6 +3104,9 @@ internal fun AssistantReply(
         ReplyHeader(message.timestamp.takeUnless { message.streaming })
         // What's happening now is said once, above the composer; the reply keeps only what it's made of.
         if (showReasoning) Reasoning(message.reasoning, message.streaming)
+        message.commentary.forEach { update ->
+            MarkdownText(remember(update) { linkFileUris(update) })
+        }
         // While the turn runs its finished steps are listed as they land; once it ends they fold into the pill.
         if (showTools) if (message.streaming) LiveSteps(listedTools, message.key) else Tools(listedTools, message.key)
         if (generated.isNotEmpty()) ReplyMediaList(remember(generated) { generated.map { it.asMedia() } })
@@ -3110,7 +3125,11 @@ internal fun AssistantReply(
             }
             // Not while it streams: the text and its blocks are still changing under the selection.
             CommentableSelection(source.takeUnless { message.streaming }, selection) {
-                MarkdownText(remember(text) { linkFileUris(text) }, streaming = message.streaming)
+                MarkdownText(
+                    remember(text) { linkFileUris(text) },
+                    modifier = if (isDesktop) Modifier.pointerHoverIcon(PointerIcon.Text) else Modifier,
+                    streaming = message.streaming,
+                )
             }
         }
         // Screens the agent drew, under what it said and whatever the tool-activity setting: they're for the user to answer.
@@ -3144,7 +3163,7 @@ internal fun AssistantReply(
         val react = onReact.takeIf { !message.streaming && message.reactionRowId != null }
         val reaction = message.userReaction.takeUnless { message.streaming }
         val hasMore = actions.isNotEmpty() || react != null
-        if (actionable || usage != null || react != null || reaction != null) {
+        if (copyable || usage != null || react != null || reaction != null) {
             var keysInside by remember { mutableStateOf(false) }
             var moreOpen by remember { mutableStateOf(false) }
             LaunchedEffect(hasMore) { if (!hasMore) moreOpen = false }
@@ -3160,7 +3179,7 @@ internal fun AssistantReply(
             val usageText = usage?.let { replyUsage(it.input, it.output) }
             val usageStyle = Theme[typography][caption].copy(fontFamily = Theme[typography][code].fontFamily)
             BoxWithConstraints(Modifier.fillMaxWidth().trimEndTop(end = 0.dp, top = 4.dp)) {
-                val copyWidth = if (actionable) {
+                val copyWidth = if (copyable) {
                     val size = ButtonSize.Small
                     maxOf(size.labelledIconWidth(copyLabel), size.labelledIconWidth(LocalDesignWords.current.copied)) + 2.dp
                 } else 0.dp
@@ -3204,9 +3223,9 @@ internal fun AssistantReply(
                         else ReplyAction(Lucide.Pause, pauseReadingLabel, onPauseReading, Modifier.size(iconSize))
                         ReplyAction(Lucide.Square, stopReadingLabel, onStopReading, Modifier.size(iconSize))
                     }
-                    if (actionable) Box(hidden.alpha(alpha)) {
-                        if (labelled) CopyButton(text, visibleLabel = copyLabel)
-                        else CopyButton(text, modifier = Modifier.size(iconSize), label = copyLabel)
+                    if (copyable) Box(hidden.alpha(alpha)) {
+                        if (labelled) CopyButton(copyText, visibleLabel = copyLabel)
+                        else CopyButton(copyText, modifier = Modifier.size(iconSize), label = copyLabel)
                     }
                     if (reaction != null) ReplyReactionBadge(reaction)
                     if (hasMore) Box(hidden.alpha(alpha)) {
@@ -3258,7 +3277,7 @@ internal fun MessageTimeLabel(epochSeconds: Double?, modifier: Modifier = Modifi
     val label = remember(epochSeconds, use24Hour) { messageTime(epochSeconds, use24Hour) }
     if (label.isEmpty()) return
     if (isDesktop) {
-        // The short label ("Mon 14:05") in full under the pointer, as desktop chat apps show it.
+        // The short label ("Mon 14:05") in full while the pointer rests on it, as desktop chat apps show it.
         val full = remember(epochSeconds, use24Hour) { fullMessageTime(epochSeconds, use24Hour) }
         Tooltip(full, modifier) { Text(label, style = Theme[typography][caption], color = Theme[colors][textTertiary]) }
     } else {
@@ -3295,18 +3314,18 @@ private fun UnreadDivider(modifier: Modifier = Modifier) {
 }
 
 /**
- * With reasoning hidden, a finished reply of nothing but reasoning (a step that only thought, or only commented
- * on its way) would be a bare header: it isn't listed.
+ * With reasoning hidden, a finished reply of nothing but reasoning (a step that only thought) would be a bare header: it isn't listed.
  */
 internal fun List<ChatMessage>.withoutBlankReplies(showReasoning: Boolean): List<ChatMessage> =
     if (showReasoning) this else filterNot {
-        it is ChatMessage.Assistant && !it.streaming && it.text.isBlank() && it.tools.isEmpty() && it.error == null &&
+        it is ChatMessage.Assistant && !it.streaming && it.text.isBlank() && it.commentary.isEmpty() && it.tools.isEmpty() && it.error == null &&
             it.warning == null && it.outcome != TurnOutcome.Error && it.outcome != TurnOutcome.Interrupted
     }
 
 /**
  * The first message newer than [readUpTo] (epoch seconds) that the person would call new: a reply, a prompt
- * from elsewhere, or another bot's row. Messages without a time (a reply still streaming) count as new.
+ * from elsewhere, or another bot's row. A reply counts once it has words to read (not a silence or only tool steps);
+ * one without a time (still streaming) counts as new.
  * Null when every message is older, or when nothing in [messages] is new.
  */
 internal fun firstUnreadKey(messages: List<ChatMessage>, readUpTo: Double): String? =
@@ -3369,8 +3388,8 @@ internal val ChatMessage.sentAt: Double?
 
 private fun ChatMessage.isNewerThan(readUpTo: Double): Boolean = when (this) {
     is ChatMessage.User -> (timestamp ?: return false) > readUpTo + UNREAD_SLACK_SECONDS
-    // Anchor the line before the first streamed word. A finished silent reply no longer needs it.
-    is ChatMessage.Assistant -> (streaming || text.replyTextOrNull() != null) &&
+    // Anchor the line before the first streamed word and keep it for finished replies with public text.
+    is ChatMessage.Assistant -> (streaming || text.replyTextOrNull() != null || commentary.isNotEmpty()) &&
         (timestamp ?: Double.MAX_VALUE) > readUpTo + UNREAD_SLACK_SECONDS
     // Another bot writing in is news even when this bot stays silent. The machinery's own rows (deliveries,
     // routines, failures) aren't: the line goes above something the person would want to read.

@@ -119,20 +119,20 @@ class ActiveSessionsTest {
     }
 
     @Test
-    fun anOldGatewayKeepsTheLastAnswerAndIsNotAskedAgain() = runTest {
+    fun aFailedAnswerKeepsTheLastOneAndIsAskedAgain() = runTest {
         val gateway = connect(backgroundScope)
         gateway.answer = """{"sessions":[${row("a", "working")}]}"""
         val active = active(gateway)
         backgroundScope.launch { active.live.collect {} }
         active.live.first { it.statuses.isNotEmpty() }
 
-        gateway.answer = """"error":{"code":-32601,"message":"Method not found"}"""
+        gateway.answer = """"error":{"code":5000,"message":"store unavailable"}"""
         advanceTimeBy(10_001)
         runCurrent()
         val asked = gateway.asked
-        advanceTimeBy(60_000)
+        advanceTimeBy(10_000)
         runCurrent()
-        assertEquals(asked, gateway.asked)
+        assertEquals(asked + 1, gateway.asked)
         assertEquals(mapOf("a" to LiveStatus.Working), active.live.value.statuses)
     }
 

@@ -303,7 +303,7 @@ class WatchRelay(
     /** Whether the gateway talks live (GPT-Live); [known] is what it said last. */
     private suspend fun checkLiveVoice(gateway: GatewayUrl, profile: String?, known: Boolean?): Boolean {
         val result = audio.voiceLiveStatus(gateway, profile)
-        // A failed check keeps what was known: an older gateway answers 404, a dropped one nothing.
+        // A failed check keeps what was known: a refused or dropped one says nothing new.
         val on = when (result) {
             is ApiResult.Success -> result.value.live
             else -> known ?: false
@@ -434,7 +434,7 @@ class WatchRelay(
                     if (chatId != null && sessions.messages(saved.gatewayUrl, chatId, limit = 1, profile = profile) !is ApiResult.Success) {
                         throw CallRefused(WatchCallLine.TargetUnopened)
                     }
-                    // Not live (or an older gateway that can't say): the watch asks there by voice instead.
+                    // Not live (or a gateway that couldn't say): the watch asks there by voice instead.
                     val live = audio.voiceLiveStatus(saved.gatewayUrl, profile).let { it is ApiResult.Success && it.value.live }
                     val resolved = DefaultCallTarget(requestId, chatId, target.profile, bot?.label ?: target.label,
                         scope = WatchScope(saved.gatewayUrl.value, profile), live = live)

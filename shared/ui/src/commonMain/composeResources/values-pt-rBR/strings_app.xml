@@ -346,7 +346,8 @@
     <string name="check_fix_wait_a_minute">Aguarde um minuto e tente de novo.</string>
     <string name="check_fix_sign_in_or_update">Entre de novo; se continuar falhando, atualize o Hermes.</string>
     <string name="check_fix_update_hermes_try_again">Atualize o Hermes e tente de novo.</string>
-    <string name="check_fix_update_hermes">Atualize o Hermes no servidor.</string>
+    <string name="hermes_unsupported_version">O Kyllene precisa do Hermes Agent 0.22 ou mais recente. Execute `hermes update`.</string>
+    <string name="check_fix_proxy_forwards_ws">Verifique se o proxy encaminha /api/ws.</string>
     <string name="check_fix_agent_running">Verifique se o Gateway do agente está rodando no servidor. Atrás de um proxy, permita upgrades de WebSocket em /api/ws.</string>
     <string name="check_fix_exact_address">Use exatamente o endereço para o qual o painel está configurado e verifique se a conversa incorporada está ativada.</string>
     <string name="check_fix_access_token_or_proxy">Atrás do Cloudflare Access, adicione um token de serviço para este Gateway. Caso contrário, verifique se o proxy encaminha /api/ws.</string>

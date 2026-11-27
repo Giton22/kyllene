@@ -28,13 +28,14 @@ class ConnectionCheckTest {
     private fun check(
         signedIn: Boolean = true,
         statusUp: Boolean = true,
+        version: String = "0.42.0",
         openSocket: suspend (GatewayUrl, String) -> RpcTransport = { _, _ -> FakeTransport().apply { push(FakeTransport.READY) } },
     ): ConnectionCheck {
         val http = createHttpClient(
             MockEngine { request ->
                 when (request.url.encodedPath) {
                     "/api/status" ->
-                        if (statusUp) respond("""{"version":"0.42.0","auth_required":true,"auth_providers":["basic"]}""", HttpStatusCode.OK, json)
+                        if (statusUp) respond("""{"version":"$version","auth_required":true,"auth_providers":["basic"]}""", HttpStatusCode.OK, json)
                         else throw RuntimeException("Connection refused")
                     "/api/auth/me" ->
                         if (signedIn) respond("""{"display_name":"Zed"}""", HttpStatusCode.OK, json)
@@ -56,6 +57,46 @@ class ConnectionCheckTest {
         val signedIn = (report.results[CheckStage.SignIn] as StageResult.Passed).detail
         assertEquals(CheckNote.Kind.SignedInAs, signedIn.kind)
         assertTrue(signedIn.args.single().contains("Zed"))
+    }
+
+    @Test
+    fun aHermesOlderThanSupportedPassesWithAnUpdateNote() = runTest {
+        val report = check(version = "0.21.5").run(url)
+
+        val server = assertIs<StageResult.Passed>(report.results[CheckStage.Server])
+        assertEquals(CheckNote.Kind.FixUpdateHermes, server.warning?.kind)
+        assertNull(report.failedStage)
+    }
+
+    @Test
+    fun aSupportedOrUnreadableVersionHasNoNote() = runTest {
+        for (version in listOf("0.22.0", "0.23.4", "0.23.4+abc", "unknown", "garbage")) {
+            val server = assertIs<StageResult.Passed>(check(version = version).run(url).results[CheckStage.Server], version)
+            assertNull(server.warning, version)
+        }
+    }
+
+    @Test
+    fun aCommitBuildPassesWithoutAnUpdateNoteInEitherMode() = runTest {
+        // A commit build reports hermes-agent's placeholder 0.0.0, with or without its stamp, on a legacy gateway
+        // and on one whose socket runs chats on the session authority alike.
+        val authorityReady = """{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}"""
+        for (ready in listOf(FakeTransport.READY, authorityReady)) {
+            for (version in listOf("0.0.0", "0.0.0+commit.20261125T001913Z")) {
+                val report = check(version = version, openSocket = { _, _ -> FakeTransport().apply { push(ready) } }).run(url)
+                CheckStage.entries.forEach { assertIs<StageResult.Passed>(report.results[it], "$version $it") }
+                assertNull((report.results[CheckStage.Server] as StageResult.Passed).warning, version)
+            }
+        }
+    }
+
+    @Test
+    fun aMissingChatEndpointPointsAtTheProxy() = runTest {
+        val report = check(openSocket = { _, _ -> throw HandshakeRejectedException(404, RuntimeException("404")) }).run(url)
+
+        val live = assertIs<StageResult.Failed>(report.results[CheckStage.Live])
+        assertEquals(CheckNote.Kind.NoChatEndpoint, live.problem.kind)
+        assertEquals(CheckNote.Kind.FixProxyForwardsWs, live.fix.kind)
     }
 
     @Test

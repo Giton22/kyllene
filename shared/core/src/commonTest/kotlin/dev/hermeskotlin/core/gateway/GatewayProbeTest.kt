@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class GatewayProbeTest {
@@ -59,6 +60,68 @@ class GatewayProbeTest {
         val result = assertIs<ProbeResult.Reachable>(probeWith(engine).probe(url))
         assertEquals(false, result.status.supportsPasswordLogin)
         assertTrue(result.canSignIn)
+    }
+
+    @Test
+    fun aHermesOlderThanSupportedIsReachableButWarned() = runTest {
+        for (version in listOf("0.21.5", "0.21.7+abc", "0.2.0", "0.0.1")) {
+            val engine = MockEngine { respond("""{"version":"$version","release_date":"2026.9.24"}""", HttpStatusCode.OK, json) }
+            val result = assertIs<ProbeResult.Reachable>(probeWith(engine).probe(url), version)
+            assertTrue(result.unsupportedVersion, version)
+        }
+    }
+
+    @Test
+    fun aSupportedOrUnreadableVersionIsntWarned() = runTest {
+        // Only `version` counts: `release_date` stays at 2026.9.24 on every release.
+        for (version in listOf("0.22.0", "0.23.4", "0.23.4+abc", "0.23.4+canary.20261120T000000Z", "1.0.0", "unknown", "garbage", "0.22", "")) {
+            val engine = MockEngine { respond("""{"version":"$version","release_date":"2026.9.24"}""", HttpStatusCode.OK, json) }
+            val result = assertIs<ProbeResult.Reachable>(probeWith(engine).probe(url), version)
+            assertFalse(result.unsupportedVersion, version)
+        }
+    }
+
+    @Test
+    fun aCommitOrChannelBuildIsntWarned() = runTest {
+        // A commit or channel build stamps hermes-agent's pyproject placeholder 0.0.0 as its version. It's current
+        // code, not an old release. A legacy dashboard and the gateway-hosted Webapp report it the same way.
+        val bodies = listOf<(String) -> String>(
+            { """{"version":"$it","release_date":"2026.9.24","gateway_running":true,"auth_required":true,"auth_providers":["basic"]}""" },
+            // The Webapp's signed-out body (hermes_cli/web_routers/status.py _WEBAPP_SIGNED_OUT_STATUS_KEYS).
+            {
+                """{"version":"$it","release_date":"2026.9.24","gateway_running":true,"gateway_state":"running",
+                   "overall":"ok","components":{},"auth_required":true,"auth_providers":["basic"],
+                   "auth_flows":["cookie","native_pkce"]}"""
+            },
+        )
+        for (body in bodies) {
+            for (version in listOf("0.0.0", "0.0.0+commit.20261125T001913Z", "0.0.0+channel.20261116T092601Z")) {
+                val engine = MockEngine { respond(body(version), HttpStatusCode.OK, json) }
+                val result = assertIs<ProbeResult.Reachable>(probeWith(engine).probe(url), version)
+                assertFalse(result.unsupportedVersion, version)
+                assertNull(assertIs<StageResult.Passed>(result.toStageResult()).warning, version)
+            }
+        }
+    }
+
+    @Test
+    fun versionsCompareByTheirLeadingRelease() {
+        assertEquals(HermesVersion(0, 23, 4), HermesVersion.parse("0.23.4+abc"))
+        assertEquals(HermesVersion(0, 22, 10), HermesVersion.parse(" 0.22.10.dev3 "))
+        assertEquals(null, HermesVersion.parse("unknown"))
+        assertEquals(null, HermesVersion.parse("v0.23.4"))
+        assertEquals(null, HermesVersion.parse("99999999999.0.0"))
+        assertEquals(null, HermesVersion.parse("0.0.0"))
+        assertEquals(null, HermesVersion.parse("0.0.0+commit.20261125T001913Z"))
+        assertEquals(null, HermesVersion.parse("0.0.0.dev1"))
+        assertEquals(null, HermesVersion.parse(null))
+        assertEquals(HermesVersion(0, 0, 1), HermesVersion.parse("0.0.1"))
+        assertFalse(HermesVersion.isUnsupported("0.0.0"))
+        assertFalse(HermesVersion.isUnsupported(null))
+        assertTrue(HermesVersion.isUnsupported("0.21.5"))
+        assertFalse(HermesVersion.isUnsupported("0.23.4+canary.20261120T000000Z"))
+        assertTrue(HermesVersion(0, 21, 99) < HermesVersion.OLDEST_SUPPORTED)
+        assertFalse(HermesVersion(0, 22, 0) < HermesVersion.OLDEST_SUPPORTED)
     }
 
     @Test

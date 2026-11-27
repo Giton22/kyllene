@@ -1,6 +1,7 @@
 package dev.hermeskotlin.core.chat
 
 import dev.hermeskotlin.core.network.HermesJson
+import dev.hermeskotlin.core.sessions.SessionMessage
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -14,7 +15,7 @@ import kotlinx.serialization.json.contentOrNull
  */
 sealed interface TranscriptEvent {
     /** Another bot's message (Bot Mode's `message_agent`, a relay or `hermes peer`). */
-    data class FromBot(val sender: String, val handle: String?, val body: String) : TranscriptEvent
+    data class FromBot(val sender: String, val handle: String?, val body: String, val noReplyNeeded: Boolean = false) : TranscriptEvent
 
     /** How a message this bot sent another one ended: the reply, or why there isn't one (yet). */
     data class Delivery(val target: String?, val outcome: DeliveryOutcome) : TranscriptEvent
@@ -68,14 +69,62 @@ object TranscriptRows {
         (displayKind == "internal_notification" &&
             AgentMessage.parse(row, requireEnvelope = true) == null &&
             routine(row) == null && scheduledResult(row, displayMetadata) == null) ||
-            row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row)
+            row.startsWith("[System:") || HEARTBEAT.containsMatchIn(row) ||
+            (isCompactionReminder(row) && (displayKind != "internal_notification" || scheduledResult(row, displayMetadata) == null))
+
+    /**
+     * The restated request (by its header line), the task list (its header and the list's first item, so a prompt
+     * that opens with the header line and goes on in its own words stays) or the skill reload notice alone.
+     */
+    private fun isCompactionReminder(row: String): Boolean =
+        row.substringBefore('\n').trimEnd('\r') == INFLIGHT_REQUEST_HEADER ||
+            TODO_SNAPSHOT_PART.containsMatchIn(row) || SKILL_RELOAD_NOTICE.containsMatchIn(row)
+
+    /**
+     * A user row the chat leaves out whatever came before it: [isNoise] on its [promptText]. A restated request
+     * isn't one, since it shows while its original isn't loaded (see historyToMessages).
+     */
+    internal fun leavesOut(row: SessionMessage): Boolean {
+        val text = promptText(row).trim()
+        return isNoise(text, row.displayKind, row.displayMetadata) && restatedRequest(text) == null
+    }
+
+    /**
+     * A user [row]'s text without the task list compaction folds into the last real user row when it doesn't
+     * stand alone (agent/conversation_compression.py): after a blank line in a text row (a prompt, a bot's
+     * message, a scheduled result), or as a text part of its own beside a picture or file. A row left with no
+     * text still shows its pictures.
+     */
+    fun promptText(row: SessionMessage): String {
+        val parts = (row.displayContent ?: row.content) as? JsonArray
+        if (parts == null || parts.none { it.isTodoSnapshotPart() }) {
+            return TODO_SNAPSHOT.find(row.text)?.let { row.text.substring(0, it.range.first).trimEnd() } ?: row.text
+        }
+        return SessionMessage(role = row.role, content = JsonArray(parts.filterNot { it.isTodoSnapshotPart() })).text
+    }
+
+    private fun JsonElement.isTodoSnapshotPart(): Boolean =
+        ((this as? JsonObject)?.get("text") as? JsonPrimitive)?.contentOrNull?.let { TODO_SNAPSHOT_PART.find(it.trimStart()) } != null
+
+    fun restatedRequest(row: String): String? {
+        if (row.substringBefore('\n').trimEnd('\r') != INFLIGHT_REQUEST_HEADER) return null
+        return row.substringAfter('\n', "").trim().takeIf { it.isNotEmpty() }
+    }
+
+    internal fun carriesRestatedRequest(text: String): Boolean {
+        val trimmed = text.trimStart()
+        return compactionPrefix(trimmed) != null && restatedRequest(trimmed.substringAfter(SUMMARY_END, "").trimStart()) != null
+    }
+
+    private fun compactionPrefix(text: String): String? =
+        listOf(SUMMARY_INTRO, LEGACY_SUMMARY_PREFIX).firstOrNull(text::startsWith)
 
     /** Older gateways/plugins kept handoffs under either user or assistant without a display kind. */
     fun compaction(text: String): TranscriptEvent.Compaction? {
         // The whole introduction every shipped prefix shares, as the gateway matches it (hermes_state_common.py),
         // so a prompt that merely starts with the bracketed label stays a prompt.
         val trimmed = text.trim()
-        val prefix = listOf(SUMMARY_INTRO, LEGACY_SUMMARY_PREFIX).firstOrNull(trimmed::startsWith) ?: return null
+        val prefix = compactionPrefix(trimmed) ?: return null
         // A legacy carrier can hold a real ask after the summary. Without a display projection,
         // leave that whole row visible rather than hide the ask and its prompt actions.
         if (trimmed.substringAfter(SUMMARY_END, "").isNotBlank()) return null
@@ -97,7 +146,7 @@ object TranscriptRows {
     ): List<TranscriptEvent>? {
         val row = text.trim()
         AgentMessage.parse(row, requireEnvelope = displayKind == "internal_notification")
-            ?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body)) }
+            ?.let { return listOf(TranscriptEvent.FromBot(it.sender, it.handle, it.body, it.noReplyNeeded)) }
         routine(row)?.let { return listOf(it) }
         if (displayKind == "internal_notification") scheduledResult(row, displayMetadata)?.let { return listOf(it) }
         if (displayKind == "process_complete" || displayKind == "async_delegation_complete" || PROCESS.matches(row)) {
@@ -236,6 +285,17 @@ object TranscriptRows {
     private const val PREFIX_END = "may reflect work described here — avoid repeating it:"
     private const val LEGACY_SUMMARY_PREFIX = "[CONTEXT SUMMARY]:"
     private const val SUMMARY_END = "--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---"
+    private const val INFLIGHT_REQUEST_HEADER =
+        "[STILL IN PROGRESS — this is the active request, restated after the " +
+            "compaction boundary because it was not finished yet. Continue it; do not start over.]"
+    /** tools/todo_tool.py `TODO_INJECTION_HEADER`; `format_for_injection` always puts an item under it. */
+    private const val TODO_SNAPSHOT_HEADER = "[Your active task list was preserved across context compression]"
+    private val TODO_SNAPSHOT = Regex("""\r?\n\r?\n""" + Regex.escape(TODO_SNAPSHOT_HEADER) + """\r?\n- """)
+    private val TODO_SNAPSHOT_PART = Regex("""^""" + Regex.escape(TODO_SNAPSHOT_HEADER) + """\r?\n- """)
+    /** agent/conversation_compression.py `_pruned_skill_reload_notice`, written after the task list. */
+    private val SKILL_RELOAD_NOTICE = Regex(
+        """^\[Skills pruned during compression — reload before acting on these tasks]\r?\nThe task list above crossed """,
+    )
     private val HEARTBEAT = Regex("""^\[Background process \S+ heartbeat #\d+ """)
     private val PROCESS = Regex("""^\[IMPORTANT: (?:Background process|\d+ background processes) [\s\S]*]$""")
     private val BATCH_SPLIT = Regex("""\n\n(?=\[IMPORTANT: )""")

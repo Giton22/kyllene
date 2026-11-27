@@ -92,7 +92,6 @@ class PushSetupTest {
         val profiles = mutableMapOf<String, Copy?>()
         val failedProfiles = mutableSetOf<String>()
         val failedChecks = mutableSetOf<String>()
-        var profilesSupported = true
         var profileListFails = false
         val calls = mutableListOf<JsonObject>()
         val registered = mutableSetOf<String>()
@@ -109,9 +108,9 @@ class PushSetupTest {
                     calls += request
                     val params = request["params"] as? JsonObject ?: JsonObject(emptyMap())
                     val reply = when ((request["method"] as JsonPrimitive).content) {
-                        "profiles.list" -> if (profileListFails) "ERROR:profiles unavailable" else if (profilesSupported) buildJsonObject {
+                        "profiles.list" -> if (profileListFails) "ERROR:profiles unavailable" else buildJsonObject {
                             put("profiles", JsonArray(profiles.keys.map { name -> buildJsonObject { put("name", name) } }))
-                        }.toString() else "UNSUPPORTED"
+                        }.toString()
                         "plugins.manage" -> manage(params)
                         "session.create" -> if (!authority) "UNSUPPORTED" else {
                             val id = chats.firstOrNull() ?: "chat-${++minted}".also { if (!chatsVanish) chats += it }
@@ -612,18 +611,6 @@ class PushSetupTest {
 
         assertEquals(PushStatus.State.Outdated, s.setup.status.value.state)
         assertTrue(s.setup.status.value.update?.needed == true)
-    }
-
-    @Test
-    fun gatewaysWithoutProfilesKeepTheirExistingUpdateFlow() = runTest {
-        val s = setup(FakeKeys())
-        val gateway = FakeGateway(installed = true, version = "0.1.1").apply { profilesSupported = false }
-        connect(s, gateway)
-        s.setup.enable()
-        s.setup.updatePlugin()
-
-        assertEquals(PushApi.PLUGIN_VERSION, gateway.version)
-        assertEquals(PushStatus.State.On, s.setup.status.value.state)
     }
 
     @Test

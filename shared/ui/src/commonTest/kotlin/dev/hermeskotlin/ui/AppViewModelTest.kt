@@ -272,7 +272,7 @@ class AppViewModelTest {
     }
 
     // Push is never registered; bot-call tests supply their own connected RPC transport.
-    private object NoPushKeys : PushKeys {
+    internal object NoPushKeys : PushKeys {
         override val deviceId = "test"
         override fun registration(name: String) = error("not registering in tests")
         override fun pinned(gatewayUrl: String): PushGateway? = null

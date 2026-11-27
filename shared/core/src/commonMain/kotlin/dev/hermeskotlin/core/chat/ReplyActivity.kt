@@ -22,12 +22,31 @@ fun List<SessionMessage>.hasUnreadBotMessage(readUpTo: Double): Boolean = any { 
             AgentMessage.parse(row.text, requireEnvelope = row.displayKind == "internal_notification") != null)
 }
 
-/** A silent completion can leave the previous, already finished reply at the end of the chat. */
-fun ChatState.newFinishedReply(previous: ChatState?): ChatMessage.Assistant? {
+/**
+ * The reply a turn that just ended gave, from the chat as it was when the turn began ([atStart]).
+ *
+ * A silent completion can leave the previous, already finished reply at the end of the chat: Bot Chat's
+ * `message.complete` carries no text for one, so the turn's empty bubble goes and the reply before it is last again.
+ * That reply was there, finished, when the turn began. Measured from the start, not from the state just before the
+ * end ([previous]): a reconnect reads the stored transcript, this turn's reply finished in it, before it says the turn
+ * is over.
+ *
+ * A history read during the turn (a reconnect, a turn that isn't ours) gives the old reply its stored row's key. A
+ * reply this turn didn't stream, under a key the start doesn't have, is the old one when its words are the same,
+ * unless the chat now has more such replies than it had at the start: a routine's "Nothing new." read back on a
+ * reconnect is a new one. (Times can't tell them apart: the read dates the old reply by the turn's later steps.)
+ */
+fun ChatState.newFinishedReply(atStart: ChatState?, previous: ChatState? = atStart): ChatMessage.Assistant? {
     val reply = messages.lastOrNull() as? ChatMessage.Assistant ?: return null
-    val old = previous?.messages?.lastOrNull() as? ChatMessage.Assistant ?: return reply
-    return reply.takeUnless {
-        !old.streaming && old.key == it.key && old.text == it.text &&
-            old.outcome == it.outcome && old.error == it.error
-    }
+    val before = atStart?.messages ?: return reply
+    val streamed = previous?.messages?.any { it.key == reply.key && it is ChatMessage.Assistant && it.streaming } == true
+    val old = before.lastOrNull { it.key == reply.key } as? ChatMessage.Assistant
+        ?: (before.lastOrNull { it is ChatMessage.Assistant && !it.streaming } as? ChatMessage.Assistant)
+            ?.takeUnless { old -> streamed || messages.count { it.sameReplyAs(old) } > before.count { it.sameReplyAs(old) } }
+        ?: return reply
+    return reply.takeUnless { it.sameReplyAs(old) }
 }
+
+/** A finished reply with [old]'s words and outcome. */
+private fun ChatMessage.sameReplyAs(old: ChatMessage.Assistant): Boolean =
+    this is ChatMessage.Assistant && !streaming && !old.streaming && text == old.text && outcome == old.outcome && error == old.error

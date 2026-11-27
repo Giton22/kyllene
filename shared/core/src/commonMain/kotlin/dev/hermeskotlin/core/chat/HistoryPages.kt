@@ -17,7 +17,8 @@ internal const val HISTORY_PAGE_MAX = 500
  * left out, it comes whole with that page. A page without a prompt (one very long turn) is kept as it is.
  */
 internal fun List<SessionMessage>.fromFirstTurn(): List<SessionMessage> {
-    val first = indexOfFirst { it.role == "user" && !it.isHidden }
+    // A user row the chat leaves out (a compaction reminder mid-turn, say) isn't a prompt.
+    val first = indexOfFirst { it.role == "user" && !it.isHidden && !TranscriptRows.leavesOut(it) }
     return if (first > 0) drop(first) else this
 }
 
