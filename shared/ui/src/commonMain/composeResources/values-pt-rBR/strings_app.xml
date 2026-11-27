@@ -293,6 +293,8 @@
     <string name="signin_with_browser">Entrar com o navegador</string>
     <string name="signin_waiting_browser">Aguardando o navegador…</string>
     <string name="signin_finish_in_browser">Termine de entrar na página que abriu. O Kyllene volta sozinho quando você terminar.</string>
+    <string name="signin_battery_restricted">O uso da bateria do Kyllene está como Restrito, então o Android não deixa o navegador devolver a entrada. Permita o uso em segundo plano e volte aqui.</string>
+    <string name="signin_battery_settings">Configurações de bateria</string>
     <string name="signin_different_gateway">Usar outro Gateway</string>
     <string name="signin_gateway_chip">Gateway %1$s</string>
     <string name="signin_or">ou</string>

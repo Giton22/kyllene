@@ -225,6 +225,7 @@ enum class PreviewScene(val label: String) {
     Connect("Connecting to a gateway that answered"),
     ConnectFailed("A gateway that didn't answer"),
     SignIn("Signing in"),
+    SignInRestricted("A browser sign-in waiting with battery usage Restricted"),
 }
 
 /**
@@ -436,6 +437,23 @@ fun HeraldPreview(scene: PreviewScene, dark: Boolean = true, accent: String = DE
                     onSignInWithBrowser = {},
                     onCancelBrowser = {},
                     onChangeGateway = {},
+                )
+                PreviewScene.SignInRestricted -> SignInView(
+                    host = "hermes.example.ts.net",
+                    notice = null,
+                    state = SignInUiState(
+                        signingIn = true,
+                        waitingForBrowser = true,
+                        batteryRestricted = true,
+                        methods = SignInMethods(password = false, browser = true),
+                    ),
+                    username = remember { TextFieldState() },
+                    password = remember { TextFieldState() },
+                    onSignIn = {},
+                    onSignInWithBrowser = {},
+                    onCancelBrowser = {},
+                    onChangeGateway = {},
+                    onBatterySettings = {},
                 )
                 PreviewScene.Loading -> OpenSidebar {
                     SidebarPage { InsightsView(InsightsUiState(), onBack = {}, onSelectPeriod = {}, onRetry = {}) }
@@ -958,6 +976,10 @@ private fun ConnectFailedPreview() = HeraldPreview(PreviewScene.ConnectFailed)
 @Preview(widthDp = 412, heightDp = 892)
 @Composable
 private fun SignInPreview() = HeraldPreview(PreviewScene.SignIn)
+
+@Preview(widthDp = 360, heightDp = 780)
+@Composable
+private fun SignInRestrictedPreview() = HeraldPreview(PreviewScene.SignInRestricted)
 
 /** The welcome screen after a test of [address] came back with [result]. */
 @Composable

@@ -293,6 +293,8 @@
     <string name="signin_with_browser">Se connecter avec le navigateur</string>
     <string name="signin_waiting_browser">En attente du navigateur…</string>
     <string name="signin_finish_in_browser">Terminez la connexion sur la page qui s’est ouverte. Kyllene revient tout seul quand c’est fait.</string>
+    <string name="signin_battery_restricted">L’utilisation de la batterie de Kyllene est Restreinte : Android empêche le navigateur de renvoyer la connexion. Autorisez l’utilisation en arrière-plan, puis revenez ici.</string>
+    <string name="signin_battery_settings">Paramètres de batterie</string>
     <string name="signin_different_gateway">Utiliser un autre Gateway</string>
     <string name="signin_gateway_chip">Gateway %1$s</string>
     <string name="signin_or">ou</string>

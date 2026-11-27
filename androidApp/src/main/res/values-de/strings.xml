@@ -42,6 +42,8 @@
     <string name="notification_read_aloud_stop">Stopp</string>
     <string name="notification_read_aloud_pause">Pause</string>
     <string name="notification_read_aloud_resume">Fortsetzen</string>
+    <string name="notification_sign_in_title">Anmeldung wird abgeschlossen…</string>
+    <string name="notification_sign_in_text">Warte darauf, dass der Browser dich zurückbringt</string>
 
     <string name="notification_approve_title">Diesen Befehl erlauben?</string>
     <string name="notification_question_title">Hermes hat eine Frage</string>

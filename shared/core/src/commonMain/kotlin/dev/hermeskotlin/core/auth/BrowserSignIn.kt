@@ -3,7 +3,12 @@ package dev.hermeskotlin.core.auth
 import dev.hermeskotlin.core.gateway.GatewayUrl
 import dev.hermeskotlin.core.network.ApiResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.concurrent.atomics.AtomicInt
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
+import kotlin.concurrent.atomics.decrementAndFetch
+import kotlin.concurrent.atomics.incrementAndFetch
 import kotlin.io.encoding.Base64
 import kotlin.time.Duration.Companion.minutes
 
@@ -27,7 +32,21 @@ interface LoopbackListener : AutoCloseable {
  * its own password page), and the gateway sends the browser to [LoopbackReceiver]'s address with a one-time code.
  * The code and the PKCE verifier, which never left the app, then buy the bearer tokens.
  */
-class BrowserSignIn(private val auth: AuthApi, private val loopback: LoopbackReceiver) {
+class BrowserSignIn(
+    private val auth: AuthApi,
+    private val loopback: LoopbackReceiver,
+    private val keepAlive: SignInKeepAlive = SignInKeepAlive.None,
+) {
+
+    /**
+     * Sign-ins waiting for the browser. Usually one, but a cancelled one lets go only once its listener notices, which
+     * can be after the next one started: the app is held while any waits.
+     */
+    @OptIn(ExperimentalAtomicApi::class)
+    private val waiting = AtomicInt(0)
+
+    /** The platform won't let the browser hand a sign-in back (battery usage Restricted): see [SignInKeepAlive.restricted]. */
+    val restricted: StateFlow<Boolean> get() = keepAlive.restricted
 
     /** [openBrowser] shows the sign-in page. A blank [provider] lets the gateway pick, or ask when it has several. */
     suspend fun signIn(url: GatewayUrl, provider: String?, openBrowser: (String) -> Unit): ApiResult<Unit> {
@@ -41,17 +60,33 @@ class BrowserSignIn(private val auth: AuthApi, private val loopback: LoopbackRec
         return listener.use {
             val verifier = pkceVerifier()
             val state = randomToken(16)
-            openBrowser(auth.nativeAuthorizeUrl(url, provider, pkceChallenge(verifier), listener.redirectUri, state))
-            // The gateway forgets an unfinished sign-in after 10 minutes. Anything else that reaches the address (a
-            // reload of an old page, another app) doesn't carry this sign-in's state and is passed over.
-            val code = withTimeoutOrNull(10.minutes) {
-                var query = listener.awaitCallback()
-                while (query["state"] != state || query["code"].isNullOrEmpty()) query = listener.awaitCallback()
-                query.getValue("code")
+            // Held while the app is still in front, which is when Android allows it, and until the code is redeemed.
+            hold()
+            try {
+                openBrowser(auth.nativeAuthorizeUrl(url, provider, pkceChallenge(verifier), listener.redirectUri, state))
+                // The gateway forgets an unfinished sign-in after 10 minutes. Anything else that reaches the address (a
+                // reload of an old page, another app) doesn't carry this sign-in's state and is passed over.
+                val code = withTimeoutOrNull(10.minutes) {
+                    var query = listener.awaitCallback()
+                    while (query["state"] != state || query["code"].isNullOrEmpty()) query = listener.awaitCallback()
+                    query.getValue("code")
+                }
+                if (code == null) ApiResult.Failed(0, "The sign-in took too long. Try again.")
+                else auth.redeemNativeCode(url, code, verifier)
+            } finally {
+                release()
             }
-            if (code == null) ApiResult.Failed(0, "The sign-in took too long. Try again.")
-            else auth.redeemNativeCode(url, code, verifier)
         }
+    }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun hold() {
+        if (waiting.incrementAndFetch() == 1) keepAlive.hold()
+    }
+
+    @OptIn(ExperimentalAtomicApi::class)
+    private fun release() {
+        if (waiting.decrementAndFetch() == 0) keepAlive.release()
     }
 }
 

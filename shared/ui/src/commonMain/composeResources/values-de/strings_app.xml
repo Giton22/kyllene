@@ -293,6 +293,8 @@
     <string name="signin_with_browser">Mit Browser anmelden</string>
     <string name="signin_waiting_browser">Warte auf den Browser…</string>
     <string name="signin_finish_in_browser">Schließ die Anmeldung auf der geöffneten Seite ab. Kyllene kommt danach von selbst zurück.</string>
+    <string name="signin_battery_restricted">Die Akkunutzung von Kyllene ist auf „Eingeschränkt“ gestellt, deshalb lässt Android den Browser die Anmeldung nicht zurückgeben. Erlaube die Nutzung im Hintergrund und komm dann hierher zurück.</string>
+    <string name="signin_battery_settings">Akku-Einstellungen</string>
     <string name="signin_different_gateway">Anderes Gateway nutzen</string>
     <string name="signin_gateway_chip">Gateway %1$s</string>
     <string name="signin_or">oder</string>

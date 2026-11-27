@@ -42,6 +42,8 @@
     <string name="notification_read_aloud_stop">Leállítás</string>
     <string name="notification_read_aloud_pause">Szünet</string>
     <string name="notification_read_aloud_resume">Folytatás</string>
+    <string name="notification_sign_in_title">Bejelentkezés befejezése…</string>
+    <string name="notification_sign_in_text">Várakozás, hogy a böngésző visszahozzon</string>
 
     <string name="notification_approve_title">Engedélyezed ezt a parancsot?</string>
     <string name="notification_question_title">Hermesnek kérdése van</string>

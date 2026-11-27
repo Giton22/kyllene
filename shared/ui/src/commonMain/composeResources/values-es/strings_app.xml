@@ -293,6 +293,8 @@
     <string name="signin_with_browser">Iniciar sesión con el navegador</string>
     <string name="signin_waiting_browser">Esperando al navegador…</string>
     <string name="signin_finish_in_browser">Termina de iniciar sesión en la página que se abrió. Kyllene vuelve sola cuando acabes.</string>
+    <string name="signin_battery_restricted">El uso de batería de Kyllene está en Restringido, así que Android no deja que el navegador devuelva el inicio de sesión. Permite el uso en segundo plano y vuelve aquí.</string>
+    <string name="signin_battery_settings">Ajustes de batería</string>
     <string name="signin_different_gateway">Usar otro Gateway</string>
     <string name="signin_gateway_chip">Gateway %1$s</string>
     <string name="signin_or">o</string>
