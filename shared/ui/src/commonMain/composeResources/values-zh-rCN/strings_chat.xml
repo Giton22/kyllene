@@ -286,6 +286,10 @@
     <string name="chat_usage_account">账户</string>
 
     <string name="chat_requests_more">还有 %1$d 个</string>
+    <string name="chat_request_minimize">最小化</string>
+    <string name="chat_request_restore">展开</string>
+    <string name="chat_request_pill_approval">需要批准</string>
+    <string name="chat_request_pill_question">有问题待回答</string>
     <string name="chat_stop_task_button">停止任务</string>
     <string name="chat_approval_title">允许此命令？</string>
     <string name="chat_approval_tool">Hermes 想用 %1$s 运行它。</string>

@@ -293,6 +293,10 @@
     <string name="chat_usage_account">Fiók</string>
 
     <string name="chat_requests_more">+%1$d további</string>
+    <string name="chat_request_minimize">Összecsukás</string>
+    <string name="chat_request_restore">Kibontás</string>
+    <string name="chat_request_pill_approval">Engedély szükséges</string>
+    <string name="chat_request_pill_question">Kérdés vár</string>
     <string name="chat_stop_task_button">Feladat leállítása</string>
     <string name="chat_approval_title">Engedélyezed ezt a parancsot?</string>
     <string name="chat_approval_tool">A Hermes ezzel futtatná: %1$s.</string>
