@@ -61,6 +61,7 @@
     <string name="startup_shows_window">Az automatikus indítás ablakot fog megjeleníteni.</string>
     <string name="startup_not_saved">Az asztali környezet frissítette az automatikus indítást; az alkalmazás beállítása nem lett mentve.</string>
     <string name="startup_incomplete">Az automatikus indítási kérés nem fejeződött be.</string>
+    <string name="startup_no_answer">Az asztali környezet nem válaszolt az automatikus indítási kérésre.</string>
     <string name="startup_enable_reason">A Kyllene indítása a tálcán bejelentkezéskor.</string>
     <string name="startup_disable_reason">A Kyllene automatikus indításának leállítása bejelentkezéskor.</string>
 </resources>

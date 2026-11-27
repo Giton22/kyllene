@@ -19,6 +19,7 @@ import org.junit.Assume.assumeTrue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -63,10 +64,16 @@ class BackgroundPortalTest {
         assertTrue(request.isCancelled)
     }
 
-    @Test fun `response timeout closes the owned request`() = fixture { service, portal ->
+    @Test fun `response timeout closes the owned request and says the desktop didn't answer`() = fixture { service, portal ->
         service.pending = true
-        assertFails { portal.request(true) }
+        assertFailsWith<StartupNoAnswer> { portal.request(true) }
         service.closed.get(3, TimeUnit.SECONDS)
+    }
+
+    @Test fun `a portal failure after an allow is not a decline`() = fixture { service, portal ->
+        service.code = 2
+        service.results = mapOf("background" to Variant(true), "autostart" to Variant(false))
+        assertFailsWith<StartupNotApplied> { portal.request(true) }
     }
 
     @Test fun `permission reasons follow the system language`() = withLocale("es") {

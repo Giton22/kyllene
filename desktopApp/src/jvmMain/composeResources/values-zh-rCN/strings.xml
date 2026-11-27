@@ -61,6 +61,7 @@
     <string name="startup_shows_window">启动时将显示窗口。</string>
     <string name="startup_not_saved">桌面已更新启动设置，但未保存应用偏好设置。</string>
     <string name="startup_incomplete">启动请求未完成。</string>
+    <string name="startup_no_answer">桌面未响应启动请求。</string>
     <string name="startup_enable_reason">登录时将 Kyllene 启动到系统托盘。</string>
     <string name="startup_disable_reason">登录时不再自动启动 Kyllene。</string>
 </resources>

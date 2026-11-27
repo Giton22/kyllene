@@ -5,6 +5,8 @@ import dev.hermeskotlin.desktop.resources.*
 import org.jetbrains.compose.resources.StringResource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -18,6 +20,7 @@ internal enum class StartupMessage(val text: StringResource) {
     ShowsWindow(Res.string.startup_shows_window),
     NotSaved(Res.string.startup_not_saved),
     Incomplete(Res.string.startup_incomplete),
+    NoAnswer(Res.string.startup_no_answer),
 }
 internal data class StartupState(val choice: StartupChoice, val busy: Boolean = false, val message: StartupMessage? = null)
 
@@ -51,7 +54,8 @@ internal class BackgroundStartup private constructor(
                 else -> null
             })
             try {
-                withContext(Dispatchers.IO) { store.put(KEY, choice.name) }
+                // The desktop has already changed its entry, so a Quit now mustn't leave the old answer stored.
+                withContext(NonCancellable + Dispatchers.IO) { store.put(KEY, choice.name) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -59,6 +63,10 @@ internal class BackgroundStartup private constructor(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (_: StartupNoAnswer) {
+            mutable.value = mutable.value.copy(message = StartupMessage.NoAnswer)
+        } catch (_: StartupNotApplied) {
+            mutable.value = mutable.value.copy(message = StartupMessage.NotApplied)
         } catch (_: Exception) {
             mutable.value = mutable.value.copy(message = StartupMessage.Incomplete)
         } finally {
@@ -78,6 +86,17 @@ internal class BackgroundStartup private constructor(
             return BackgroundStartup(store, request, initial ?: StartupChoice.Off)
         }
     }
+}
+
+/** Waits between asks: at login the portal can take a while to start, and a later launch only reaches this one. */
+internal val PORTAL_RETRIES = listOf(0L, 5_000L, 15_000L, 30_000L, 60_000L)
+
+internal suspend fun awaitPortal(available: suspend () -> Boolean, waits: List<Long> = PORTAL_RETRIES): Boolean {
+    for (wait in waits) {
+        delay(wait)
+        if (available()) return true
+    }
+    return false
 }
 
 internal fun backgroundLaunch(args: Array<String>, choice: StartupChoice, tray: Boolean): Boolean =

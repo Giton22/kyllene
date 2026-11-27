@@ -109,14 +109,70 @@ class BackgroundStartupTest {
                         java.io.File(dir, "instance.port").writeText(server.localPort.toString())
                         assertFalse(backgroundLaunch(arrayOf("--background"), StartupChoice.Background, false))
                         assertNull(SingleInstance.claim(dir, foreground = !backgroundInvocation(arrayOf("--background"), true)))
-                        server.soTimeout = 100
-                        kotlin.test.assertFailsWith<java.net.SocketTimeoutException> { server.accept() }
+                        server.soTimeout = 1_000
+                        server.accept().use { assertNull(it.getInputStream().bufferedReader().readLine()) }
                         assertNull(SingleInstance.claim(dir))
                         server.accept().use { assertEquals("show", it.getInputStream().bufferedReader().readLine()) }
                     }
                 }
             }
         } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun `a background launch still runs when the lock holder doesn't answer`() {
+        val dir = java.nio.file.Files.createTempDirectory("startup-instance-").toFile()
+        try {
+            java.io.RandomAccessFile(java.io.File(dir, "instance.lock"), "rw").use { file ->
+                file.channel.lock().use {
+                    // A port nothing listens on: the holder is on its way out, or hung.
+                    val port = java.net.ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress()).use { it.localPort }
+                    java.io.File(dir, "instance.port").writeText(port.toString())
+                    kotlin.test.assertNotNull(SingleInstance.claim(dir, foreground = false)).close()
+                    java.io.File(dir, "instance.port").delete()
+                    kotlin.test.assertNotNull(SingleInstance.claim(dir, foreground = false)).close()
+                }
+            }
+        } finally { dir.deleteRecursively() }
+    }
+
+    @Test fun `no answer and a portal failure each say what happened and keep the choice`() = runTest {
+        var failure: Exception = StartupNoAnswer()
+        val startup = BackgroundStartup.load(InMemoryKeyValueStore()) { throw failure }
+        startup.set(true)
+        assertEquals(StartupMessage.NoAnswer, startup.state.value.message)
+        failure = StartupNotApplied()
+        startup.set(true)
+        assertEquals(StartupMessage.NotApplied, startup.state.value.message)
+        assertEquals(StartupChoice.Off, startup.state.value.choice)
+        assertFalse(startup.state.value.busy)
+    }
+
+    @Test fun `quitting while the answer is being saved still saves it`() = runTest {
+        val writing = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val backing = InMemoryKeyValueStore()
+        val store = object : KeyValueStore by backing {
+            override suspend fun put(key: String, value: String) {
+                writing.complete(Unit); release.await(); backing.put(key, value)
+            }
+        }
+        val startup = BackgroundStartup.load(store) { StartupGrant(true, true) }
+        val pending = async { startup.set(true) }
+        writing.await()
+        pending.cancel()
+        release.complete(Unit)
+        pending.join()
+        assertEquals(StartupChoice.Background, BackgroundStartup.load(backing) { null }.state.value.choice)
+    }
+
+    @Test fun `the portal is asked again while it starts`() = runTest {
+        var asks = 0
+        assertTrue(awaitPortal({ ++asks == 3 }))
+        assertEquals(3, asks)
+        assertEquals(20_000L, testScheduler.currentTime)
+        asks = 0
+        assertFalse(awaitPortal({ asks++; false }))
+        assertEquals(PORTAL_RETRIES.size, asks)
     }
 
     @Test fun `ordinary launches and links never become quiet background handoffs`() {

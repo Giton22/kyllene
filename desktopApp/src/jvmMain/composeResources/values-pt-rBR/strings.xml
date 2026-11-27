@@ -61,6 +61,7 @@
     <string name="startup_shows_window">A inicialização automática mostrará uma janela.</string>
     <string name="startup_not_saved">O ambiente de trabalho atualizou a inicialização automática; a preferência do aplicativo não foi salva.</string>
     <string name="startup_incomplete">A solicitação de inicialização automática não foi concluída.</string>
+    <string name="startup_no_answer">O ambiente de trabalho não respondeu à solicitação de inicialização automática.</string>
     <string name="startup_enable_reason">Iniciar o Kyllene na bandeja ao entrar.</string>
     <string name="startup_disable_reason">Parar de iniciar o Kyllene automaticamente ao entrar.</string>
 </resources>

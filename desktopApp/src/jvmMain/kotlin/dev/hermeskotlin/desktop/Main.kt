@@ -165,9 +165,9 @@ fun main(args: Array<String>) {
     val links = koin.get<ChatLinks>()
     koin.get<PushSetup>().start()
     val portal = BackgroundPortal()
-    val startup = if (quietLaunch && startupCapable) runBlocking {
-        if (portal.available()) BackgroundStartup.load(koin.get(), portal::request) else null
-    } else null
+    // The choice the desktop last confirmed, from the app's own store: a portal still starting at login doesn't hold
+    // up the window or decide whether it shows.
+    val startup = if (startupCapable) runBlocking { BackgroundStartup.load(koin.get(), portal::request) } else null
     val startHidden = startup != null && backgroundLaunch(args, startup.state.value.choice, startupCapable)
     val saved = WindowMemory.read(koin.get())
     // The same mark as docs/logo.svg, for the title bar, the taskbar and the tray.
@@ -182,14 +182,12 @@ fun main(args: Array<String>) {
         val back = remember { DesktopBack() }
         val settings = settingsStore.settings.collectAsState().value ?: AppSettings()
         var windowShown by remember { mutableStateOf(!startHidden) }
-        var startupControl by remember { mutableStateOf(startup) }
+        // Offered once the portal answers. At login it may still be starting, and a later launch only reaches this
+        // instance, so it's asked again for a while rather than leaving no way to turn startup off until Quit.
+        var startupControl by remember { mutableStateOf<BackgroundStartup?>(null) }
         val startupState = startupControl?.state?.collectAsState()?.value
-        // Also after a login launch whose portal didn't answer in time: a later launch only reaches this instance, so
-        // without this the tray would offer no way to turn startup off until Quit.
         LaunchedEffect(Unit) {
-            if (startupCapable && startupControl == null && portal.available()) {
-                startupControl = BackgroundStartup.load(koin.get(), portal::request)
-            }
+            if (startup != null && awaitPortal(portal::available)) startupControl = startup
         }
         var frame by remember { mutableStateOf<Frame?>(null) }
         val focused = remember { MutableStateFlow(false) }

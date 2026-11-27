@@ -6,6 +6,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
@@ -33,6 +34,12 @@ internal interface BackgroundRequest : DBusInterface {
     class Response(path: String, val response: UInt32, val results: Map<String, Variant<*>>) :
         DBusSignal(path, response, results)
 }
+
+/** The desktop didn't answer the request in time; it was closed. */
+internal class StartupNoAnswer : Exception()
+
+/** The portal answered that it couldn't make the change. */
+internal class StartupNotApplied : Exception()
 
 /** The portal, not a host helper, owns the login entry. Each operation owns its connection and request. */
 internal class BackgroundPortal(private val address: String? = null, private val responseTimeoutMillis: Long = 300_000) {
@@ -74,8 +81,12 @@ internal class BackgroundPortal(private val address: String? = null, private val
                     dispatched = true
                     path = bus.call<DBusPath>(portal, "RequestBackground", "", options).path
                     check(path == expected) { "Unexpected background request handle." }
-                    val response = result.get(responseTimeoutMillis, TimeUnit.MILLISECONDS)
+                    val response = try {
+                        result.get(responseTimeoutMillis, TimeUnit.MILLISECONDS)
+                    } catch (_: TimeoutException) { throw StartupNoAnswer() }
                     terminal = true
+                    // 1 is the user's no; 2 is the portal failing, after an Allow too (it couldn't write the entry).
+                    if (response.response.toLong() == 2L) throw StartupNotApplied()
                     if (response.response.toLong() != 0L) null else {
                         val background = response.results["background"]?.value
                         val autostart = response.results["autostart"]?.value

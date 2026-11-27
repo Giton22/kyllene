@@ -61,6 +61,7 @@
     <string name="startup_shows_window">Beim Autostart wird ein Fenster angezeigt.</string>
     <string name="startup_not_saved">Der Desktop hat den Autostart aktualisiert; die App-Einstellung wurde nicht gespeichert.</string>
     <string name="startup_incomplete">Die Autostart-Anfrage wurde nicht abgeschlossen.</string>
+    <string name="startup_no_answer">Der Desktop hat auf die Autostart-Anfrage nicht geantwortet.</string>
     <string name="startup_enable_reason">Kyllene bei der Anmeldung im Infobereich starten.</string>
     <string name="startup_disable_reason">Kyllene bei der Anmeldung nicht mehr automatisch starten.</string>
 </resources>

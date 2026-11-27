@@ -61,6 +61,7 @@
     <string name="startup_shows_window">Le démarrage automatique affichera une fenêtre.</string>
     <string name="startup_not_saved">Le bureau a mis à jour le démarrage automatique ; la préférence de l’application n’a pas été enregistrée.</string>
     <string name="startup_incomplete">La demande de démarrage automatique n’a pas abouti.</string>
+    <string name="startup_no_answer">Le bureau n’a pas répondu à la demande de démarrage automatique.</string>
     <string name="startup_enable_reason">Lancer Kyllene dans la zone de notification à la connexion.</string>
     <string name="startup_disable_reason">Ne plus lancer Kyllene automatiquement à la connexion.</string>
 </resources>
