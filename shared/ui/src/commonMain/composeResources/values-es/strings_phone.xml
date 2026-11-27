@@ -114,7 +114,7 @@
     <string name="phone_tool_health">Salud</string>
     <string name="phone_tool_health_detail">Pasos, sueño y frecuencia cardiaca de Health Connect, tanto como permitas allí. Mientras Kyllene está abierta, salvo que también lo permitas con ella cerrada.</string>
     <string name="phone_tool_show_ui">Pantallas en el chat (experimento)</string>
-    <string name="phone_tool_show_ui_detail">El agente dibuja una pequeña pantalla bajo su respuesta, con botones, opciones o un formulario, y espera tu toque hasta 5 minutos. Solo Android.</string>
+    <string name="phone_tool_show_ui_detail">El agente dibuja una pequeña pantalla bajo su respuesta, con botones, opciones o un formulario, y espera tu toque hasta 5 minutos.</string>
     <string name="phone_tool_call_me">Hermes puede llamarme</string>
     <string name="phone_tool_call_me_detail">El agente te llama cuando algo no puede esperar o cuando le pides que te llame, también desde una tarea programada. Responde y Hermes te dice por qué en la llamada. Solo te llama a ti.</string>
 </resources>

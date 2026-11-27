@@ -263,6 +263,7 @@ class PhoneToolsBridgeTest {
         keys: PushKeys = Keys(),
         pushAnywhere: Boolean = false,
         store: KeyValueStore = InMemoryKeyValueStore(),
+        desktopScreensOnly: Boolean = false,
     ): Setup {
         val cookies = PersistentCookiesStorage(InMemoryKeyValueStore())
         // On the test's scheduler: on a thread of its own, a slow ticket lets virtual time run past a call's deadline.
@@ -280,6 +281,7 @@ class PhoneToolsBridgeTest {
         val api = PushApi(connection)
         val bridge = PhoneToolsBridge(
             api, keys, store, connection, gateways, settings, runner, backgroundScope, { "Pixel" }, { currentTime },
+            desktopScreensOnly = desktopScreensOnly,
         )
         bridge.start()
         return Setup(bridge, connection, settings, store, api)
@@ -298,6 +300,26 @@ class PhoneToolsBridgeTest {
     private suspend fun until(condition: () -> Boolean) = withTimeout(60_000) { while (!condition()) delay(10) }
 
     private fun Plugin.error(id: String) = answers[id]?.get("error")?.jsonPrimitive?.contentOrNull
+
+    @Test
+    fun desktopOffersAndRunsOnlyChatScreens() = runTest {
+        val runner = Runner()
+        val s = setup(
+            runner, on = listOf(PhoneTool.ShowUi, PhoneTool.Battery),
+            keys = Keys(URL), pushAnywhere = true, desktopScreensOnly = true,
+        )
+        val plugin = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id)
+            call("battery", PhoneTool.Battery.id)
+        }
+        connect(s, plugin)
+        until { plugin.answers.keys == setOf("screen", "battery") }
+        assertEquals(listOf(listOf(PhoneTool.ShowUi.id)), plugin.reports)
+        assertNull(plugin.reportBodies.single()["push_id"])
+        assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
+        assertEquals(PhoneTool.ShowUi.id, plugin.answers["screen"]?.get("result")?.jsonObject?.get("tool")?.jsonPrimitive?.content)
+        assertTrue(plugin.error("battery").orEmpty().isNotBlank())
+    }
 
     @Test
     fun aPartialUpdateKeepsPhoneToolsWorkingAndTheFailedBotVisible() = runTest {

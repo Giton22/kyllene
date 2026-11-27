@@ -7,6 +7,8 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -45,6 +47,37 @@ class AgentScreensTest {
         assertTrue(a.isActive)
         screens.answer("chat-a", "pick-1", JsonPrimitive("a"))
         assertEquals(JsonPrimitive("a"), a.await())
+    }
+
+    @Test
+    fun aNonBlockingCardReportsSuccessOnlyAfterItDraws() = runTest {
+        val screens = AgentScreens()
+        val call = async { screens.await(screen("pick").copy(wait = false), "chat-a") }
+        runCurrent()
+        assertEquals(emptyList(), screens.live.value)
+        assertFalse(screens.answer("chat-a", "pick", JsonPrimitive("x")))
+        assertTrue(call.isActive)
+        screens.shown("chat-a", setOf("pick"))
+        assertEquals(buildJsonObject { put("shown", true) }, call.await())
+    }
+
+    @Test
+    fun desktopTapsBelongToTheOriginalGatewayProfileAndChatOwner() = runTest {
+        val screens = AgentScreens()
+        val chat = desktopAgentScreenChat("https://a.example", "work", "chat-1")
+        var ownsChat = true
+        val call = async { screens.await(screen("pick"), chat) { ownsChat } }
+        runCurrent()
+        screens.shown(chat, setOf("pick"))
+        val differentGateway = desktopAgentScreenChat("https://b.example", "work", "chat-1")
+        val differentProfile = desktopAgentScreenChat("https://a.example", "personal", "chat-1")
+        val result = JsonPrimitive("tapped")
+        assertFalse(screens.answer(differentGateway, "pick", result))
+        assertFalse(screens.answer(differentProfile, "pick", result))
+        ownsChat = false
+        assertFalse(screens.answer(chat, "pick", result))
+        assertTrue(call.isActive)
+        call.cancel()
     }
 
     @Test

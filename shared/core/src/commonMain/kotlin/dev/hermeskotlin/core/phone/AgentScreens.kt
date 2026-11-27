@@ -9,6 +9,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
  * The agent's screens in the chat that a `phone_show_ui` call waits on. The tool [await]s the user's answer; the
@@ -24,7 +29,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
             surfaceId in surfaceIds && (this.chat == null || chat == null || this.chat == chat)
     }
 
-    private class Waiting(val live: Live) {
+    private class Waiting(val live: Live, val takesTaps: Boolean, val accepts: () -> Boolean) {
         val shown = CompletableDeferred<Unit>()
         private val answer = CompletableDeferred<Result<JsonElement>>()
 
@@ -84,8 +89,13 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
      * [PhoneToolException] when the chat doesn't show it soon (Kyllene is closed, or on another chat), when it
      * failed to draw, when the call ended, or when a newer call took over its surface.
      */
-    suspend fun await(screen: AgentScreen, chat: String?): JsonElement {
-        val entry = Waiting(Live(chat, screen.surfaceIds))
+    suspend fun await(
+        screen: AgentScreen,
+        chat: String?,
+        notShown: String = NOT_SHOWN,
+        accepts: () -> Boolean = { true },
+    ): JsonElement {
+        val entry = Waiting(Live(chat, screen.surfaceIds), screen.wait, accepts)
         var replaced = emptyList<Waiting>()
         waiting.update { list ->
             val (old, kept) = list.partition { it.live.chat == chat && it.live.surfaceIds.any(screen.surfaceIds::contains) }
@@ -95,7 +105,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         replaced.forEach { it.complete(Result.failure(PhoneToolException(REPLACED))) }
         publish()
         try {
-            withTimeoutOrNull(shownWithinMs) { entry.shown.await() } ?: throw PhoneToolException(NOT_SHOWN)
+            withTimeoutOrNull(shownWithinMs) { entry.shown.await() } ?: throw PhoneToolException(notShown)
             return entry.await()
         } finally {
             waiting.update { list -> list - entry }
@@ -105,22 +115,27 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
 
     /** The chat [chat] shows the screen with [surfaceIds] now, and can take its answer. */
     fun shown(chat: String?, surfaceIds: Set<String>) {
-        waiting.value.filter { w -> surfaceIds.any { w.live.matches(chat, it) } }.forEach { it.shown.complete(Unit) }
+        waiting.value.filter { w -> w.accepts() && surfaceIds.any { w.live.matches(chat, it) } }.forEach { entry ->
+            if (entry.takesTaps) entry.shown.complete(Unit)
+            else entry.complete(Result.success(buildJsonObject { put("shown", true) }))
+        }
     }
 
     /** Hands the user's [result] on [surfaceId] in [chat] to the call waiting on it; false when none waits. */
-    fun answer(chat: String?, surfaceId: String, result: JsonElement): Boolean = complete(chat, surfaceId, Result.success(result))
+    fun answer(chat: String?, surfaceId: String, result: JsonElement): Boolean =
+        waiting.value.lastOrNull { it.takesTaps && it.accepts() && it.live.matches(chat, surfaceId) }
+            ?.complete(Result.success(result)) == true
 
     /** Tells the call waiting on [surfaceId] in [chat] that its screen failed or ended ([message], for the agent). */
     fun fail(chat: String?, surfaceId: String, message: String): Boolean =
         complete(chat, surfaceId, Result.failure(PhoneToolException(message)))
 
     private fun complete(chat: String?, surfaceId: String, result: Result<JsonElement>): Boolean {
-        val entry = waiting.value.lastOrNull { it.live.matches(chat, surfaceId) } ?: return false
+        val entry = waiting.value.lastOrNull { it.accepts() && it.live.matches(chat, surfaceId) } ?: return false
         return entry.complete(result)
     }
 
-    private fun publish() = _live.update { waiting.value.map { it.live } }
+    private fun publish() = _live.update { waiting.value.filter { it.takesTaps }.map { it.live } }
 
     companion object {
         /**
@@ -144,3 +159,11 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
             "screen. Ask in words instead, or try again when they're in the chat."
     }
 }
+
+/** The desktop binds a request to its gateway and profile as well as its stored chat id. */
+fun desktopAgentScreenChat(gateway: String, profile: String?, chat: String): String =
+    buildJsonArray {
+        add(JsonPrimitive(gateway))
+        add(profile?.let { JsonPrimitive(it) } ?: JsonNull)
+        add(JsonPrimitive(chat))
+    }.toString()

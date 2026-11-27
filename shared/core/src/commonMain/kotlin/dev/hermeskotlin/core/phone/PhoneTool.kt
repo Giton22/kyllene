@@ -1,5 +1,6 @@
 package dev.hermeskotlin.core.phone
 
+import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.push.PluginUpdate
 import dev.hermeskotlin.core.settings.AppSettings
 import kotlinx.serialization.json.JsonElement
@@ -22,7 +23,7 @@ enum class PhoneTool(val id: String, val title: String, val detail: String) {
     Calendar("phone_calendar", "Calendar", "Your events in a time range. Adding or moving one asks you first."),
     Contacts("phone_contacts", "Contacts", "Looks people up by name, number or email: only their names, numbers and emails, a few at a time."),
     Health("phone_health", "Health", "Steps, sleep and heart rate from Health Connect, as much of it as you allow there. While Kyllene is open, unless you also allow it while closed."),
-    ShowUi("phone_show_ui", "Screens in the chat (experiment)", "The agent draws a small screen under its reply, with buttons, choices or a form, and waits up to 5 minutes for your tap. Android only."),
+    ShowUi("phone_show_ui", "Screens in the chat (experiment)", "The agent draws a small screen under its reply, with buttons, choices or a form, and waits up to 5 minutes for your tap."),
 
     /** Shown under Calls, not with the tools: it rings, as an approval does with [AppSettings.phoneRings]. */
     CallMe(
@@ -76,6 +77,10 @@ interface PhoneToolRunner {
      * the result the agent reads. Throws [PhoneToolException] for anything the agent should be told.
      */
     suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement
+
+    /** Desktop requests are bound to the socket that delivered them. */
+    suspend fun run(tool: PhoneTool, args: JsonObject, session: String, origin: JsonRpcClient?): JsonElement =
+        run(tool, args, session)
 }
 
 /** One time the agent used a phone tool: shown on the Phone tools page, so nothing happens unseen. */

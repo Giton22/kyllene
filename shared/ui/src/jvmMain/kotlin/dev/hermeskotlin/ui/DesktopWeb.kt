@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import org.koin.compose.getKoin
+import dev.hermeskotlin.core.chat.AgentScreen
+import kotlinx.serialization.json.JsonElement
 
 /**
  * A browser the desktop app lends the shared screens when the runtime it runs on has one (JetBrains Runtime's
@@ -19,6 +21,16 @@ interface DesktopWeb {
      */
     @Composable
     fun Widget(document: String, name: String, modifier: Modifier, keepsWheel: (title: String?, down: Boolean) -> Boolean, onFailure: (String) -> Unit)
+
+    @Composable
+    fun AgentCard(
+        screen: AgentScreen,
+        takesTaps: Boolean,
+        modifier: Modifier,
+        onRendered: () -> Unit,
+        onAnswer: (String, JsonElement) -> Unit,
+        onFailure: () -> Unit,
+    )
 
     /** A plugin's page at [url] on [gateway], signed in as the app is, with a bar that names it and closes it. */
     @Composable

@@ -13,6 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -21,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.composeunstyled.Text
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.AgentScreen
@@ -48,6 +50,7 @@ import kotlinx.serialization.json.contentOrNull
 import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.resources.*
 import org.jetbrains.compose.resources.stringResource
+import org.koin.compose.getKoin
 
 /**
  * What the app lends the agent's screens: the screens a `phone_show_ui` call waits on now, and where it's said
@@ -70,13 +73,30 @@ internal class AgentScreenContext(
 
 internal val LocalAgentScreens = compositionLocalOf { AgentScreenContext.None }
 
+@Composable
+internal fun rememberAgentScreenContext(): AgentScreenContext {
+    val koin = getKoin()
+    val agentScreens = remember(koin) { koin.getOrNull<AgentScreens>() } ?: return LocalAgentScreens.current
+    val liveScreens by agentScreens.live.collectAsStateWithLifecycle()
+    val screensGot by agentScreens.got.collectAsStateWithLifecycle()
+    return remember(liveScreens, screensGot) {
+        AgentScreenContext(
+            liveScreens,
+            agentScreens::shown,
+            agentScreens::answer,
+            agentScreens::fail,
+            // Only a chat Kyllene knows the id of: the phone's calls are kept by it.
+            onDrawn = { chat, screen -> if (chat != null) agentScreens.drawn(screen, chat) },
+            took = { chat, screen -> AgentScreens.took(screen, chat, screensGot) },
+        )
+    }
+}
+
 /** The stored id of the chat the screens are drawn in, so a tap answers that chat's call only. */
 internal val LocalAgentScreenChat = compositionLocalOf<String?> { null }
 
-/**
- * Whether this platform draws agent screens. Off, a `phone_show_ui` call is only its line among the tools.
- */
-internal expect val drawsAgentScreens: Boolean
+@Composable
+internal expect fun agentScreenRendererAvailable(): Boolean
 
 /**
  * Where a tap on a screen goes when no call waits on it: the chat's next message, from the user. Null where
@@ -97,6 +117,7 @@ internal expect fun AgentScreenSurface(
     onAnswer: (surfaceId: String, result: JsonElement) -> Unit,
     onFail: (surfaceId: String, message: String) -> Unit,
     modifier: Modifier = Modifier,
+    onRendered: () -> Unit = {},
 )
 
 /**
@@ -129,7 +150,7 @@ internal val LocalScreenViews = compositionLocalOf { ScreenViews(emptyMap(), emp
 internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     val screen = view.screen
     val call = view.latest
-    if (!drawsAgentScreens) return
+    if (!agentScreenRendererAvailable()) return
     val context = LocalAgentScreens.current
     val chat = LocalAgentScreenChat.current
     // So a call that updates it is checked against what's here, even one made after Kyllene restarted.
@@ -139,14 +160,19 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     // Saved, so it outlives the card scrolling out of the list.
     var wasLive by rememberSaveable(call.id) { mutableStateOf(false) }
     var tappedLive by rememberSaveable(call.id) { mutableStateOf(false) }
-    if (live) wasLive = true
     // Only while the app is in front: in the background nobody sees the screen, and the call should know.
     val resumed by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
-    if (waits && !wasLive && resumed.isAtLeast(Lifecycle.State.RESUMED)) {
-        // Said again and again while the call runs: the phone may hear of the call after the card is drawn.
-        LaunchedEffect(chat, screen.surfaceIds) {
+    var rendered by remember(call.id, screen.messages) { mutableStateOf(!isDesktop) }
+    var drawError by remember(call.id, screen.messages) { mutableStateOf<String?>(null) }
+    if (live && !isDesktop) wasLive = true
+    val confirming = if (isDesktop) call.running else waits && !wasLive
+    if ((rendered || drawError != null) && confirming && resumed.isAtLeast(Lifecycle.State.RESUMED)) {
+        // The bridge may receive the request after its card has been rendered.
+        LaunchedEffect(chat, screen.surfaceIds, drawError) {
             while (true) {
-                context.onShown(chat, screen.surfaceIds)
+                val error = drawError
+                if (error == null) context.onShown(chat, screen.surfaceIds)
+                else screen.surfaceIds.forEach { context.onFail(chat, it, error) }
                 delay(SHOWN_EVERY_MS)
             }
         }
@@ -184,7 +210,10 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
                     send(screenTapMessage(result))
                 }
             },
-            onFail = { surface, message -> context.onFail(chat, surface, message) },
+            onFail = { surface, message ->
+                if (isDesktop) drawError = message else context.onFail(chat, surface, message)
+            },
+            onRendered = { rendered = true },
             modifier = Modifier
                 .fillMaxWidth()
                 // Bounded, since the chat is a lazy list; a taller screen scrolls inside the card.

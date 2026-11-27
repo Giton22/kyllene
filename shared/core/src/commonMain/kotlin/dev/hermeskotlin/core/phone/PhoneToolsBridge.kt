@@ -13,6 +13,7 @@ import dev.hermeskotlin.core.push.PushApi
 import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushMessage
 import dev.hermeskotlin.core.rpc.JsonRpcClient
+import dev.hermeskotlin.core.settings.AppSettings
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.storage.KeyValueStore
 import io.ktor.util.date.getTimeMillis
@@ -65,6 +66,7 @@ class PhoneToolsBridge(
     private val scope: CoroutineScope,
     private val deviceName: () -> String,
     private val now: () -> Long = ::getTimeMillis,
+    private val desktopScreensOnly: Boolean = false,
 ) {
     private val _status = MutableStateFlow(PhoneToolsStatus())
     val status: StateFlow<PhoneToolsStatus> = _status.asStateFlow()
@@ -95,7 +97,7 @@ class PhoneToolsBridge(
     @Serializable
     private data class Identity(val id: String, val key: String)
 
-    private class Running(val tool: String, val job: Job)
+    private class Running(val tool: String, val job: Job, val origin: JsonRpcClient?)
 
     private val running = mutableMapOf<String, Running>()
 
@@ -105,10 +107,15 @@ class PhoneToolsBridge(
     private val draining = Mutex()
     private val identityLock = Mutex()
 
+    private fun enabled(settings: AppSettings?): Set<PhoneTool> {
+        val tools = settings?.enabledPhoneTools().orEmpty()
+        return if (desktopScreensOnly) tools.intersect(setOf(PhoneTool.ShowUi)) else tools
+    }
+
     fun start() {
         scope.launch {
             val client = connection.state.map { (it as? ConnectionState.Connected)?.client }.distinctUntilChanged()
-            val enabled = settings.settings.filterNotNull().map { it.enabledPhoneTools() }.distinctUntilChanged()
+            val enabled = settings.settings.filterNotNull().map(::enabled).distinctUntilChanged()
             // A plugin update from Notifications anywhere: look again, so the page doesn't still offer it. Turned on
             // (or off) after the tools were reported: report again, so a call rings through the push off the network.
             combine(client, enabled, setUps, api.updates, api.registrations) { c, on, setUp, _, _ -> Triple(c, on, setUp) }.collectLatest { (c, on, setUp) ->
@@ -127,7 +134,7 @@ class PhoneToolsBridge(
     /** A push said a call waits: fetch it now. */
     fun wake() {
         scope.launch {
-            if (connection.state.value is ConnectionState.Connected && settings.settings.value?.enabledPhoneTools().orEmpty().isNotEmpty()) {
+            if (connection.state.value is ConnectionState.Connected && enabled(settings.settings.value).isNotEmpty()) {
                 drain()
             }
         }
@@ -312,6 +319,7 @@ class PhoneToolsBridge(
 
     /** The push registration a call can nudge: this phone's, when it's registered with this gateway. */
     private suspend fun pushId(): String? {
+        if (desktopScreensOnly) return null
         if (settings.settings.value?.pushAnywhere != true) return null
         val url = gateways.current()?.gatewayUrl?.value ?: return null
         return keys.deviceId.takeIf { keys.pinnedGatewayUrl() == url }
@@ -319,15 +327,18 @@ class PhoneToolsBridge(
 
     /** Fetches the calls waiting for this phone and starts each one not already running or answered. */
     private suspend fun drain() = draining.withLock {
+        val origin = if (desktopScreensOnly) {
+            (connection.state.value as? ConnectionState.Connected)?.client ?: return@withLock
+        } else null
         val me = identity()
         val waiting = try {
-            api.phonePending(me.id, me.key)
+            api.phonePending(me.id, me.key, origin)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             null
         } ?: return@withLock
-        startAll(waiting)
+        if (origin == null || (connection.state.value as? ConnectionState.Connected)?.client === origin) startAll(waiting, origin)
     }
 
     /**
@@ -352,14 +363,14 @@ class PhoneToolsBridge(
     }
 
     /** Starts each of [waiting] not already running or answered. */
-    private suspend fun startAll(waiting: List<PhoneRequest>) = runningLock.withLock {
+    private suspend fun startAll(waiting: List<PhoneRequest>, origin: JsonRpcClient? = null) = runningLock.withLock {
         for (request in waiting) {
             if (request.id in running || request.id in answered) continue
-            running[request.id] = Running(request.tool, scope.launch { handle(request) })
+            running[request.id] = Running(request.tool, scope.launch { handle(request, origin) }, origin)
         }
     }
 
-    private suspend fun handle(request: PhoneRequest) {
+    private suspend fun handle(request: PhoneRequest, origin: JsonRpcClient?) {
         val started = now()
         val tool = PhoneTool.byId(request.tool)
         // Up to the gateway's own deadline, less a margin: the phone may look late (a poll, Doze), and an Allow
@@ -371,16 +382,18 @@ class PhoneToolsBridge(
         } else {
             most
         }
-        val (result, error) = if (tool == null) {
+        val (result, error) = if (origin != null && (connection.state.value as? ConnectionState.Connected)?.client !== origin) {
+            null to SWITCHED_OFF
+        } else if (tool == null) {
             null to UNKNOWN_TOOL
-        } else if (tool !in settings.settings.value?.enabledPhoneTools().orEmpty()) {
+        } else if (tool !in enabled(settings.settings.value)) {
             null to SWITCHED_OFF
         } else if (limit <= 0) {
             // Too late to ask or do anything the agent would still hear of: nothing runs.
             null to TOO_LONG
         } else {
             try {
-                withTimeout(limit) { runner.run(tool, request.args, request.session) } to null
+                withTimeout(limit) { runner.run(tool, request.args, request.session, origin) } to null
             } catch (e: TimeoutCancellationException) {
                 null to TOO_LONG
             } catch (e: CancellationException) {
@@ -396,7 +409,7 @@ class PhoneToolsBridge(
         // Out of the running list before answering: switching the tool off now can't send a second answer.
         if (!finish(request.id)) return
         // Until the gateway stops waiting: a call declined off the network gets there once the way back is up.
-        answer(request.id, result, error, wait = (started + limit + DEADLINE_MARGIN_MS - now()).coerceAtLeast(ANSWER_WAIT_MS))
+        answer(request.id, result, error, wait = (started + limit + DEADLINE_MARGIN_MS - now()).coerceAtLeast(ANSWER_WAIT_MS), origin = origin)
     }
 
     /** Takes [requestId] out of the running list; false when switching off already did (and answered it). */
@@ -415,16 +428,23 @@ class PhoneToolsBridge(
     private suspend fun refuseSwitchedOff(on: Set<PhoneTool>) {
         val ids = on.map { it.id }.toSet()
         val stopped = runningLock.withLock {
-            running.filterValues { it.tool !in ids }.keys.toList().onEach { id ->
+            running.filterValues { it.tool !in ids }.toList().onEach { (id, _) ->
                 running.remove(id)?.job?.cancel()
                 markAnswered(id)
             }
         }
-        for (id in stopped) scope.launch { answer(id, null, SWITCHED_OFF) }
+        for ((id, call) in stopped) scope.launch { answer(id, null, SWITCHED_OFF, origin = call.origin) }
     }
 
-    private suspend fun answer(requestId: String, result: JsonElement?, error: String?, wait: Long = ANSWER_WAIT_MS) {
+    private suspend fun answer(
+        requestId: String,
+        result: JsonElement?,
+        error: String?,
+        wait: Long = ANSWER_WAIT_MS,
+        origin: JsonRpcClient? = null,
+    ) {
         try {
+            if (origin != null && (connection.state.value as? ConnectionState.Connected)?.client !== origin) return
             // A call rung from a push may end while Kyllene can't reach the gateway: the answer waits for it, trying
             // again every few seconds rather than sitting out a long backoff once the network is back.
             if (connection.state.value !is ConnectionState.Connected) {
@@ -436,7 +456,7 @@ class PhoneToolsBridge(
                 } ?: return
             }
             val me = identity()
-            api.phoneAnswer(me.id, me.key, requestId, result, error)
+            api.phoneAnswer(me.id, me.key, requestId, result, error, origin)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

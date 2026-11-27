@@ -128,8 +128,11 @@ fun ChatWindow(
         LaunchedEffect(windowFocused) { focused.value = windowFocused }
         LaunchedEffect(host) { DesktopNotifier(host, koin.get(), focused, onPost, onNoticeChange).start(this) }
         val mainHost = koinInject<ChatHost>()
-        DisposableEffect(owner) {
+        val screenTool = koinInject<DesktopScreenTool>()
+        DisposableEffect(owner, host) {
+            screenTool.open(host)
             onDispose {
+                screenTool.close(host)
                 host.close()
                 owner.viewModelStore.clear()
             }

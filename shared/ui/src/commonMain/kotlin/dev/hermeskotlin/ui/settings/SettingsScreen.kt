@@ -227,6 +227,11 @@ import dev.hermeskotlin.ui.SidebarPage
 import dev.hermeskotlin.core.bots.SidebarMode
 import com.composables.icons.lucide.LayoutList
 import dev.hermeskotlin.ui.update.UpdateBanner
+import dev.hermeskotlin.core.phone.PhoneTool
+import dev.hermeskotlin.core.phone.PhoneToolsBridge
+import dev.hermeskotlin.core.phone.PhoneToolsStatus.State
+import dev.hermeskotlin.ui.chat.agentScreenRendererAvailable
+import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import kotlin.math.roundToInt
 import androidx.compose.foundation.text.KeyboardOptions
@@ -311,6 +316,9 @@ fun SettingsScreen(
             viewModel.removeWallpaper()
         },
         onOpenPhoneTools = { phoneToolsOpen = true },
+        desktopAgentCards = {
+            if (agentScreenRendererAvailable()) DesktopAgentCardsSetting(settings, viewModel::update)
+        },
         botFaces = botFaces,
         onChooseCallTarget = { callTargetOpen = true },
         appIcon = appIcons.current,
@@ -394,6 +402,47 @@ private fun InversePillButton(text: String, icon: ImageVector, onClick: () -> Un
     }
 }
 
+@Composable
+private fun DesktopAgentCardsSetting(settings: AppSettings, onUpdate: ((AppSettings) -> AppSettings) -> Unit) {
+    val bridge = koinInject<PhoneToolsBridge>()
+    val status by bridge.status.collectAsStateWithLifecycle()
+    val id = PhoneTool.ShowUi.id
+    val enabled = settings.phoneTools && id in settings.phoneToolsOn
+    val title = stringResource(Res.string.phone_tool_show_ui)
+    val detail = stringResource(Res.string.phone_tool_show_ui_detail)
+    var installAsked by remember { mutableStateOf(false) }
+    PluginInstallDialog(installAsked, title, detail, onDismiss = { installAsked = false }) {
+        installAsked = false
+        bridge.setUp()
+    }
+    SwitchRow(
+        title = title,
+        detail = when (status.state) {
+            State.NotInstalled -> stringResource(Res.string.phone_status_not_installed)
+            State.Outdated -> stringResource(Res.string.phone_status_too_old)
+            State.Offline -> stringResource(Res.string.phone_status_offline)
+            State.Working -> stringResource(Res.string.phone_status_working)
+            State.Failed -> status.detail ?: stringResource(Res.string.phone_status_refused)
+            else -> detail
+        },
+        checked = enabled,
+        onCheckedChange = { on ->
+            onUpdate {
+                it.copy(
+                    phoneTools = on || it.phoneTools,
+                    phoneToolsOn = if (on) (it.phoneToolsOn + id).distinct() else it.phoneToolsOn - id,
+                )
+            }
+        },
+        icon = Lucide.AppWindow,
+    )
+    if (enabled && status.state == State.NotInstalled) {
+        ActionRow(stringResource(Res.string.phone_set_up), Lucide.AppWindow) { installAsked = true }
+    }
+    if (enabled) status.update?.let { PluginUpdateRow(it, bridge::updatePlugin) }
+    Divider()
+}
+
 /** The settings page itself, stateless so previews can draw it. */
 @Composable
 internal fun SettingsView(
@@ -420,6 +469,7 @@ internal fun SettingsView(
     onChooseWallpaper: () -> Unit = {},
     onRemoveWallpaper: () -> Unit = {},
     onOpenPhoneTools: () -> Unit = {},
+    desktopAgentCards: @Composable () -> Unit = {},
     botFaces: BotFaces = BotFaces(),
     onChooseCallTarget: () -> Unit = {},
     appIcon: AppIcon = AppIcon.Blue,
@@ -767,6 +817,7 @@ internal fun SettingsView(
                 }
 
                 if (isDesktop) Section(stringResource(Res.string.settings_section_desktop)) {
+                    desktopAgentCards()
                     SwitchRow(
                         title = stringResource(Res.string.settings_keep_running),
                         detail = stringResource(Res.string.settings_keep_running_detail),
