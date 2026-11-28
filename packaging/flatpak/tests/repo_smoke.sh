@@ -1,6 +1,8 @@
 #!/bin/sh
 # Exercise publish-repo.sh and both installation routes against the SAME two releases.
 # --fixture uses a tiny payload for PRs; BUILD_REPO APP BRANCH uses the real release payload.
+# --bundle BUNDLE reuses an already-built candidate bundle for release 2, pairing it with a tiny release 1 that
+# carries the same metadata so the test exercises real publication and HTTP updates without re-bundling twice.
 # No app is launched: installed_smoke.py separately qualifies real application behavior.
 set -eu
 export LC_ALL=C
@@ -20,7 +22,13 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ "$#" = 1 ] && [ "$1" = --fixture ]; then
+candidate_bundle=""
+if [ "$#" -ge 2 ] && [ "$1" = --bundle ]; then
+  candidate_bundle="$(realpath "$2")"
+  shift 2
+fi
+
+if [ "$#" = 1 ] && [ "$1" = --fixture ] && [ -z "$candidate_bundle" ]; then
   app=app.kyllene.RepositoryTest branch=stable build="$work/source"
   mkdir -p "$work/app/files" "$work/app/export"
   printf '[Application]\nname=%s\nruntime=org.freedesktop.Platform/x86_64/26.08\n' "$app" > "$work/app/metadata"
@@ -29,7 +37,7 @@ if [ "$#" = 1 ] && [ "$1" = --fixture ]; then
 elif [ "$#" = 3 ]; then
   build="$(realpath "$1")" app="$2" branch="$3"
 else
-  echo 'Usage: repo_smoke.sh --fixture | BUILD_REPO APP BRANCH' >&2; exit 1
+  echo 'Usage: repo_smoke.sh --fixture | [--bundle BUNDLE] BUILD_REPO APP BRANCH' >&2; exit 1
 fi
 ref="app/$app/x86_64/$branch"
 
@@ -68,14 +76,33 @@ same() {
   [ -n "$a" ] && [ "$a" = "$b" ] || { echo "Installed '$a', published '$b'" >&2; exit 1; }
 }
 # Fresh output still exercises the production publication contract; only the HTTP store accumulates objects.
+publish_bundle() {
+  rm -rf "$work/publish"
+  sh "$publish" "$1" "$work/publish" "$GNUPGHOME" "$key"
+  cp -R "$work/publish/." "$served/"
+}
 release() {
-  flatpak build-commit-from --force --src-repo="$build" --src-ref="$ref" --subject="release $1" \
+  src="$build"
+  ts_flag=""
+  if [ -n "$candidate_bundle" ] && [ "$1" = 1 ]; then
+    # A tiny release 1 carrying the real app's metadata avoids re-bundling the full Chromium payload for the base
+    # commit; release 2 then imports the real candidate bundle and tests real HTTP object delivery on update.
+    # Backdate release 1 so flatpak update accepts the earlier-built candidate bundle as newer.
+    src="$work/base"
+    ts_flag="--timestamp=2020-01-01T00:00:00Z"
+    mkdir -p "$work/base-app/files" "$work/base-app/export"
+    ostree --repo="$build" cat "$ref" /metadata > "$work/base-app/metadata"
+    printf 'release 1 base\n' > "$work/base-app/files/payload"
+    flatpak build-export --arch=x86_64 "$ts_flag" "$src" "$work/base-app" "$branch" >/dev/null
+  elif [ -n "$candidate_bundle" ] && [ "$1" = 2 ]; then
+    publish_bundle "$candidate_bundle"
+    return
+  fi
+  flatpak build-commit-from --force $ts_flag --src-repo="$src" --src-ref="$ref" --subject="release $1" \
     --gpg-sign="$key" --gpg-homedir="$GNUPGHOME" "$work/build" "$ref" >/dev/null
   flatpak build-bundle --repo-url="$url" --gpg-keys="$work/key.gpg" \
     "$work/build" "$work/release-$1.flatpak" "$app" "$branch"
-  rm -rf "$work/publish"
-  sh "$publish" "$work/release-$1.flatpak" "$work/publish" "$GNUPGHOME" "$key"
-  cp -R "$work/publish/." "$served/"
+  publish_bundle "$work/release-$1.flatpak"
 }
 ostree --repo="$work/build" init --mode=archive-z2
 release 1

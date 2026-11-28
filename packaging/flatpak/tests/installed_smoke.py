@@ -62,13 +62,24 @@ def verify_resize(window, app, before):
     until(lambda: pixels(CLICKED_TWICE), 'post-resize widget click', app)
 
 
-def main(bundle):
+def main(bundle, from_repo=False, branch=None):
     existing = run('flatpak', 'list', '--user', '--app', '--columns=application').splitlines()
     if APP in existing:
         raise RuntimeError('Refusing to replace an installed app; use a disposable Flatpak user installation')
     with ExitStack() as resources:
+        if from_repo:
+            remote = f'kyllene-smoke-{os.getpid()}'
+            if remote in run('flatpak', 'remotes', '--user', '--columns=name').splitlines():
+                raise RuntimeError(f'Refusing to overwrite existing remote {remote}')
+            run('flatpak', 'build-update-repo', str(bundle))
+            run('flatpak', 'remote-add', '--user', '--no-gpg-verify', remote, Path(bundle).resolve().as_uri())
+            resources.callback(remove_remote, remote)
+            ref = f'{APP}//{branch}' if branch else APP
+            install_args = ('flatpak', 'install', '--user', '--noninteractive', '-y', remote, ref)
+        else:
+            install_args = ('flatpak', 'install', '--user', '--noninteractive', '-y', str(bundle))
         try:
-            run('flatpak', 'install', '--user', '--noninteractive', '-y', str(bundle))
+            run(*install_args)
             commit = run('flatpak', 'info', '--user', '--show-commit', APP)
         except Exception as failure:
             state = 'unknown'
@@ -175,15 +186,32 @@ def uninstall(commit):
     print('Owned installation removed; no app data deleted')
 
 
+def remove_remote(remote):
+    run('flatpak', 'remote-delete', '--user', '--force', remote)
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('bundle', type=Path)
     # A release bundle is the stable app, app.kyllene.Kyllene.
     parser.add_argument('--app', default=APP)
+    parser.add_argument('--repo', action='store_true',
+                        help='Install from a local OSTree repository directory instead of a .flatpak bundle')
+    parser.add_argument('--branch', default=None,
+                        help='Branch to install when using --repo (for example, devel)')
     args = parser.parse_args()
+    if args.branch and not args.repo:
+        parser.error('--branch requires --repo')
+    resolved = args.bundle.resolve(strict=True)
+    if args.repo and not resolved.is_dir():
+        parser.error('--repo expects a directory path')
+    if not args.repo and not resolved.is_file():
+        parser.error('Expected a .flatpak bundle file (pass --repo for an OSTree directory)')
     # Always create a private display; no environment flag can select the live desktop.
     child = ("import sys; from pathlib import Path; import installed_smoke; "
-             "installed_smoke.APP = sys.argv[2]; installed_smoke.main(Path(sys.argv[1]))")
+             "installed_smoke.APP = sys.argv[2]; "
+             "installed_smoke.main(Path(sys.argv[1]), from_repo=sys.argv[3] == '1', branch=sys.argv[4] or None)")
     raise SystemExit(subprocess.call(['xvfb-run', '-a', '-s', '-screen 0 1280x900x24',
-                                     sys.executable, '-c', child, str(args.bundle.resolve(strict=True)), args.app],
+                                     sys.executable, '-c', child, str(resolved), args.app,
+                                     '1' if args.repo else '0', args.branch or ''],
                                      cwd=Path(__file__).resolve().parent))
