@@ -379,6 +379,10 @@ installed commit cannot be verified, it reports retained/unknown state and leave
 the installation for inspection instead of deleting an unverified ref.
 
 Run `python3 packaging/flatpak/tests/installed_smoke.py build/kyllene.flatpak`
+(or `--repo build/flatpak-repo --branch devel` to install directly from the
+OSTree build repository without running `flatpak build-bundle`, as PR and
+`master` runs of `.github/workflows/linux.yml` do; manual `workflow_dispatch`
+runs still build and upload the `.flatpak` bundle)
 on Linux with Flatpak, its matching runtime, Xvfb, xauth, xdotool and Pillow
 installed. The app reads its settings key from the Secret portal at startup, so
 run it as CI does: `dbus-run-session` with a throwaway unlocked gnome-keyring as
