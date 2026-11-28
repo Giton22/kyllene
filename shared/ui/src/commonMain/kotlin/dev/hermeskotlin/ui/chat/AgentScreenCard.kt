@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.boundsInWindow
@@ -330,6 +331,7 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
         Row(
             Modifier.fillMaxWidth().background(Theme[colors][warningSoft], shape).padding(12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             UnstyledIcon(
                 Lucide.ShieldAlert,
