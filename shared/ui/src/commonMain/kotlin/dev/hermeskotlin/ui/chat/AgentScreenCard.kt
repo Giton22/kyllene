@@ -4,9 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -26,7 +28,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ShieldAlert
 import com.composeunstyled.Text
+import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.AgentScreen
 import dev.hermeskotlin.core.chat.ChatMessage
@@ -46,6 +51,7 @@ import dev.hermeskotlin.designsystem.stroke
 import dev.hermeskotlin.designsystem.surface
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
+import dev.hermeskotlin.designsystem.warning
 import dev.hermeskotlin.designsystem.warningSoft
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
@@ -321,12 +327,20 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
         },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Column(
+        Row(
             Modifier.fillMaxWidth().background(Theme[colors][warningSoft], shape).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(stringResource(Res.string.chat_gateway_screen_title), style = Theme[typography][bodySmall])
-            Text(stringResource(Res.string.chat_gateway_screen_notice), style = Theme[typography][caption])
+            UnstyledIcon(
+                Lucide.ShieldAlert,
+                contentDescription = null,
+                tint = Theme[colors][warning],
+                modifier = Modifier.size(18.dp),
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(Res.string.chat_gateway_screen_title), style = Theme[typography][bodySmall])
+                Text(stringResource(Res.string.chat_gateway_screen_notice), style = Theme[typography][caption])
+            }
         }
         val takesTaps = visible && call.takesTaps && state.isAtLeast(minimum)
         CompositionLocalProvider(
