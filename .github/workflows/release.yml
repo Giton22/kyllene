@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-x64
     timeout-minutes: 45
     steps:
       # Pinned to commits, not tags, so a moved tag can't change what runs with the signing key.
@@ -159,7 +159,7 @@ jobs:
             task: packageReleaseMsi
           - os: macos-latest
             task: packageReleaseDmg
-          - os: ubuntu-latest
+          - os: namespace-profile-linux-x64
             task: packageReleaseDeb
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -318,7 +318,7 @@ jobs:
   flatpak:
     permissions:
       contents: read
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-linux-x64
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
