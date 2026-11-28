@@ -91,11 +91,15 @@ class ChatSession(
     private val startInstruction: () -> String? = { null },
     /** The host's account/profile lifetime when this source was created, even if a collector starts later. */
     val ownerVersion: Long = 0,
+    dismissedSideTaskIds: Set<String> = emptySet(),
 ) {
     private fun nowSeconds(): Double = clock.now().toEpochMilliseconds() / 1000.0
 
     private val _state = MutableStateFlow(
-        ChatState(storedSessionId = initialStoredId, title = initialTitle, messages = sideTasks.map(::reopenedSideTask)),
+        ChatState(
+            storedSessionId = initialStoredId, title = initialTitle, messages = sideTasks.map(::reopenedSideTask),
+            dismissedSideTaskIds = dismissedSideTaskIds,
+        ),
     )
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
@@ -1645,10 +1649,18 @@ class ChatSession(
             val runtimeId = ensureAttached(client)
             val taskId = (client.request(method, buildJsonObject { put("session_id", runtimeId); put("text", text) }) as? JsonObject)
                 .string("task_id")
+            var dismissed = false
             _state.update { state ->
-                state.copy(messages = state.messages.map { if (it is ChatMessage.Command && it.key == key) it.copy(taskId = taskId) else it })
+                dismissed = taskId in state.dismissedSideTaskIds
+                state.copy(messages = state.messages.mapNotNull {
+                    when {
+                        it !is ChatMessage.Command || it.key != key -> it
+                        dismissed -> null
+                        else -> it.copy(taskId = taskId)
+                    }
+                })
             }
-            if (taskId != null && command == "/bg") scope.launch { followBackgroundTask(taskId) }
+            if (taskId != null && !dismissed && command == "/bg") scope.launch { followBackgroundTask(taskId) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -2543,6 +2555,17 @@ class ChatSession(
 
     /** Hides a gateway notice on this phone (its ×). The gateway isn't told. */
     fun dismissNotice(key: String) = _state.update { it.withoutNotice(key) }
+
+    /** Hides a finished side-task card and ignores later completions of its task. */
+    fun dismissSideCard(card: ChatMessage.Command) = _state.update { state ->
+        val current = state.messages.filterIsInstance<ChatMessage.Command>()
+            .firstOrNull { it.rowIdentity === card.rowIdentity && it.canDismiss } ?: return@update state
+        val taskId = current.taskId
+        state.copy(
+            messages = state.messages.filterNot { it === current || (taskId != null && it is ChatMessage.Command && it.taskId == taskId) },
+            dismissedSideTaskIds = if (taskId == null) state.dismissedSideTaskIds else state.dismissedSideTaskIds + taskId,
+        )
+    }
 
     /** Shows a title set elsewhere (a REST rename) without waiting for the gateway to echo it. */
     fun showTitle(title: String?) = _state.update { it.copy(title = title) }
@@ -3638,6 +3661,7 @@ private val ChatMessage.Command.isBackground: Boolean get() = command == "/bg" |
  */
 private fun reopenedSideTask(card: ChatMessage.Command): ChatMessage.Command = card.copy(
     key = "task-${card.taskId}",
+    rowIdentity = Any(),
     output = if (card.running && !card.isBackground) "Its answer may have come while another chat was open." else card.output,
     running = card.running && card.isBackground,
 )

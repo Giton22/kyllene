@@ -125,6 +125,9 @@ interface ChatActions {
     /** Hides the gateway notice with [key] (its ×). */
     fun dismissNotice(key: String) {}
 
+    /** Hides the finished side-task card the user tapped. */
+    fun dismissSideCard(card: ChatMessage.Command) {}
+
     fun dismissAttachmentError()
 
     fun skipSpeech()

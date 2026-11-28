@@ -2603,6 +2603,128 @@ class ChatSessionTest {
     }
 
     @Test
+    fun dismissedSideCardsStayGoneWhenTheChatReopens() = runTest {
+        val (connection, transport) = setup(backgroundScope, mapOf(
+            "session.resume" to """{"session_id":"rt1","running":false,"info":{}}""",
+            "prompt.btw" to SILENT,
+            "prompt.background" to """{"task_id":"bg_host"}""",
+        ))
+        connection.state.first { it is ConnectionState.Connected }
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope)
+        fun openChat() = host.open(url, "stored-1", "Greeting")
+        fun ChatSession.cards() = state.value.messages.filterIsInstance<ChatMessage.Command>()
+
+        val first = openChat()
+        first.state.first { it.historyLoaded }
+        val btw = event("btw.complete", "rt1", """{"task_id":"btw_host","question":"which file?","text":"notes.txt"}""")
+        val bg = event("background.complete", "rt1", """{"task_id":"bg_host","text":"Tidied."}""")
+        val start = async { first.askAside("which file?") }
+        val request = transport.awaitSent { it.isCall("prompt.btw") }
+        first.runInBackground("tidy up")
+        first.dismissSideCard(first.cards().first())
+        assertEquals(2, first.cards().count { it.running })
+        transport.push(btw)
+        transport.push(bg)
+        first.state.first { state -> state.messages.filterIsInstance<ChatMessage.Command>().count { !it.running } == 2 }
+
+        val sideQuestion = first.cards().first { it.taskId == "btw_host" }
+        first.dismissSideCard(sideQuestion)
+        first.dismissSideCard(sideQuestion)
+        transport.push("""{"jsonrpc":"2.0","id":${request["id"]},"result":{"task_id":"btw_host"}}""")
+        start.await()
+        transport.push(btw)
+        testScheduler.runCurrent()
+        assertEquals(listOf("bg_host"), first.cards().map { it.taskId })
+
+        host.open(url, null, null)
+        val back = openChat()
+        back.state.first { it.historyLoaded }
+        assertEquals(listOf("bg_host"), back.cards().map { it.taskId })
+        back.dismissSideCard(back.cards().single())
+        host.open(url, null, null)
+        val empty = openChat()
+        empty.state.first { it.historyLoaded && it.runtimeSessionId == "rt1" }
+        assertTrue(empty.cards().isEmpty())
+        transport.push(btw)
+        transport.push(bg)
+        transport.push(event("background.complete", "rt1", """{"task_id":"bg_other","text":"A new result."}"""))
+        empty.state.first { state -> state.messages.filterIsInstance<ChatMessage.Command>().any { it.taskId == "bg_other" } }
+        assertEquals(listOf("bg_other"), empty.cards().map { it.taskId })
+    }
+
+    @Test
+    fun aTapStillDismissesTheCardAfterItsAnswerIsUpdated() = runTest {
+        val (chat, transport) = newChat(backgroundScope, mapOf("prompt.background" to """{"task_id":"bg_copy"}"""))
+        chat.runInBackground("tidy up")
+        transport.push(event("background.complete", "rt9", """{"task_id":"bg_copy","text":"First result."}"""))
+        val tapped = chat.state.first { state ->
+            state.messages.filterIsInstance<ChatMessage.Command>().any { it.output == "First result." }
+        }.messages.filterIsInstance<ChatMessage.Command>().single()
+        transport.push(event("background.complete", "rt9", """{"task_id":"bg_copy","text":"Updated result."}"""))
+        chat.state.first { state ->
+            state.messages.filterIsInstance<ChatMessage.Command>().any { it.output == "Updated result." }
+        }
+
+        chat.dismissSideCard(tapped)
+        assertTrue(chat.state.value.messages.none { it is ChatMessage.Command })
+    }
+
+    @Test
+    fun dismissingCardsInOtherChatsDoesNotEvictAStashedRunningCard() = runTest {
+        val (connection, transport) = setup(backgroundScope, mapOf(
+            "session.resume" to """{"session_id":"rt1","running":false,"info":{}}""",
+            "prompt.background" to """{"task_id":"bg_kept"}""",
+        ))
+        connection.state.first { it is ConnectionState.Connected }
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope)
+        val first = host.open(url, "stored-1", "Greeting")
+        first.state.first { it.historyLoaded }
+        first.runInBackground("keep running")
+
+        repeat(21) { index ->
+            val id = "other-$index"
+            storedSessions[id] = """{"session_id":"$id","messages":[]}"""
+            val other = host.open(url, id, "Another chat")
+            other.state.first { it.historyLoaded && it.runtimeSessionId == "rt1" }
+            transport.push(event("btw.complete", "rt1", """{"task_id":"btw_$index","text":"Done."}"""))
+            val card = other.state.first { state -> state.messages.any { it is ChatMessage.Command } }
+                .messages.filterIsInstance<ChatMessage.Command>().single()
+            other.dismissSideCard(card)
+        }
+
+        val back = host.open(url, "stored-1", "Greeting")
+        back.state.first { it.historyLoaded }
+        val kept = back.state.value.messages.filterIsInstance<ChatMessage.Command>().singleOrNull()
+        assertEquals("bg_kept", kept?.taskId)
+        assertTrue(kept?.running == true)
+    }
+
+    @Test
+    fun sideTaskCompletionWithoutTaskIdCanBeDismissedWhileUsageCardsCannot() = runTest {
+        val (connection, transport) = setup(backgroundScope, mapOf(
+            "session.resume" to """{"session_id":"rt1","running":false,"info":{}}""",
+        ))
+        connection.state.first { it is ConnectionState.Connected }
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope)
+        val chat = host.open(url, "stored-1", "Greeting")
+        chat.state.first { it.historyLoaded && it.runtimeSessionId == "rt1" }
+
+        chat.askAside("")
+        val usage = chat.state.value.messages.filterIsInstance<ChatMessage.Command>().single()
+        assertFalse(usage.canDismiss)
+        chat.dismissSideCard(usage)
+        assertEquals(listOf(usage), chat.state.value.messages.filterIsInstance<ChatMessage.Command>())
+
+        transport.push(event("background.complete", "rt1", """{"text":"Finished without an id."}"""))
+        val card = chat.state.first { state ->
+            state.messages.filterIsInstance<ChatMessage.Command>().any { it.output == "Finished without an id." }
+        }.messages.filterIsInstance<ChatMessage.Command>().last()
+        assertTrue(card.canDismiss)
+        chat.dismissSideCard(card)
+        assertEquals(listOf(usage), chat.state.value.messages.filterIsInstance<ChatMessage.Command>())
+    }
+
+    @Test
     fun sideTaskCardsComeBackWithTheirChat() = runTest {
         val (connection, _) = setup(backgroundScope, mapOf("session.resume" to """{"session_id":"rt1","running":false,"info":{}}"""))
         storedSessions["bg_away"] = """{"session_id":"bg_away","messages":[{"id":1,"role":"assistant","content":"Finished while away."}]}"""

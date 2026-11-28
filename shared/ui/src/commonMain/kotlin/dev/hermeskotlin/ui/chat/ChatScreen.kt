@@ -985,8 +985,9 @@ internal fun ChatView(
             }
             var foundKey by remember { mutableStateOf<String?>(null) }
             LaunchedEffect(findText, findOpen) { foundKey = matches.lastOrNull() }
-            val match = matches.indexOf(foundKey)
-            val found = foundKey.takeIf { findOpen && match >= 0 }
+            LaunchedEffect(matches) { if (foundKey !in matches) foundKey = matches.lastOrNull() }
+            val (activeFoundKey, match) = resolveFoundMatch(matches, foundKey)
+            val found = activeFoundKey.takeIf { findOpen && match >= 0 }
             LaunchedEffect(found) {
                 val index = listed.indexOfFirst { it.key == found }
                 if (index >= 0) {
@@ -2129,7 +2130,8 @@ private fun Messages(
     LaunchedEffect(awayFromBottom, messages) {
         val arrivedWithPage = oldest.isOlderThan(replySeen.oldest) &&
             messages.replyArrivedWithPage(previousReplyMessages, replySeen.mark)
-        replySeen = replySeen.next(awayFromBottom, oldest, tail, arrivedWithPage)
+        val onlyDismissedCards = messages.onlyDismissedSideCardsFrom(previousReplyMessages)
+        replySeen = replySeen.next(awayFromBottom, oldest, tail, arrivedWithPage, onlyDismissedCards)
         previousReplyMessages = messages
     }
     val newBelow = awayFromBottom && replySeen.new
@@ -2338,7 +2340,7 @@ private fun Messages(
                             if (to != null && !message.streaming) RepliedToFold(to, message.text, reply) else reply()
                         }
                         is ChatMessage.Event -> TranscriptEventRow(message.event)
-                        is ChatMessage.Command -> CommandOutput(message)
+                        is ChatMessage.Command -> CommandOutput(message) { actions.dismissSideCard(message) }
                         is ChatMessage.Notice -> NoticeLine(message)
                     }
                     }
@@ -2545,6 +2547,19 @@ internal fun List<ChatMessage>.replyArrivedWithPage(previous: List<ChatMessage>,
 }
 
 /**
+ * True when this list differs from [previous] only because one or more finished side-task cards were dismissed,
+ * with no new prompt, reply or command text arriving in the same update.
+ */
+internal fun List<ChatMessage>.onlyDismissedSideCardsFrom(previous: List<ChatMessage>): Boolean {
+    val keptKeys = mapTo(HashSet()) { it.key }
+    val withoutDismissed = previous.filterNot { it is ChatMessage.Command && it.canDismiss && it.key !in keptKeys }
+    return withoutDismissed.size < previous.size &&
+        withoutDismissed.size == size &&
+        withoutDismissed.zip(this).all { (before, after) -> before.key == after.key } &&
+        withoutDismissed.replyMark() == replyMark()
+}
+
+/**
  * The [replyMark] and oldest loaded row as they last were, and whether reply text has come ([new]) since the reader
  * left the end. It stays new until they are back there, even if a later turn brings the mark back to what it was.
  */
@@ -2555,8 +2570,18 @@ internal data class ReplySeen(val oldest: String?, val mark: Pair<Int, Int>, val
      * (see [replyArrivedWithPage]). [mark] is kept but not compared: the page can bring the prompt of a turn that was
      * only partly loaded, which changes the mark without any new reply.
      */
-    fun next(away: Boolean, oldest: String?, mark: Pair<Int, Int>, arrivedWithPage: Boolean = false): ReplySeen {
-        val arrived = if (oldest.isOlderThan(this.oldest)) arrivedWithPage else mark != this.mark
+    fun next(
+        away: Boolean,
+        oldest: String?,
+        mark: Pair<Int, Int>,
+        arrivedWithPage: Boolean = false,
+        onlyDismissedCards: Boolean = false,
+    ): ReplySeen {
+        val arrived = when {
+            onlyDismissedCards -> false
+            oldest.isOlderThan(this.oldest) -> arrivedWithPage
+            else -> mark != this.mark
+        }
         return ReplySeen(oldest, mark, new = away && (new || arrived))
     }
 }
@@ -3436,7 +3461,7 @@ internal const val UNREAD_PAGE_LIMIT = 5
 
 /** A slash command and what it printed: a quiet outlined card in the terminal face, local to this device. */
 @Composable
-private fun CommandOutput(message: ChatMessage.Command) {
+private fun CommandOutput(message: ChatMessage.Command, onDismiss: () -> Unit) {
     val shape = RoundedCornerShape(Theme[radii][radiusMedium])
     Column(
         Modifier
@@ -3454,7 +3479,13 @@ private fun CommandOutput(message: ChatMessage.Command) {
                 color = Theme[colors][textSecondary],
                 modifier = Modifier.weight(1f),
             )
-            if (message.running) Spinner(Modifier.size(12.dp))
+            when {
+                message.running && message.isSideTask -> Box(Modifier.size(MinTouchTarget), contentAlignment = Alignment.Center) {
+                    Spinner(Modifier.size(12.dp))
+                }
+                message.running -> Spinner(Modifier.size(12.dp))
+                message.canDismiss -> IconButton(Lucide.X, contentDescription = stringResource(Res.string.chat_dismiss), onClick = onDismiss)
+            }
         }
         if (message.output.isNotEmpty()) {
             val source = remember(message.key, message.command) {

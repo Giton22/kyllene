@@ -11,6 +11,7 @@ import dev.hermeskotlin.ui.chat.PromptRecall
 import dev.hermeskotlin.ui.chat.findMatches
 import dev.hermeskotlin.ui.chat.moveHighlight
 import dev.hermeskotlin.ui.chat.refChoices
+import dev.hermeskotlin.ui.chat.resolveFoundMatch
 import dev.hermeskotlin.ui.chat.transcriptMarkdown
 import dev.hermeskotlin.ui.components.PaletteItem
 import dev.hermeskotlin.ui.components.paletteMatches
@@ -142,6 +143,14 @@ class DesktopUxTest {
         )
         assertEquals(listOf(0, 1), findMatches(messages, "checking"))
         assertEquals(listOf(0), findMatches(messages, "done"))
+    }
+
+    @Test
+    fun findMatchFallsBackWhenTheHighlightedCardIsDismissed() {
+        assertEquals("row-2" to 1, resolveFoundMatch(listOf("row-1", "row-2", "side-1"), "row-2"))
+        // Dismissing the active match moves to the newest remaining match instead of showing 0 of N.
+        assertEquals("row-2" to 1, resolveFoundMatch(listOf("row-1", "row-2"), "side-1"))
+        assertEquals(null to -1, resolveFoundMatch(emptyList(), "side-1"))
     }
 
     @Test

@@ -81,6 +81,35 @@ import kotlin.test.assertSame
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatViewModelTest {
 
+    @Test
+    fun dismissIgnoresRetiredOwnersAndCardsFromADifferentChat() = runTest(dispatcher) {
+        val (vm, host) = viewModel()
+        val target = ChatTarget(gateway, "first", "First")
+        vm.open(target)
+        val first = assertNotNull(host.session.value)
+        first.showCommandOutput("/btw sample question", "Sample answer.")
+        val oldCard = first.state.value.messages.filterIsInstance<ChatMessage.Command>().single()
+
+        host.invalidateOwner()
+        vm.dismissSideCard(oldCard)
+        assertTrue(oldCard in first.state.value.messages)
+
+        val other = target.copy(storedSessionId = "second", title = "Second")
+        host.open(gateway.gatewayUrl, "second", "Second")
+        vm.dismissSideCard(oldCard)
+        assertTrue(oldCard in first.state.value.messages)
+
+        vm.open(other)
+        val second = assertNotNull(host.session.value)
+        second.showCommandOutput("/btw sample question", "Sample answer.")
+        val newCard = second.state.value.messages.filterIsInstance<ChatMessage.Command>().single()
+        assertEquals(oldCard.key, newCard.key)
+        vm.dismissSideCard(oldCard)
+        assertTrue(newCard in second.state.value.messages)
+        vm.dismissSideCard(newCard)
+        assertTrue(second.state.value.messages.none { it is ChatMessage.Command })
+    }
+
     private val dispatcher = UnconfinedTestDispatcher()
     private val gateway = SavedGateway("https://hermes.example.ts.net")
     private val json = headersOf(HttpHeaders.ContentType, "application/json")
