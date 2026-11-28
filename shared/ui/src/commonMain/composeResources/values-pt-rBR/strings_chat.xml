@@ -127,7 +127,6 @@
     <string name="chat_sessions_next">Próxima conversa que precisa de você</string>
 
     <string name="chat_gateway_screen_title">Solicitação de uma ferramenta do gateway</string>
-    <string name="chat_gateway_screen_notice">Uma ferramenta no seu gateway Hermes criou este cartão. As informações que você enviar podem ser encaminhadas de volta para essa ferramenta.</string>
     <string name="chat_screen_waiting">Aguardando sua resposta</string>
     <string name="chat_screen_opening">Abrindo…</string>
     <string name="chat_screen_tap_answers">Um toque responde na conversa</string>

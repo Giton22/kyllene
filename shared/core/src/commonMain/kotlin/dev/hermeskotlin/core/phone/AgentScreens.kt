@@ -15,11 +15,15 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -47,7 +51,14 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val takesTaps: Boolean,
     )
 
-    data class GatewayCard(val call: DesktopCall, val screen: AgentScreen, val owner: ChatSession?, val anchor: GatewayCardAnchor?, val isCurrent: () -> Boolean)
+    data class GatewayCard(
+        val call: DesktopCall,
+        val screen: AgentScreen,
+        val owner: ChatSession?,
+        val anchor: GatewayCardAnchor?,
+        val isCurrent: () -> Boolean,
+        val cardId: String = call.id,
+    )
 
     private class Waiting(
         val live: Live,
@@ -58,6 +69,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val ownsChat: () -> Boolean,
         val owner: ChatSession?,
         val anchor: GatewayCardAnchor?,
+        val cardId: String = callId ?: "",
     ) {
         val shown = CompletableDeferred<Unit>()
         private val answer = CompletableDeferred<Result<JsonElement>>()
@@ -132,6 +144,14 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     val gatewayCards: StateFlow<List<GatewayCard>> = _gatewayCards.asStateFlow()
     private val shownGatewayCards = ArrayDeque<GatewayCard>()
 
+    /** True when every surface in [screen] already belongs to a live standalone card for [owner] in [chat]. */
+    fun ownsGatewaySurface(screen: AgentScreen, chat: String, owner: ChatSession?): Boolean {
+        if (screen.surfaceIds.isEmpty()) return false
+        val owned = shownGatewayCards.filter { it.call.chat == chat && it.owner === owner && it.isCurrent() }
+            .flatMapTo(HashSet()) { it.screen.surfaceIds }
+        return screen.surfaceIds.all { it in owned }
+    }
+
     /** Standalone updates can replay only the bounded, still-owned surfaces shown in this window. */
     fun gatewayDrawing(screen: AgentScreen, chat: String, owner: ChatSession?): AgentScreen {
         val creates = screen.envelopes.mapNotNullTo(HashSet()) { it?.takeIf { message -> message.creates }?.surfaceId }
@@ -142,11 +162,25 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
             card.screen.messages.zip(card.screen.envelopes).filter { (_, envelope) -> envelope?.surfaceId == surface }
                 .map { (message, _) -> message }
         }
-        val messages = bases + screen.messages
-        if (messages.size > AgentScreen.MAX_MESSAGES) {
-            throw PhoneToolException(NOT_DRAWN + "The screen update history is full. Create a new surface.")
+        val combined = bases + screen.messages
+        val messages = if (combined.size <= AgentScreen.MAX_MESSAGES) {
+            combined
+        } else {
+            val compacted = compactGatewayHistory(bases) + screen.messages
+            if (compacted.size > AgentScreen.MAX_MESSAGES) {
+                throw PhoneToolException(NOT_DRAWN + "The screen update history is full. Create a new surface.")
+            }
+            compacted
         }
         return screen.copy(messages = messages)
+    }
+
+    private fun gatewayCardId(screen: AgentScreen, chat: String, owner: ChatSession?, fallback: String): String {
+        val matching = shownGatewayCards.filter {
+            it.call.chat == chat && it.owner === owner && it.isCurrent() &&
+                it.call.surfaceIds.all(screen.surfaceIds::contains)
+        }.mapTo(LinkedHashSet()) { it.cardId }
+        return matching.singleOrNull() ?: fallback
     }
 
     suspend fun awaitGatewayCard(
@@ -160,7 +194,10 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         changes: Flow<Unit> = emptyFlow(),
         isWaiting: () -> Boolean = { true },
         ownsChat: () -> Boolean,
-    ): JsonElement = await(update, chat, notShown, id, { ownsChat() && isWaiting() }, screen, ownsChat, owner, anchor, changes)
+    ): JsonElement = await(
+        update, chat, notShown, id, { ownsChat() && isWaiting() }, screen, ownsChat, owner, anchor, changes,
+        cardId = gatewayCardId(screen, chat, owner, id),
+    )
 
     /**
      * Waits until the user answers [screen] in [chat], and returns what they did, for the agent. Throws
@@ -189,10 +226,11 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         anchor: GatewayCardAnchor?,
         changes: Flow<Unit>,
         transcriptId: String? = null,
+        cardId: String = callId ?: "",
     ): JsonElement = coroutineScope {
         require(callId == null || chat != null)
         if (!accepts()) throw PhoneToolException(notShown)
-        val entry = Waiting(Live(chat, screen.surfaceIds, transcriptId), screen, accepts, callId, gatewayScreen, ownsChat, owner, anchor)
+        val entry = Waiting(Live(chat, screen.surfaceIds, transcriptId), screen, accepts, callId, gatewayScreen, ownsChat, owner, anchor, cardId)
         var replaced = emptyList<Waiting>()
         waiting.update { list ->
             val (old, kept) = list.partition { it.live.chat == chat && it.live.surfaceIds.any(screen.surfaceIds::contains) }
@@ -241,7 +279,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
             val kept = shownGatewayCards.mapNotNull { it.without(call, entry.owner) }.filter { it.isCurrent() }
             shownGatewayCards.clear()
             shownGatewayCards.addAll(kept)
-            shownGatewayCards.addLast(GatewayCard(call, gatewayScreen, entry.owner, entry.anchor, entry.ownsChat))
+            shownGatewayCards.addLast(GatewayCard(call, gatewayScreen, entry.owner, entry.anchor, entry.ownsChat, entry.cardId))
             if (shownGatewayCards.size > RECENT_GATEWAY_CARDS) shownGatewayCards.removeFirst()
         }
         publishDesktop()
@@ -287,7 +325,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         _desktop.value = (shownDesktop + entries.filter { it.gatewayScreen == null }.mapNotNull { it.desktopCall() })
             .associateBy { it.chat to it.id }.values.toList()
         val pendingCards = entries.mapNotNull { entry ->
-            entry.gatewayScreen?.let { GatewayCard(checkNotNull(entry.desktopCall()), it, entry.owner, entry.anchor, entry.accepts) }
+            entry.gatewayScreen?.let { GatewayCard(checkNotNull(entry.desktopCall()), it, entry.owner, entry.anchor, entry.accepts, entry.cardId) }
         }
         shownGatewayCards.removeAll { !it.isCurrent() }
         _gatewayCards.value = shownGatewayCards.mapNotNull { shown ->
@@ -343,3 +381,95 @@ fun desktopAgentScreenChat(gateway: String, profile: String?, chat: String): Str
 /** Standalone surfaces have their own namespace, separate from transcript cards. */
 fun gatewayAgentScreenChat(gateway: String, profile: String?, chat: String): String =
     "gateway:${desktopAgentScreenChat(gateway, profile, chat)}"
+
+/**
+ * Compacts historical standalone updates so multi-tap plugin loops don't hit [AgentScreen.MAX_MESSAGES]:
+ * keeps only messages from the latest createSurface/deleteSurface per surface, merges updateComponents by
+ * component id, and drops superseded updateDataModel writes on the same or child paths.
+ */
+internal fun compactGatewayHistory(messages: List<String>): List<String> {
+    data class DataUpdate(val path: String, val raw: String)
+    class SurfaceHistory {
+        var created: String? = null
+        var deleted: String? = null
+        var componentsEnvelope: JsonObject? = null
+        val components = LinkedHashMap<String, JsonElement>()
+        val dataUpdates = mutableListOf<DataUpdate>()
+        val other = mutableListOf<String>()
+
+        fun reset() {
+            created = null
+            deleted = null
+            componentsEnvelope = null
+            components.clear()
+            dataUpdates.clear()
+            other.clear()
+        }
+
+        fun emit(): List<String> = buildList {
+            created?.let(::add)
+            deleted?.let(::add)
+            componentsEnvelope?.let { envelope ->
+                val body = envelope["updateComponents"] as? JsonObject
+                if (body != null && components.isNotEmpty()) {
+                    val mergedBody = JsonObject(body + ("components" to JsonArray(components.values.toList())))
+                    add(JsonObject(envelope + ("updateComponents" to mergedBody)).toString())
+                }
+            }
+            dataUpdates.forEach { add(it.raw) }
+            addAll(other)
+        }
+    }
+
+    val bySurface = LinkedHashMap<String, SurfaceHistory>()
+    val ungrouped = mutableListOf<String>()
+    for (raw in messages) {
+        val obj = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull()
+        val surface = A2uiEnvelope.of(raw)?.surfaceId
+        if (obj == null || surface == null) {
+            ungrouped += raw
+            continue
+        }
+        val history = bySurface.getOrPut(surface) { SurfaceHistory() }
+        when {
+            obj["createSurface"] is JsonObject -> {
+                history.reset()
+                history.created = raw
+            }
+            obj["deleteSurface"] is JsonObject -> {
+                history.reset()
+                history.deleted = raw
+            }
+            obj["updateComponents"] is JsonObject -> {
+                val body = obj["updateComponents"] as JsonObject
+                val items = body["components"] as? JsonArray
+                if (items != null) {
+                    history.componentsEnvelope = obj
+                    for (item in items) {
+                        val id = ((item as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull
+                        if (id != null) history.components[id] = item else history.other += raw
+                    }
+                } else {
+                    history.other += raw
+                }
+            }
+            obj["updateDataModel"] is JsonObject -> {
+                val body = obj["updateDataModel"] as JsonObject
+                val rawPath = (body["path"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                val path = if (rawPath.isEmpty() || rawPath == "/") "/" else rawPath.trimEnd('/')
+                if (path == "/") {
+                    history.dataUpdates.clear()
+                } else {
+                    val childPrefix = "$path/"
+                    history.dataUpdates.removeAll { it.path == path || it.path.startsWith(childPrefix) }
+                }
+                history.dataUpdates += DataUpdate(path, raw)
+            }
+            else -> history.other += raw
+        }
+    }
+    return buildList {
+        bySurface.values.forEach { addAll(it.emit()) }
+        addAll(ungrouped)
+    }
+}

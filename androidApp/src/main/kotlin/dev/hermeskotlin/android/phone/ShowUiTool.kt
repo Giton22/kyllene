@@ -56,9 +56,11 @@ internal class ShowUiTool(
             }
             if (!ownsChat()) throw PhoneToolException(AgentScreens.NOT_SHOWN)
             val transcriptKey = desktopAgentScreenChat(open.gateway.value, open.profile, stored)
+            val gatewayKey = gatewayAgentScreenChat(open.gateway.value, open.profile, stored)
             val changes = screenRequestChanges(host, open, connection)
             return runScreenPlacement(
                 open.state, screen, ownsChat, claimed = { transcriptKey to it in claimed },
+                preferStandalone = screens.ownsGatewaySurface(screen, gatewayKey, open),
                 direct = { callId ->
                     claimed += transcriptKey to callId
                     if (claimed.size > 128) claimed.remove(claimed.first())
@@ -70,10 +72,9 @@ internal class ShowUiTool(
                     else buildJsonObject { put("shown", true) }
                 },
                 standalone = { placement ->
-                    val key = gatewayAgentScreenChat(open.gateway.value, open.profile, stored)
-                    val drawing = checkedScreen { screens.gatewayDrawing(screen, key, open) }
+                    val drawing = checkedScreen { screens.gatewayDrawing(screen, gatewayKey, open) }
                     screens.awaitGatewayCard(
-                        screen, drawing, key, Uuid.random().toString(), owner = open, changes = changes,
+                        screen, drawing, gatewayKey, Uuid.random().toString(), owner = open, changes = changes,
                         anchor = placement.anchor(open.state.value),
                         isWaiting = { placement.canShowStandalone(open.state.value) },
                         ownsChat = { ownsChat() && !placement.conflictsWithDirect(open.state.value, screen) },

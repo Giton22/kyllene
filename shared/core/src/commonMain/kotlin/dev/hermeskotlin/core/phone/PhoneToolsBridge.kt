@@ -22,8 +22,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -114,6 +116,7 @@ class PhoneToolsBridge(
     private val runningLock = Mutex()
     private val draining = Mutex()
     private val identityLock = Mutex()
+    private val drainBursts = MutableSharedFlow<LongArray>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     private fun enabled(settings: AppSettings?): Set<PhoneTool> {
         val tools = settings?.enabledPhoneTools().orEmpty()
@@ -173,15 +176,29 @@ class PhoneToolsBridge(
             }
             launch { phonesCall { api.phoneList(it.id, it.key) } }
             launch {
+                drainBursts.collectLatest { waits ->
+                    for (wait in waits) {
+                        delay(wait)
+                        drain()
+                    }
+                }
+            }
+            launch {
                 client.events
-                    .filter { it.type == "tool.start" && toolName(it.payload)?.startsWith(TOOL_PREFIX) == true }
-                    .collect {
-                        // The event can come before the gateway has written the call down: look again shortly.
-                        launch {
-                            for (wait in EVENT_DRAINS_MS) {
-                                delay(wait)
-                                drain()
+                    .filter { it.type == "tool.start" }
+                    .collect { event ->
+                        val name = toolName(event.payload)
+                        if (name?.startsWith(TOOL_PREFIX) == true) {
+                            // The event can come before the gateway has written the call down: look again shortly.
+                            launch {
+                                for (wait in EVENT_DRAINS_MS) {
+                                    delay(wait)
+                                    drain()
+                                }
                             }
+                        } else if (PhoneTool.ShowUi in on) {
+                            // A plugin tool may open a standalone phone_show_ui screen from inside without a phone_* tool.start.
+                            drainBursts.tryEmit(PLUGIN_SCREEN_DRAINS_MS)
                         }
                     }
             }
@@ -434,6 +451,8 @@ class PhoneToolsBridge(
                 boundAnswering.remove(key)
                 markCompleted(key)
             }
+            // A plugin tool handling a tap in code often immediately posts an updated screen on the same surface.
+            if (tool == PhoneTool.ShowUi && error == null) drainBursts.tryEmit(POST_ANSWER_DRAINS_MS)
             return
         }
         // Until the gateway stops waiting: a call declined off the network gets there once the way back is up.
@@ -563,6 +582,12 @@ class PhoneToolsBridge(
 
         /** After a chat's `phone_*` tool starts: when to look for its call. */
         val EVENT_DRAINS_MS = longArrayOf(300, 700, 1_500, 3_000)
+
+        /** After a non-phone plugin tool starts while screens are enabled: look shortly for an inner screen. */
+        val PLUGIN_SCREEN_DRAINS_MS = longArrayOf(300, 900, 2_000, 4_000)
+
+        /** After answering a screen: look quickly for a plugin's follow-up update on the same surface. */
+        val POST_ANSWER_DRAINS_MS = longArrayOf(150, 450, 1_000, 2_000)
 
         /** Between tries of a report that failed. */
         val RETRY_MS = longArrayOf(2_000, 5_000, 15_000, 30_000, 60_000)

@@ -127,7 +127,6 @@
     <string name="chat_sessions_next">Nächster Chat, der dich braucht</string>
 
     <string name="chat_gateway_screen_title">Gateway-Tool-Anfrage</string>
-    <string name="chat_gateway_screen_notice">Diese Karte wurde von einem Tool auf deinem Hermes-Gateway erstellt. Deine Eingaben können beim Absenden an dieses Tool zurückgesendet werden.</string>
     <string name="chat_screen_waiting">Wartet auf deine Antwort</string>
     <string name="chat_screen_opening">Wird geöffnet…</string>
     <string name="chat_screen_tap_answers">Ein Tippen antwortet im Chat</string>

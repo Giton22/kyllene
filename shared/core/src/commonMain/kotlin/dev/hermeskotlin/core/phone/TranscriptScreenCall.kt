@@ -50,13 +50,19 @@ suspend fun awaitScreenPlacement(
     screen: AgentScreen,
     accepts: () -> Boolean,
     notShown: String = AgentScreens.NOT_SHOWN,
+    preferStandalone: Boolean = false,
     claimed: (String) -> Boolean,
 ): ScreenPlacement {
-    val direct = withTimeoutOrNull(SCREEN_TRANSCRIPT_GRACE_MS) {
-        awaitTranscriptScreenCall(states, screen, accepts, notShown, claimed)
+    val remainingMs = if (preferStandalone) {
+        AgentScreens.SHOWN_WITHIN_MS
+    } else {
+        val direct = withTimeoutOrNull(SCREEN_TRANSCRIPT_GRACE_MS) {
+            awaitTranscriptScreenCall(states, screen, accepts, notShown, claimed)
+        }
+        if (direct != null) return ScreenPlacement(direct)
+        AgentScreens.SHOWN_WITHIN_MS - SCREEN_TRANSCRIPT_GRACE_MS
     }
-    if (direct != null) return ScreenPlacement(direct)
-    return withTimeoutOrNull(AgentScreens.SHOWN_WITHIN_MS - SCREEN_TRANSCRIPT_GRACE_MS) {
+    return withTimeoutOrNull(remainingMs) {
         runningTools(states, accepts, notShown).mapNotNull { calls ->
             val match = matchTranscriptScreenCall(calls.asSequence(), screen, claimed)
             when {
@@ -76,10 +82,11 @@ suspend fun <T> runScreenPlacement(
     accepts: () -> Boolean,
     notShown: String = AgentScreens.NOT_SHOWN,
     claimed: (String) -> Boolean,
+    preferStandalone: Boolean = false,
     direct: suspend (String) -> T,
     standalone: suspend (ScreenPlacement) -> T,
 ): T {
-    val placement = awaitScreenPlacement(states, screen, accepts, notShown, claimed)
+    val placement = awaitScreenPlacement(states, screen, accepts, notShown, preferStandalone, claimed)
     placement.transcriptCallId?.let { return direct(it) }
     return try {
         standalone(placement)

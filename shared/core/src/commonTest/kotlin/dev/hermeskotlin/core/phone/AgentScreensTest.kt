@@ -98,6 +98,86 @@ class AgentScreensTest {
     }
 
     @Test
+    fun aGatewayUpdateKeepsItsCardIdStableWhenReplacingTheSameSurface() = runTest {
+        val screens = AgentScreens()
+        val initial = AgentScreen(
+            listOf("""{"createSurface":{"surfaceId":"tasks"}}""", """{"updateDataModel":{"surfaceId":"tasks","path":"/step","value":"1"}}"""),
+            setOf("tasks"),
+            wait = true,
+        )
+        val first = async { screens.awaitGatewayCard(initial, initial, "chat", "req-1") { true } }
+        runCurrent()
+        assertEquals("req-1", screens.gatewayCards.value.single().cardId)
+        screens.validated("chat", initial.surfaceIds, "req-1")
+        screens.shown("chat", initial.surfaceIds, "req-1")
+        assertTrue(screens.ownsGatewaySurface(initial, "chat", null))
+        assertTrue(screens.answer("chat", "tasks", JsonPrimitive("next"), "req-1"))
+        first.await()
+
+        val update = AgentScreen(
+            listOf("""{"updateDataModel":{"surfaceId":"tasks","path":"/step","value":"2"}}"""),
+            setOf("tasks"),
+            wait = true,
+        )
+        val drawing = screens.gatewayDrawing(update, "chat", null)
+        val second = async { screens.awaitGatewayCard(update, drawing, "chat", "req-2") { true } }
+        runCurrent()
+        val pendingCard = screens.gatewayCards.value.single()
+        assertEquals("req-2", pendingCard.call.id)
+        assertEquals("req-1", pendingCard.cardId)
+        screens.validated("chat", update.surfaceIds, "req-2")
+        screens.shown("chat", update.surfaceIds, "req-2")
+        assertTrue(screens.answer("chat", "tasks", JsonPrimitive("done"), "req-2"))
+        second.await()
+        assertEquals("req-1", screens.gatewayCards.value.single().cardId)
+    }
+
+    @Test
+    fun aGatewayUpdateCompactsLongHistoryWithoutHittingTheMessageLimit() = runTest {
+        val screens = AgentScreens()
+        val initial = AgentScreen(
+            listOf(
+                """{"version":"v0.9","createSurface":{"surfaceId":"tasks"}}""",
+                """{"version":"v0.9","updateComponents":{"surfaceId":"tasks","components":[{"id":"root","component":"Text","text":"0"}]}}""",
+                """{"version":"v0.9","updateDataModel":{"surfaceId":"tasks","path":"/","value":{"step":0}}}""",
+            ),
+            setOf("tasks"),
+            wait = false,
+        )
+        val start = async { screens.awaitGatewayCard(initial, initial, "chat", "req-0") { true } }
+        runCurrent()
+        screens.validated("chat", initial.surfaceIds, "req-0")
+        screens.shown("chat", initial.surfaceIds, "req-0")
+        start.await()
+
+        repeat(60) { step ->
+            val update = AgentScreen(
+                listOf(
+                    """{"version":"v0.9","updateComponents":{"surfaceId":"tasks","components":[{"id":"root","component":"Text","text":"${step + 1}"}]}}""",
+                    """{"version":"v0.9","updateDataModel":{"surfaceId":"tasks","path":"/","value":{"step":${step + 1}}}}""",
+                ),
+                setOf("tasks"),
+                wait = false,
+            )
+            val drawing = screens.gatewayDrawing(update, "chat", null)
+            assertTrue(drawing.messages.size <= AgentScreen.MAX_MESSAGES)
+            val id = "req-${step + 1}"
+            val req = async { screens.awaitGatewayCard(update, drawing, "chat", id) { true } }
+            runCurrent()
+            screens.validated("chat", update.surfaceIds, id)
+            screens.shown("chat", update.surfaceIds, id)
+            req.await()
+        }
+
+        val finalCard = screens.gatewayCards.value.single()
+        assertEquals("req-0", finalCard.cardId)
+        assertTrue(finalCard.screen.messages.size <= AgentScreen.MAX_MESSAGES)
+        assertTrue(finalCard.screen.messages.any { "\"createSurface\"" in it })
+        assertTrue(finalCard.screen.messages.any { "\"text\":\"60\"" in it })
+        assertTrue(finalCard.screen.messages.any { "\"step\":60" in it })
+    }
+
+    @Test
     fun aMatchedAndroidRequestOnlyAcceptsItsTranscriptCall() = runTest {
         val screens = AgentScreens()
         val card = screen("form")

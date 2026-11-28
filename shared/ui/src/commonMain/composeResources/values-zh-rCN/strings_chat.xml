@@ -124,7 +124,6 @@
     <string name="chat_sessions_next">下一个需要你的对话</string>
 
     <string name="chat_gateway_screen_title">网关工具请求</string>
-    <string name="chat_gateway_screen_notice">此卡片由你的 Hermes 网关上的工具创建。你提交的信息可能会发送回该工具。</string>
     <string name="chat_screen_waiting">等待你的回答</string>
     <string name="chat_screen_opening">正在打开…</string>
     <string name="chat_screen_tap_answers">点按即可在对话中回答</string>

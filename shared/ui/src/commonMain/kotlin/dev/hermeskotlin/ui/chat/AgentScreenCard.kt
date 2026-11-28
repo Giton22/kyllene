@@ -43,7 +43,6 @@ import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.AgentScreens.DesktopStage
 import dev.hermeskotlin.designsystem.accentSoft
 import dev.hermeskotlin.designsystem.accentText
-import dev.hermeskotlin.designsystem.bodySmall
 import dev.hermeskotlin.designsystem.caption
 import dev.hermeskotlin.designsystem.colors
 import dev.hermeskotlin.designsystem.radii
@@ -53,7 +52,6 @@ import dev.hermeskotlin.designsystem.surface
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
 import dev.hermeskotlin.designsystem.warning
-import dev.hermeskotlin.designsystem.warningSoft
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -310,7 +308,7 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
     val minimum = if (isDesktop) Lifecycle.State.STARTED else Lifecycle.State.RESUMED
     val validating = call.stage == DesktopStage.Validating
     var rendered by remember(call.id, validating) { mutableStateOf<Set<String>>(emptySet()) }
-    var visible by remember(call.id) { mutableStateOf(false) }
+    var visible by remember(card.cardId) { mutableStateOf(false) }
     LaunchedEffect(call.stage, rendered, state, visible) {
         if (!state.isAtLeast(minimum)) return@LaunchedEffect
         when (call.stage) {
@@ -321,6 +319,8 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
     }
 
     val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    val takesTaps = visible && call.takesTaps && state.isAtLeast(minimum)
+    val active = call.takesTaps || call.stage != DesktopStage.Ready
     Column(
         modifier = Modifier.onGloballyPositioned { coordinates ->
             val bounds = coordinates.boundsInWindow()
@@ -329,28 +329,28 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Row(
-            Modifier.fillMaxWidth().background(Theme[colors][warningSoft], shape).padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.padding(start = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             UnstyledIcon(
                 Lucide.ShieldAlert,
                 contentDescription = null,
-                tint = Theme[colors][warning],
-                modifier = Modifier.size(18.dp),
+                tint = if (active) Theme[colors][warning] else Theme[colors][textTertiary],
+                modifier = Modifier.size(13.dp),
             )
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(Res.string.chat_gateway_screen_title), style = Theme[typography][bodySmall])
-                Text(stringResource(Res.string.chat_gateway_screen_notice), style = Theme[typography][caption])
-            }
+            Text(
+                stringResource(Res.string.chat_gateway_screen_title),
+                style = Theme[typography][caption],
+                color = Theme[colors][textTertiary],
+            )
         }
-        val takesTaps = visible && call.takesTaps && state.isAtLeast(minimum)
         CompositionLocalProvider(
             LocalAgentScreenLoadsRemoteImages provides false,
             LocalAgentScreenAllowsInput provides takesTaps,
         ) {
             AgentScreenSurface(
-                key = call.id,
+                key = card.cardId,
                 screen = screen,
                 live = true,
                 takesTaps = takesTaps,
@@ -359,9 +359,26 @@ internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
                 },
                 onFail = { surface, message -> registry.fail(call.chat, surface, message, call.id) },
                 onRendered = { rendered = it },
+                draftKey = JsonArray(listOf(JsonPrimitive(call.chat), JsonPrimitive(card.cardId))).toString(),
+                revision = call.id,
                 validateOnly = validating,
                 modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).clip(shape)
-                    .background(Theme[colors][surface]).border(1.dp, Theme[colors][stroke], shape).padding(12.dp),
+                    .background(Theme[colors][surface])
+                    .border(1.dp, if (takesTaps) Theme[colors][accentSoft] else Theme[colors][stroke], shape)
+                    .padding(12.dp),
+            )
+        }
+        val note = when {
+            takesTaps -> stringResource(Res.string.chat_screen_waiting)
+            call.stage != DesktopStage.Ready -> stringResource(Res.string.chat_screen_opening)
+            else -> null
+        }
+        if (note != null) {
+            Text(
+                note,
+                style = Theme[typography][caption],
+                color = if (takesTaps) Theme[colors][accentText] else Theme[colors][textTertiary],
+                modifier = Modifier.padding(start = 4.dp),
             )
         }
     }

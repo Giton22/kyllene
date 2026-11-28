@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -39,6 +40,17 @@ class TranscriptScreenCallTest {
         assertNull(placement.transcriptCallId)
         assertTrue(placement.canShowStandalone(state(outer)))
         assertFalse(placement.canShowStandalone(state(outer.copy(running = false), outer.copy(id = "another"))))
+    }
+
+    @Test
+    fun preferStandaloneSkipsTheTranscriptGraceDelay() = runTest {
+        val outer = ToolActivity("plugin", "plugin_tool", running = true)
+        val start = currentTime
+        val placement = awaitScreenPlacement(
+            MutableStateFlow(state(outer)), screen("pick"), { true }, preferStandalone = true,
+        ) { false }
+        assertNull(placement.transcriptCallId)
+        assertEquals(0L, currentTime - start)
     }
 
     @Test

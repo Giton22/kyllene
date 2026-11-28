@@ -67,10 +67,12 @@ internal class DesktopScreenTool(
         val screen = AgentScreen.from(SHOW_UI_TOOL, args)
             ?: throw PhoneToolException(NOT_DRAWN + "The screen has invalid A2UI messages.")
         val transcriptKey = desktopAgentScreenChat(chat.gateway.value, chat.profile, stored)
+        val gatewayKey = gatewayAgentScreenChat(chat.gateway.value, chat.profile, stored)
         // The plugin generates its own request UUID. The transcript carries the model's tool-call ID.
         // Match a unique, still-running call by its arguments before letting the browser act on it.
         return runScreenPlacement(
             chat.state, screen, accepts, NOT_SHOWN, claimed = { transcriptKey to it in claimed },
+            preferStandalone = screens.ownsGatewaySurface(screen, gatewayKey, chat),
             direct = { callId ->
                 claimed += transcriptKey to callId
                 if (claimed.size > RECENT_CLAIMS) claimed.remove(claimed.first())
@@ -82,11 +84,10 @@ internal class DesktopScreenTool(
                 screens.await(screen, transcriptKey, NOT_SHOWN, callId, accepts = accepts)
             },
             standalone = { placement ->
-                val key = gatewayAgentScreenChat(chat.gateway.value, chat.profile, stored)
-                val drawing = screens.gatewayDrawing(screen, key, chat)
+                val drawing = screens.gatewayDrawing(screen, gatewayKey, chat)
                 drawing.layoutProblem?.let { throw PhoneToolException(NOT_DRAWN + it) }
                 screens.awaitGatewayCard(
-                    screen, drawing, key, Uuid.random().toString(), owner = chat, notShown = NOT_SHOWN,
+                    screen, drawing, gatewayKey, Uuid.random().toString(), owner = chat, notShown = NOT_SHOWN,
                     anchor = placement.anchor(chat.state.value),
                     changes = screenRequestChanges(host, chat, connection),
                     isWaiting = { placement.canShowStandalone(chat.state.value) },

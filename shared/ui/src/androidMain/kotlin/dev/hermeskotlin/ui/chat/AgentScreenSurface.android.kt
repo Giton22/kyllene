@@ -149,7 +149,7 @@ internal actual fun AgentScreenSurface(
         }
     }.toSet() + closed
     val notifyRendered by rememberUpdatedState(onRendered)
-    LaunchedEffect(rendered, error, validateOnly) {
+    LaunchedEffect(revision, rendered, error, validateOnly) {
         if (error == null && rendered.containsAll(screen.surfaceIds)) notifyRendered(screen.surfaceIds)
     }
     val accents = remember(screen) { primaryColors(screen) }

@@ -419,6 +419,29 @@ class PhoneToolsBridgeTest {
     }
 
     @Test
+    fun pluginToolStartAndScreenAnswerDrainQuicklyWithoutWaitingForThePollInterval() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi))
+        val plugin = Plugin()
+        val transport = connect(s, plugin)
+        until { plugin.pendingReads >= 1 }
+
+        val beforePluginStart = currentTime
+        transport.push("""{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","payload":{"name":"kyllene_tasks"}}}""")
+        delay(100)
+        plugin.call("step-1", PhoneTool.ShowUi.id, buildJsonObject { put("value", "first") })
+        until { "step-1" in plugin.answers }
+        assertTrue(currentTime - beforePluginStart < 2_000L, "Expected fast drain on plugin tool.start, took ${currentTime - beforePluginStart}ms")
+
+        val beforeFollowUp = currentTime
+        delay(100)
+        plugin.call("step-2", PhoneTool.ShowUi.id, buildJsonObject { put("value", "second") })
+        until { "step-2" in plugin.answers }
+        assertTrue(currentTime - beforeFollowUp < 2_000L, "Expected fast follow-up drain after screen answer, took ${currentTime - beforeFollowUp}ms")
+        assertEquals(listOf(PhoneTool.ShowUi, PhoneTool.ShowUi), runner.runs)
+    }
+
+    @Test
     fun desktopRetriesARefusedAnswerWithoutRunningTheScreenAgain() = runTest {
         val runner = Runner()
         val s = setup(runner, on = listOf(PhoneTool.ShowUi), desktopScreensOnly = true)

@@ -2344,7 +2344,7 @@ private fun Messages(
                     }
                     }
                     for (card in cardsByMessage[message.key].orEmpty()) {
-                        key(card.call.id) {
+                        key(card.cardId) {
                             Box(Modifier.padding(top = 12.dp)) { GatewayAgentScreenCard(card) }
                         }
                     }
