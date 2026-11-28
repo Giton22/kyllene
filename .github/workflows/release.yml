@@ -336,13 +336,6 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.freedesktop.Sdk//26.08 org.freedesktop.Platform//26.08
 
-      - name: Let Flatpak use user namespaces
-        run: |
-          # Ubuntu 24.04+ runners with AppArmor restrict unprivileged userns, which Flatpak's bwrap needs.
-          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
       - name: Packaging contracts
         run: |
           mkdir -p "$RUNNER_TEMP/fontconfig-sdk"
@@ -354,7 +347,10 @@ jobs:
             --env="FONTCONFIG_FILE=$FONTCONFIG_FILE" --command=fc-list org.freedesktop.Sdk//26.08 "$@"
           SH
           chmod +x "$RUNNER_TEMP/fontconfig-sdk/fc-list"
-          PATH="$RUNNER_TEMP/fontconfig-sdk:$PATH" python3 -m unittest discover -s packaging/flatpak/tests -p test_fonts.py -v
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg-runtime}"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          PATH="$RUNNER_TEMP/fontconfig-sdk:$PATH" dbus-run-session -- \
+            python3 -m unittest discover -s packaging/flatpak/tests -p test_fonts.py -v
 
       - name: Select the tagged source
         run: |
@@ -406,6 +402,8 @@ jobs:
       # As in the Linux workflow: its own bus, and an unlocked keyring answering the Secret portal.
       - name: Installed sandbox smoke
         run: |
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg-runtime}"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
           mkdir -p ~/.config/xdg-desktop-portal
           printf '[preferred]\ndefault=*\norg.freedesktop.impl.portal.Secret=gnome-keyring\n' \
             > ~/.config/xdg-desktop-portal/portals.conf
