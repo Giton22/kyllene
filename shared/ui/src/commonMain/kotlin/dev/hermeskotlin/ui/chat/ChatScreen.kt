@@ -26,7 +26,10 @@ import dev.hermeskotlin.ui.windowControlsHeight
 import dev.hermeskotlin.ui.isDesktop
 import dev.hermeskotlin.ui.frostedPanel
 import dev.hermeskotlin.ui.stepChat
+import dev.hermeskotlin.core.chat.ChatSession
+import dev.hermeskotlin.core.phone.AgentScreens
 import dev.hermeskotlin.core.phone.desktopAgentScreenChat
+import dev.hermeskotlin.core.phone.gatewayAgentScreenChat
 import dev.hermeskotlin.core.bots.MentionQuery
 import dev.hermeskotlin.core.chat.ReplyReaction
 import dev.hermeskotlin.core.chat.PathRefKind
@@ -443,6 +446,7 @@ fun ChatScreen(
     LaunchedEffect(target) { viewModel.open(target) }
     val transcript = viewModel.transcript.collectAsStateWithLifecycle().value
     val state = transcript.state
+    val gatewayScreenOwner by viewModel.gatewayScreenOwner.collectAsStateWithLifecycle()
     // The same chat reopened with a new position (a notification for it) keeps the last one until the new one is read.
     val readPosition = viewModel.readPosition.collectAsStateWithLifecycle().value
         ?.takeIf { it.target.copy(readUpTo = null) == target.copy(readUpTo = null) }
@@ -620,8 +624,12 @@ fun ChatScreen(
         state = if (readPosition == null || !ownsTranscript) state.copy(historyLoaded = false) else state,
         conversationKey = conversationKey,
         agentScreenChat = state.storedSessionId?.let {
-            if (isDesktop) desktopAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it) else it
+            desktopAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it)
         },
+        gatewayScreenChat = state.storedSessionId?.takeIf { ownsTranscript && screenShown && connected }?.let {
+            gatewayAgentScreenChat(target.gateway.gatewayUrl.value, target.profile, it)
+        },
+        gatewayScreenOwner = gatewayScreenOwner,
         savedViewport = { viewModel.viewportFor(conversationKey, target) },
         onSaveViewport = viewModel::saveViewport,
         picker = picker,
@@ -792,6 +800,8 @@ internal fun ChatView(
     /** Isolates the transcript's scroll state across gateways, profiles and chats. */
     conversationKey: Any? = null,
     agentScreenChat: String? = state.storedSessionId,
+    gatewayScreenChat: String? = null,
+    gatewayScreenOwner: ChatSession? = null,
     /** Where the reader was in this chat's list when it last left the screen, read as the list comes back. */
     savedViewport: () -> TranscriptViewport? = { null },
     onSaveViewport: ((TranscriptViewport) -> Unit)? = null,
@@ -1130,6 +1140,9 @@ internal fun ChatView(
                             Modifier.fillMaxSize().then(if (controlHaze != null) Modifier.hazeSource(controlHaze, zIndex = -1f) else Modifier),
                         )
                     }
+                    val gatewayCards = LocalAgentScreens.current.gatewayCards.filter {
+                        gatewayScreenOwner != null && it.owner === gatewayScreenOwner && it.call.chat == gatewayScreenChat && it.isCurrent()
+                    }
                     if (state.historyLoaded && state.messages.isNotEmpty()) {
                         CompositionLocalProvider(
                             LocalMediaLoader provides actions::loadMedia,
@@ -1182,6 +1195,7 @@ internal fun ChatView(
                                     // The voice chat and dictation have the speaker and the microphone.
                                     canReadAloud = hasSpeechPlayback && !voiceOn && !dictation.active,
                                     found = found,
+                                    gatewayCards = gatewayCards,
                                 )
                             }
                         }
@@ -2025,6 +2039,7 @@ private fun Messages(
     canReadAloud: Boolean = true,
     /** The message Find in chat is on, by its key, marked with an outline. */
     found: String? = null,
+    gatewayCards: List<AgentScreens.GatewayCard> = emptyList(),
 ) {
     var confirm by remember { mutableStateOf<Pair<MessageChange, String>?>(null) }
     val lastPrompt = messages.lastOrNull { it is ChatMessage.User }?.key
@@ -2215,6 +2230,10 @@ private fun Messages(
                 layout.totalItemsCount == count && !listState.canScrollForward
         }.collect { atEnd -> if (atEnd) readLatest?.invoke() }
     }
+    val cardsByMessage = remember(messages, gatewayCards) {
+        gatewayCards.mapNotNull { card -> card.anchor?.replyKey(messages)?.let { it to card } }
+            .groupBy({ it.first }, { it.second })
+    }
     val unservable = remember(messages) { unservableEchoes(messages) }
     val unreadLine = remember(messages, unreadFrom, readUpTo) { unreadLineKey(messages, unreadFrom, readUpTo) }
     BoxWithConstraints(Modifier.fillMaxSize().pointerInput(readUpTo) {
@@ -2343,6 +2362,11 @@ private fun Messages(
                         is ChatMessage.Command -> CommandOutput(message) { actions.dismissSideCard(message) }
                         is ChatMessage.Notice -> NoticeLine(message)
                     }
+                    }
+                    for (card in cardsByMessage[message.key].orEmpty()) {
+                        key(card.cardId) {
+                            Box(Modifier.padding(top = 12.dp)) { GatewayAgentScreenCard(card) }
+                        }
                     }
                 }
             }

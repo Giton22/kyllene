@@ -126,6 +126,7 @@
     <string name="chat_sessions_open">Ouvrir les sessions</string>
     <string name="chat_sessions_next">Prochaine conversation qui vous attend</string>
 
+    <string name="chat_gateway_screen_title">Demande d’un outil de la passerelle</string>
     <string name="chat_screen_waiting">En attente de votre réponse</string>
     <string name="chat_screen_opening">Ouverture…</string>
     <string name="chat_screen_tap_answers">Un appui répond dans la conversation</string>

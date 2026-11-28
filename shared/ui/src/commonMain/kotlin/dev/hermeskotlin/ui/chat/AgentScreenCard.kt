@@ -4,11 +4,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -16,14 +19,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.ShieldAlert
 import com.composeunstyled.Text
+import com.composeunstyled.UnstyledIcon
 import com.composeunstyled.theme.Theme
 import dev.hermeskotlin.core.chat.AgentScreen
 import dev.hermeskotlin.core.chat.ChatMessage
@@ -42,6 +51,7 @@ import dev.hermeskotlin.designsystem.stroke
 import dev.hermeskotlin.designsystem.surface
 import dev.hermeskotlin.designsystem.textTertiary
 import dev.hermeskotlin.designsystem.typography
+import dev.hermeskotlin.designsystem.warning
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -61,23 +71,28 @@ import org.koin.compose.getKoin
  */
 internal class AgentScreenContext(
     val live: List<AgentScreens.Live>,
-    val onShown: (chat: String?, surfaceIds: Set<String>) -> Unit,
+    val onShown: (chat: String?, surfaceIds: Set<String>, transcriptId: String) -> Unit,
     /** True when a call waiting on the screen took the tap. */
-    val onAnswer: (chat: String?, surfaceId: String, result: JsonElement) -> Boolean,
-    val onFail: (chat: String?, surfaceId: String, message: String) -> Unit,
+    val onAnswer: (chat: String?, surfaceId: String, result: JsonElement, transcriptId: String) -> Boolean,
+    val onFail: (chat: String?, surfaceId: String, message: String, transcriptId: String) -> Unit,
     val onDrawn: (chat: String?, screen: AgentScreen) -> Unit = { _, _ -> },
     val took: (chat: String?, screen: AgentScreen) -> Boolean = { _, _ -> true },
     val registry: AgentScreens? = null,
+    val gatewayCards: List<AgentScreens.GatewayCard> = emptyList(),
     private val desktopCalls: List<AgentScreens.DesktopCall> = emptyList(),
 ) {
     fun desktopCall(chat: String?, id: String) = desktopCalls.find { it.chat == chat && it.id == id }
 
     companion object {
-        val None = AgentScreenContext(emptyList(), { _, _ -> }, { _, _, _ -> false }, { _, _, _ -> })
+        val None = AgentScreenContext(emptyList(), { _, _, _ -> }, { _, _, _, _ -> false }, { _, _, _, _ -> })
     }
 }
 
 internal val LocalAgentScreens = compositionLocalOf { AgentScreenContext.None }
+
+/** A standalone gateway card does not fetch images merely because the request arrived. */
+internal val LocalAgentScreenLoadsRemoteImages = compositionLocalOf { true }
+internal val LocalAgentScreenAllowsInput = compositionLocalOf { true }
 
 @Composable
 internal fun rememberAgentScreenContext(): AgentScreenContext {
@@ -86,17 +101,19 @@ internal fun rememberAgentScreenContext(): AgentScreenContext {
     val liveScreens by agentScreens.live.collectAsStateWithLifecycle()
     val screensGot by agentScreens.got.collectAsStateWithLifecycle()
     val desktopCalls by agentScreens.desktop.collectAsStateWithLifecycle()
-    return remember(liveScreens, screensGot, desktopCalls) {
+    val gatewayCards by agentScreens.gatewayCards.collectAsStateWithLifecycle()
+    return remember(liveScreens, screensGot, desktopCalls, gatewayCards) {
         AgentScreenContext(
             liveScreens,
-            onShown = { chat, ids -> agentScreens.shown(chat, ids) },
-            onAnswer = { chat, id, result -> agentScreens.answer(chat, id, result) },
-            onFail = { chat, id, message -> agentScreens.fail(chat, id, message) },
+            onShown = { chat, ids, call -> agentScreens.shown(chat, ids, transcriptId = call) },
+            onAnswer = { chat, id, result, call -> agentScreens.answer(chat, id, result, transcriptId = call) },
+            onFail = { chat, id, message, call -> agentScreens.fail(chat, id, message, transcriptId = call) },
             // Only a chat Kyllene knows the id of: the phone's calls are kept by it.
             onDrawn = { chat, screen -> if (chat != null) agentScreens.drawn(screen, chat) },
             took = { chat, screen -> AgentScreens.took(screen, chat, screensGot) },
             registry = agentScreens,
             desktopCalls = desktopCalls,
+            gatewayCards = gatewayCards,
         )
     }
 }
@@ -171,7 +188,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     val live = waits && if (isDesktop) {
         desktopCall?.takesTaps == true
     } else {
-        context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it) } }
+        context.live.any { waiting -> screen.surfaceIds.any { waiting.matches(chat, it, call.id) } }
     }
     var wasLive by rememberSaveable(call.id) { mutableStateOf(false) }
     var tappedLive by rememberSaveable(call.id) { mutableStateOf(false) }
@@ -200,10 +217,10 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
         }
     } else {
         LaunchedEffect(chat, screen.messages) { context.onDrawn(chat, screen) }
-        if (waits && !wasLive && lifecycle.isAtLeast(Lifecycle.State.RESUMED)) {
+        if (waits && (live || !wasLive) && lifecycle.isAtLeast(Lifecycle.State.RESUMED)) {
             LaunchedEffect(chat, screen.surfaceIds) {
                 while (true) {
-                    context.onShown(chat, screen.surfaceIds)
+                    context.onShown(chat, screen.surfaceIds, call.id)
                     delay(SHOWN_EVERY_MS)
                 }
             }
@@ -215,7 +232,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
     LaunchedEffect(call.running) {
         if (wasRunning && !call.running) screen.surfaceIds.forEach {
             if (isDesktop) context.registry?.fail(chat, it, ENDED, call.id)
-            else context.onFail(chat, it, ENDED)
+            else context.onFail(chat, it, ENDED, call.id)
         }
         wasRunning = call.running
     }
@@ -240,7 +257,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
                 if (live) {
                     // Only a tap a call took: one just after the turn stopped went nowhere, and may be tapped again.
                     val answeredHere = if (isDesktop) context.registry?.answer(chat, surface, result, call.id) == true
-                    else context.onAnswer(chat, surface, result)
+                    else context.onAnswer(chat, surface, result, call.id)
                     if (answeredHere) tappedLive = true
                 } else if (replies && send != null && !sent.value) {
                     sent.value = true
@@ -248,7 +265,7 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
                 }
             },
             onFail = { surface, message ->
-                if (isDesktop) drawError = message else context.onFail(chat, surface, message)
+                if (isDesktop) drawError = message else context.onFail(chat, surface, message, call.id)
             },
             onRendered = { rendered = it },
             draftKey = JsonArray(listOf(JsonPrimitive(chat), JsonPrimitive(view.owner.id))).toString(),
@@ -274,6 +291,93 @@ internal fun AgentScreenCard(view: ScreenView, newest: Boolean) {
                 note,
                 style = Theme[typography][caption],
                 color = if (live || replies) Theme[colors][accentText] else Theme[colors][textTertiary],
+                modifier = Modifier.padding(start = 4.dp),
+            )
+        }
+    }
+}
+
+/** A live, request-scoped card whose provenance is displayed by Kyllene outside the remote surface. */
+@Composable
+internal fun GatewayAgentScreenCard(card: AgentScreens.GatewayCard) {
+    val registry = LocalAgentScreens.current.registry ?: return
+    if (!agentScreenRendererAvailable()) return
+    val (call, screen) = card
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val state by lifecycle.currentStateAsState()
+    val minimum = if (isDesktop) Lifecycle.State.STARTED else Lifecycle.State.RESUMED
+    val validating = call.stage == DesktopStage.Validating
+    var rendered by remember(call.id, validating) { mutableStateOf<Set<String>>(emptySet()) }
+    var visible by remember(card.cardId) { mutableStateOf(false) }
+    LaunchedEffect(call.stage, rendered, state, visible) {
+        if (!state.isAtLeast(minimum)) return@LaunchedEffect
+        when (call.stage) {
+            DesktopStage.Validating -> registry.validated(call.chat, rendered, call.id)
+            DesktopStage.Showing -> if (visible) registry.shown(call.chat, rendered, call.id)
+            DesktopStage.Ready -> Unit
+        }
+    }
+
+    val shape = RoundedCornerShape(Theme[radii][radiusLarge])
+    val takesTaps = visible && call.takesTaps && state.isAtLeast(minimum)
+    val active = call.takesTaps || call.stage != DesktopStage.Ready
+    Column(
+        modifier = Modifier.onGloballyPositioned { coordinates ->
+            val bounds = coordinates.boundsInWindow()
+            visible = !bounds.isEmpty
+        },
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            Modifier.padding(start = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            UnstyledIcon(
+                Lucide.ShieldAlert,
+                contentDescription = null,
+                tint = if (active) Theme[colors][warning] else Theme[colors][textTertiary],
+                modifier = Modifier.size(13.dp),
+            )
+            Text(
+                stringResource(Res.string.chat_gateway_screen_title),
+                style = Theme[typography][caption],
+                color = Theme[colors][textTertiary],
+            )
+        }
+        CompositionLocalProvider(
+            LocalAgentScreenLoadsRemoteImages provides false,
+            LocalAgentScreenAllowsInput provides takesTaps,
+        ) {
+            AgentScreenSurface(
+                key = card.cardId,
+                screen = screen,
+                live = true,
+                takesTaps = takesTaps,
+                onAnswer = { surface, result ->
+                    if (visible && lifecycle.currentState.isAtLeast(minimum)) registry.answer(call.chat, surface, result, call.id)
+                },
+                onFail = { surface, message -> registry.fail(call.chat, surface, message, call.id) },
+                onRendered = { rendered = it },
+                draftKey = JsonArray(listOf(JsonPrimitive(call.chat), JsonPrimitive(card.cardId))).toString(),
+                revision = call.id,
+                validateOnly = validating,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).clip(shape)
+                    .background(Theme[colors][surface])
+                    .border(1.dp, if (takesTaps) Theme[colors][accentSoft] else Theme[colors][stroke], shape)
+                    .padding(12.dp),
+            )
+        }
+        val note = when {
+            takesTaps -> stringResource(Res.string.chat_screen_waiting)
+            call.stage != DesktopStage.Ready -> stringResource(Res.string.chat_screen_opening)
+            else -> null
+        }
+        if (note != null) {
+            Text(
+                note,
+                style = Theme[typography][caption],
+                color = if (takesTaps) Theme[colors][accentText] else Theme[colors][textTertiary],
                 modifier = Modifier.padding(start = 4.dp),
             )
         }

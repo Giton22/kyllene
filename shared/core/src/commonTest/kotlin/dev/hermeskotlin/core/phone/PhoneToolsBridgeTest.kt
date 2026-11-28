@@ -17,6 +17,7 @@ import dev.hermeskotlin.core.push.PushKeys
 import dev.hermeskotlin.core.push.PushMessage
 import dev.hermeskotlin.core.push.PushRegistration
 import dev.hermeskotlin.core.rpc.FakeTransport
+import dev.hermeskotlin.core.rpc.JsonRpcClient
 import dev.hermeskotlin.core.settings.SettingsStore
 import dev.hermeskotlin.core.storage.InMemoryKeyValueStore
 import io.ktor.client.engine.mock.MockEngine
@@ -48,6 +49,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -270,6 +272,12 @@ class PhoneToolsBridgeTest {
     private class Runner(val block: Set<PhoneTool> = emptySet()) : PhoneToolRunner {
         val cancelled = CompletableDeferred<PhoneTool>()
         val runs = mutableListOf<PhoneTool>()
+        val origins = mutableMapOf<PhoneTool, JsonRpcClient?>()
+
+        override suspend fun run(tool: PhoneTool, args: JsonObject, session: String, origin: JsonRpcClient?): JsonElement {
+            origins[tool] = origin
+            return run(tool, args, session)
+        }
 
         override suspend fun run(tool: PhoneTool, args: JsonObject, session: String): JsonElement {
             runs += tool
@@ -356,6 +364,81 @@ class PhoneToolsBridgeTest {
         assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
         assertEquals(PhoneTool.ShowUi.id, plugin.answers["screen"]?.get("result")?.jsonObject?.get("tool")?.jsonPrimitive?.content)
         assertTrue(plugin.error("battery").orEmpty().isNotBlank())
+    }
+
+    @Test
+    fun androidBindsOnlyScreenRequestsToTheirFetchSocket() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi, PhoneTool.Battery))
+        val plugin = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id)
+            call("battery", PhoneTool.Battery.id)
+        }
+        connect(s, plugin)
+
+        until { plugin.answers.keys.containsAll(listOf("screen", "battery")) }
+        val client = (s.connection.state.value as ConnectionState.Connected).client
+        assertEquals(client, runner.origins.getValue(PhoneTool.ShowUi))
+        assertNull(runner.origins.getValue(PhoneTool.Battery))
+        assertEquals(setOf(PhoneTool.ShowUi, PhoneTool.Battery), runner.runs.toSet())
+    }
+
+    @Test
+    fun androidRetriesAScreenAnswerAfterReconnectWithoutRunningItAgain() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi))
+        val plugin = Plugin().apply {
+            call("screen", PhoneTool.ShowUi.id, buildJsonObject { put("value", "submitted") })
+            disconnectOnAnswer = true
+        }
+        connect(s, plugin)
+        until { s.connection.state.value is ConnectionState.Reconnecting }
+        assertEquals(1, plugin.answerAttempts.size)
+        assertNotNull(runner.origins.getValue(PhoneTool.ShowUi))
+
+        connect(s, plugin)
+        until { "screen" in plugin.answers }
+        assertEquals(listOf(PhoneTool.ShowUi), runner.runs)
+        assertEquals(listOf(plugin.answers["screen"], plugin.answers["screen"]), plugin.answerAttempts)
+    }
+
+    @Test
+    fun androidDeduplicatesScreenRequestsIndependentlyForEachGateway() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi))
+        val first = Plugin().apply { call("screen", PhoneTool.ShowUi.id) }
+        connect(s, first)
+        until { "screen" in first.answers }
+
+        val second = Plugin().apply { call("screen", PhoneTool.ShowUi.id) }
+        connect(s, second, "https://b.example")
+        until { "screen" in second.answers }
+        assertEquals(listOf(PhoneTool.ShowUi, PhoneTool.ShowUi), runner.runs)
+        assertEquals(1, first.answerAttempts.size)
+        assertEquals(1, second.answerAttempts.size)
+    }
+
+    @Test
+    fun pluginToolStartAndScreenAnswerDrainQuicklyWithoutWaitingForThePollInterval() = runTest {
+        val runner = Runner()
+        val s = setup(runner, on = listOf(PhoneTool.ShowUi))
+        val plugin = Plugin()
+        val transport = connect(s, plugin)
+        until { plugin.pendingReads >= 1 }
+
+        val beforePluginStart = currentTime
+        transport.push("""{"jsonrpc":"2.0","method":"event","params":{"type":"tool.start","payload":{"name":"kyllene_tasks"}}}""")
+        delay(100)
+        plugin.call("step-1", PhoneTool.ShowUi.id, buildJsonObject { put("value", "first") })
+        until { "step-1" in plugin.answers }
+        assertTrue(currentTime - beforePluginStart < 2_000L, "Expected fast drain on plugin tool.start, took ${currentTime - beforePluginStart}ms")
+
+        val beforeFollowUp = currentTime
+        delay(100)
+        plugin.call("step-2", PhoneTool.ShowUi.id, buildJsonObject { put("value", "second") })
+        until { "step-2" in plugin.answers }
+        assertTrue(currentTime - beforeFollowUp < 2_000L, "Expected fast follow-up drain after screen answer, took ${currentTime - beforeFollowUp}ms")
+        assertEquals(listOf(PhoneTool.ShowUi, PhoneTool.ShowUi), runner.runs)
     }
 
     @Test

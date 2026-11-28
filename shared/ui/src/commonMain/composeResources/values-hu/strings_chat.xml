@@ -126,6 +126,7 @@
     <string name="chat_sessions_open">Munkamenetek megnyitása</string>
     <string name="chat_sessions_next">A következő csevegés, amely rád vár</string>
 
+    <string name="chat_gateway_screen_title">Átjáróeszköz kérése</string>
     <string name="chat_screen_waiting">A válaszodra vár</string>
     <string name="chat_screen_opening">Megnyitás…</string>
     <string name="chat_screen_tap_answers">Egy koppintással a csevegésben válaszolhatsz</string>

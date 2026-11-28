@@ -424,6 +424,8 @@ class ChatViewModel(
         }
     }
 
+    internal val gatewayScreenOwner = host.session
+
     internal val transcript: StateFlow<ChatTranscript> = widgetSession
         .flatMapLatest { bound ->
             if (bound == null) flowOf(ChatTranscript()) else {

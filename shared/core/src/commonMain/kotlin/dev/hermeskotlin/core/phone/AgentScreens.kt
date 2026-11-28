@@ -2,17 +2,28 @@ package dev.hermeskotlin.core.phone
 
 import dev.hermeskotlin.core.chat.A2uiEnvelope
 import dev.hermeskotlin.core.chat.AgentScreen
+import dev.hermeskotlin.core.chat.ChatSession
+import dev.hermeskotlin.core.chat.NOT_DRAWN
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -24,9 +35,10 @@ import kotlinx.serialization.json.put
 class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
 
     /** A screen a call waits on: [chat] is null when the gateway didn't say which chat called. */
-    data class Live(val chat: String?, val surfaceIds: Set<String>) {
-        fun matches(chat: String?, surfaceId: String) =
-            surfaceId in surfaceIds && (this.chat == null || chat == null || this.chat == chat)
+    data class Live(val chat: String?, val surfaceIds: Set<String>, val transcriptId: String? = null) {
+        fun matches(chat: String?, surfaceId: String, transcriptId: String? = null) =
+            surfaceId in surfaceIds && (this.transcriptId == null || this.transcriptId == transcriptId) &&
+                (this.chat == null || chat == null || this.chat == chat)
     }
 
     enum class DesktopStage { Validating, Showing, Ready }
@@ -39,11 +51,25 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val takesTaps: Boolean,
     )
 
+    data class GatewayCard(
+        val call: DesktopCall,
+        val screen: AgentScreen,
+        val owner: ChatSession?,
+        val anchor: GatewayCardAnchor?,
+        val isCurrent: () -> Boolean,
+        val cardId: String = call.id,
+    )
+
     private class Waiting(
         val live: Live,
         val screen: AgentScreen,
         val accepts: () -> Boolean,
         val callId: String?,
+        val gatewayScreen: AgentScreen?,
+        val ownsChat: () -> Boolean,
+        val owner: ChatSession?,
+        val anchor: GatewayCardAnchor?,
+        val cardId: String = callId ?: "",
     ) {
         val shown = CompletableDeferred<Unit>()
         private val answer = CompletableDeferred<Result<JsonElement>>()
@@ -53,9 +79,9 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         /** Ends the wait with [result]; an answer, or a failure, needs no more showing. */
         fun complete(result: Result<JsonElement>): Boolean = answer.complete(result).also { shown.complete(Unit) }
 
-        fun matches(chat: String?, surface: String, callId: String?): Boolean =
+        fun matches(chat: String?, surface: String, callId: String?, transcriptId: String? = null): Boolean =
             !answer.isCompleted && this.callId == callId && accepts() &&
-                if (callId == null) live.matches(chat, surface) else live.chat == chat && surface in live.surfaceIds
+                if (callId == null) live.matches(chat, surface, transcriptId) else live.chat == chat && surface in live.surfaceIds
 
         fun desktopCall(): DesktopCall? = callId?.let {
             DesktopCall(checkNotNull(live.chat), it, live.surfaceIds, stage, screen.wait && stage == DesktopStage.Ready)
@@ -114,6 +140,64 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     private val shownDesktop = ArrayDeque<DesktopCall>()
     private val _desktop = MutableStateFlow<List<DesktopCall>>(emptyList())
     val desktop: StateFlow<List<DesktopCall>> = _desktop.asStateFlow()
+    private val _gatewayCards = MutableStateFlow<List<GatewayCard>>(emptyList())
+    val gatewayCards: StateFlow<List<GatewayCard>> = _gatewayCards.asStateFlow()
+    private val shownGatewayCards = ArrayDeque<GatewayCard>()
+
+    /** True when every surface in [screen] already belongs to a live standalone card for [owner] in [chat]. */
+    fun ownsGatewaySurface(screen: AgentScreen, chat: String, owner: ChatSession?): Boolean {
+        if (screen.surfaceIds.isEmpty()) return false
+        val owned = shownGatewayCards.filter { it.call.chat == chat && it.owner === owner && it.isCurrent() }
+            .flatMapTo(HashSet()) { it.screen.surfaceIds }
+        return screen.surfaceIds.all { it in owned }
+    }
+
+    /** Standalone updates can replay only the bounded, still-owned surfaces shown in this window. */
+    fun gatewayDrawing(screen: AgentScreen, chat: String, owner: ChatSession?): AgentScreen {
+        val creates = screen.envelopes.mapNotNullTo(HashSet()) { it?.takeIf { message -> message.creates }?.surfaceId }
+        val bases = (screen.surfaceIds - creates).flatMap { surface ->
+            val card = shownGatewayCards.lastOrNull {
+                it.call.chat == chat && it.owner === owner && it.isCurrent() && surface in it.screen.surfaceIds
+            } ?: throw PhoneToolException(NOT_DRAWN + "The screen to update is no longer available. Create a new surface.")
+            card.screen.messages.zip(card.screen.envelopes).filter { (_, envelope) -> envelope?.surfaceId == surface }
+                .map { (message, _) -> message }
+        }
+        val combined = bases + screen.messages
+        val messages = if (combined.size <= AgentScreen.MAX_MESSAGES) {
+            combined
+        } else {
+            val compacted = compactGatewayHistory(bases) + screen.messages
+            if (compacted.size > AgentScreen.MAX_MESSAGES) {
+                throw PhoneToolException(NOT_DRAWN + "The screen update history is full. Create a new surface.")
+            }
+            compacted
+        }
+        return screen.copy(messages = messages)
+    }
+
+    private fun gatewayCardId(screen: AgentScreen, chat: String, owner: ChatSession?, fallback: String): String {
+        val matching = shownGatewayCards.filter {
+            it.call.chat == chat && it.owner === owner && it.isCurrent() &&
+                it.call.surfaceIds.all(screen.surfaceIds::contains)
+        }.mapTo(LinkedHashSet()) { it.cardId }
+        return matching.singleOrNull() ?: fallback
+    }
+
+    suspend fun awaitGatewayCard(
+        update: AgentScreen,
+        screen: AgentScreen,
+        chat: String,
+        id: String,
+        owner: ChatSession? = null,
+        anchor: GatewayCardAnchor? = null,
+        notShown: String = NOT_SHOWN,
+        changes: Flow<Unit> = emptyFlow(),
+        isWaiting: () -> Boolean = { true },
+        ownsChat: () -> Boolean,
+    ): JsonElement = await(
+        update, chat, notShown, id, { ownsChat() && isWaiting() }, screen, ownsChat, owner, anchor, changes,
+        cardId = gatewayCardId(screen, chat, owner, id),
+    )
 
     /**
      * Waits until the user answers [screen] in [chat], and returns what they did, for the agent. Throws
@@ -125,10 +209,28 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         chat: String?,
         notShown: String = NOT_SHOWN,
         callId: String? = null,
+        transcriptId: String? = null,
+        changes: Flow<Unit> = emptyFlow(),
         accepts: () -> Boolean = { true },
-    ): JsonElement {
+    ): JsonElement = await(screen, chat, notShown, callId, accepts, null, accepts, null, null, changes, transcriptId)
+
+    private suspend fun await(
+        screen: AgentScreen,
+        chat: String?,
+        notShown: String,
+        callId: String?,
+        accepts: () -> Boolean,
+        gatewayScreen: AgentScreen?,
+        ownsChat: () -> Boolean,
+        owner: ChatSession?,
+        anchor: GatewayCardAnchor?,
+        changes: Flow<Unit>,
+        transcriptId: String? = null,
+        cardId: String = callId ?: "",
+    ): JsonElement = coroutineScope {
         require(callId == null || chat != null)
-        val entry = Waiting(Live(chat, screen.surfaceIds), screen, accepts, callId)
+        if (!accepts()) throw PhoneToolException(notShown)
+        val entry = Waiting(Live(chat, screen.surfaceIds, transcriptId), screen, accepts, callId, gatewayScreen, ownsChat, owner, anchor, cardId)
         var replaced = emptyList<Waiting>()
         waiting.update { list ->
             val (old, kept) = list.partition { it.live.chat == chat && it.live.surfaceIds.any(screen.surfaceIds::contains) }
@@ -137,10 +239,16 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         }
         replaced.forEach { it.complete(Result.failure(PhoneToolException(REPLACED))) }
         publish()
+        val invalidate = launch {
+            if (changes.firstOrNull { !accepts() } != null) {
+                entry.complete(Result.failure(PhoneToolException(notShown)))
+            }
+        }
         try {
             withTimeoutOrNull(shownWithinMs) { entry.shown.await() } ?: throw PhoneToolException(notShown)
-            return entry.await()
+            entry.await()
         } finally {
+            invalidate.cancel()
             waiting.update { list -> list - entry }
             publish()
         }
@@ -154,16 +262,26 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     }
 
     /** The chat shows these surfaces. Desktop confirms all affected surfaces before accepting the batch. */
-    fun shown(chat: String?, surfaceIds: Set<String>, callId: String? = null) {
+    fun shown(chat: String?, surfaceIds: Set<String>, callId: String? = null, transcriptId: String? = null) {
         if (callId == null) {
-            waiting.value.filter { w -> surfaceIds.any { w.matches(chat, it, null) } }.forEach(::acknowledge)
+            waiting.value.filter { w -> surfaceIds.any { w.matches(chat, it, null, transcriptId) } }.forEach(::acknowledge)
             return
         }
         val entry = desktopConfirmation(chat, surfaceIds, callId, DesktopStage.Showing) ?: return
-        record(entry.screen, chat)
         entry.stage = DesktopStage.Ready
-        shownDesktop.addLast(checkNotNull(entry.desktopCall()).copy(takesTaps = false))
-        if (shownDesktop.size > RECENT_DESKTOP_CALLS) shownDesktop.removeFirst()
+        val gatewayScreen = entry.gatewayScreen
+        if (gatewayScreen == null) {
+            record(entry.screen, chat)
+            shownDesktop.addLast(checkNotNull(entry.desktopCall()).copy(takesTaps = false))
+            if (shownDesktop.size > RECENT_DESKTOP_CALLS) shownDesktop.removeFirst()
+        } else {
+            val call = checkNotNull(entry.desktopCall()).copy(takesTaps = false)
+            val kept = shownGatewayCards.mapNotNull { it.without(call, entry.owner) }.filter { it.isCurrent() }
+            shownGatewayCards.clear()
+            shownGatewayCards.addAll(kept)
+            shownGatewayCards.addLast(GatewayCard(call, gatewayScreen, entry.owner, entry.anchor, entry.ownsChat, entry.cardId))
+            if (shownGatewayCards.size > RECENT_GATEWAY_CARDS) shownGatewayCards.removeFirst()
+        }
         publishDesktop()
         acknowledge(entry)
     }
@@ -188,13 +306,13 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     }
 
     /** Hands the user's result to the call waiting on the card. Desktop additionally requires its own call ID. */
-    fun answer(chat: String?, surfaceId: String, result: JsonElement, callId: String? = null): Boolean =
+    fun answer(chat: String?, surfaceId: String, result: JsonElement, callId: String? = null, transcriptId: String? = null): Boolean =
         waiting.value.lastOrNull {
-            it.screen.wait && (callId == null || it.stage == DesktopStage.Ready) && it.matches(chat, surfaceId, callId)
+            it.screen.wait && (callId == null || it.stage == DesktopStage.Ready) && it.matches(chat, surfaceId, callId, transcriptId)
         }?.complete(Result.success(result)) == true
 
-    fun fail(chat: String?, surfaceId: String, message: String, callId: String? = null): Boolean =
-        waiting.value.lastOrNull { it.matches(chat, surfaceId, callId) }
+    fun fail(chat: String?, surfaceId: String, message: String, callId: String? = null, transcriptId: String? = null): Boolean =
+        waiting.value.lastOrNull { it.matches(chat, surfaceId, callId, transcriptId) }
             ?.complete(Result.failure(PhoneToolException(message))) == true
 
     private fun publish() {
@@ -203,8 +321,28 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
     }
 
     private fun publishDesktop() {
-        _desktop.value = (shownDesktop + waiting.value.mapNotNull { it.desktopCall() })
+        val entries = waiting.value
+        _desktop.value = (shownDesktop + entries.filter { it.gatewayScreen == null }.mapNotNull { it.desktopCall() })
             .associateBy { it.chat to it.id }.values.toList()
+        val pendingCards = entries.mapNotNull { entry ->
+            entry.gatewayScreen?.let { GatewayCard(checkNotNull(entry.desktopCall()), it, entry.owner, entry.anchor, entry.accepts, entry.cardId) }
+        }
+        shownGatewayCards.removeAll { !it.isCurrent() }
+        _gatewayCards.value = shownGatewayCards.mapNotNull { shown ->
+            pendingCards.fold<GatewayCard, GatewayCard?>(shown) { remaining, pending ->
+                remaining?.without(pending.call, pending.owner)
+            }
+        } + pendingCards
+    }
+
+    private fun GatewayCard.without(replacement: DesktopCall, owner: ChatSession?): GatewayCard? {
+        if (this.owner !== owner || call.chat != replacement.chat) return this
+        val remaining = call.surfaceIds - replacement.surfaceIds
+        if (remaining.size == call.surfaceIds.size) return this
+        if (remaining.isEmpty()) return null
+        val messages = screen.messages.zip(screen.envelopes).filter { (_, envelope) -> envelope?.surfaceId in remaining }
+            .map { (message, _) -> message }
+        return copy(call = call.copy(surfaceIds = remaining), screen = screen.copy(messages = messages, surfaceIds = remaining))
     }
 
     companion object {
@@ -224,6 +362,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         /** A screen the chat doesn't show by then isn't waited on: nobody would see it. */
         const val SHOWN_WITHIN_MS = 15_000L
         private const val RECENT_DESKTOP_CALLS = 128
+        private const val RECENT_GATEWAY_CARDS = 8
 
         const val REPLACED = "A newer screen with the same surface id took its place."
         const val NOT_SHOWN = "Kyllene isn't showing this chat on the phone right now, so the user can't see the " +
@@ -238,3 +377,99 @@ fun desktopAgentScreenChat(gateway: String, profile: String?, chat: String): Str
         add(profile?.let { JsonPrimitive(it) } ?: JsonNull)
         add(JsonPrimitive(chat))
     }.toString()
+
+/** Standalone surfaces have their own namespace, separate from transcript cards. */
+fun gatewayAgentScreenChat(gateway: String, profile: String?, chat: String): String =
+    "gateway:${desktopAgentScreenChat(gateway, profile, chat)}"
+
+/**
+ * Compacts historical standalone updates so multi-tap plugin loops don't hit [AgentScreen.MAX_MESSAGES]:
+ * keeps only messages from the latest createSurface/deleteSurface per surface, merges updateComponents by
+ * component id, and drops superseded updateDataModel writes on the same or child paths.
+ */
+internal fun compactGatewayHistory(messages: List<String>): List<String> {
+    data class DataUpdate(val path: String, val raw: String)
+    class SurfaceHistory {
+        var created: String? = null
+        var deleted: String? = null
+        var componentsEnvelope: JsonObject? = null
+        val components = LinkedHashMap<String, JsonElement>()
+        val dataUpdates = mutableListOf<DataUpdate>()
+        val other = mutableListOf<String>()
+
+        fun reset() {
+            created = null
+            deleted = null
+            componentsEnvelope = null
+            components.clear()
+            dataUpdates.clear()
+            other.clear()
+        }
+
+        fun emit(): List<String> = buildList {
+            created?.let(::add)
+            deleted?.let(::add)
+            componentsEnvelope?.let { envelope ->
+                val body = envelope["updateComponents"] as? JsonObject
+                if (body != null && components.isNotEmpty()) {
+                    val mergedBody = JsonObject(body + ("components" to JsonArray(components.values.toList())))
+                    add(JsonObject(envelope + ("updateComponents" to mergedBody)).toString())
+                }
+            }
+            dataUpdates.forEach { add(it.raw) }
+            addAll(other)
+        }
+    }
+
+    val bySurface = LinkedHashMap<String, SurfaceHistory>()
+    val ungrouped = mutableListOf<String>()
+    for (raw in messages) {
+        val obj = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull()
+        val surface = A2uiEnvelope.of(raw)?.surfaceId
+        if (obj == null || surface == null) {
+            ungrouped += raw
+            continue
+        }
+        val history = bySurface.getOrPut(surface) { SurfaceHistory() }
+        when {
+            obj["createSurface"] is JsonObject -> {
+                history.reset()
+                history.created = raw
+            }
+            obj["deleteSurface"] is JsonObject -> {
+                history.reset()
+                history.deleted = raw
+            }
+            obj["updateComponents"] is JsonObject -> {
+                val body = obj["updateComponents"] as JsonObject
+                val items = body["components"] as? JsonArray
+                if (items != null) {
+                    history.componentsEnvelope = obj
+                    for (item in items) {
+                        val id = ((item as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull
+                        if (id != null) history.components[id] = item else history.other += raw
+                    }
+                } else {
+                    history.other += raw
+                }
+            }
+            obj["updateDataModel"] is JsonObject -> {
+                val body = obj["updateDataModel"] as JsonObject
+                val rawPath = (body["path"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                val path = if (rawPath.isEmpty() || rawPath == "/") "/" else rawPath.trimEnd('/')
+                if (path == "/") {
+                    history.dataUpdates.clear()
+                } else {
+                    val childPrefix = "$path/"
+                    history.dataUpdates.removeAll { it.path == path || it.path.startsWith(childPrefix) }
+                }
+                history.dataUpdates += DataUpdate(path, raw)
+            }
+            else -> history.other += raw
+        }
+    }
+    return buildList {
+        bySurface.values.forEach { addAll(it.emit()) }
+        addAll(ungrouped)
+    }
+}

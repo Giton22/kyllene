@@ -126,6 +126,7 @@
     <string name="chat_sessions_open">Sitzungen öffnen</string>
     <string name="chat_sessions_next">Nächster Chat, der dich braucht</string>
 
+    <string name="chat_gateway_screen_title">Gateway-Tool-Anfrage</string>
     <string name="chat_screen_waiting">Wartet auf deine Antwort</string>
     <string name="chat_screen_opening">Wird geöffnet…</string>
     <string name="chat_screen_tap_answers">Ein Tippen antwortet im Chat</string>

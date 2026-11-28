@@ -10,6 +10,8 @@ import androidx.a2ui.model.processor.processInput
 import androidx.a2ui.model.protocol.A2uiClientErrorMessage
 import androidx.a2ui.model.protocol.A2uiClientEventMessage
 import androidx.a2ui.model.protocol.A2uiException
+import androidx.a2ui.compose.runtime.A2uiComponentState
+import androidx.a2ui.compose.runtime.observeA2uiComponentState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -140,6 +142,16 @@ internal actual fun AgentScreenSurface(
         if (live) fail(surface, message)
     }
     val surfaces by drawn.processor.activeSurfaces.collectAsStateWithLifecycle()
+    val closed = remember(screen) { closedSurfaces(screen) }
+    val rendered = surfaces.mapNotNull { surface ->
+        key(surface.id) {
+            surface.id.takeIf { observeA2uiComponentState(surface) is A2uiComponentState.Success }
+        }
+    }.toSet() + closed
+    val notifyRendered by rememberUpdatedState(onRendered)
+    LaunchedEffect(revision, rendered, error, validateOnly) {
+        if (error == null && rendered.containsAll(screen.surfaceIds)) notifyRendered(screen.surfaceIds)
+    }
     val accents = remember(screen) { primaryColors(screen) }
     val textColor = Theme[colors][text]
     MaterialTheme(colorScheme = materialColors(), shapes = materialShapes(), typography = materialType()) {
@@ -276,11 +288,7 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
         }
     }
     // A screen the messages close at the end has nothing left to show.
-    val closed = screen.messages.mapNotNullTo(HashSet()) { message ->
-        (runCatching { HermesJson.parseToJsonElement(message) }.getOrNull() as? JsonObject)
-            ?.let { it["deleteSurface"] as? JsonObject }?.let { (it["surfaceId"] as? JsonPrimitive)?.contentOrNull }
-    }
-    val shown = screen.surfaceIds - closed
+    val shown = screen.surfaceIds - closedSurfaces(screen)
     // What the processing throws is a screen it can't draw, said to the agent, not a crash of the tool.
     return try {
         drawsWithoutError(context, screen, shown)
@@ -288,6 +296,16 @@ suspend fun agentScreenProblem(context: Context, screen: AgentScreen): String? {
         throw e
     } catch (e: Exception) {
         "The screen couldn't be drawn: ${e.message ?: e::class.simpleName}"
+    }
+}
+
+private fun closedSurfaces(screen: AgentScreen): Set<String> = buildSet {
+    for (message in screen.messages) {
+        val body = runCatching { HermesJson.parseToJsonElement(message) }.getOrNull() as? JsonObject ?: continue
+        val created = (body["createSurface"] as? JsonObject)?.get("surfaceId") as? JsonPrimitive
+        val deleted = (body["deleteSurface"] as? JsonObject)?.get("surfaceId") as? JsonPrimitive
+        created?.contentOrNull?.let { remove(it) }
+        deleted?.contentOrNull?.let { add(it) }
     }
 }
 
