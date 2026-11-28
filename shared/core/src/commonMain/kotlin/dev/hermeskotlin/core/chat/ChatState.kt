@@ -170,9 +170,13 @@ sealed interface ChatMessage {
         val failed: Boolean = false,
         /** The side task answering a `/btw` or `/bg`, whose `btw.complete` / `background.complete` fills [output] in. */
         val taskId: String? = null,
+        /** Identifies the same row across updates to its answer, within its current chat session. */
+        internal val rowIdentity: Any = Any(),
     ) : ChatMessage {
-        val canDismiss: Boolean
-            get() = !running && (taskId != null || command.startsWith("/btw ") || command.startsWith("/bg "))
+        val isSideTask: Boolean
+            get() = taskId != null || command.startsWith("/btw ") || command.startsWith("/bg ")
+
+        val canDismiss: Boolean get() = !running && isSideTask
     }
 }
 

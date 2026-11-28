@@ -3454,9 +3454,12 @@ private fun CommandOutput(message: ChatMessage.Command, onDismiss: () -> Unit) {
                 color = Theme[colors][textSecondary],
                 modifier = Modifier.weight(1f),
             )
-            if (message.running) Spinner(Modifier.size(12.dp))
-            if (message.canDismiss) {
-                IconButton(Lucide.X, contentDescription = stringResource(Res.string.chat_dismiss), onClick = onDismiss)
+            when {
+                message.running && message.isSideTask -> Box(Modifier.size(MinTouchTarget), contentAlignment = Alignment.Center) {
+                    Spinner(Modifier.size(12.dp))
+                }
+                message.running -> Spinner(Modifier.size(12.dp))
+                message.canDismiss -> IconButton(Lucide.X, contentDescription = stringResource(Res.string.chat_dismiss), onClick = onDismiss)
             }
         }
         if (message.output.isNotEmpty()) {

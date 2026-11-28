@@ -73,9 +73,10 @@ class ChatHost(
     private var sessionScope: CoroutineScope? = null
 
     /** Each closed chat's `/btw` and `/bg` cards, by gateway, profile and stored id, to show again when it reopens. */
-    private val sideTasks = mutableMapOf<Triple<GatewayUrl, String?, String>, SideTasks>()
+    private val sideTasks = mutableMapOf<Triple<GatewayUrl, String?, String>, List<ChatMessage.Command>>()
 
-    private data class SideTasks(val cards: List<ChatMessage.Command>, val dismissedIds: Set<String>)
+    /** Retain dismissed IDs separately so an empty chat can't evict one with a running card. */
+    private val dismissedSideTasks = mutableMapOf<Triple<GatewayUrl, String?, String>, Set<String>>()
 
     /**
      * The session for [storedSessionId] on [gateway] and [profile]: the open one when it is already that
@@ -95,11 +96,11 @@ class ChatHost(
         this.gateway = gateway
         this.profile = profile
         sessionScope = childScope
-        val kept = storedSessionId?.let { sideTasks.remove(Triple(gateway, profile, it)) }
+        val key = storedSessionId?.let { Triple(gateway, profile, it) }
         return ChatSession(
             gateway, storedSessionId, title, connection, sessions, childScope, profile, risks, cwd = cwd, cache = cache,
-            sideTasks = kept?.cards.orEmpty(), startInstruction = startInstruction, ownerVersion = _ownerVersion.value,
-            dismissedSideTaskIds = kept?.dismissedIds.orEmpty(),
+            sideTasks = key?.let(sideTasks::remove).orEmpty(), startInstruction = startInstruction, ownerVersion = _ownerVersion.value,
+            dismissedSideTaskIds = key?.let(dismissedSideTasks::remove).orEmpty(),
         )
             .also { it.start() }
             .also { _session.value = it }
@@ -109,6 +110,7 @@ class ChatHost(
     fun close() {
         invalidateOwner()
         sideTasks.clear()
+        dismissedSideTasks.clear()
         closeOpen()
     }
 
@@ -120,9 +122,15 @@ class ChatHost(
         // A quick answer can beat the task id onto its card and add a second one; keep the answered card.
         val cards = state.messages.filterIsInstance<ChatMessage.Command>().filter { it.taskId != null }
             .groupBy { it.taskId }.values.map { same -> same.firstOrNull { !it.running } ?: same.first() }
-        if (cards.isEmpty() && state.dismissedSideTaskIds.isEmpty()) return
-        sideTasks[Triple(openGateway, profile, storedId)] = SideTasks(cards, state.dismissedSideTaskIds)
-        if (sideTasks.size > KEPT_CHATS) sideTasks.remove(sideTasks.keys.first())
+        val key = Triple(openGateway, profile, storedId)
+        if (cards.isNotEmpty()) {
+            sideTasks[key] = cards
+            if (sideTasks.size > KEPT_CHATS) sideTasks.remove(sideTasks.keys.first())
+        }
+        if (state.dismissedSideTaskIds.isNotEmpty()) {
+            dismissedSideTasks[key] = state.dismissedSideTaskIds
+            if (dismissedSideTasks.size > KEPT_CHATS) dismissedSideTasks.remove(dismissedSideTasks.keys.first())
+        }
     }
 
     private fun closeOpen() {

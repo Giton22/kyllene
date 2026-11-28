@@ -2653,6 +2653,53 @@ class ChatSessionTest {
     }
 
     @Test
+    fun aTapStillDismissesTheCardAfterItsAnswerIsUpdated() = runTest {
+        val (chat, transport) = newChat(backgroundScope, mapOf("prompt.background" to """{"task_id":"bg_copy"}"""))
+        chat.runInBackground("tidy up")
+        transport.push(event("background.complete", "rt9", """{"task_id":"bg_copy","text":"First result."}"""))
+        val tapped = chat.state.first { state ->
+            state.messages.filterIsInstance<ChatMessage.Command>().any { it.output == "First result." }
+        }.messages.filterIsInstance<ChatMessage.Command>().single()
+        transport.push(event("background.complete", "rt9", """{"task_id":"bg_copy","text":"Updated result."}"""))
+        chat.state.first { state ->
+            state.messages.filterIsInstance<ChatMessage.Command>().any { it.output == "Updated result." }
+        }
+
+        chat.dismissSideCard(tapped)
+        assertTrue(chat.state.value.messages.none { it is ChatMessage.Command })
+    }
+
+    @Test
+    fun dismissingCardsInOtherChatsDoesNotEvictAStashedRunningCard() = runTest {
+        val (connection, transport) = setup(backgroundScope, mapOf(
+            "session.resume" to """{"session_id":"rt1","running":false,"info":{}}""",
+            "prompt.background" to """{"task_id":"bg_kept"}""",
+        ))
+        connection.state.first { it is ConnectionState.Connected }
+        val host = ChatHost(connection, SessionsApi(client()), backgroundScope)
+        val first = host.open(url, "stored-1", "Greeting")
+        first.state.first { it.historyLoaded }
+        first.runInBackground("keep running")
+
+        repeat(21) { index ->
+            val id = "other-$index"
+            storedSessions[id] = """{"session_id":"$id","messages":[]}"""
+            val other = host.open(url, id, "Another chat")
+            other.state.first { it.historyLoaded && it.runtimeSessionId == "rt1" }
+            transport.push(event("btw.complete", "rt1", """{"task_id":"btw_$index","text":"Done."}"""))
+            val card = other.state.first { state -> state.messages.any { it is ChatMessage.Command } }
+                .messages.filterIsInstance<ChatMessage.Command>().single()
+            other.dismissSideCard(card)
+        }
+
+        val back = host.open(url, "stored-1", "Greeting")
+        back.state.first { it.historyLoaded }
+        val kept = back.state.value.messages.filterIsInstance<ChatMessage.Command>().singleOrNull()
+        assertEquals("bg_kept", kept?.taskId)
+        assertTrue(kept?.running == true)
+    }
+
+    @Test
     fun sideTaskCardsComeBackWithTheirChat() = runTest {
         val (connection, _) = setup(backgroundScope, mapOf("session.resume" to """{"session_id":"rt1","running":false,"info":{}}"""))
         storedSessions["bg_away"] = """{"session_id":"bg_away","messages":[{"id":1,"role":"assistant","content":"Finished while away."}]}"""

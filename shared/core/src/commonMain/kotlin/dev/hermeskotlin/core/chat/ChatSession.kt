@@ -2554,11 +2554,13 @@ class ChatSession(
     /** Hides a gateway notice on this phone (its ×). The gateway isn't told. */
     fun dismissNotice(key: String) = _state.update { it.withoutNotice(key) }
 
+    /** Hides a finished side-task card and ignores later completions of its task. */
     fun dismissSideCard(card: ChatMessage.Command) = _state.update { state ->
-        if (!card.canDismiss || state.messages.none { it === card }) return@update state
-        val taskId = card.taskId
+        val current = state.messages.filterIsInstance<ChatMessage.Command>()
+            .firstOrNull { it.rowIdentity === card.rowIdentity && it.canDismiss } ?: return@update state
+        val taskId = current.taskId
         state.copy(
-            messages = state.messages.filterNot { it === card || (taskId != null && it is ChatMessage.Command && it.taskId == taskId) },
+            messages = state.messages.filterNot { it === current || (taskId != null && it is ChatMessage.Command && it.taskId == taskId) },
             dismissedSideTaskIds = if (taskId == null) state.dismissedSideTaskIds else state.dismissedSideTaskIds + taskId,
         )
     }
@@ -3657,6 +3659,7 @@ private val ChatMessage.Command.isBackground: Boolean get() = command == "/bg" |
  */
 private fun reopenedSideTask(card: ChatMessage.Command): ChatMessage.Command = card.copy(
     key = "task-${card.taskId}",
+    rowIdentity = Any(),
     output = if (card.running && !card.isBackground) "Its answer may have come while another chat was open." else card.output,
     running = card.running && card.isBackground,
 )
