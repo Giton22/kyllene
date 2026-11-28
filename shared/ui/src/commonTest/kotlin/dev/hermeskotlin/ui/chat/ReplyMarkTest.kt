@@ -170,4 +170,24 @@ class ReplyMarkTest {
         val ran = listOf(prompt, ChatMessage.Assistant("a1", text = "Done"), command)
         assertNotEquals(ran.replyMark(), listOf(prompt, ChatMessage.Assistant("a1", text = "Done"), command.copy(output = "ok", running = false)).replyMark())
     }
+
+    @Test
+    fun dismissingASideCardWhileAwayIsNotANewReply() {
+        val reply = ChatMessage.Assistant("a1", text = "Done")
+        val card = ChatMessage.Command("side-1", "/btw which file?", output = "notes.txt", running = false, taskId = "btw_1")
+        val withCard = listOf(prompt, reply, card)
+        val away = ReplySeen(prompt.key, withCard.replyMark()).next(away = true, prompt.key, withCard.replyMark())
+
+        val dismissed = listOf(prompt, reply)
+        assertTrue(dismissed.onlyDismissedSideCardsFrom(withCard))
+        val afterDismiss = away.next(away = true, prompt.key, dismissed.replyMark(), onlyDismissedCards = dismissed.onlyDismissedSideCardsFrom(withCard))
+        assertFalse(afterDismiss.new)
+
+        // A real reply afterwards still counts as news, as does one arriving in the same update as a dismissal.
+        val replied = dismissed + ChatMessage.Assistant("a2", text = "Next answer")
+        assertFalse(replied.onlyDismissedSideCardsFrom(dismissed))
+        assertTrue(afterDismiss.next(away = true, prompt.key, replied.replyMark(), onlyDismissedCards = replied.onlyDismissedSideCardsFrom(dismissed)).new)
+        assertFalse(replied.onlyDismissedSideCardsFrom(withCard))
+        assertTrue(away.next(away = true, prompt.key, replied.replyMark(), onlyDismissedCards = replied.onlyDismissedSideCardsFrom(withCard)).new)
+    }
 }

@@ -66,6 +66,12 @@ internal fun findMatches(messages: List<ChatMessage>, query: String): List<Int> 
     return messages.indices.filter { findableText(messages[it]).contains(needle, ignoreCase = true) }
 }
 
+/** Keeps [currentKey] when it is still in [matches], else falls back to the newest remaining match. */
+internal fun resolveFoundMatch(matches: List<String>, currentKey: String?): Pair<String?, Int> {
+    val index = matches.indexOf(currentKey)
+    return if (index >= 0) currentKey to index else matches.lastOrNull() to matches.lastIndex
+}
+
 /**
  * Hermes Desktop's Ctrl+F: a field over the conversation, "3 of 12", and the way between matches. Enter goes to
  * the next (older) match, Shift+Enter back; Escape closes.
