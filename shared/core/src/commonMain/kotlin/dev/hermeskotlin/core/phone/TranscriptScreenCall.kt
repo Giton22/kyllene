@@ -22,11 +22,20 @@ import kotlinx.serialization.json.Json
 /** Waits briefly for the transcript's separately delivered call before showing a standalone card. */
 private const val SCREEN_TRANSCRIPT_GRACE_MS = 1_000L
 
+/** The reply keeps its live key until the transcript is reloaded from the gateway. */
+data class GatewayCardAnchor(val liveKey: String, val toolId: String) {
+    fun replyKey(messages: List<ChatMessage>): String? = messages.firstOrNull { it.key == liveKey }?.key
+        ?: messages.asReversed().filterIsInstance<ChatMessage.Assistant>()
+            .firstOrNull { message -> message.tools.any { it.id == toolId } }?.key
+}
+
 data class ScreenPlacement(val transcriptCallId: String?, private val outerToolIds: Set<String> = emptySet()) {
     fun canShowStandalone(state: ChatState): Boolean = state.runningScreenTools().any { it.id in outerToolIds }
 
-    fun anchor(state: ChatState): String? = state.messages.asReversed().filterIsInstance<ChatMessage.Assistant>()
-        .firstOrNull { message -> message.tools.any { it.id in outerToolIds } }?.key
+    fun anchor(state: ChatState): GatewayCardAnchor? =
+        state.messages.asReversed().filterIsInstance<ChatMessage.Assistant>().firstNotNullOfOrNull { message ->
+            message.tools.firstOrNull { it.id in outerToolIds }?.let { GatewayCardAnchor(message.key, it.id) }
+        }
 
     fun conflictsWithDirect(state: ChatState, screen: AgentScreen): Boolean =
         state.runningScreenTools().any { it.conflictsWith(screen) }

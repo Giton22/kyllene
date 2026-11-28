@@ -47,7 +47,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val takesTaps: Boolean,
     )
 
-    data class GatewayCard(val call: DesktopCall, val screen: AgentScreen, val owner: ChatSession?, val anchor: String?, val isCurrent: () -> Boolean)
+    data class GatewayCard(val call: DesktopCall, val screen: AgentScreen, val owner: ChatSession?, val anchor: GatewayCardAnchor?, val isCurrent: () -> Boolean)
 
     private class Waiting(
         val live: Live,
@@ -57,7 +57,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         val gatewayScreen: AgentScreen?,
         val ownsChat: () -> Boolean,
         val owner: ChatSession?,
-        val anchor: String?,
+        val anchor: GatewayCardAnchor?,
     ) {
         val shown = CompletableDeferred<Unit>()
         private val answer = CompletableDeferred<Result<JsonElement>>()
@@ -155,7 +155,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         chat: String,
         id: String,
         owner: ChatSession? = null,
-        anchor: String? = null,
+        anchor: GatewayCardAnchor? = null,
         notShown: String = NOT_SHOWN,
         changes: Flow<Unit> = emptyFlow(),
         isWaiting: () -> Boolean = { true },
@@ -186,7 +186,7 @@ class AgentScreens(private val shownWithinMs: Long = SHOWN_WITHIN_MS) {
         gatewayScreen: AgentScreen?,
         ownsChat: () -> Boolean,
         owner: ChatSession?,
-        anchor: String?,
+        anchor: GatewayCardAnchor?,
         changes: Flow<Unit>,
         transcriptId: String? = null,
     ): JsonElement = coroutineScope {

@@ -2215,7 +2215,10 @@ private fun Messages(
                 layout.totalItemsCount == count && !listState.canScrollForward
         }.collect { atEnd -> if (atEnd) readLatest?.invoke() }
     }
-    val cardsByMessage = remember(gatewayCards) { gatewayCards.groupBy { it.anchor } }
+    val cardsByMessage = remember(messages, gatewayCards) {
+        gatewayCards.mapNotNull { card -> card.anchor?.replyKey(messages)?.let { it to card } }
+            .groupBy({ it.first }, { it.second })
+    }
     val unservable = remember(messages) { unservableEchoes(messages) }
     val unreadLine = remember(messages, unreadFrom, readUpTo) { unreadLineKey(messages, unreadFrom, readUpTo) }
     BoxWithConstraints(Modifier.fillMaxSize().pointerInput(readUpTo) {

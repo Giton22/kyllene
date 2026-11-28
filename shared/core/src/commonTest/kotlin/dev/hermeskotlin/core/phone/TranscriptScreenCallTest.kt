@@ -76,12 +76,21 @@ class TranscriptScreenCallTest {
         val result = runScreenPlacement(states, pending, { true }, claimed = { false },
             direct = { it },
             standalone = { placement ->
-                assertEquals("reply", placement.anchor(states.value))
+                assertEquals(GatewayCardAnchor("reply", "plugin"), placement.anchor(states.value))
                 states.first { placement.conflictsWithDirect(it, pending) }
                 throw PhoneToolException(AgentScreens.NOT_SHOWN)
             },
         )
         assertEquals("direct", result)
+    }
+
+    @Test
+    fun aGatewayCardStaysWithTheOriginalReplyAfterHistoryReloads() {
+        val anchor = GatewayCardAnchor("live-1", "outer-tool")
+        val stored = ChatMessage.Assistant("saved-2", tools = listOf(ToolActivity("outer-tool", "plugin_tool")))
+        val newer = ChatMessage.Assistant("saved-3", text = "A newer reply.")
+        assertEquals("saved-2", anchor.replyKey(listOf(stored, newer)))
+        assertNull(anchor.replyKey(listOf(newer)))
     }
 
     @Test
