@@ -37,3 +37,33 @@ class RepoSmokeTest(unittest.TestCase):
                 self.assertIn(route + ': refused wrong-key update and retained release 2', result.stdout)
             self.assertIn('both routes passed with two prepared releases', result.stdout)
             self.assertEqual(list(root.iterdir()), [])
+
+    @unittest.skipUnless(sys.platform == 'linux' and all(shutil.which(tool) for tool in
+                        ('flatpak', 'ostree', 'gpg', 'gpgconf', 'timeout')), 'Linux Flatpak/OSTree/GPG tools required')
+    def test_bundle_mode_publishes_and_updates_to_the_given_candidate_bundle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_dir = root / 'app'
+            (app_dir / 'files').mkdir(parents=True)
+            (app_dir / 'export').mkdir()
+            app = 'app.kyllene.RepositoryTest'
+            (app_dir / 'metadata').write_text(
+                f'[Application]\nname={app}\nruntime=org.freedesktop.Platform/x86_64/26.08\n')
+            (app_dir / 'files/payload').write_text('candidate payload\n')
+            repo = root / 'repo'
+            bundle = root / 'candidate.flatpak'
+            subprocess.run(['flatpak', 'build-export', '--arch=x86_64', '--timestamp=2025-01-01T00:00:00Z',
+                            str(repo), str(app_dir), 'stable'],
+                           check=True, capture_output=True)
+            subprocess.run(['flatpak', 'build-bundle', str(repo), str(bundle), app, 'stable'],
+                           check=True, capture_output=True)
+            tmp = root / 'tmp'
+            tmp.mkdir()
+            result = subprocess.run(
+                ['timeout', '80', shutil.which('sh'), str(SCRIPT), '--bundle', str(bundle), str(repo), app, 'stable'],
+                text=True, capture_output=True, env={**os.environ, 'TMPDIR': str(tmp)}, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for route in ('bundle', 'ref'):
+                self.assertIn(route + ': updated from release 1 to release 2', result.stdout)
+                self.assertIn(route + ': refused wrong-key update and retained release 2', result.stdout)
+            self.assertEqual(list(tmp.iterdir()), [])

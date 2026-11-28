@@ -72,12 +72,14 @@ installed by hand updates from it too.
 - **Release qualification:** the Flatpak build starts alongside Android. Its bundle
   is attached only after Android's draft exists and JVM/desktop tests, Flatpak contracts, real installed
   UI smoke, and repository tests pass. Publication reuses that qualified bundle.
-  Repository tests use the real candidate payload on tags and a tiny fixture on PRs.
+  Repository tests use the real candidate bundle on tags (paired with a tiny base
+  release carrying the same metadata so the update tests real publication and HTTP
+  object transfer without re-bundling twice) and a tiny fixture on PRs.
   Two isolated user installations share two signed test releases: bundle and
   `.flatpakref` both update, then both reject a wrong-key commit and retain the
-  previous commit. The two releases use the same payload; this tests delivery/trust,
-  not application-data migration from a historical version. Temporary keys/origins
-  never appear in the downloadable candidate bundle.
+  previous commit. This tests delivery/trust, not application-data migration from a
+  historical version. Temporary keys/origins never appear in the downloadable
+  candidate bundle.
 
 Repository tests require Linux, Flatpak, OSTree, GnuPG and Python 3. They do not
 launch the app, download a runtime, or change the caller's installation. Run

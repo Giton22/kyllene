@@ -36,6 +36,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       - name: Signing key
         env:
@@ -56,6 +58,8 @@ jobs:
       - name: Test and build
         run: >
           ./gradlew --no-daemon
+          -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
           :shared:core:testAndroidHostTest :shared:designsystem:testAndroidHostTest :shared:ui:testAndroidHostTest :shared:wearlink:testAndroidHostTest
           :wearApp:testDebugUnitTest :androidApp:assembleRelease :wearApp:assembleRelease
           -PappVersion="${GITHUB_REF_NAME#v}" -PreleasesRepo="$GITHUB_REPOSITORY"
@@ -142,13 +146,15 @@ jobs:
   #   MAC_CERT_P12_BASE64, MAC_CERT_PASSWORD           a "Developer ID Application" certificate (.p12), base64-encoded
   #   MAC_SIGN_IDENTITY                                its name after "Developer ID Application: ", e.g. "Jane Doe (AB12CD34EF)"
   #   MAC_NOTARY_APPLE_ID, MAC_NOTARY_PASSWORD, MAC_TEAM_ID   for notarisation (an app-specific password)
+  # Desktop installers start alongside Android instead of waiting for its draft; `desktop-attach` uploads them once
+  # both finish.
   desktop:
-    needs: release
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          # The release build type: ProGuard leaves out the library code the app never reaches.
           - os: windows-latest
             task: packageReleaseMsi
           - os: macos-latest
@@ -175,6 +181,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       - name: macOS signing certificate
         if: runner.os == 'macOS'
@@ -213,10 +221,12 @@ jobs:
 
       - name: Build the installer
         # The installer bundles this JDK, not whichever one Gradle's own toolchain settings pick to run on.
+        # Keep gradle.properties's -Xmx4g here: macos-latest standard runners have 7 GB RAM.
         env:
           HERALD_PACKAGING_JDK: ${{ env.JAVA_HOME }}
         run: >
-          ./gradlew --no-daemon :desktopApp:${{ matrix.task }} ${{ env.NOTARIZE && ':desktopApp:notarizeReleaseDmg' || '' }}
+          ./gradlew --no-daemon
+          :desktopApp:${{ matrix.task }} ${{ env.NOTARIZE && ':desktopApp:notarizeReleaseDmg' || '' }}
           -PappVersion="${GITHUB_REF_NAME#v}" -PreleasesRepo="$GITHUB_REPOSITORY"
 
       - name: Sign the MSI
@@ -239,26 +249,49 @@ jobs:
             Remove-Item $pfx
           }
 
-      - name: Add to the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Prepare installer artifact
         run: |
           v="${GITHUB_REF_NAME#v}"
           out=desktopApp/build/compose/binaries/main-release
+          mkdir -p dist
           case "${{ runner.os }}" in
-            Windows) cp "$out"/msi/*.msi "kyllene-desktop-$v.msi" ;;
-            macOS) cp "$out"/dmg/*.dmg "kyllene-desktop-$v.dmg" ;;
-            Linux) cp "$out"/deb/*.deb "kyllene-desktop-${v}_amd64.deb" ;;
+            Windows) cp "$out"/msi/*.msi "dist/kyllene-desktop-$v.msi" ;;
+            macOS) cp "$out"/dmg/*.dmg "dist/kyllene-desktop-$v.dmg" ;;
+            Linux) cp "$out"/deb/*.deb "dist/kyllene-desktop-${v}_amd64.deb" ;;
           esac
-          for file in kyllene-desktop-*; do
-            if command -v sha256sum > /dev/null; then sha256sum "$file"; else shasum -a 256 "$file"; fi > "$file.sha256"
-          done
-          gh release upload "$GITHUB_REF_NAME" kyllene-desktop-*
+          (
+            cd dist
+            for file in kyllene-desktop-*; do
+              if command -v sha256sum > /dev/null; then sha256sum "$file"; else shasum -a 256 "$file"; fi > "$file.sha256"
+            done
+          )
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-installer-${{ runner.os }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Remove the signing keychain
         if: always() && runner.os == 'macOS'
         run: |
           if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then security delete-keychain "$RUNNER_TEMP/signing.keychain-db"; fi
+
+  desktop-attach:
+    needs: [release, desktop]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: desktop-installer-*
+          merge-multiple: true
+          path: dist
+      - name: Add to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload --clobber --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" dist/*
 
   # The stable Flatpak, app.kyllene.Kyllene, added to the draft as kyllene-desktop-1.2.3_x86_64.flatpak for a manual
   # install. It is built offline from this tag's commit, like the Linux workflow's Devel build, and installing it
@@ -362,9 +395,10 @@ jobs:
           dbus-run-session -- sh -c 'printf smoke | gnome-keyring-daemon --unlock --components=secrets >/dev/null &&
             python3 packaging/flatpak/tests/installed_smoke.py --app app.kyllene.Kyllene build/kyllene.flatpak'
 
-      # Real candidate payload on release; the PR workflow uses the tiny fixture for this matrix.
+      # Real candidate bundle on release (reused from Sign and bundle so we don't re-bundle twice); the PR workflow
+      # uses the tiny fixture for this matrix.
       - name: Repository update qualification
-        run: timeout 1200 sh packaging/flatpak/tests/repo_smoke.sh build/flatpak-repo app.kyllene.Kyllene stable
+        run: timeout 1200 sh packaging/flatpak/tests/repo_smoke.sh --bundle build/kyllene.flatpak build/flatpak-repo app.kyllene.Kyllene stable
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
