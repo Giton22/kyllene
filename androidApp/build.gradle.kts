@@ -134,3 +134,7 @@ dependencies {
 }
 
 apply(from = rootProject.file("gradle/robolectric.gradle.kts"))
+
+tasks.withType<Test>().configureEach {
+    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+}
