@@ -278,8 +278,10 @@ jobs:
         run: |
           if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then security delete-keychain "$RUNNER_TEMP/signing.keychain-db"; fi
 
+  # Runs whenever the draft exists, even if one OS leg failed (`fail-fast: false`), so the other installers still attach.
   desktop-attach:
     needs: [release, desktop]
+    if: always() && needs.release.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -291,7 +293,14 @@ jobs:
       - name: Add to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload --clobber --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" dist/*
+        run: |
+          shopt -s nullglob
+          files=(dist/*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::warning::No desktop installers were produced to attach"
+            exit 0
+          fi
+          gh release upload --clobber --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "${files[@]}"
 
   # The stable Flatpak, app.kyllene.Kyllene, added to the draft as kyllene-desktop-1.2.3_x86_64.flatpak for a manual
   # install. It is built offline from this tag's commit, like the Linux workflow's Devel build, and installing it

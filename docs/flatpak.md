@@ -159,9 +159,9 @@ retain any returned portal token for the next retrieval, and clear owned bytes.
 Linux integration tests start a disposable `dbus-daemon`; other hosts skip them
 explicitly. Run `./gradlew :shared:core:jvmTest --tests '*LinuxSecretPortalTest'`.
 
-The Linux Secret transport pins matching junixsocket Java/native libraries. Release
-builds analyze those two JARs as ProGuard libraries and package their original bytes,
-preserving multi-release classes and JNI resources while shrinking the application.
+The Linux Secret transport pins matching junixsocket Java/native libraries and packages
+their original bytes intact, preserving multi-release classes and JNI resources (and
+treating them as ProGuard library JARs whenever desktop ProGuard is enabled).
 The Linux runtime includes `jdk.security.auth` for D-Bus EXTERNAL authentication.
 Other desktop platforms retain FileKit's existing transport provider.
 
