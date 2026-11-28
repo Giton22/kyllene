@@ -38,10 +38,16 @@ def stable(manifest, module, version):
 def stable_files(directory, version, date):
     """The stable app's .desktop file and metainfo, from the Devel ones: its own ID and name, and this release."""
     desktop = (directory / (DEVEL + '.desktop')).read_text()
-    desktop = desktop.replace(DEVEL, STABLE).replace('Name=Kyllene (Development)', 'Name=Kyllene')
+    desktop = desktop.replace(DEVEL, STABLE)
+    # The name, in English and in every translation beside it: the release is not the development build.
+    desktop = re.sub(r'^Name(\[[^\]]*\])?=Kyllene \((?:Development|Entwicklung)\)$',
+                     lambda m: 'Name' + (m.group(1) or '') + '=Kyllene', desktop, flags=re.M)
     (directory / (STABLE + '.desktop')).write_text(desktop)
     metainfo = (directory / (DEVEL + '.metainfo.xml')).read_text()
-    metainfo = metainfo.replace(DEVEL, STABLE).replace('<name>Kyllene (Development)</name>', '<name>Kyllene</name>')
+    metainfo = metainfo.replace(DEVEL, STABLE)
+    metainfo, name_count = re.subn(r'<name>Kyllene \(Development\)</name>', '<name>Kyllene</name>', metainfo)
+    if name_count != 1:
+        raise ValueError('Expected one <name> element in the metainfo')
     # A pre-release (1.2.3-rc.1) is a development release to software centres.
     kind = 'development' if '-' in version else 'stable'
     metainfo, count = re.subn(r'<releases>.*?</releases>',

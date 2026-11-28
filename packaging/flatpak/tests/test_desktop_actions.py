@@ -28,6 +28,15 @@ class DesktopActionsTest(unittest.TestCase):
             self.assertEqual(group['Name'], name)
             self.assertEqual(shlex.split(group['Exec']), ['kyllene', uri])
 
+    def test_every_name_and_comment_has_a_german_line(self):
+        """A software centre and the start menu show the language of the desktop, not the .desktop file's."""
+        for section in ('Desktop Entry', 'Desktop Action NewChat', 'Desktop Action QuickEntry', 'Desktop Action Call'):
+            group = self.entry[section]
+            with self.subTest(section):
+                self.assertTrue(group.get('Name[de]'), section + ' has no German name')
+                self.assertNotEqual(group['Name[de]'], group['Name'], section + ' repeats the English name')
+        self.assertTrue(self.entry['Desktop Entry'].get('Comment[de]'))
+
 
 if __name__ == '__main__':
     unittest.main()

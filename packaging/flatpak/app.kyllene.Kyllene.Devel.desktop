@@ -1,7 +1,9 @@
 [Desktop Entry]
 Type=Application
 Name=Kyllene (Development)
+Name[de]=Kyllene (Entwicklung)
 Comment=Client for Hermes Agent
+Comment[de]=Client für Hermes Agent
 Exec=kyllene %u
 Icon=app.kyllene.Kyllene.Devel
 Terminal=false
@@ -11,12 +13,15 @@ Actions=NewChat;QuickEntry;Call;
 
 [Desktop Action NewChat]
 Name=New chat
+Name[de]=Neuer Chat
 Exec=kyllene herald://new-chat
 
 [Desktop Action QuickEntry]
 Name=Quick entry
+Name[de]=Schnelleingabe
 Exec=kyllene herald://quick-entry
 
 [Desktop Action Call]
 Name=Call Hermes
+Name[de]=Hermes anrufen
 Exec=kyllene herald://voice-chat
