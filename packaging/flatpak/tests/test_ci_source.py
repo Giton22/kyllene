@@ -109,6 +109,30 @@ class CiSourceTest(unittest.TestCase):
             self.assertIn('<release version="1.2.3-rc.1"', metainfo)
             self.assertIn('type="development"', metainfo)
 
+    def test_a_release_drops_the_development_word_from_every_translation(self):
+        """The release is not the development build in any language, so no Name[xx] may keep it."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(prepare(devel_files(root), 'flatpak-release', '--release', '1.2.3').returncode, 0)
+            desktop = (root / 'app.kyllene.Kyllene.desktop').read_text()
+            names = [line for line in desktop.splitlines() if line.startswith('Name')]
+            self.assertIn('Name=Kyllene', names)
+            self.assertTrue(len(names) > 1, 'the .desktop file carries no translated name')
+            for line in names:
+                self.assertNotIn('Development', line)
+                self.assertNotIn('Entwicklung', line)
+            metainfo = (root / 'app.kyllene.Kyllene.metainfo.xml').read_text()
+            self.assertNotIn('Development', metainfo)
+
+    def test_the_devel_files_carry_german_beside_the_english_words(self):
+        desktop = (FLATPAK / 'app.kyllene.Kyllene.Devel.desktop').read_text()
+        self.assertIn('Name[de]=Kyllene (Entwicklung)', desktop)
+        self.assertIn('Name[de]=Neuer Chat', desktop)
+        self.assertIn('Comment[de]=', desktop)
+        metainfo = (FLATPAK / 'app.kyllene.Kyllene.Devel.metainfo.xml').read_text()
+        self.assertIn('<summary xml:lang="de">', metainfo)
+        self.assertIn('<p xml:lang="de">', metainfo)
+
     def test_a_release_version_is_one_plain_word(self):
         for version in ('1.2', 'v1.2.3', '1.2.3; rm -rf /', '1.2.3 -PreleasesRepo=x', '1.2.3-$(id)'):
             with tempfile.TemporaryDirectory() as directory:

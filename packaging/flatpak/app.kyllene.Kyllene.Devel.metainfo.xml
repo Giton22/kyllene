@@ -3,9 +3,13 @@
   <id>app.kyllene.Kyllene.Devel</id>
   <name>Kyllene (Development)</name>
   <summary>A client for Hermes Agent</summary>
+  <summary xml:lang="de">Ein Client für Hermes Agent</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
-  <description><p>Use the existing Kyllene desktop application to connect to your Hermes gateway.</p></description>
+  <description>
+    <p>Use the existing Kyllene desktop application to connect to your Hermes gateway.</p>
+    <p xml:lang="de">Verbinde die vorhandene Kyllene-Desktop-App mit deinem Hermes-Gateway.</p>
+  </description>
   <launchable type="desktop-id">app.kyllene.Kyllene.Devel.desktop</launchable>
   <url type="homepage">https://kyllene.app/</url>
   <url type="vcs-browser">https://github.com/Giton22/kyllene</url>
