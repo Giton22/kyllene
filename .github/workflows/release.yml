@@ -315,10 +315,11 @@ jobs:
     secrets:
       GRADLE_ENCRYPTION_KEY: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
+  # Flatpak builds and sandbox smoke need full VM kernel support (bwrap pivot_root + systemd D-Bus).
   flatpak:
     permissions:
       contents: read
-    runs-on: namespace-profile-linux-x64
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -331,13 +332,6 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: flatpak flatpak-builder ostree xvfb xauth xdotool python3-pil xdg-desktop-portal gnome-keyring
-      - name: Ensure system D-Bus is running
-        run: |
-          # Lightweight VMs without systemd lack the system bus socket that flatpak run connects to.
-          if [ ! -S /run/dbus/system_bus_socket ]; then
-            sudo mkdir -p /run/dbus
-            sudo dbus-daemon --system --fork
-          fi
       - name: Install Flatpak SDK
         run: |
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
@@ -354,10 +348,7 @@ jobs:
             --env="FONTCONFIG_FILE=$FONTCONFIG_FILE" --command=fc-list org.freedesktop.Sdk//26.08 "$@"
           SH
           chmod +x "$RUNNER_TEMP/fontconfig-sdk/fc-list"
-          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg-runtime}"
-          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
-          PATH="$RUNNER_TEMP/fontconfig-sdk:$PATH" dbus-run-session -- \
-            python3 -m unittest discover -s packaging/flatpak/tests -p test_fonts.py -v
+          PATH="$RUNNER_TEMP/fontconfig-sdk:$PATH" python3 -m unittest discover -s packaging/flatpak/tests -p test_fonts.py -v
 
       - name: Select the tagged source
         run: |
@@ -409,8 +400,6 @@ jobs:
       # As in the Linux workflow: its own bus, and an unlocked keyring answering the Secret portal.
       - name: Installed sandbox smoke
         run: |
-          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/xdg-runtime}"
-          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
           mkdir -p ~/.config/xdg-desktop-portal
           printf '[preferred]\ndefault=*\norg.freedesktop.impl.portal.Secret=gnome-keyring\n' \
             > ~/.config/xdg-desktop-portal/portals.conf
