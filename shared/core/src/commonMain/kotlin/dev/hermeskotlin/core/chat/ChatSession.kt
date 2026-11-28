@@ -1649,16 +1649,18 @@ class ChatSession(
             val runtimeId = ensureAttached(client)
             val taskId = (client.request(method, buildJsonObject { put("session_id", runtimeId); put("text", text) }) as? JsonObject)
                 .string("task_id")
+            var dismissed = false
             _state.update { state ->
+                dismissed = taskId in state.dismissedSideTaskIds
                 state.copy(messages = state.messages.mapNotNull {
                     when {
                         it !is ChatMessage.Command || it.key != key -> it
-                        taskId in state.dismissedSideTaskIds -> null
+                        dismissed -> null
                         else -> it.copy(taskId = taskId)
                     }
                 })
             }
-            if (taskId != null && command == "/bg") scope.launch { followBackgroundTask(taskId) }
+            if (taskId != null && !dismissed && command == "/bg") scope.launch { followBackgroundTask(taskId) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

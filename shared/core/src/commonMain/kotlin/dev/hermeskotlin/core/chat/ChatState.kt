@@ -174,7 +174,7 @@ sealed interface ChatMessage {
         internal val rowIdentity: Any = Any(),
     ) : ChatMessage {
         val isSideTask: Boolean
-            get() = taskId != null || command.startsWith("/btw ") || command.startsWith("/bg ")
+            get() = taskId != null || key.startsWith("side-") || command.startsWith("/btw ") || command.startsWith("/bg ")
 
         val canDismiss: Boolean get() = !running && isSideTask
     }
