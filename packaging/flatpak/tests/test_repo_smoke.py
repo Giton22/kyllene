@@ -52,11 +52,30 @@ class RepoSmokeTest(unittest.TestCase):
             (app_dir / 'files/payload').write_text('candidate payload\n')
             repo = root / 'repo'
             bundle = root / 'candidate.flatpak'
-            subprocess.run(['flatpak', 'build-export', '--arch=x86_64', '--timestamp=2025-01-01T00:00:00Z',
-                            str(repo), str(app_dir), 'stable'],
-                           check=True, capture_output=True)
-            subprocess.run(['flatpak', 'build-bundle', str(repo), str(bundle), app, 'stable'],
-                           check=True, capture_output=True)
+            prod_gnupg = root / 'prod-gnupg'
+            prod_gnupg.mkdir(mode=0o700)
+            prod_env = {**os.environ, 'GNUPGHOME': str(prod_gnupg)}
+            try:
+                subprocess.run(['gpg', '--batch', '--quiet', '--passphrase', '', '--quick-gen-key',
+                                'Candidate release key', 'rsa2048', 'sign', 'never'],
+                               check=True, capture_output=True, env=prod_env)
+                keys = subprocess.run(['gpg', '--list-keys', '--with-colons'],
+                                      check=True, capture_output=True, text=True, env=prod_env).stdout
+                prod_key = next(line.split(':')[9] for line in keys.splitlines() if line.startswith('fpr:'))
+                prod_pub = root / 'prod-key.gpg'
+                prod_pub.write_bytes(subprocess.run(['gpg', '--export', prod_key],
+                                                    check=True, capture_output=True, env=prod_env).stdout)
+                subprocess.run(['flatpak', 'build-export', '--arch=x86_64', '--timestamp=2025-01-01T00:00:00Z',
+                                str(repo), str(app_dir), 'stable'],
+                               check=True, capture_output=True)
+                subprocess.run(['flatpak', 'build-sign', '--arch=x86_64', '--gpg-sign=' + prod_key,
+                                '--gpg-homedir=' + str(prod_gnupg), str(repo), app, 'stable'],
+                               check=True, capture_output=True)
+                subprocess.run(['flatpak', 'build-bundle', '--repo-url=https://flatpak.example.invalid/repo/',
+                                '--gpg-keys=' + str(prod_pub), str(repo), str(bundle), app, 'stable'],
+                               check=True, capture_output=True)
+            finally:
+                subprocess.run(['gpgconf', '--homedir', str(prod_gnupg), '--kill', 'all'], capture_output=True)
             tmp = root / 'tmp'
             tmp.mkdir()
             result = subprocess.run(

@@ -278,10 +278,11 @@ jobs:
         run: |
           if [ -f "$RUNNER_TEMP/signing.keychain-db" ]; then security delete-keychain "$RUNNER_TEMP/signing.keychain-db"; fi
 
-  # Runs whenever the draft exists, even if one OS leg failed (`fail-fast: false`), so the other installers still attach.
+  # Runs whenever the draft exists and the run wasn't cancelled, even if one OS leg failed (`fail-fast: false`), so the
+  # other installers still attach.
   desktop-attach:
     needs: [release, desktop]
-    if: always() && needs.release.result == 'success'
+    if: ${{ !cancelled() && needs.release.result == 'success' && (needs.desktop.result == 'success' || needs.desktop.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
