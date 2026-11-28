@@ -68,11 +68,11 @@ compose.desktop {
         // will block.
         jvmArgs += "--enable-native-access=ALL-UNNAMED,jcef"
 
-        // The installers (packageRelease…) leave out the library code the app never reaches. Names are kept:
-        // renaming would save little more, and code that looks classes up by name (Warmup, Compose's text menu)
-        // would need a rule for each. No optimisation either: it took over half of a Linux CI run (13 of 25 min)
-        // and saved only about 3.4 MB on top of the shrinking.
+        // Desktop ProGuard is disabled: even with optimize=false and obfuscate=false, ProGuard's single-threaded
+        // CodePreverifier took 2.5–3.5 minutes on every desktop/Flatpak build to save ~12–15 MB on a ~200 MB JCEF
+        // installer. Keep proguard-rules.pro intact in case shrinking is re-enabled later.
         buildTypes.release.proguard {
+            isEnabled = false
             obfuscate = false
             optimize = false
             configurationFiles.from(project.file("proguard-rules.pro"))
@@ -216,7 +216,7 @@ if (System.getProperty("os.name").startsWith("Windows")) {
 if (System.getProperty("os.name").startsWith("Linux")) {
     val junixsocketVersion = libs.versions.junixsocket.get()
     afterEvaluate {
-        val shrinker = tasks.named<AbstractProguardTask>("proguardReleaseJars").get()
+        val shrinker = tasks.findByName("proguardReleaseJars") as? AbstractProguardTask ?: return@afterEvaluate
         // Snapshot the sources: inputFiles.from is a live set, so retaining it would make this collection recursive.
         val original = files(shrinker.inputFiles.from.toList())
         val nativeJars = original.filter {
@@ -252,5 +252,6 @@ if (System.getProperty("os.name").startsWith("Linux")) {
 
 // A failed check's message (which language, how wide) shows in the CI log, not only in the HTML report.
 tasks.withType<Test>().configureEach {
+    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
     testLogging { exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }

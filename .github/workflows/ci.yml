@@ -16,9 +16,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  # Split across parallel runners so R8 minification, Android Lint, and unit tests don't contend for the same
+  # runner and JVM heap. The `build` gate job below keeps the required status check name unchanged.
+  test:
+    runs-on: namespace-profile-linux-x64
+    timeout-minutes: 30
     steps:
       # Pinned to commits, not tags, so a moved tag can't change what runs here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,14 +38,73 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
-      # Lint fails on any issue that isn't in androidApp/lint-baseline.xml. --continue reports the tests and
-      # lint together instead of stopping at the first failure. assembleDev is built like a release (R8), so
-      # a missing keep rule shows up here instead of as a crash on a phone.
-      - name: Test, build and lint
+      - name: Test and debug builds
         run: >
           ./gradlew --no-daemon --continue
+          -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
           :shared:core:testAndroidHostTest :shared:designsystem:testAndroidHostTest :shared:ui:testAndroidHostTest :shared:wearlink:testAndroidHostTest
-          :androidApp:testDebugUnitTest :androidApp:assembleDebug :androidApp:assembleDev :androidApp:lintDebug :wearApp:testDebugUnitTest :wearApp:assembleDebug :wearApp:lintDebug
+          :androidApp:testDebugUnitTest :androidApp:assembleDebug :wearApp:testDebugUnitTest :wearApp:assembleDebug
+
+  lint:
+    runs-on: namespace-profile-linux-x64
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: jetbrains
+          java-version: "25"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      # Lint fails on any issue that isn't in androidApp/lint-baseline.xml.
+      - name: Lint
+        run: >
+          ./gradlew --no-daemon --continue
+          -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+          :androidApp:lintDebug :wearApp:lintDebug
+
+      - name: Lint report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lint-report
+          path: |
+            androidApp/build/reports/lint-results-debug.html
+            wearApp/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
+
+  dev-apk:
+    runs-on: namespace-profile-linux-x64
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: jetbrains
+          java-version: "25"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      # assembleDev is built like a release (R8), so a missing keep rule shows up here instead of as a crash on a phone.
+      - name: Build dev APK (R8)
+        run: >
+          ./gradlew --no-daemon
+          -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8"
+          -Dkotlin.daemon.jvmargs="-Xmx3g"
+          :androidApp:assembleDev
 
       # WebRTC's native code looks up org.jni_zero classes by name. If R8 renames them, live voice aborts in
       # JNI_OnLoad, and only in minified builds.
@@ -74,15 +135,17 @@ jobs:
             echo '::error::R8 changed the TeX macro method'; exit 1;
           }
 
-      - name: Lint report
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: lint-report
-          path: |
-            androidApp/build/reports/lint-results-debug.html
-            wearApp/build/reports/lint-results-debug.html
-          if-no-files-found: ignore
+  # Required status check in the master ruleset.
+  build:
+    needs: [test, lint, dev-apk]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify all Android checks passed
+        run: |
+          echo "test=${{ needs.test.result }} lint=${{ needs.lint.result }} dev-apk=${{ needs.dev-apk.result }}"
+          [ "${{ needs.test.result }}" = "success" ] && [ "${{ needs.lint.result }}" = "success" ] && [ "${{ needs.dev-apk.result }}" = "success" ]
 
   # The Pebble watchapp, built with Pebble's own tools. Installing the SDK only prints its terms
   # (https://developer.repebble.com/legal/sdk-license/), it asks nothing. The SDK is pinned like the tool: a newer

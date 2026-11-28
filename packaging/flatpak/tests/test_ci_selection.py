@@ -80,7 +80,7 @@ class SelectionTest(unittest.TestCase):
         self.assertNotIn('if: always()', attach)
         self.assertIn('name: qualified-flatpak', build)
         self.assertIn('name: qualified-flatpak', attach)
-        self.assertIn('repo_smoke.sh build/flatpak-repo app.kyllene.Kyllene stable', build)
+        self.assertIn('repo_smoke.sh --bundle build/kyllene.flatpak build/flatpak-repo app.kyllene.Kyllene stable', build)
         self.assertIn('installed_smoke.py --app app.kyllene.Kyllene build/kyllene.flatpak', build)
         self.assertIn('gh release upload --repo "$GITHUB_REPOSITORY"', attach)
         self.assertNotIn('build-bundle', attach)

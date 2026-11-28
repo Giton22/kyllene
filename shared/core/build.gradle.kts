@@ -93,3 +93,7 @@ room {
 
 // Lint only ever gets this module's test sources, and the app's lint ignores those (see androidApp).
 tasks.matching { it.name == "lintAnalyzeAndroidHostTest" }.configureEach { enabled = false }
+
+tasks.withType<Test>().configureEach {
+    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+}

@@ -75,3 +75,7 @@ tasks.matching { it.name == "lintAnalyzeAndroidHostTest" }.configureEach { enabl
 providers.systemProperty("rtl.geometry").orNull?.let { dir ->
     tasks.withType<Test>().configureEach { systemProperty("rtl.geometry", dir) }
 }
+
+tasks.withType<Test>().configureEach {
+    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+}

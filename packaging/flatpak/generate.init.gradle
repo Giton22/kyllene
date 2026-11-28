@@ -34,13 +34,15 @@ gradle.projectsEvaluated {
                 "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:${coroutines}")
     }
     def desktop = rootProject.project(':desktopApp')
-    def shrinker = desktop.tasks.named('proguardReleaseJars').get()
+    def shrinker = desktop.tasks.findByName('proguardReleaseJars')
     desktop.configurations.create('flatpakComposeTools')
     def composeVersion = desktop.extensions.getByType(org.gradle.api.artifacts.VersionCatalogsExtension)
             .named('libs').findVersion('compose-multiplatform').get().requiredVersion
     desktop.dependencies.add('flatpakComposeTools',
             "org.jetbrains.compose:gradle-plugin-internal-jdk-version-probe:${composeVersion}")
     desktop.configurations.create('flatpakProguard')
-    desktop.dependencies.add('flatpakProguard',
-            "com.guardsquare:proguard-gradle:${shrinker.proguardVersion.get()}")
+    if (shrinker != null) {
+        desktop.dependencies.add('flatpakProguard',
+                "com.guardsquare:proguard-gradle:${shrinker.proguardVersion.get()}")
+    }
 }

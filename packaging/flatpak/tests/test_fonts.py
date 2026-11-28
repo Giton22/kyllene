@@ -26,9 +26,10 @@ class FontFilterTest(unittest.TestCase):
                 config.write_text('<fontconfig><dir>' + escape(str(fonts)) + '</dir>'
                                   '<cachedir>' + escape(str(root / 'cache')) + '</cachedir>'
                                   + fragment + '</fontconfig>')
-                result = subprocess.run(['fc-list', '-f', '%{file}\n'], check=True,
+                result = subprocess.run(['fc-list', '-f', '%{file}\n'],
                                         capture_output=True, text=True,
                                         env={**os.environ, 'FONTCONFIG_FILE': str(config)})
+                self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
                 return {Path(line).suffix for line in result.stdout.splitlines()}
 
             self.assertEqual(listed(''), {'.ttf', '.otf', '.woff', '.woff2'})

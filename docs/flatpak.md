@@ -72,12 +72,14 @@ installed by hand updates from it too.
 - **Release qualification:** the Flatpak build starts alongside Android. Its bundle
   is attached only after Android's draft exists and JVM/desktop tests, Flatpak contracts, real installed
   UI smoke, and repository tests pass. Publication reuses that qualified bundle.
-  Repository tests use the real candidate payload on tags and a tiny fixture on PRs.
+  Repository tests use the real candidate bundle on tags (paired with a tiny base
+  release carrying the same metadata so the update tests real publication and HTTP
+  object transfer without re-bundling twice) and a tiny fixture on PRs.
   Two isolated user installations share two signed test releases: bundle and
   `.flatpakref` both update, then both reject a wrong-key commit and retain the
-  previous commit. The two releases use the same payload; this tests delivery/trust,
-  not application-data migration from a historical version. Temporary keys/origins
-  never appear in the downloadable candidate bundle.
+  previous commit. This tests delivery/trust, not application-data migration from a
+  historical version. Temporary keys/origins never appear in the downloadable
+  candidate bundle.
 
 Repository tests require Linux, Flatpak, OSTree, GnuPG and Python 3. They do not
 launch the app, download a runtime, or change the caller's installation. Run
@@ -157,9 +159,9 @@ retain any returned portal token for the next retrieval, and clear owned bytes.
 Linux integration tests start a disposable `dbus-daemon`; other hosts skip them
 explicitly. Run `./gradlew :shared:core:jvmTest --tests '*LinuxSecretPortalTest'`.
 
-The Linux Secret transport pins matching junixsocket Java/native libraries. Release
-builds analyze those two JARs as ProGuard libraries and package their original bytes,
-preserving multi-release classes and JNI resources while shrinking the application.
+The Linux Secret transport pins matching junixsocket Java/native libraries and packages
+their original bytes intact, preserving multi-release classes and JNI resources (and
+treating them as ProGuard library JARs whenever desktop ProGuard is enabled).
 The Linux runtime includes `jdk.security.auth` for D-Bus EXTERNAL authentication.
 Other desktop platforms retain FileKit's existing transport provider.
 
@@ -377,6 +379,10 @@ installed commit cannot be verified, it reports retained/unknown state and leave
 the installation for inspection instead of deleting an unverified ref.
 
 Run `python3 packaging/flatpak/tests/installed_smoke.py build/kyllene.flatpak`
+(or `--repo build/flatpak-repo --branch devel` to install directly from the
+OSTree build repository without running `flatpak build-bundle`, as PR and
+`master` runs of `.github/workflows/linux.yml` do; manual `workflow_dispatch`
+runs still build and upload the `.flatpak` bundle)
 on Linux with Flatpak, its matching runtime, Xvfb, xauth, xdotool and Pillow
 installed. The app reads its settings key from the Secret portal at startup, so
 run it as CI does: `dbus-run-session` with a throwaway unlocked gnome-keyring as

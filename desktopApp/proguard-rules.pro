@@ -1,5 +1,5 @@
-# ProGuard for the desktop installers (release build type): shrinking only, no optimisation, names kept (see
-# build.gradle.kts). These keep what's reached only by name, by native code or through the runtime.
+# ProGuard rules for the desktop installers (currently disabled via `isEnabled = false` in desktopApp/build.gradle.kts,
+# kept in case shrinking is re-enabled). These keep what's reached only by name, by native code or through the runtime.
 
 # For when optimisation is turned back on. Narrowing a method's declared types can pick a type it doesn't always
 # return: okio's buffer() came out declared as RealBufferedSource, and the JVM refused it (VerifyError), so the app

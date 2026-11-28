@@ -147,3 +147,35 @@ class InstalledSmokeTest(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, 'resized widget layout'):
                 smoke.verify_resize('owned-window', app, [(430, 400)])
         self.assertFalse(any('mousemove' in call.args for call in commands.call_args_list))
+
+    def test_repo_install_uses_disposable_remote_and_removes_it_after_uninstall(self):
+        commands = []
+        def run(*args):
+            commands.append(args)
+            if args[:2] == ('flatpak', 'remotes'):
+                return ''
+            return 'owned-commit'
+        with patch.object(smoke, 'run', side_effect=run), \
+             patch.object(smoke, 'server', side_effect=OSError('fixture bind failed')):
+            with self.assertRaisesRegex(OSError, 'fixture bind failed'):
+                smoke.main(Path('flatpak-repo'), from_repo=True, branch='devel')
+        remote = f'kyllene-smoke-{os.getpid()}'
+        self.assertIn(('flatpak', 'build-update-repo', 'flatpak-repo'), commands)
+        self.assertIn(('flatpak', 'remote-add', '--user', '--no-gpg-verify', remote, Path('flatpak-repo').resolve().as_uri()), commands)
+        self.assertIn(('flatpak', 'install', '--user', '--noninteractive', '-y', remote, f'{smoke.APP}//devel'), commands)
+        uninstall_idx = commands.index(('flatpak', 'uninstall', '--user', '--noninteractive', '-y', smoke.APP))
+        delete_idx = commands.index(('flatpak', 'remote-delete', '--user', '--force', remote))
+        self.assertLess(uninstall_idx, delete_idx)
+
+    def test_repo_install_refuses_to_overwrite_existing_remote(self):
+        remote = f'kyllene-smoke-{os.getpid()}'
+        commands = []
+        def run(*args):
+            commands.append(args)
+            if args[:2] == ('flatpak', 'remotes'):
+                return remote
+            return ''
+        with patch.object(smoke, 'run', side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, 'existing remote'):
+                smoke.main(Path('flatpak-repo'), from_repo=True, branch='devel')
+        self.assertFalse(any(c[:2] == ('flatpak', 'remote-add') for c in commands))
