@@ -331,6 +331,13 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: flatpak flatpak-builder ostree xvfb xauth xdotool python3-pil xdg-desktop-portal gnome-keyring
+      - name: Ensure system D-Bus is running
+        run: |
+          # Lightweight VMs without systemd lack the system bus socket that flatpak run connects to.
+          if [ ! -S /run/dbus/system_bus_socket ]; then
+            sudo mkdir -p /run/dbus
+            sudo dbus-daemon --system --fork
+          fi
       - name: Install Flatpak SDK
         run: |
           flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
